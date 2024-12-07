@@ -1,0 +1,148 @@
+;;; org-supertag-cache.el --- Cache system for org-supertag -*- lexical-binding: t; -*-
+
+(require 'org-supertag-models)
+(require 'org-supertag-db)
+(require 'org-supertag-query)
+
+;;; Cache Class
+
+(defclass org-supertag-cache ()
+  ((db :initarg :db
+       :type org-supertag-db
+       :documentation "Reference to the database")
+   (query-cache :initform (make-hash-table :test 'equal)
+               :documentation "Cache for query results")
+   (node-cache :initform (make-hash-table :test 'equal)
+              :documentation "Cache for node content")
+   (field-cache :initform (make-hash-table :test 'equal)
+               :documentation "Cache for field values")
+   (tag-cache :initform (make-hash-table :test 'equal)
+             :documentation "Cache for tag relationships")
+   (max-size :initarg :max-size
+            :initform 1000
+            :type integer
+            :documentation "Maximum number of entries in each cache")
+   (ttl :initarg :ttl
+        :initform 3600
+        :type integer
+        :documentation "Time to live in seconds")))
+
+;;; Cache Operations
+
+(cl-defmethod org-supertag-cache-get ((cache org-supertag-cache) key type)
+  "Get cached value for KEY of TYPE from CACHE."
+  (let* ((cache-table (pcase type
+                       ('query (oref cache query-cache))
+                       ('node (oref cache node-cache))
+                       ('field (oref cache field-cache))
+                       ('tag (oref cache tag-cache)))))
+    (when-let* ((entry (gethash key cache-table))
+                (timestamp (car entry))
+                (value (cdr entry)))
+      (if (< (- (float-time) timestamp) (oref cache ttl))
+          (if (eq type 'node)
+              ;; For nodes, create a fresh copy to avoid sharing
+              (clone value)
+            value)
+        (remhash key cache-table)
+        nil))))
+
+(cl-defmethod org-supertag-cache-set ((cache org-supertag-cache) key value type)
+  "Set VALUE for KEY of TYPE in CACHE."
+  (let* ((cache-table (pcase type
+                       ('query (oref cache query-cache))
+                       ('node (oref cache node-cache))
+                       ('field (oref cache field-cache))
+                       ('tag (oref cache tag-cache)))))
+    ;; Check cache size
+    (when (>= (hash-table-count cache-table) (oref cache max-size))
+      (org-supertag-cache--evict-oldest cache-table))
+    ;; Store value with timestamp
+    (puthash key (cons (float-time) value) cache-table)))
+
+(defun org-supertag-cache--evict-oldest (cache-table)
+  "Evict the oldest entry from CACHE-TABLE."
+  (let ((oldest-key nil)
+        (oldest-time most-positive-fixnum))
+    (maphash (lambda (k v)
+               (when (< (car v) oldest-time)
+                 (setq oldest-key k
+                       oldest-time (car v))))
+             cache-table)
+    (when oldest-key
+      (remhash oldest-key cache-table))))
+
+;;; Query Cache
+
+(cl-defmethod org-supertag-cache-query ((cache org-supertag-cache) query)
+  "Execute QUERY using cache when possible."
+  (let* ((query-key (org-supertag-cache--make-query-key query))
+         (cached-result (org-supertag-cache-get cache query-key 'query)))
+    (or cached-result
+        (let ((result (org-supertag-query-execute query (oref cache db))))
+          (org-supertag-cache-set cache query-key result 'query)
+          result))))
+
+(defun org-supertag-cache--make-query-key (query)
+  "Create a cache key for QUERY."
+  (format "%S" (list (oref query type)
+                     (oref query operator)
+                     (oref query value)
+                     (mapcar #'org-supertag-cache--make-query-key
+                            (oref query children)))))
+
+;;; Node Cache
+
+(cl-defmethod org-supertag-cache-node ((cache org-supertag-cache) node-id)
+  "Get node with NODE-ID using cache when possible."
+  (or (org-supertag-cache-get cache node-id 'node)
+      (when-let ((node (org-supertag-db-get-node (oref cache db) node-id)))
+        (org-supertag-cache-set cache node-id node 'node)
+        node)))
+
+;;; Field Cache
+
+(cl-defmethod org-supertag-cache-field ((cache org-supertag-cache) node-id field-name)
+  "Get field value for NODE-ID and FIELD-NAME using cache."
+  (let ((cache-key (cons node-id field-name)))
+    (or (org-supertag-cache-get cache cache-key 'field)
+        (when-let* ((node (org-supertag-cache-node cache node-id))
+                    (field (cl-find field-name (oref node fields)
+                                  :key (lambda (f) (oref f name))
+                                  :test #'equal)))
+          (let ((value (oref field value)))
+            (org-supertag-cache-set cache cache-key value 'field)
+            value)))))
+
+;;; Tag Cache
+
+(cl-defmethod org-supertag-cache-tag-nodes ((cache org-supertag-cache) tag)
+  "Get nodes with TAG using cache."
+  (or (org-supertag-cache-get cache tag 'tag)
+      (let ((nodes (org-supertag-db-get-nodes-by-tag (oref cache db) tag)))
+        (org-supertag-cache-set cache tag nodes 'tag)
+        nodes)))
+
+;;; Cache Invalidation
+
+(cl-defmethod org-supertag-cache-invalidate ((cache org-supertag-cache) &optional type key)
+  "Invalidate cache entries.
+If TYPE is provided, only invalidate that type of cache.
+If KEY is also provided, only invalidate that specific entry."
+  (if type
+      (let ((cache-table (pcase type
+                          ('query (oref cache query-cache))
+                          ('node (oref cache node-cache))
+                          ('field (oref cache field-cache))
+                          ('tag (oref cache tag-cache)))))
+        (if key
+            (remhash key cache-table)
+          (clrhash cache-table)))
+    ;; Invalidate all caches
+    (clrhash (oref cache query-cache))
+    (clrhash (oref cache node-cache))
+    (clrhash (oref cache field-cache))
+    (clrhash (oref cache tag-cache))))
+
+(provide 'org-supertag-cache)
+;;; org-supertag-cache.el ends here 

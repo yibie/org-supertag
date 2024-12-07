@@ -1,0 +1,115 @@
+;;; org-supertag-db.el --- Database for org-supertag -*- lexical-binding: t; -*-
+
+;; 核心数据结构
+(defvar org-supertag-db
+  (make-hash-table :test 'equal)
+  "Main storage for tag definitions and relationships.")
+
+;; 标签定义的结构
+(cl-defstruct (org-supertag (:constructor org-supertag--create)
+                           (:copier nil))
+  name                    ; 标签名称 (string)
+  description            ; 描述 (string or nil)
+  created-time          ; 创建时间 (timestamp)
+  modified-time         ; 修改时间 (timestamp)
+  parents               ; 父标签列表 (list of strings)
+  children              ; 子标签列表 (list of strings)
+  exclusives            ; 互斥标签列表 (list of strings)
+  depends-on            ; 依赖标签列表 (list of strings)
+  suggests              ; 建议标签列表 (list of strings))
+  fields)              ; 字段列表 (list of strings)
+
+
+;; 创建新标签的函数
+(defun org-supertag-create (name &optional description)
+  "Create a new supertag with NAME and optional DESCRIPTION."
+  (let ((tag (org-supertag--create
+              :name name
+              :description description
+              :created-time (current-time)
+              :modified-time (current-time)
+              :parents nil
+              :children nil
+              :exclusives nil
+              :depends-on nil
+              :suggests nil
+              :fields nil)))
+    (puthash name tag org-supertag-db)
+    tag))
+
+;; 添加标签关系的函数
+(defun org-supertag-add-relation (tag1 tag2 relation-type)
+  "Add a relationship between TAG1 and TAG2 of type RELATION-TYPE.
+RELATION-TYPE can be 'parent, 'exclusive, 'depends-on, or 'suggests."
+  (let ((tag1-struct (gethash tag1 org-supertag-db))
+        (tag2-struct (gethash tag2 org-supertag-db)))
+    (when (and tag1-struct tag2-struct)
+      (case relation-type
+        ('parent
+         (push tag1 (org-supertag-parents tag2-struct))
+         (push tag2 (org-supertag-children tag1-struct)))
+        ('exclusive
+         (push tag2 (org-supertag-exclusives tag1-struct))
+         (push tag1 (org-supertag-exclusives tag2-struct)))
+        ('depends-on
+         (push tag2 (org-supertag-depends-on tag1-struct)))
+        ('suggests
+         (push tag2 (org-supertag-suggests tag1-struct))))
+      (setf (org-supertag-modified-time tag1-struct) (current-time))
+      (setf (org-supertag-modified-time tag2-struct) (current-time))
+      t)))
+
+;; 序列化函数
+(defun org-supertag-save ()
+  "Save the tag database to disk."
+  (with-temp-file org-supertag-file
+    (let ((print-level nil)
+          (print-length nil))
+      (pp (hash-table-to-alist org-supertag-db)
+          (current-buffer)))))
+
+;; 反序列化函数
+(defun org-supertag-load ()
+  "Load the tag database from disk."
+  (when (file-exists-p org-supertag-file)
+    (setq org-supertag-db
+          (let ((alist (with-temp-buffer
+                        (insert-file-contents org-supertag-file)
+                        (read (current-buffer)))))
+            (cl-loop with ht = (make-hash-table :test 'equal)
+                     for (k . v) in alist
+                     do (puthash k v ht)
+                     finally return ht)))))
+
+;; 查询函数示例
+(defun org-supertag-get-ancestors (tag)
+  "Get all ancestor tags of TAG."
+  (let ((tag-struct (gethash tag org-supertag-db))
+        ancestors)
+    (when tag-struct
+      (let ((parents (org-supertag-parents tag-struct)))
+        (dolist (parent parents)
+          (push parent ancestors)
+          (setq ancestors (append ancestors 
+                                (org-supertag-get-ancestors parent))))))
+    (delete-dups ancestors)))
+
+(defun org-supertag-get-conflicts (tag)
+  "Get all tags that conflict with TAG."
+  (let ((tag-struct (gethash tag org-supertag-db))
+        conflicts)
+    (when tag-struct
+      ;; Direct exclusives
+      (setq conflicts (org-supertag-exclusives tag-struct))
+      ;; Required dependencies
+      (dolist (dep (org-supertag-depends-on tag-struct))
+        (push dep conflicts))
+      ;; Ancestor exclusives
+      (dolist (ancestor (org-supertag-get-ancestors tag))
+        (let ((ancestor-struct (gethash ancestor org-supertag-db)))
+          (when ancestor-struct
+            (setq conflicts (append conflicts 
+                                  (org-supertag-exclusives ancestor-struct)))))))
+    (delete-dups conflicts)))
+
+(provide 'org-supertag-db)

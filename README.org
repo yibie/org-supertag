@@ -1,0 +1,34 @@
+* org-supertag #test
+:PROPERTIES:
+:ID:       A242E9CE-8733-4F0A-9EB3-92410A48ED79
+:END:
+
+* Install #supertag
+:PROPERTIES:
+:ID:       D0F2ADA1-0093-4ED4-B080-C8FC6F45A73A
+:END:
+Git clone this repo to your emacs.d directory.
+
+#+BEGIN_SRC emacs-lisp
+(use-package org-supertag
+  :load-path "~/emacs.d/lisp/org-supertag"
+  :after org
+  :config
+  (setq org-supertag-data-directory "~/org/supertag-data")
+  :hook (org-mode . org-supertag-mode))
+#+END_SRC
+
+* Test
+:PROPERTIES:
+:ID:       C1735914-E666-4096-B172-E7A63BFDCDBA
+:END:
+* Test #supertag2 #supertag3
+:PROPERTIES:
+:ID:       DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
+:END:
+DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
+* Tag Template Test #supertag4
+:PROPERTIES:
+:ID:       FC3C2312-393B-4E08-9619-8EFC772D5C81
+:END:
+

@@ -1,0 +1,52 @@
+;;; org-supertag-field-sync.el --- Field synchronization -*- lexical-binding: t; -*-
+
+;; 同步状态
+(defvar org-supertag-field-sync-pending-changes
+  (make-hash-table :test 'equal)
+  "待同步的变更")
+
+(defvar org-supertag-field-sync-timer nil
+  "同步定时器")
+
+(defvar org-supertag-field-sync-interval 5
+  "同步间隔(秒)")
+
+;; 同步函数
+(defun org-supertag-queue-field-change (node field value)
+  "将字段变更加入队列"
+  (let* ((node-id (plist-get node :id))
+         (field-name (plist-get field :name))
+         (changes (or (gethash node-id org-supertag-field-sync-pending-changes)
+                     (make-hash-table :test 'equal))))
+    (puthash field-name value changes)
+    (puthash node-id changes org-supertag-field-sync-pending-changes)
+    
+    ;; 重置同步定时器
+    (org-supertag-reset-sync-timer)))
+
+(defun org-supertag-sync-fields ()
+  "同步所有待处理的字段变更"
+  (maphash
+   (lambda (node-id field-changes)
+     (when-let* ((node (org-supertag-db-get-node node-id)))
+       (maphash
+        (lambda (field-name value)
+          (org-supertag-update-field node field-name value))
+        field-changes)))
+   org-supertag-field-sync-pending-changes)
+  
+  ;; 清空变更队列
+  (clrhash org-supertag-field-sync-pending-changes))
+
+(defun org-supertag-reset-sync-timer ()
+  "重置同步定时器"
+  (when org-supertag-field-sync-timer
+    (cancel-timer org-supertag-field-sync-timer))
+  
+  (setq org-supertag-field-sync-timer
+        (run-with-timer
+         org-supertag-field-sync-interval
+         nil
+         #'org-supertag-sync-fields)))
+
+(provide 'org-supertag-field-sync) 

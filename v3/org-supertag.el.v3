@@ -1,0 +1,245 @@
+;;; org-supertag.el --- Enhance org-mode with super tags -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2023 Free Software Foundation, Inc.
+
+;; Author: Your Name <your-email@example.com>
+;; Keywords: org-mode, tags
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "27.1") (org "9.4"))
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; org-supertag enhances org-mode with a powerful tagging system that supports
+;; inheritance, fields, and complex relationships between nodes.
+
+;;; Code:
+
+(require 'org)
+(require 'org-supertag-tag)
+(require 'org-supertag-field)
+(require 'org-supertag-node)
+(require 'org-supertag-db)
+(require 'org-supertag-sync)
+(require 'org-supertag-ui)
+
+(defgroup org-supertag nil
+  "Customization options for org-supertag."
+  :group 'org
+  :prefix "org-supertag-")
+
+(defcustom org-supertag-auto-sync t
+  "Whether to automatically sync supertags when saving org files."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom org-supertag-data-directory
+  (expand-file-name "org-supertag/" user-emacs-directory)
+  "Org SuperTag 数据存储目录。
+这个目录将用于存储所有的 SuperTag 相关数据，包括：
+- 数据库文件
+- 备份文件
+- 其他相关数据
+默认存储在 ~/.emacs.d/org-supertag/ 目录下。"
+  :type 'directory
+  :group 'org-supertag)
+
+(defcustom org-supertag-backup-directory
+  (expand-file-name "backups/" org-supertag-data-directory)
+  "Org SuperTag 数据备份目录。
+用于存储数据备份文件。"
+  :type 'directory
+  :group 'org-supertag)
+
+(defcustom org-supertag-db-file
+  (expand-file-name "supertag-db.el" org-supertag-data-directory)
+  "Org SuperTag 数据库文件路径。
+存储所有 SuperTag 相关的数据表。"
+  :type 'file
+  :group 'org-supertag)
+
+(defcustom org-supertag-org-files 'org-agenda-files
+  "List of org files to track supertags in.
+Can be either a list of files, or a symbol referring to a variable containing a list of files."
+  :type '(choice (repeat :tag "List of files" file)
+                (symbol :tag "Variable containing files"))
+  :group 'org-supertag)
+
+(defcustom org-supertag-auto-enable t
+  "Whether to automatically enable org-supertag-mode in org files."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom org-supertag-watch-directories nil
+  "List of directories to watch for .org files.
+When non-nil, org-supertag will automatically monitor all .org files
+in these directories and their subdirectories."
+  :type '(repeat directory)
+  :group 'org-supertag)
+
+(defcustom org-supertag-file-patterns '("\\.org$")
+  "List of file patterns to monitor.
+Each pattern should be a regular expression matching org files."
+  :type '(repeat string)
+  :group 'org-supertag)
+
+
+(defun org-supertag-find-org-files (directory)
+  "Find all org files in DIRECTORY and its subdirectories."
+  (let ((files nil))
+    (dolist (pattern org-supertag-file-patterns)
+      (setq files (append files
+                         (directory-files-recursively
+                          directory pattern t))))
+    files))
+
+(defun org-supertag-watch-directory (directory)
+  "Start watching DIRECTORY for org files."
+  (interactive "DDirectory to watch: ")
+  (add-to-list 'org-supertag-watch-directories directory)
+  (when org-supertag-mode
+    (dolist (file (org-supertag-find-org-files directory))
+      (org-supertag-maybe-enable-for-file file))))
+
+(defun org-supertag-unwatch-directory (directory)
+  "Stop watching DIRECTORY for org files."
+  (interactive (list (completing-read "Directory to unwatch: "
+                                    org-supertag-watch-directories
+                                    nil t)))
+  (setq org-supertag-watch-directories
+        (delete directory org-supertag-watch-directories)))
+
+(defun org-supertag-maybe-enable-for-file (file)
+  "Maybe enable org-supertag-mode for FILE if appropriate."
+  (when (and org-supertag-auto-enable
+             (file-exists-p file)
+             (not (file-directory-p file))
+             (cl-some (lambda (pattern)
+                       (string-match-p pattern file))
+                     org-supertag-file-patterns))
+    (let ((buf (find-buffer-visiting file)))
+      (if buf
+          (with-current-buffer buf
+            (when (derived-mode-p 'org-mode)
+              (org-supertag-mode 1)))
+        ;; If file is not visited, we don't load it automatically
+        ;; but will enable org-supertag-mode when it's opened
+        ))))
+
+(defun org-supertag-find-file-hook ()
+  "Hook to run when a file is opened."
+  (when (and org-supertag-auto-enable
+             (derived-mode-p 'org-mode)
+             (or (cl-some (lambda (dir)
+                           (string-prefix-p (expand-file-name dir)
+                                          (expand-file-name default-directory)))
+                         org-supertag-watch-directories)
+                 (cl-some (lambda (pattern)
+                           (string-match-p pattern (buffer-file-name)))
+                         org-supertag-file-patterns)))
+    (org-supertag-mode 1)))
+
+(defun org-supertag-after-change-major-mode-hook ()
+  "Hook to run after major mode changes."
+  (when (and org-supertag-auto-enable
+             (derived-mode-p 'org-mode)
+             (buffer-file-name))
+    (org-supertag-maybe-enable-for-file (buffer-file-name))))
+
+;;;###autoload
+(define-minor-mode org-supertag-mode
+  "Toggle org-supertag mode.
+With prefix argument ARG, enable org-supertag mode if ARG is positive,
+and disable it otherwise. If called from Lisp, enable the mode if ARG is omitted
+or nil."
+  :init-value nil
+  :lighter " SuperTag"
+  :group 'org-supertag
+  (if org-supertag-mode
+      (org-supertag-mode-enable)
+    (org-supertag-mode-disable)))
+
+(defun org-supertag-mode-enable ()
+  "启用 org-supertag-mode."
+  (message "启用 org-supertag 模式")
+  (org-supertag-db-init)
+  (org-supertag-sync-init)
+  (org-supertag-ui-init)
+  (org-supertag-field-init)
+  (org-supertag-tag-init)
+  (org-supertag-node-init))
+
+(defun org-supertag-mode-disable ()
+  "禁用 org-supertag-mode."
+  (message "禁用 org-supertag 模式")
+  (org-supertag-db-cleanup)
+  (org-supertag-sync-cleanup)
+  (org-supertag-ui-cleanup)
+  (org-supertag-field-cleanup)
+  (org-supertag-tag-cleanup)
+  (org-supertag-node-cleanup))
+
+(defun org-supertag-after-save-hook ()
+  "Hook run after saving an org file with supertags."
+  (when (and org-supertag-mode org-supertag-auto-sync)
+    (org-supertag-sync-buffer)))
+
+(defun org-supertag-cleanup-buffer ()
+  "Clean up supertag resources when killing a buffer."
+  (when org-supertag-mode
+    (org-supertag-sync-cleanup-buffer)))
+
+(defun org-supertag-sync ()
+  "Manually sync supertags in the current buffer."
+  (interactive)
+  (when org-supertag-mode
+    (org-supertag-sync-buffer)
+    (message "Supertags synced successfully")))
+
+;;;###autoload
+(defun org-supertag-global-mode (&optional arg)
+  "Toggle org-supertag-mode in all org buffers.
+With prefix ARG, enable if positive, disable if negative or zero."
+  (interactive "P")
+  (let ((enable (if arg
+                    (> (prefix-numeric-value arg) 0)
+                  (not (bound-and-true-p org-supertag-global-mode)))))
+    (if enable
+        (progn
+          ;; Add global hooks
+          (add-hook 'org-mode-hook #'org-supertag-mode)
+          (add-hook 'find-file-hook #'org-supertag-find-file-hook)
+          (add-hook 'after-change-major-mode-hook #'org-supertag-after-change-major-mode-hook)
+          ;; Enable for existing buffers
+          (dolist (buffer (buffer-list))
+            (with-current-buffer buffer
+              (when (derived-mode-p 'org-mode)
+                (org-supertag-mode 1))))
+          ;; Process watched directories
+          (dolist (dir org-supertag-watch-directories)
+            (dolist (file (org-supertag-find-org-files dir))
+              (org-supertag-maybe-enable-for-file file))))
+      ;; Disable mode
+      (remove-hook 'org-mode-hook #'org-supertag-mode)
+      (remove-hook 'find-file-hook #'org-supertag-find-file-hook)
+      (remove-hook 'after-change-major-mode-hook #'org-supertag-after-change-major-mode-hook)
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when (derived-mode-p 'org-mode)
+            (org-supertag-mode -1)))))
+    (setq org-supertag-global-mode enable)))
+
+(provide 'org-supertag)
+;;; org-supertag.el ends here

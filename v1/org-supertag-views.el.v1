@@ -1,0 +1,235 @@
+;;; org-supertag-views.el --- View system for org-supertag -*- lexical-binding: t; -*-
+
+(require 'eieio)
+(require 'dash)
+(require 'ht)
+(require 'magit-section)
+
+;;; View Model
+
+(defclass org-supertag-view ()
+  ((name :initarg :name
+         :type string
+         :documentation "View name")
+   (type :initarg :type
+         :type symbol
+         :documentation "View type (list, table, etc)")
+   (filter :initarg :filter
+           :initform nil
+           :type (or null function)
+           :documentation "Filter function for nodes")
+   (sort-by :initarg :sort-by
+            :initform nil
+            :type (or null function)
+            :documentation "Sort function for nodes")
+   (group-by :initarg :group-by
+             :initform nil
+             :type (or null function)
+             :documentation "Grouping function for nodes")
+   (fields :initarg :fields
+          :type list
+          :documentation "Fields to display"))
+  "Base class for views.")
+
+(defclass org-supertag-dynamic-view (org-supertag-view)
+  ((refresh-interval :initarg :refresh-interval
+                    :initform nil
+                    :documentation "Auto refresh interval")
+   (dynamic-fields :initarg :dynamic-fields
+                  :initform t
+                  :documentation "Whether to include dynamic fields")))
+
+;;; View Registry
+
+(defvar org-supertag-views (ht-create)
+  "Registry of available views.")
+
+(defun org-supertag-register-view (view)
+  "Register VIEW in the view registry."
+  (ht-set! org-supertag-views (oref view name) view))
+
+(defun org-supertag-get-view (name)
+  "Get view by NAME."
+  (ht-get org-supertag-views name))
+
+;;; Data Processing
+
+(defun org-supertag-view-process-data (view nodes)
+  "Process NODES according to VIEW configuration."
+  (let ((data nodes))
+    ;; Apply filter
+    (when-let ((filter (oref view filter)))
+      (setq data (seq-filter filter data)))
+    
+    ;; Apply sorting
+    (when-let ((sort-fn (oref view sort-by)))
+      (setq data (sort data sort-fn)))
+    
+    ;; Apply grouping
+    (if-let ((group-fn (oref view group-by)))
+        (-group-by group-fn data)
+      data)))
+
+;;; Renderers
+
+(defclass org-supertag-renderer ()
+  ((buffer :initarg :buffer
+           :documentation "Buffer for rendering")
+   (view :initarg :view
+         :documentation "View being rendered"))
+  "Base class for view renderers.")
+
+(defclass org-supertag-list-renderer (org-supertag-renderer) ()
+  "Renderer for list views.")
+
+(defclass org-supertag-table-renderer (org-supertag-renderer) ()
+  "Renderer for table views.")
+
+(defclass org-supertag-kanban-renderer (org-supertag-renderer) ()
+  "Renderer for kanban views.")
+
+(defclass org-supertag-calendar-renderer (org-supertag-renderer) ()
+  "Renderer for calendar views.")
+
+;;; Rendering Methods
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-list-renderer) data)
+  "Render DATA as a list using magit-section."
+  (with-current-buffer (oref renderer buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (magit-section-mode)
+      (if (ht-p data)
+          ;; Grouped data
+          (ht-each
+           (lambda (group nodes)
+             (magit-insert-section (group)
+               (magit-insert-heading
+                 (propertize (format "%s" group) 'face 'magit-section-heading))
+               (dolist (node nodes)
+                 (org-supertag-render-node node))))
+           data)
+        ;; Flat list
+        (dolist (node data)
+          (org-supertag-render-node node))))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-table-renderer) data)
+  "Render DATA as a table."
+  (with-current-buffer (oref renderer buffer)
+    (let* ((inhibit-read-only t)
+           (view (oref renderer view))
+           (fields (oref view fields)))
+      (erase-buffer)
+      ;; Header
+      (insert "| "
+              (mapconcat #'identity fields " | ")
+              " |\n")
+      (insert (make-string (length fields) ?-)
+              "\n")
+      ;; Data
+      (dolist (node data)
+        (insert "| ")
+        (dolist (field fields)
+          (insert (format "%s | "
+                         (or (ht-get (oref node properties) field)
+                             ""))))
+        (insert "\n"))
+      (org-table-align))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-kanban-renderer) data)
+  "Render DATA as a kanban board."
+  (with-current-buffer (oref renderer buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (magit-section-mode)
+      ;; Assume data is grouped by status
+      (ht-each
+       (lambda (status nodes)
+         (magit-insert-section (status)
+           (magit-insert-heading
+             (propertize (format "=== %s ===" status)
+                        'face 'magit-section-heading))
+           (dolist (node nodes)
+             (org-supertag-render-node node))
+           (insert "\n")))
+       data))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-calendar-renderer) data)
+  "Render DATA as a calendar view."
+  (with-current-buffer (oref renderer buffer)
+    (let* ((inhibit-read-only t)
+           (view (oref renderer view))
+           (date-field (car (oref view fields))))
+      (erase-buffer)
+      ;; Group by date
+      (let ((date-groups (-group-by
+                         (lambda (node)
+                           (ht-get (oref node properties) date-field))
+                         data)))
+        (--each (sort (ht-keys date-groups) #'string<)
+          (magit-insert-section (date)
+            (magit-insert-heading
+              (propertize (format "=== %s ===" it)
+                         'face 'magit-section-heading))
+            (dolist (node (ht-get date-groups it))
+              (org-supertag-render-node node))
+            (insert "\n")))))))
+
+;;; Node Rendering
+
+(defun org-supertag-render-node (node)
+  "Render a single NODE in the current buffer."
+  (magit-insert-section (node)
+    (insert (propertize (format "* %s" (oref node content))
+                       'face 'default))
+    (when (oref node tags)
+      (insert " "
+              (mapconcat (lambda (tag)
+                          (propertize tag 'face 'org-tag))
+                        (oref node tags)
+                        " ")))
+    (insert "\n")))
+
+;;; View Buffer Management
+
+(defvar org-supertag-view-buffers (ht-create)
+  "Hash table of view buffers.")
+
+(defun org-supertag-get-view-buffer (view-name)
+  "Get or create buffer for VIEW-NAME."
+  (or (ht-get org-supertag-view-buffers view-name)
+      (let ((buffer (generate-new-buffer
+                    (format "*org-supertag-%s*" view-name))))
+        (ht-set! org-supertag-view-buffers view-name buffer)
+        buffer)))
+
+;;; Public Interface
+
+(defun org-supertag-create-view (name type &rest props)
+  "Create a new view with NAME and TYPE with properties PROPS."
+  (let ((view (apply #'make-instance
+                    'org-supertag-view
+                    :name name
+                    :type type
+                    props)))
+    (org-supertag-register-view view)
+    view))
+
+(defun org-supertag-display-view (view-name)
+  "Display view with VIEW-NAME."
+  (let* ((view (org-supertag-get-view view-name))
+         (buffer (org-supertag-get-view-buffer view-name))
+         (nodes (ht-values org-supertag-nodes))
+         (data (org-supertag-view-process-data view nodes))
+         (renderer (make-instance
+                   (pcase (oref view type)
+                     ('list 'org-supertag-list-renderer)
+                     ('table 'org-supertag-table-renderer)
+                     ('kanban 'org-supertag-kanban-renderer)
+                     ('calendar 'org-supertag-calendar-renderer))
+                   :buffer buffer
+                   :view view)))
+    (org-supertag-render renderer data)
+    (pop-to-buffer buffer)))
+
+(provide 'org-supertag-views)

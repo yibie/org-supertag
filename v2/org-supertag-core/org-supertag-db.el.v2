@@ -1,0 +1,323 @@
+;;; org-supertag-db.el --- Database for org-supertag -*- lexical-binding: t; -*-
+
+(require 'org-supertag-models)
+(require 'org-supertag-parser)
+(require 'eieio)
+(require 'cl-lib)
+
+;;; Database Class
+
+(defclass org-supertag-db ()
+  ((nodes :initarg :nodes
+          :type hash-table
+          :initform (make-hash-table :test 'equal)
+          :documentation "Hash table of nodes indexed by ID")
+   (tags :initarg :tags
+         :type hash-table
+         :initform (make-hash-table :test 'equal)
+         :documentation "Hash table of nodes indexed by tag")
+   (fields :initarg :fields
+          :type hash-table
+          :initform (make-hash-table :test 'equal)
+          :documentation "Hash table of nodes indexed by field values")
+   (templates :initarg :templates
+             :type hash-table
+             :initform (make-hash-table :test 'equal)
+             :documentation "Hash table of templates indexed by name")
+   (inheritance-rules :initarg :rules
+                     :type hash-table
+                     :initform (make-hash-table :test 'equal)
+                     :documentation "存储继承规则，key 格式为 'parent:child'")))
+  
+
+;;; Database Operations
+
+(cl-defmethod org-supertag-db-add-node ((db org-supertag-db) node)
+  "Add NODE to DB and update indices."
+  ;; Add to nodes index
+  (puthash (oref node id) node (oref db nodes))
+  
+  ;; Update tags index
+  (dolist (tag (oref node tags))
+    (let ((nodes (gethash tag (oref db tags))))
+      (puthash tag
+               (cons node (or nodes nil))
+               (oref db tags))))
+  ;; Update fields index
+  (dolist (field (oref node fields))
+    (let* ((key (format "%s:%s" (oref field name) (oref field value)))
+           (nodes (gethash key (oref db fields))))
+      (puthash key
+               (cons node (or nodes nil))
+               (oref db fields)))))
+
+(cl-defmethod org-supertag-db-remove-node ((db org-supertag-db) node)
+  "Remove NODE from DB and update indices."
+  ;; Remove from nodes index
+  (remhash (oref node id) (oref db nodes))
+  
+  ;; Update tags index
+  (dolist (tag (oref node tags))
+    (let ((nodes (gethash tag (oref db tags))))
+      (when nodes
+        (puthash tag
+                 (remove node nodes)
+                 (oref db tags)))))
+  ;; Update fields index
+  (dolist (field (oref node fields))
+    (let* ((key (format "%s:%s" (oref field name) (oref field value)))
+           (nodes (gethash key (oref db fields))))
+      (when nodes
+        (puthash key
+                 (remove node nodes)
+                 (oref db fields))))))
+
+;;; Query Operations
+
+(cl-defmethod org-supertag-db-get-node ((db org-supertag-db) id)
+  "Get node by ID from DB."
+  (gethash id (oref db nodes)))
+
+(cl-defmethod org-supertag-db-get-nodes-by-tag ((db org-supertag-db) tag)
+  "Get nodes with TAG from DB."
+  (gethash tag (oref db tags)))
+
+(cl-defmethod org-supertag-db-get-nodes-by-field ((db org-supertag-db) name value)
+  "Get nodes with field NAME equal to VALUE from DB."
+  (gethash (format "%s:%s" name value) (oref db fields)))
+
+(defun org-supertag-db--hash-to-list (table)
+  "Convert hash table TABLE to an alist."
+  (let (result)
+    (maphash (lambda (k v) (push (cons k v) result)) table)
+    result))
+
+(cl-defmethod org-supertag-db-query ((db org-supertag-db) &rest conditions)
+  "Query DB with CONDITIONS.
+Each condition is a plist with :type, :value, and optional :operator keys.
+:type can be 'tag or 'field
+:operator can be 'and or 'or (defaults to 'and)"
+  (let ((results nil)
+        (operator (plist-get (car (last conditions)) :operator)))
+    (dolist (condition conditions)
+      (unless (plist-get condition :operator)  ;; Skip the operator plist
+        (let ((type (plist-get condition :type))
+              (value (plist-get condition :value))
+              (current-results nil))
+          (cond
+           ((eq type 'tag)
+            (setq current-results (org-supertag-db-get-nodes-by-tag db value)))
+           ((eq type 'field)
+            (let ((name (car value))
+                  (val (cdr value)))
+              (setq current-results (org-supertag-db-get-nodes-by-field db name val)))))
+          
+          (setq results
+                (if (eq operator 'and)
+                    (if results
+                        (cl-intersection results current-results)
+                      current-results)
+                  (cl-union results current-results))))))
+    (or results nil)))  ;; Ensure we return nil for empty results
+
+(cl-defmethod org-supertag-db-get-all-nodes ((db org-supertag-db))
+  "Get all nodes from DB."
+  (let (nodes)
+    (maphash (lambda (_k v) (push v nodes))
+             (oref db nodes))
+    nodes))
+
+;;; Template Operations
+
+(cl-defmethod org-supertag-db-add-template ((db org-supertag-db) template)
+  "Add TEMPLATE to DB."
+  (puthash (oref template name) template (oref db templates)))
+
+(cl-defmethod org-supertag-db-get-template ((db org-supertag-db) name)
+  "Get template by NAME from DB."
+  (gethash name (oref db templates)))
+
+;;; File Operations
+
+(cl-defmethod org-supertag-db-save ((db org-supertag-db) file)
+  "将数据库保存到文件"
+  (with-temp-buffer
+    (let ((print-level nil)
+          (print-length nil))
+      (prin1 (mapcar #'org-supertag-node-to-plist
+                     (hash-table-values (oref db nodes)))
+             (current-buffer))
+      (write-file file))))
+
+(cl-defmethod org-supertag-db-load ((db org-supertag-db) file)
+  "从文件加载数据库"
+  (when (file-exists-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((nodes-data (read (current-buffer))))
+        (dolist (node-plist nodes-data)
+          (let ((node (org-supertag-node-from-plist node-plist)))
+            (org-supertag-db-add-node db node)))))))
+
+(cl-defmethod org-supertag-node-to-plist ((node org-supertag-node))
+  "将节点转换为属性列表格式"
+  (list :id (oref node id)
+        :content (oref node content)
+        :tags (oref node tags)
+        :fields (mapcar #'org-supertag-field-to-plist
+                       (oref node fields))))
+
+(cl-defmethod org-supertag-node-from-plist ((plist list))
+  "从属性列表创建节点"
+  (make-instance 'org-supertag-node
+                 :id (plist-get plist :id)
+                 :content (plist-get plist :content)
+                 :tags (plist-get plist :tags)
+                 :fields (mapcar #'org-supertag-field-from-plist
+                                (plist-get plist :fields))))
+
+(cl-defmethod org-supertag-field-to-plist ((field org-supertag-field))
+  "将字段转换为属性列表格式"
+  (list :name (oref field name)
+        :type (oref field type)
+        :value (oref field value)
+        :inherit (oref field inherit)))
+
+(cl-defmethod org-supertag-field-from-plist ((plist list))
+  "从属性列表创建字段"
+  (make-instance 'org-supertag-field
+                 :name (plist-get plist :name)
+                 :type (plist-get plist :type)
+                 :value (plist-get plist :value)
+                 :inherit (plist-get plist :inherit)))
+
+;;; 添加继承规则相关的方法
+(defun org-supertag-rule-key (parent child)
+  "生成规则存储的键"
+  (format "%s:%s" parent child))
+
+;; 规则管理方法
+(cl-defmethod org-supertag-db-add-rule ((db org-supertag-db) parent child &optional fields overrides)
+  "添加继承规则到数据库。
+PARENT: 父标签
+CHILD: 子标签
+FIELDS: 要继承的字段列表，nil 表示继承所有字段
+OVERRIDES: 字段覆盖规则，格式为 ((field-name . value) ...)"
+  (let* ((key (org-supertag-rule-key parent child))
+         (rule (org-supertag-rule-create
+                :parent-tag parent
+                :child-tag child
+                :fields fields
+                :overrides overrides)))
+    ;; 验证继承链
+    (when (org-supertag-db-validate-inheritance-chain db child)
+      (puthash key rule (oref db inheritance-rules))
+      (run-hooks 'org-supertag-rule-change-hook)
+      rule)))
+
+(cl-defmethod org-supertag-db-remove-rule ((db org-supertag-db) parent child)
+  "从数据库删除继承规则"
+  (let ((key (org-supertag-rule-key parent child)))
+    (remhash key (oref db inheritance-rules))
+    (run-hooks 'org-supertag-rule-change-hook)))
+
+(cl-defmethod org-supertag-db-get-rule ((db org-supertag-db) parent child)
+  "获取特定的继承规则"
+  (gethash (org-supertag-rule-key parent child)
+           (oref db inheritance-rules)))
+
+;; 规则查询方法
+(cl-defmethod org-supertag-db-get-parent-rules ((db org-supertag-db) tag)
+  "获取标签的所有父级规则"
+  (let (rules)
+    (maphash (lambda (_key rule)
+               (when (and (stringp (org-supertag-rule-child-tag rule))
+                         (string= (org-supertag-rule-child-tag rule) tag))
+                 (push rule rules)))
+             (oref db inheritance-rules))
+    (message "Found rules for tag %s: %S" tag rules)  ; 添加调试信息
+    rules))
+
+(cl-defmethod org-supertag-db-get-child-rules ((db org-supertag-db) parent)
+  "获取标签的所有子级规则"
+  (let (rules)
+    (maphash (lambda (key rule)
+               (when (string= (org-supertag-rule-parent-tag rule) parent)
+                 (push rule rules)))
+             (oref db inheritance-rules))
+    rules))
+
+;; 继承链验证
+(cl-defmethod org-supertag-db-validate-inheritance-chain ((db org-supertag-db) tag)
+  "验证继承链是否存在循环依赖"
+  (let ((visited (make-hash-table :test 'equal))
+        (valid t))
+    (cl-labels ((visit (current)
+                      (if (gethash current visited)
+                          (setq valid nil)
+                        (progn
+                          (puthash current t visited)
+                          (dolist (rule (org-supertag-db-get-parent-rules db current))
+                            (visit (org-supertag-rule-parent-tag rule)))))))
+      (visit tag))
+    valid))
+
+;; 继承解析
+(cl-defmethod org-supertag-db-resolve-inheritance ((db org-supertag-db) tag)
+  "解析标签的完整继承链，返回合并后的字段列表"
+  (message "Resolving inheritance for tag: %s" tag)  ; 添加调试信息
+  (let ((fields nil))
+    ;; 获取并处理所有父规则
+    (dolist (rule (org-supertag-db-get-parent-rules db tag))
+      (let* ((parent-tag (org-supertag-rule-parent-tag rule))
+             (parent-nodes (org-supertag-db-get-nodes-by-tag db parent-tag)))
+        (message "Processing parent tag: %s, nodes: %S" parent-tag parent-nodes)  ; 添加调试信息
+        (dolist (parent-node parent-nodes)
+          (let ((parent-fields (oref parent-node fields)))
+            (message "Parent node fields: %S" parent-fields)  ; 添加调试信息
+            (setq fields (org-supertag-db-merge-fields 
+                         fields 
+                         parent-fields 
+                         (org-supertag-rule-overrides rule)))))))
+    fields))
+
+(cl-defmethod org-supertag-db-merge-fields ((base-fields list) (new-fields list) overrides)
+  "合并字段列表，应用覆盖规则"
+  (message "Merging fields: base=%S new=%S overrides=%S" 
+          base-fields new-fields overrides)  ; 添加调试信息
+  (let ((result (copy-sequence base-fields)))
+    ;; 合并新字段
+    (dolist (field new-fields)
+      (let* ((field-name (oref field name))
+             (override (assoc field-name overrides)))
+        (if override
+            ;; 使用覆盖值
+            (let ((existing (cl-find field-name result
+                                   :key #'org-supertag-field-name
+                                   :test #'string=)))
+              (if existing
+                  (setf (org-supertag-field-value existing) (cdr override))
+                (push (org-supertag-make-field
+                       :name field-name
+                       :type (oref field type)
+                       :value (cdr override))
+                      result)))
+          ;; 使用新值（如果不存在）
+          (unless (cl-find field-name result
+                          :key #'org-supertag-field-name
+                          :test #'string=)
+            (push (copy-sequence field) result)))))
+    (message "Merged result: %S" result)  ; 添加调试信息
+    result))
+
+(cl-defmethod org-supertag-db-find-nodes-by-tag ((db org-supertag-db) tag)
+  "查找具有指定标签的所有节点"
+  (let (result)
+    (maphash (lambda (_id node)
+               (when (member tag (oref node tags))
+                 (push node result)))
+             (oref db nodes))
+    result))
+
+(provide 'org-supertag-db)
+;;; org-supertag-db.el ends here 

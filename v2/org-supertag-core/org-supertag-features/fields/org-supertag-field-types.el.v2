@@ -1,0 +1,84 @@
+;;; org-supertag-field-types.el --- Field type definitions -*- lexical-binding: t; -*-
+
+(require 'eieio)
+(require 'cl-lib)
+
+;; 确保 models 已经加载
+(require 'org-supertag-models)
+
+;; 定义字段类型类
+(defclass org-supertag-field-type ()
+  ((name      :initarg :name
+              :type string
+              :documentation "字段类型名称")
+   (validator :initarg :validator
+             :type function
+             :documentation "验证函数")
+   (formatter :initarg :formatter
+             :type function
+             :documentation "格式化函数")
+   (parser   :initarg :parser
+            :type function
+            :documentation "解析函数"))
+  "字段类型的基类")
+
+;; 字段类型注册表
+(defvar org-supertag-field-types
+  (make-hash-table :test 'equal)
+  "字段类型注册表")
+
+;; 辅助函数
+(defun org-supertag-register-field-type (name validator formatter parser)
+  "注册字段类型"
+  (let ((type (make-instance 'org-supertag-field-type
+                            :name name
+                            :validator validator
+                            :formatter formatter
+                            :parser parser)))
+    (puthash name type org-supertag-field-types)))
+
+(defun org-supertag-get-field-type (name)
+  "获取字段类型"
+  (gethash name org-supertag-field-types))
+
+;; 验证函数
+(defun org-supertag-always-valid (_value)
+  "总是返回 t 的验证函数"
+  t)
+
+(defun org-supertag-identity (value)
+  "返回输入值本身"
+  value)
+
+;; 注册基本字段类型
+(org-supertag-register-field-type
+ "text"
+ #'org-supertag-always-valid
+ #'org-supertag-identity
+ #'org-supertag-identity)
+
+(org-supertag-register-field-type
+ "number"
+ #'numberp
+ #'org-supertag-identity
+ #'org-supertag-identity)
+
+(org-supertag-register-field-type
+ "date"
+ (lambda (value)
+   (condition-case nil
+       (let ((time (parse-time-string value)))
+         (and (nth 3 time)  ;; 日
+              (nth 4 time)  ;; 月
+              (nth 5 time))) ;; 年
+     (error nil)))
+ #'org-supertag-identity
+ #'org-supertag-identity)
+
+(org-supertag-register-field-type
+ "select"
+ #'org-supertag-always-valid
+ #'org-supertag-identity
+ #'org-supertag-identity)
+
+(provide 'org-supertag-field-types) 

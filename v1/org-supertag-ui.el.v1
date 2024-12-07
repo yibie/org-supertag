@@ -1,0 +1,268 @@
+;;; org-supertag-ui.el --- User interface for org-supertag -*- lexical-binding: t; -*-
+
+(require 'transient)
+(require 'magit-section)
+(require 'posframe)
+
+;;; Constants
+
+(defconst org-supertag-ui--field-types
+  '(("Text" . text)
+    ("Number" . number)
+    ("Date" . date)
+    ("Select" . select))
+  "Available field types for UI selection.")
+
+;;; Custom Faces
+
+(defface org-supertag-tag
+  '((t :inherit org-tag :box t))
+  "Face for supertags in UI.")
+
+(defface org-supertag-field-name
+  '((t :inherit font-lock-variable-name-face))
+  "Face for field names in UI.")
+
+(defface org-supertag-field-value
+  '((t :inherit font-lock-string-face))
+  "Face for field values in UI.")
+
+;;; Interactive Tag Commands
+
+(defun org-supertag-ui-add-tag (pos)
+  "Add a tag at position POS."
+  (interactive "d")
+  (let ((tag (completing-read "Tag: "
+                             (ht-keys org-supertag-tags)
+                             nil nil "#")))
+    (save-excursion
+      (goto-char pos)
+      (insert tag)
+      (org-supertag-scan-buffer))))
+
+(defun org-supertag-ui-remove-tag ()
+  "Remove tag at point."
+  (interactive)
+  (when-let* ((bounds (org-supertag-ui--tag-bounds-at-point))
+              (tag (buffer-substring-no-properties
+                    (car bounds) (cdr bounds))))
+    (delete-region (car bounds) (cdr bounds))
+    (org-supertag-scan-buffer)))
+
+(defun org-supertag-ui--tag-bounds-at-point ()
+  "Get bounds of tag at point."
+  (save-excursion
+    (when (looking-at org-supertag-tag-regex)
+      (cons (point) (match-end 0)))))
+
+;;; Field Editor UI
+
+(transient-define-prefix org-supertag-ui-edit-fields ()
+  "Edit fields for the current node."
+  ["Fields"
+   ("a" "Add field" org-supertag-ui-add-field)
+   ("e" "Edit field" org-supertag-ui-edit-field)
+   ("d" "Delete field" org-supertag-ui-delete-field)])
+
+(defun org-supertag-ui-add-field ()
+  "Add a new field to the current node."
+  (interactive)
+  (let* ((node (org-supertag-ui--get-node-at-point))
+         (field-name (read-string "Field name: "))
+         (field-type (cdr (assoc (completing-read "Field type: "
+                                                org-supertag-ui--field-types nil t)
+                                org-supertag-ui--field-types)))
+         (required (yes-or-no-p "Required? "))
+         (field (make-instance 'org-supertag-field
+                             :name field-name
+                             :type field-type
+                             :required required)))
+    (org-supertag-register-field
+     (car (oref node tags))
+     field)
+    (org-supertag-ui--refresh-view)))
+
+(defun org-supertag-ui-edit-field ()
+  "Edit field value for the current node."
+  (interactive)
+  (let* ((node (org-supertag-ui--get-node-at-point))
+         (field-name (completing-read
+                     "Field: "
+                     (mapcar (lambda (f) (oref f name))
+                            (org-supertag-get-fields
+                             (car (oref node tags))))))
+         (value (org-supertag-read-field-value
+                (ht-get (org-supertag-get-fields
+                        (car (oref node tags)))
+                       field-name))))
+    (ht-set! (oref node properties) field-name value)
+    (org-supertag-ui--refresh-view)))
+
+;;; Node Editor UI
+
+(defclass org-supertag-ui-editor ()
+  ((node :initarg :node
+         :documentation "Node being edited")
+   (buffer :initarg :buffer
+           :documentation "Editor buffer")
+   (original-buffer :initarg :original-buffer
+                   :documentation "Buffer containing the node"))
+  "Editor for node contents and properties.")
+
+(defun org-supertag-ui-edit-node ()
+  "Edit node at point in a dedicated buffer."
+  (interactive)
+  (let* ((node (org-supertag-ui--get-node-at-point))
+         (buf (generate-new-buffer "*org-supertag-edit*"))
+         (editor (make-instance 'org-supertag-ui-editor
+                              :node node
+                              :buffer buf
+                              :original-buffer (current-buffer))))
+    (org-supertag-ui--setup-editor-buffer editor)
+    (pop-to-buffer buf)))
+
+(defun org-supertag-ui--setup-editor-buffer (editor)
+  "Set up the editor buffer for EDITOR."
+  (with-current-buffer (oref editor buffer)
+    (erase-buffer)
+    (org-mode)
+    (let ((node (oref editor node)))
+      ;; Insert content
+      (insert (oref node content))
+      ;; Insert properties
+      (insert "\n:PROPERTIES:\n")
+      (ht-each
+       (lambda (k v)
+         (insert (format ":%s: %s\n" k v)))
+       (oref node properties))
+      (insert ":END:\n"))
+    ;; Set up local variables
+    (setq-local org-supertag-current-editor editor)
+    ;; Set up keybindings
+    (use-local-map
+     (let ((map (make-sparse-keymap)))
+       (define-key map (kbd "C-c C-c") #'org-supertag-ui-finish-edit)
+       (define-key map (kbd "C-c C-k") #'org-supertag-ui-cancel-edit)
+       map))))
+
+;;; Quick Entry UI
+
+(defvar org-supertag-quick-entry-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'org-supertag-ui-quick-entry-finish)
+    (define-key map [escape] #'org-supertag-ui-quick-entry-cancel)
+    map)
+  "Keymap for quick entry buffer.")
+
+(defun org-supertag-ui-quick-entry ()
+  "Show quick entry UI for adding new nodes."
+  (interactive)
+  (let ((buf (get-buffer-create "*org-supertag-quick-entry*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (use-local-map org-supertag-quick-entry-map))
+    (posframe-show
+     buf
+     :position (point)
+     :border-width 1
+     :border-color "gray50"
+     :background-color (face-background 'default))))
+
+;;; Context Menu UI
+
+(transient-define-prefix org-supertag-ui-context-menu ()
+  "Context menu for org-supertag."
+  ["Node"
+   ("e" "Edit" org-supertag-ui-edit-node)
+   ("t" "Add tag" org-supertag-ui-add-tag)
+   ("f" "Edit fields" org-supertag-ui-edit-fields)
+   ("k" "Delete" org-supertag-ui-delete-node)]
+  ["View"
+   ("v" "Change view" org-supertag-ui-change-view)
+   ("r" "Refresh" org-supertag-ui--refresh-view)
+   ("s" "Save view" org-supertag-ui-save-view)])
+
+;;; View Navigation UI
+
+(defun org-supertag-ui-next-node ()
+  "Move to next node in view."
+  (interactive)
+  (magit-section-forward))
+
+(defun org-supertag-ui-previous-node ()
+  "Move to previous node in view."
+  (interactive)
+  (magit-section-backward))
+
+(defun org-supertag-ui-next-sibling ()
+  "Move to next sibling node."
+  (interactive)
+  (magit-section-forward-sibling))
+
+(defun org-supertag-ui-previous-sibling ()
+  "Move to previous sibling node."
+  (interactive)
+  (magit-section-backward-sibling))
+
+;;; Filter UI
+
+(defun org-supertag-ui-add-filter ()
+  "Add a filter to the current view."
+  (interactive)
+  (let* ((view (org-supertag-ui--current-view))
+         (field (completing-read "Field: " (oref view fields)))
+         (op (completing-read "Operator: " '("=" "!=" "<" ">" "<=" ">=")))
+         (value (read-string "Value: ")))
+    (org-supertag-ui--add-view-filter view field op value)
+    (org-supertag-ui--refresh-view)))
+
+;;; Utility Functions
+
+(defun org-supertag-ui--get-node-at-point ()
+  "Get node at point in view buffer."
+  (when-let ((section (magit-current-section)))
+    (oref section value)))
+
+(defun org-supertag-ui--refresh-view ()
+  "Refresh the current view."
+  (let ((view (org-supertag-ui--current-view)))
+    (when view
+      (org-supertag-display-view (oref view name)))))
+
+(defun org-supertag-ui--current-view ()
+  "Get the current view object."
+  (when (derived-mode-p 'magit-section-mode)
+    (buffer-local-value 'org-supertag-current-view
+                       (current-buffer))))
+
+;;; Mode Definition
+
+(defvar org-supertag-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "n") #'org-supertag-ui-next-node)
+    (define-key map (kbd "p") #'org-supertag-ui-previous-node)
+    (define-key map (kbd "f") #'org-supertag-ui-add-filter)
+    (define-key map (kbd "e") #'org-supertag-ui-edit-node)
+    (define-key map (kbd "t") #'org-supertag-ui-add-tag)
+    (define-key map (kbd "q") #'quit-window)
+    (define-key map (kbd "?") #'org-supertag-ui-context-menu)
+    map)
+  "Keymap for `org-supertag-view-mode'.")
+
+(define-derived-mode org-supertag-view-mode magit-section-mode "Org-Supertag"
+  "Major mode for org-supertag views."
+  (setq-local revert-buffer-function #'org-supertag-ui--refresh-view))
+
+(defun org-supertag-ui-quick-add-field ()
+  "Quickly add a new field to current node's tags."
+  (interactive)
+  (let* ((node (org-supertag-get-node-at-point))
+         (tags (oref node tags))
+         (field-name (read-string "Field name: "))
+         (field-type (completing-read "Field type: "
+                                    '("text" "number" "date" "select"))))
+    (dolist (tag tags)
+      (org-supertag-add-dynamic-field tag field-name
+                                     (intern field-type)))))
+
+(provide 'org-supertag-ui)

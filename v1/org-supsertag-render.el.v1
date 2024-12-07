@@ -1,0 +1,85 @@
+;;; org-supertag-render.el --- Rendering methods for org-supertag -*- lexical-binding: t; -*-
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-list-renderer) data)
+  "Render DATA as a list using magit-section."
+  (with-current-buffer (oref renderer buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (magit-section-mode)
+      (if (ht-p data)
+          ;; Grouped data
+          (ht-each
+           (lambda (group nodes)
+             (magit-insert-section (group)
+               (magit-insert-heading
+                 (propertize (format "%s" group) 'face 'magit-section-heading))
+               (dolist (node nodes)
+                 (org-supertag-render-node node))))
+           data)
+        ;; Flat list
+        (dolist (node data)
+          (org-supertag-render-node node))))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-table-renderer) data)
+  "Render DATA as a table."
+  (with-current-buffer (oref renderer buffer)
+    (let* ((inhibit-read-only t)
+           (view (oref renderer view))
+           (fields (oref view fields)))
+      (erase-buffer)
+      ;; Header
+      (insert "| "
+              (mapconcat #'identity fields " | ")
+              " |\n")
+      (insert (make-string (length fields) ?-)
+              "\n")
+      ;; Data
+      (dolist (node data)
+        (insert "| ")
+        (dolist (field fields)
+          (insert (format "%s | "
+                         (or (ht-get (oref node properties) field)
+                             ""))))
+        (insert "\n"))
+      (org-table-align))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-kanban-renderer) data)
+  "Render DATA as a kanban board."
+  (with-current-buffer (oref renderer buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (magit-section-mode)
+      ;; Assume data is grouped by status
+      (ht-each
+       (lambda (status nodes)
+         (magit-insert-section (status)
+           (magit-insert-heading
+             (propertize (format "=== %s ===" status)
+                        'face 'magit-section-heading))
+           (dolist (node nodes)
+             (org-supertag-render-node node))
+           (insert "\n")))
+       data))))
+
+(cl-defmethod org-supertag-render ((renderer org-supertag-calendar-renderer) data)
+  "Render DATA as a calendar view."
+  (with-current-buffer (oref renderer buffer)
+    (let* ((inhibit-read-only t)
+           (view (oref renderer view))
+           (date-field (car (oref view fields))))
+      (erase-buffer)
+      ;; Group by date
+      (let ((date-groups (-group-by
+                         (lambda (node)
+                           (ht-get (oref node properties) date-field))
+                         data)))
+        (--each (sort (ht-keys date-groups) #'string<)
+          (magit-insert-section (date)
+            (magit-insert-heading
+              (propertize (format "=== %s ===" it)
+                         'face 'magit-section-heading))
+            (dolist (node (ht-get date-groups it))
+              (org-supertag-render-node node))
+            (insert "\n")))))))
+
+(provide 'org-supertag-render)

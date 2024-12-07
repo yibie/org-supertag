@@ -1,0 +1,287 @@
+;;; org-supertag-automation.el --- Automation system for org-supertag -*- lexical-binding: t; -*-
+
+
+
+;;; Event System
+
+(defclass org-supertag-event ()
+  ((type :initarg :type
+         :type symbol
+         :documentation "Event type")
+   (payload :initarg :payload
+           :documentation "Event data")
+   (timestamp :initarg :timestamp
+              :initform (current-time)
+              :documentation "Event timestamp")
+   (source :initarg :source
+           :documentation "Event source"))
+  "Base class for events.")
+
+(defvar org-supertag-event-handlers (ht-create)
+  "Registry of event handlers.")
+
+(defvar org-supertag-event-queue nil
+  "Queue of pending events.")
+
+(defun org-supertag-emit-event (type payload &optional source)
+  "Emit an event of TYPE with PAYLOAD and optional SOURCE."
+  (let ((event (make-instance 'org-supertag-event
+                             :type type
+                             :payload payload
+                             :source source)))
+    (org-supertag-process-event event)))
+
+(defun org-supertag-on (event-type handler)
+  "Register HANDLER for EVENT-TYPE."
+  (let ((handlers (or (ht-get org-supertag-event-handlers event-type)
+                     '())))
+    (ht-set! org-supertag-event-handlers
+             event-type
+             (cons handler handlers))))
+
+(defun org-supertag-process-event (event)
+  "Process EVENT by calling appropriate handlers."
+  (when-let ((handlers (ht-get org-supertag-event-handlers
+                              (oref event type))))
+    (dolist (handler handlers)
+      (condition-case err
+          (funcall handler event)
+        (error
+         (message "Error in event handler: %S" err))))))
+
+;;; Trigger System
+
+(defclass org-supertag-trigger ()
+  ((name :initarg :name
+         :type string
+         :documentation "Trigger name")
+   (condition :initarg :condition
+             :type function
+             :documentation "Trigger condition")
+   (action :initarg :action
+           :type function
+           :documentation "Trigger action")
+   (events :initarg :events
+          :type list
+          :documentation "Events to listen for"))
+  "Class representing an automation trigger.")
+
+(defvar org-supertag-triggers (ht-create)
+  "Registry of automation triggers.")
+
+(defun org-supertag-register-trigger (trigger)
+  "Register TRIGGER in the automation system."
+  (ht-set! org-supertag-triggers (oref trigger name) trigger)
+  ;; Set up event handlers
+  (dolist (event-type (oref trigger events))
+    (org-supertag-on
+     event-type
+     (lambda (event)
+       (when (funcall (oref trigger condition) event)
+         (funcall (oref trigger action) event))))))
+
+(defun org-supertag-create-trigger (name events condition action)
+  "Create and register a new trigger."
+  (let ((trigger (make-instance 'org-supertag-trigger
+                               :name name
+                               :events events
+                               :condition condition
+                               :action action)))
+    (org-supertag-register-trigger trigger)
+    trigger))
+
+;;; AI Integration
+
+(defclass org-supertag-ai-prompt ()
+  ((name :initarg :name
+         :type string
+         :documentation "Prompt name")
+   (template :initarg :template
+            :type string
+            :documentation "Prompt template")
+   (model :initarg :model
+          :type string
+          :initform "gpt-3.5-turbo"
+          :documentation "AI model to use")
+   (temperature :initarg :temperature
+                :type number
+                :initform 0.7
+                :documentation "Temperature for AI generation"))
+  "Class representing an AI prompt template.")
+
+(defvar org-supertag-ai-prompts (ht-create)
+  "Registry of AI prompts.")
+
+(defun org-supertag-register-prompt (prompt)
+  "Register AI PROMPT in the system."
+  (ht-set! org-supertag-ai-prompts (oref prompt name) prompt))
+
+(defun org-supertag-execute-prompt (prompt-name &rest args)
+  "Execute prompt with PROMPT-NAME using ARGS."
+  (when-let* ((prompt (ht-get org-supertag-ai-prompts prompt-name))
+              (template (oref prompt template))
+              (filled-prompt (apply #'format template args)))
+    (gptel-request
+     filled-prompt
+     :temperature (oref prompt temperature)
+     :model (oref prompt model))))
+
+;; AI Task Queue
+(defvar org-supertag-ai-queue nil
+  "Queue of pending AI tasks.")
+
+(defun org-supertag-queue-ai-task (prompt-name args callback)
+  "Queue an AI task for asynchronous processing."
+  (push (list prompt-name args callback) org-supertag-ai-queue)
+  (org-supertag-process-ai-queue))
+
+(defun org-supertag-process-ai-queue ()
+  "Process pending AI tasks."
+  (when-let ((task (pop org-supertag-ai-queue)))
+    (cl-destructuring-bind (prompt-name args callback) task
+      (async-start
+       `(lambda ()
+          ,(org-supertag-execute-prompt prompt-name args))
+       callback))))
+
+;;; Extension System
+
+(defclass org-supertag-extension ()
+  ((name :initarg :name
+         :type string
+         :documentation "Extension name")
+   (description :initarg :description
+                :type string
+                :documentation "Extension description")
+   (version :initarg :version
+            :type string
+            :documentation "Extension version")
+   (setup-fn :initarg :setup
+             :type function
+             :documentation "Setup function")
+   (cleanup-fn :initarg :cleanup
+               :type function
+               :documentation "Cleanup function"))
+  "Class representing a org-supertag extension.")
+
+(defvar org-supertag-extensions (ht-create)
+  "Registry of installed extensions.")
+
+(defun org-supertag-register-extension (extension)
+  "Register and initialize EXTENSION."
+  (ht-set! org-supertag-extensions (oref extension name) extension)
+  (when-let ((setup (oref extension setup-fn)))
+    (funcall setup)))
+
+(defun org-supertag-unregister-extension (name)
+  "Unregister extension with NAME."
+  (when-let* ((ext (ht-get org-supertag-extensions name))
+              (cleanup (oref ext cleanup-fn)))
+    (funcall cleanup))
+  (ht-remove! org-supertag-extensions name))
+
+;;; Hook System
+
+(defvar org-supertag-hooks
+  '((before-tag-add . nil)
+    (after-tag-add . nil)
+    (before-tag-remove . nil)
+    (after-tag-remove . nil)
+    (before-field-change . nil)
+    (after-field-change . nil)
+    (before-view-change . nil)
+    (after-view-change . nil))
+  "Hooks available in org-supertag.")
+
+(defun org-supertag-run-hooks (hook &rest args)
+  "Run hooks for HOOK with ARGS."
+  (run-hook-with-args hook args))
+
+;;; Public API
+
+;; Event API
+(defun org-supertag-on-tag-added (handler)
+  "Register HANDLER for tag addition events."
+  (org-supertag-on 'tag-added handler))
+
+(defun org-supertag-on-tag-removed (handler)
+  "Register HANDLER for tag removal events."
+  (org-supertag-on 'tag-removed handler))
+
+(defun org-supertag-on-field-changed (handler)
+  "Register HANDLER for field change events."
+  (org-supertag-on 'field-changed handler))
+
+;; Trigger API
+(defun org-supertag-add-field-trigger (field condition action)
+  "Add trigger for FIELD changes with CONDITION and ACTION."
+  (org-supertag-create-trigger
+   (format "field-%s-trigger" field)
+   '(field-changed)
+   (lambda (event)
+     (and (equal (plist-get (oref event payload) :field) field)
+          (funcall condition event)))
+   action))
+
+;; AI API
+(defun org-supertag-register-ai-prompt (name template &optional model temperature)
+  "Register a new AI prompt."
+  (let ((prompt (make-instance 'org-supertag-ai-prompt
+                              :name name
+                              :template template
+                              :model (or model "gpt-3.5-turbo")
+                              :temperature (or temperature 0.7))))
+    (org-supertag-register-prompt prompt)))
+
+;; Extension API
+(defmacro org-supertag-define-extension (name &rest body)
+  "Define a new extension with NAME and BODY."
+  (declare (indent 1))
+  `(let ((ext (make-instance 'org-supertag-extension
+                            :name ,name
+                            ,@body)))
+     (org-supertag-register-extension ext)))
+
+;;; Usage Examples
+
+;; Event handling example
+(org-supertag-on-tag-added
+ (lambda (event)
+   (message "Tag added: %S" (oref event payload))))
+
+;; Trigger example
+(org-supertag-add-field-trigger
+ "status"
+ (lambda (event)
+   (equal (plist-get (oref event payload) :value) "done"))
+ (lambda (event)
+   (message "Task completed!")))
+
+;; AI prompt example
+(org-supertag-register-ai-prompt
+ "summarize"
+ "Summarize the following text in 3 bullet points:\n%s")
+
+;; Extension example
+(org-supertag-define-extension "my-extension"
+  :description "Example extension"
+  :version "1.0"
+  :setup (lambda () (message "Extension setup"))
+  :cleanup (lambda () (message "Extension cleanup")))
+
+(defun org-supertag-auto-manage-tags ()
+  "Automatically manage tags based on usage patterns."
+  (interactive)
+  (let ((usage-data (org-supertag-analyze-tag-usage)))
+    ;; 处理常用标签
+    (dolist (tag (org-supertag-get-frequent-tags usage-data))
+      (unless (org-supertag-is-registered-tag tag)
+        (org-supertag-register-tag tag)))
+    
+    ;; 处理相关字段
+    (dolist (tag (ht-keys usage-data))
+      (let ((common-fields (org-supertag-analyze-common-fields tag)))
+        (dolist (field common-fields)
+          (org-supertag-add-dynamic-field tag field))))))
+
+(provide 'org-supertag-automation)

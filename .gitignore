@@ -1,0 +1,21 @@
+# Compiled
+*.elc
+
+# Packaging
+.cask
+
+# Backup files
+*~
+\#*\#
+.\#*
+
+# Undo-tree save-files
+*.~undo-tree
+
+# Auto-save files
+auto-save-list
+tramp
+.\#*
+
+# etc
+.DS_Store 

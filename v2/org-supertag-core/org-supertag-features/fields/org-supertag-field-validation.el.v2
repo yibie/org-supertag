@@ -1,0 +1,77 @@
+;;; org-supertag-field-validation.el --- Field validation -*- lexical-binding: t; -*-
+
+;; 验证规则注册表
+(defvar org-supertag-validation-rules
+  (make-hash-table :test 'eq)
+  "验证规则注册表")
+
+;; 辅助函数
+(defun org-supertag-make-validation-rule (name predicate message)
+  "创建验证规则"
+  (list :name name
+        :predicate predicate
+        :message message))
+
+(defun org-supertag-register-validation-rule (rule)
+  "注册验证规则"
+  (puthash (plist-get rule :name) rule org-supertag-validation-rules))
+
+;; 验证函数
+(defun org-supertag-validate-field (field value rules)
+  "验证字段值。返回错误消息列表，如果没有错误则返回 nil。"
+  (let* ((type-name (plist-get field :type))
+         (type (org-supertag-get-field-type type-name))
+         (errors '()))
+    
+    ;; 验证类型
+    (unless (and type 
+                (funcall (plist-get type :validator) value))
+      (push (format "值类型不正确: %s" type-name) errors))
+    
+    ;; 验证规则
+    (dolist (rule rules)
+      (let* ((rule-name (car rule))
+             (rule-args (cdr rule))
+             (validation-rule (gethash rule-name org-supertag-validation-rules)))
+        (when validation-rule
+          (let ((predicate (plist-get validation-rule :predicate)))
+            (unless (if rule-args
+                       (apply predicate value rule-args)
+                     (funcall predicate value))  ;; 根据是否有参数选择调用方式
+              (push (if rule-args
+                       (apply #'format 
+                             (plist-get validation-rule :message)
+                             rule-args)
+                     (plist-get validation-rule :message))
+                    errors))))))
+    
+    ;; 返回错误列表
+    (nreverse errors)))
+
+;; 注册基本验证规则
+(org-supertag-register-validation-rule
+ (org-supertag-make-validation-rule
+  'required
+  (lambda (value)
+    "验证值是否非空"
+    (not (null value)))
+  "字段不能为空"))
+
+(org-supertag-register-validation-rule
+ (org-supertag-make-validation-rule
+  'valid-option
+  (lambda (value options)
+    "验证值是否在选项列表中"
+    (member value options))
+  "选项必须是有效的: %s"))
+
+;; 添加字段名称验证规则
+(org-supertag-register-validation-rule
+ (org-supertag-make-validation-rule
+  'valid-field-name
+  (lambda (name)
+    (and (stringp name)
+         (string-match-p "^[[:alnum:]_-]+$" name)))
+  "字段名称必须是有效的标识符"))
+
+(provide 'org-supertag-field-validation) 

@@ -1,0 +1,247 @@
+;;; org-supertag-triggers.el --- Predefined triggers for org-supertag -*- lexical-binding: t; -*-
+
+(require 'eieio)
+(require 'dash)
+(require 'ht)
+
+;;; Tag Lifecycle Triggers
+
+(defclass org-supertag-lifecycle-trigger (org-supertag-trigger)
+  ((tag :initarg :tag
+        :documentation "Tag this trigger applies to")
+   (scope :initarg :scope
+          :initform 'global
+          :type symbol
+          :documentation "Trigger scope (global, buffer, node)"))
+  "Base class for tag lifecycle triggers.")
+
+;; Tag Creation Triggers
+(defun org-supertag-create-initialization-trigger (tag-name &rest field-specs)
+  "Create trigger to initialize TAG-NAME with FIELD-SPECS."
+  (org-supertag-create-trigger
+   (format "init-%s" tag-name)
+   '(tag-added)
+   (lambda (event)
+     (equal (plist-get (oref event payload) :tag) tag-name))
+   (lambda (event)
+     (let ((node (plist-get (oref event payload) :node)))
+       (dolist (spec field-specs)
+         (let-alist spec
+           (ht-set! (oref node properties) 
+                   .field 
+                   (if (functionp .value)
+                       (funcall .value)
+                     .value))))))))
+
+(defun org-supertag-create-inheritance-trigger (tag-name parent-tag)
+  "Create trigger to handle TAG-NAME inheriting from PARENT-TAG."
+  (org-supertag-create-trigger
+   (format "inherit-%s-%s" tag-name parent-tag)
+   '(tag-added)
+   (lambda (event)
+     (equal (plist-get (oref event payload) :tag) tag-name))
+   (lambda (event)
+     (let* ((node (plist-get (oref event payload) :node))
+            (parent-fields (org-supertag-get-fields parent-tag)))
+       (ht-each
+        (lambda (field-name field)
+          (unless (ht-get (oref node properties) field-name)
+            (ht-set! (oref node properties) field-name
+                    (oref field default))))
+        parent-fields)))))
+
+;; Tag Modification Triggers
+(defun org-supertag-create-sync-trigger (source-tag target-tag field)
+  "Create trigger to sync FIELD from SOURCE-TAG to TARGET-TAG."
+  (org-supertag-create-trigger
+   (format "sync-%s-%s-%s" source-tag target-tag field)
+   '(field-changed)
+   (lambda (event)
+     (and (equal (plist-get (oref event payload) :field) field)
+          (equal (plist-get (oref event payload) :tag) source-tag)))
+   (lambda (event)
+     (let* ((source-node (plist-get (oref event payload) :node))
+            (value (ht-get (oref source-node properties) field))
+            (target-nodes (org-supertag-find-nodes-by-tag target-tag)))
+       (dolist (node target-nodes)
+         (ht-set! (oref node properties) field value))))))
+
+;; Tag Deletion Triggers
+(defun org-supertag-create-cleanup-trigger (tag-name)
+  "Create trigger to clean up when TAG-NAME is removed."
+  (org-supertag-create-trigger
+   (format "cleanup-%s" tag-name)
+   '(tag-removed)
+   (lambda (event)
+     (equal (plist-get (oref event payload) :tag) tag-name))
+   (lambda (event)
+     (let ((node (plist-get (oref event payload) :node)))
+       ;; Clean up properties
+       (ht-clear! (oref node properties))
+       ;; Remove from inheritance
+       (org-supertag-remove-inheritance tag-name)
+       ;; Update indexes
+       (org-supertag-update-indexes node)))))
+
+;;; Content Processing Triggers
+
+(defclass org-supertag-content-trigger (org-supertag-trigger)
+  ((pattern :initarg :pattern
+            :documentation "Pattern to match in content")
+   (processor :initarg :processor
+              :type function
+              :documentation "Content processing function"))
+  "Base class for content processing triggers.")
+
+;; Text Analysis Triggers
+(defun org-supertag-create-tag-extraction-trigger (patterns tag-name)
+  "Create trigger to extract tags based on PATTERNS."
+  (make-instance 'org-supertag-content-trigger
+    :name (format "extract-%s" tag-name)
+    :events '(content-changed)
+    :pattern patterns
+    :condition (lambda (event)
+                (let ((content (plist-get (oref event payload) :content)))
+                  (--any? (string-match-p it content) patterns)))
+    :action (lambda (event)
+             (let ((node (plist-get (oref event payload) :node)))
+               (push tag-name (oref node tags))))))
+
+(defun org-supertag-create-keyword-trigger (keywords field value)
+  "Create trigger to set FIELD when KEYWORDS are found."
+  (make-instance 'org-supertag-content-trigger
+    :name (format "keyword-%s" field)
+    :events '(content-changed)
+    :pattern keywords
+    :condition (lambda (event)
+                (let ((content (plist-get (oref event payload) :content)))
+                  (--any? (string-match-p it content) keywords)))
+    :action (lambda (event)
+             (let ((node (plist-get (oref event payload) :node)))
+               (ht-set! (oref node properties) field value)))))
+
+;; Format Triggers
+(defun org-supertag-create-template-trigger (tag-name template)
+  "Create trigger to apply TEMPLATE to nodes with TAG-NAME."
+  (org-supertag-create-trigger
+   (format "template-%s" tag-name)
+   '(tag-added)
+   (lambda (event)
+     (equal (plist-get (oref event payload) :tag) tag-name))
+   (lambda (event)
+     (let* ((node (plist-get (oref event payload) :node))
+            (content (oref node content))
+            (props (oref node properties)))
+       (oset node content
+             (s-format template
+                      (lambda (prop)
+                        (or (ht-get props prop) ""))))))))
+
+;;; Time-based Triggers
+
+(defclass org-supertag-time-trigger (org-supertag-trigger)
+  ((schedule :initarg :schedule
+             :documentation "Trigger schedule specification")
+   (last-run :initform nil
+             :documentation "Last execution timestamp"))
+  "Base class for time-based triggers.")
+
+;; Timer Triggers
+(defun org-supertag-create-periodic-trigger (interval action)
+  "Create trigger that runs ACTION every INTERVAL seconds."
+  (make-instance 'org-supertag-time-trigger
+    :name (format "timer-%s" interval)
+    :events '(timer)
+    :schedule interval
+    :condition (lambda (event)
+                (let ((now (time-to-seconds (current-time)))
+                      (last-run (oref event source last-run)))
+                  (or (null last-run)
+                      (>= (- now last-run) interval))))
+    :action (lambda (event)
+             (funcall action)
+             (oset event source last-run
+                   (time-to-seconds (current-time))))))
+
+;; Deadline Triggers
+(defun org-supertag-create-deadline-trigger (tag-name deadline-field action)
+  "Create trigger for deadline based on DEADLINE-FIELD."
+  (make-instance 'org-supertag-time-trigger
+    :name (format "deadline-%s" tag-name)
+    :events '(timer)
+    :schedule 3600  ; Check hourly
+    :condition (lambda (event)
+                (let* ((nodes (org-supertag-find-nodes-by-tag tag-name))
+                       (now (current-time)))
+                  (--any? (let ((deadline (ht-get (oref it properties)
+                                                deadline-field)))
+                           (and deadline
+                                (time-less-p now (parse-time-string deadline))))
+                         nodes)))
+    :action action))
+
+;;; Composite Triggers
+
+(defclass org-supertag-composite-trigger (org-supertag-trigger)
+  ((triggers :initarg :triggers
+             :type list
+             :documentation "List of member triggers")
+   (combination :initarg :combination
+                :type function
+                :documentation "Function to combine trigger results"))
+  "Class for composite triggers.")
+
+(defun org-supertag-create-and-trigger (&rest triggers)
+  "Create trigger that activates when all TRIGGERS activate."
+  (make-instance 'org-supertag-composite-trigger
+    :name (format "and-trigger-%s" (length triggers))
+    :triggers triggers
+    :combination (lambda (&rest results) (--all? it results))
+    :action (lambda (event)
+             (--all? (and (funcall (oref it condition) event)
+                         (funcall (oref it action) event))
+                    triggers))))
+
+(defun org-supertag-create-or-trigger (&rest triggers)
+  "Create trigger that activates when any TRIGGER activates."
+  (make-instance 'org-supertag-composite-trigger
+    :name (format "or-trigger-%s" (length triggers))
+    :triggers triggers
+    :combination (lambda (&rest results) (--any? it results))
+    :action (lambda (event)
+             (--any? (and (funcall (oref it condition) event)
+                         (funcall (oref it action) event))
+                    triggers))))
+
+;;; Usage Examples
+
+;; Tag initialization example
+(org-supertag-create-initialization-trigger
+ "#task"
+ '((field . "status") (value . "todo"))
+ '((field . "priority") (value . "normal"))
+ '((field . "created") (value . current-time)))
+
+;; Content processing example
+(org-supertag-create-tag-extraction-trigger
+ '("TODO" "FIXME" "XXX")
+ "#review")
+
+;; Deadline example
+(org-supertag-create-deadline-trigger
+ "#task"
+ "due-date"
+ (lambda (event)
+   (message "Task deadline approaching!")))
+
+;; Composite example
+(org-supertag-create-and-trigger
+ (org-supertag-create-tag-extraction-trigger
+  '("urgent" "important")
+  "#high-priority")
+ (org-supertag-create-deadline-trigger
+  "#task"
+  "due-date"
+  #'identity))
+
+(provide 'org-supertag-triggers)

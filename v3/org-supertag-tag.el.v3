@@ -1,0 +1,462 @@
+;;; org-supertag-tag.el --- Tag management for org-supertag -*- lexical-binding: t; -*-
+
+(require 'cl-lib)
+(require 'org)
+(require 'org-id)
+(require 'org-supertag-db)
+
+;;------------------------------------------------------------------------------ 
+;; Internal Functions
+;;------------------------------------------------------------------------------ 
+(defun org-supertag-tag--generate-id ()
+  "生成唯一的标签ID。"
+  (format "tag-%s" (org-id-uuid)))
+
+(defun org-supertag-tag--validate-name (name)
+  "验证标签名称的效性。
+NAME 是要验证的标签名称。
+如果名称无效，抛出错误。"
+  (cond
+   ;; 检查空名称
+   ((or (null name) (string-empty-p name))
+    (error "标签名称不能为空"))
+   
+   ;; 检查名称长度
+   ((> (length name) 100)
+    (error "标签名称过长（最大100个字符）"))
+   
+   ;; 检查名称是否已存在
+   ((org-supertag-tag-get-by-name name)
+    (error "标签名称 '%s' 已存在" name))))
+
+(defun org-supertag-tag-create (name &rest props)
+  "创建新标签。
+NAME 是标签名称。
+PROPS 是属性列表，可包含 :description, :owner-id, :fields, :children 等。
+:children 属性会被单独处理，不会存储在标签结构中。
+
+返回新创建的 org-supertag-tag 结构体。
+
+可能的错误：
+- 名称为空
+- 名称过长（超过100个字符）
+- 名称已存在
+- 所有者标签不存在"
+  ;; 验证输入
+  (org-supertag-tag--validate-name name)
+  
+  ;; 检查名称唯一性
+  (when (org-supertag-tag-get-by-name name)
+    (error "标签名称 '%s' 已存在" name))
+  
+  ;; 验证所有者标签
+  (when-let ((owner-id (plist-get props :owner-id)))
+    (unless (org-supertag-tag-get owner-id)
+      (error "所有者标签 '%s' 不存在" owner-id)))
+  
+  ;; 提取children属性，不传给make-org-supertag-tag
+  (let* ((children (plist-get props :children))
+         (props-without-children (org-plist-delete props :children))
+         (id (or (plist-get props-without-children :id) 
+                 (org-supertag-tag--generate-id)))
+         (tag (make-org-supertag-tag
+               :id id
+               :name name
+               :description (or (plist-get props-without-children :description) "")
+               :owner-id (plist-get props-without-children :owner-id)
+               :metadata (or (plist-get props-without-children :metadata)
+                           `(:created-at ,(current-time))))))
+    
+    ;; 存储标签
+    (message "存储标签 - ID: %s" id)  ; 调试信息
+    (org-supertag-db-create 'tags (org-supertag-tag--to-plist tag))
+    (message "验证存储 - 已存储的标签: %S" (org-supertag-tag-get id))  ; 调试信息
+    
+    ;; 创建预设字段
+    (when-let ((fields (plist-get props-without-children :fields)))
+      (dolist (field-spec fields)
+        (let ((field-id (plist-get field-spec :id))
+              (default-value (plist-get field-spec :default)))
+          (org-supertag-tag-field-rel-create id field-id default-value))))
+    
+    ;; 处理子标签
+    (when children
+      (dolist (child-id children)
+        (org-supertag-tag-update child-id (list :owner-id id))))
+    
+    ;; 返回创建的标签结构体
+    tag))
+
+(defun org-supertag-tag-get-by-name (name)
+  "通过名称获取标签。
+返回 org-supertag-tag 结构体。"
+  (let ((store (org-supertag-db-get-store 'tags)))
+    (cl-loop for tag-plist being the hash-values of store
+             when (equal (plist-get tag-plist :name) name)
+             return (org-supertag-tag--from-plist tag-plist))))
+
+(defun org-supertag-tag-get (tag-id)
+  "通过ID获取标签。
+返回 org-supertag-tag 结构体。"
+  (when-let ((tag-plist (org-supertag-db-get 'tags tag-id)))
+    (org-supertag-tag--from-plist tag-plist)))
+
+(defun org-supertag-tag-get-children (owner-id)
+  "获取标签的所有子标签。
+OWNER-ID 是要查找子标签的标签ID。
+返回 org-supertag-tag 结构体列表。"
+  (mapcar #'org-supertag-tag--from-plist
+          (org-supertag-db-query 'tags
+                                (lambda (tag-plist)
+                                  (equal (plist-get tag-plist :owner-id)
+                                         owner-id)))))
+
+(defun org-supertag-tag-get-id (tag)
+  "Get the ID of a tag.
+TAG can be either a tag object or a tag ID string."
+  (if (stringp tag)
+      tag
+    (org-supertag-tag-id tag)))
+
+(defun org-supertag-tag-update (tag-id props)
+  "更新标签的属性。
+TAG-ID 是标签ID。
+PROPS 是要更新的属性列表。
+返回更新后的 org-supertag-tag 结构体。"
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (updated-tag (copy-org-supertag-tag tag)))
+    (unless tag
+      (error "标签 '%s' 不存在" tag-id))
+    
+    ;; 更新属性
+    (when-let ((name (plist-get props :name)))
+      (org-supertag-tag--validate-name name)
+      (setf (org-supertag-tag-name updated-tag) name))
+    
+    (when-let ((description (plist-get props :description)))
+      (setf (org-supertag-tag-description updated-tag) description))
+    
+    (when-let ((owner-id (plist-get props :owner-id)))
+      (message "更新所有者ID - Tag ID: %s, Owner ID: %s" tag-id owner-id)
+      (setf (org-supertag-tag-owner-id updated-tag) owner-id))
+    
+    ;; 存储更新后的标签
+    (message "更新后的标签: %S" updated-tag)
+    (org-supertag-db-create 'tags (org-supertag-tag--to-plist updated-tag))
+    (message "存储后的标签: %S" updated-tag)
+    
+    ;; 通知更新
+    (org-supertag-tag--notify-change 'update (list :tag updated-tag))
+    
+    updated-tag))
+
+(defun org-supertag-tag-get-owned (owner-id)
+  "获取属于指定标签的所有标签。
+OWNER-ID 是所有者标签的ID。"
+  (let ((store (org-supertag-db-get-store 'tags)))
+    (cl-loop for tag-plist being the hash-values of store
+             when (equal (plist-get tag-plist :owner-id) owner-id)
+             collect (org-supertag-tag--from-plist tag-plist))))
+
+(defun org-supertag-tag-get-all ()
+  "获取所有标签。
+返回 org-supertag-tag 结构体列表。"
+  (let ((store (org-supertag-db-get-store 'tags)))
+    (cl-loop for tag-plist being the hash-values of store
+             collect (org-supertag-tag--from-plist tag-plist))))
+
+(defun org-supertag-tag--to-plist (tag)
+  "将标签结构体转换为plist。
+TAG 是 org-supertag-tag 结构体。"
+  (list :id (org-supertag-tag-id tag)
+        :name (org-supertag-tag-name tag)
+        :description (org-supertag-tag-description tag)
+        :owner-id (org-supertag-tag-owner-id tag)
+        :metadata (org-supertag-tag-metadata tag)))
+
+(defun org-supertag-tag--from-plist (plist)
+  "将plist转换为标签结构体。
+PLIST 是包含标签数据的属性列表。"
+  (make-org-supertag-tag
+   :id (plist-get plist :id)
+   :name (plist-get plist :name)
+   :description (plist-get plist :description)
+   :owner-id (plist-get plist :owner-id)
+   :metadata (plist-get plist :metadata)))
+
+(defun org-supertag-tag-get-ancestors (tag-id)
+  "获取标签的所有祖先标签ID。
+TAG-ID 是要查找祖先的标签ID。
+返回标签ID列表，从最近的祖先到最远的祖先。"
+  (let ((result '())
+        (current-id tag-id))
+    (while (when-let ((tag (org-supertag-tag-get current-id)))
+             (setq current-id (org-supertag-tag-owner-id tag))
+             (when current-id
+               (push current-id result)
+               t)))
+    result))
+
+(defun org-supertag-tag-get-root (tag-id)
+  "获取标签的根标签ID。
+TAG-ID 是要查找根标签的标签ID。
+返回根标签的ID。"
+  (let ((current-id tag-id))
+    (while (when-let* ((tag (org-supertag-tag-get current-id))
+                      (owner-id (org-supertag-tag-owner-id tag)))
+             (setq current-id owner-id)
+             t))
+    current-id))
+
+(defun org-supertag-tag-set-owner (tag-id owner-id)
+  "设置标签的所有者。
+TAG-ID 是要设置的标签ID。
+OWNER-ID 是所有者标签的ID。
+
+可能的错误：
+- 标签不存在
+- 所有者标签不存在"
+  ;; 验证标签存在
+  (let ((tag (org-supertag-tag-get tag-id)))
+    (unless tag
+      (error "标签 '%s' 不存在" tag-id))
+    
+    ;; 验证所有者存在（如果不是 nil）
+    (when owner-id
+      (unless (org-supertag-tag-get owner-id)
+        (error "所有者标签 '%s' 不存在" owner-id)))
+    
+    ;; 使用 update 函数更新所有者ID
+    (org-supertag-tag-update tag-id (list :owner-id owner-id))))
+
+(defun org-supertag-tag-list ()
+  "返回所有已定义的标签列表。"
+  (let ((tags nil))
+    (when-let ((store (org-supertag-db-get-store 'tags)))
+      (maphash (lambda (_id tag-plist)
+                 ;; 将 plist 转换为 org-supertag-tag 结构体
+                 (push (org-supertag-tag--from-plist tag-plist) tags))
+               store))
+    (nreverse tags)))
+
+;;------------------------------------------------------------------------------ 
+;; 字段关联管理
+;;------------------------------------------------------------------------------ 
+
+(defun org-supertag-tag--validate-field-relation (tag-id field-id)
+  "验证标签和字段的关联。
+TAG-ID 是标签ID。
+FIELD-ID 是字段ID。
+
+如果关联无效，抛出错误。"
+  ;; 验证标签和字段ID不为空
+  (unless (and tag-id field-id)
+    (error "标签ID和字段ID不能为空"))
+  
+  ;; 验证标签存在
+  (unless (org-supertag-tag-get tag-id)
+    (error "标签 '%s' 不存在" tag-id))
+  
+  ;; 验证字段存在
+  (unless (org-supertag-field-get field-id)
+    (error "字段 '%s' 不存在" field-id))
+  
+  ;; 验证关联不存在
+  (let ((store (org-supertag-db-get-store 'tag-field-rels))
+        (rel-id (format "%s-%s" tag-id field-id)))
+    (when (gethash rel-id store)
+      (error "标签 '%s' 已关联字段 '%s'" tag-id field-id))))
+
+(defun org-supertag-tag-field-rel-create (tag-id field-id &optional default-value)
+  "创建标签和字段的关联。
+TAG-ID 是标签ID。
+FIELD-ID 是字段ID。
+DEFAULT-VALUE 是可选的默认值。"
+  ;; 验证标签和字段存在
+  (unless (org-supertag-tag-get tag-id)
+    (error "标签 '%s' 不存在" tag-id))
+  (unless (org-supertag-field-get field-id)
+    (error "字段 '%s' 不存在" field-id))
+    
+  ;; Create relationship ID and data
+  (let* ((rel-id (format "%s-%s" tag-id field-id))
+         (rel (make-org-supertag-tag-field-rel
+               :tag-id tag-id
+               :field-id field-id
+               :default-value default-value
+               :created-at (current-time))))
+    
+    ;; Store in database with proper ID
+    (org-supertag-db-put 'tag-field-rels rel-id rel)
+    
+    ;; Return the relationship ID for reference
+    rel-id))
+
+(defun org-supertag-tag-add-field (tag-id field-id &optional default-value)
+  "为标签添加字段。
+TAG-ID 是标签ID。
+FIELD-ID 是字段ID。
+DEFAULT-VALUE 是可选的默认值。"
+  (let* ((field (org-supertag-field-get field-id))
+         (field-default (when field (org-supertag-field-default field))))
+    ;; 直接调用 field-rel-create，它会处理所有验证
+    (org-supertag-tag-field-rel-create tag-id field-id (or default-value field-default))))
+
+(defun org-supertag-tag-remove-field (tag-id field-id)
+  "从标签中移除字段。
+TAG-ID 是标签ID。
+FIELD-ID 是字段ID。"
+  (let ((store (org-supertag-db-get-store 'tag-field-rels))
+        (rel-id (format "%s-%s" tag-id field-id)))
+    (if (gethash rel-id store)
+        (progn
+          (remhash rel-id store)
+          (message "移除字段关联 - ID: %s" rel-id)
+          (org-supertag-tag--notify-change 'field-remove 
+                                           (list :tag-id tag-id 
+                                                 :field-id field-id)))
+      (error "字段 '%s' 不存在于标签 '%s'" field-id tag-id))))
+
+(defun org-supertag-tag-get-fields (tag-id)
+  "获取标签的所有字段。
+TAG-ID 是标签ID。"
+  (let ((store (org-supertag-db-get-store 'tag-field-rels))
+        (fields '()))
+    (maphash (lambda (k v)
+               (when (and (string-prefix-p tag-id k)
+                         (org-supertag-tag-field-rel-p v))
+                 (push v fields)))
+             store)
+    fields))
+
+;;------------------------------------------------------------------------------ 
+;; 标签层级管理
+;;------------------------------------------------------------------------------ 
+
+;;------------------------------------------------------------------------------ 
+;; Notify Change
+;;------------------------------------------------------------------------------  
+
+(defvar org-supertag-tag-change-functions nil
+  "标签变更时调用的函数列表。
+每个函数接收两个参数：操作类型（符号）和相关数据（plist）。")
+
+(defun org-supertag-tag--notify-change (operation data)
+  "通知标签变更。
+OPERATION 是操作类型（符号）。
+DATA 是相关数据（plist）。"
+  (run-hook-with-args 'org-supertag-tag-change-functions operation data))
+
+;;----------------------------------------------------------------------
+;; 初始化
+;;----------------------------------------------------------------------
+
+(defun org-supertag-tag-init ()
+  "初始化标签系统。"
+  (message "\n=== 初始化标签系统 ===")
+  ;; 确保数据库已初始化
+  (org-supertag-db-init)
+  ;; 注册必要的存储
+  (org-supertag-db-register-store 'tags)
+  (org-supertag-db-register-store 'tag-field-rels)
+  
+  (message "标签系统初始化完成"))
+
+;;----------------------------------------------------------------------
+;; 调试和测试工具
+;;----------------------------------------------------------------------
+
+(defun org-supertag-tag-debug ()
+  "调试标签系统。"
+  (interactive)
+  (message "\n=== 标签系统调试 ===")
+  (let ((tags (org-supertag-db-query 'tags #'identity)))
+    (dolist (tag tags)
+      (message "标签: %s (%s)"
+               (org-supertag-tag-name tag)
+               (org-supertag-tag-id tag)))))
+
+(defun org-supertag-tag--validate-field (field-id)
+  "验证字段ID的有效性。
+FIELD-ID 是要验证的字段ID。
+如果字段不存在，抛出错误。"
+  (unless (and field-id
+               (org-supertag-field-get field-id))
+    (error "字段 '%s' 不存在" field-id)))
+
+(defun org-supertag-tag-delete (tag-id)
+  "删除指定的标签。
+TAG-ID 是要删除的标签ID。
+
+可能的错误：
+- 标签不存在"
+  (let ((tag (org-supertag-tag-get tag-id)))
+    ;; 验证标签存在
+    (unless tag
+      (error "标签 '%s' 不存在" tag-id))
+    
+    (message "[DEBUG] 开始删除标签: %s" tag-id)
+    (message "[DEBUG] 获取到标签: %s" tag)
+    
+    (message "[DEBUG] 开始事务操作")
+    (org-supertag-db-transaction
+     (lambda ()
+       ;; 更新所有子标签的owner-id为自己的id
+       (let ((children (org-supertag-tag-get-children tag-id)))
+         (dolist (child children)
+           (let ((child-id (org-supertag-tag-id child)))
+             (message "[DEBUG] 更新子标签 %s 的owner-id为自己" child-id)
+             (org-supertag-tag-update child-id (list :owner-id child-id)))))
+       
+       ;; 删除标签
+       (org-supertag-db-delete 'tags tag-id)
+       
+       ;; 通知变更
+       (org-supertag-tag--notify-change 'delete 
+                                      (list :tag-id tag-id))))))
+
+(defun org-supertag-tag-fields (tag)
+  "Get all fields associated with TAG."
+  (message "[DEBUG Tag] Getting fields for tag: %S" tag)
+  (let* ((tag-id (org-supertag-tag-id tag))
+         (store (org-supertag-db-get-store 'tag-field-rels))
+         (fields nil))
+    
+    ;; Collect all fields from tag-field relationships
+    (maphash (lambda (rel-id rel)
+               (when (and (stringp rel-id)
+                         (string-prefix-p tag-id rel-id))
+                 (when-let* ((field-id (org-supertag-tag-field-rel-field-id rel))
+                            (field (org-supertag-field-get field-id)))
+                   (push field fields))))
+             store)
+    
+    (message "[DEBUG Tag] Found fields: %S" fields)
+    (nreverse fields)))
+
+(defun org-supertag-tag-get-field-value (tag field)
+  "Get the value of FIELD for TAG."
+  (message "[DEBUG Tag] Getting field value - Tag: %S, Field: %S" tag field)
+  (let* ((tag-id (org-supertag-tag-id tag))
+         (field-id (org-supertag-field-id field))
+         (rel-id (format "%s-%s" tag-id field-id))
+         (rel (gethash rel-id (org-supertag-db-get-store 'tag-field-rels))))
+    (when rel
+      (message "[DEBUG Tag] Found relationship: %S" rel)
+      (org-supertag-tag-field-rel-default-value rel))))
+
+(defun org-supertag-tag-cleanup ()
+  "清理标签系统。"
+  (message "\n=== 清理标签系统 ===")
+  ;; 清理标签数据
+  (when-let ((store (org-supertag-db-get-store 'tags)))
+    (clrhash store))
+  (when-let ((store (org-supertag-db-get-store 'tag-field-rels)))
+    (clrhash store))
+  ;; 清理变更通知函数
+  (setq org-supertag-tag-change-functions nil)
+  (message "标签系统清理完成"))
+
+
+(provide 'org-supertag-tag)
+;;; org-supertag-tag.el ends here

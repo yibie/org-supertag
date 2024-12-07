@@ -1,0 +1,105 @@
+;;; org-supertag-inheritance.el --- Inheritance system for org-supertag -*- lexical-binding: t; -*-
+
+
+
+;;; Inheritance Graph
+
+(defclass org-supertag-inheritance-graph ()
+  ((nodes :initform (ht-create)
+          :documentation "Hash table of nodes in the graph")
+   (edges :initform (ht-create)
+          :documentation "Hash table of edges in the graph"))
+  "Graph structure for managing tag inheritance relationships.")
+
+(defvar org-supertag-inheritance-graph (make-instance 'org-supertag-inheritance-graph)
+  "Global inheritance graph instance.")
+
+;;; Graph Operations
+
+(cl-defmethod org-supertag-graph-add-node ((graph org-supertag-inheritance-graph) tag)
+  "Add TAG node to GRAPH if it doesn't exist."
+  (unless (ht-get (oref graph nodes) tag)
+    (ht-set! (oref graph nodes) tag (ht-create))))
+
+(cl-defmethod org-supertag-graph-add-edge ((graph org-supertag-inheritance-graph) child parent)
+  "Add inheritance edge from CHILD to PARENT in GRAPH."
+  (org-supertag-graph-add-node graph child)
+  (org-supertag-graph-add-node graph parent)
+  (ht-set! (oref graph edges) child parent))
+
+(cl-defmethod org-supertag-graph-get-ancestors ((graph org-supertag-inheritance-graph) tag)
+  "Get list of ancestor tags for TAG in GRAPH."
+  (let ((ancestors '())
+        (current tag))
+    (while (setq current (ht-get (oref graph edges) current))
+      (push current ancestors))
+    (nreverse ancestors)))
+
+(cl-defmethod org-supertag-graph-get-descendants ((graph org-supertag-inheritance-graph) tag)
+  "Get list of descendant tags for TAG in GRAPH."
+  (let ((descendants '()))
+    (ht-each
+     (lambda (child parent)
+       (when (equal parent tag)
+         (push child descendants)
+         (setq descendants
+               (append descendants
+                       (org-supertag-graph-get-descendants graph child)))))
+     (oref graph edges))
+    descendants))
+
+;;; Cycle Detection
+
+(defun org-supertag-check-inheritance-cycles (child parent)
+  "Check if adding PARENT as parent of CHILD would create a cycle."
+  (let ((ancestors (org-supertag-graph-get-ancestors
+                   org-supertag-inheritance-graph parent)))
+    (when (member child ancestors)
+      (error "Inheritance cycle detected: %s would be an ancestor of itself"
+             child))))
+
+;;; Property Inheritance
+
+(defun org-supertag-merge-properties (child-props parent-props)
+  "Merge PARENT-PROPS into CHILD-PROPS with conflict resolution."
+  (let ((merged (ht-copy child-props)))
+    (ht-each
+     (lambda (k v)
+       (unless (ht-get merged k)
+         (ht-set! merged k v)))
+     parent-props)
+    merged))
+
+(defun org-supertag-compute-inherited-properties (tag)
+  "Compute all inherited properties for TAG."
+  (let ((ancestors (org-supertag-graph-get-ancestors
+                   org-supertag-inheritance-graph tag))
+        (properties (ht-get (oref org-supertag-inheritance-graph nodes) tag)))
+    (dolist (ancestor ancestors)
+      (setq properties
+            (org-supertag-merge-properties
+             properties
+             (ht-get (oref org-supertag-inheritance-graph nodes) ancestor))))
+    properties))
+
+;;; Public Interface
+
+(defun org-supertag-set-parent (child parent)
+  "Set PARENT as the parent tag of CHILD tag."
+  (org-supertag-check-inheritance-cycles child parent)
+  (org-supertag-graph-add-edge org-supertag-inheritance-graph child parent))
+
+(defun org-supertag-get-all-properties (tag)
+  "Get all properties for TAG including inherited ones."
+  (org-supertag-compute-inherited-properties tag))
+
+(defun org-supertag-get-children (tag)
+  "Get immediate child tags of TAG."
+  (--filter (equal (ht-get (oref org-supertag-inheritance-graph edges) it) tag)
+           (ht-keys (oref org-supertag-inheritance-graph edges))))
+
+(defun org-supertag-get-parent (tag)
+  "Get parent tag of TAG."
+  (ht-get (oref org-supertag-inheritance-graph edges) tag))
+
+(provide 'org-supertag-inheritance)
