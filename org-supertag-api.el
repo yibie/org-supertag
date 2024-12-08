@@ -234,8 +234,51 @@ TO 是目标实体
         (push (list (nth 1 rel) (nth 3 rel)) results)))
     results))
 
+;;------------------------------------------------------------------------------
+;; 字段值 API
+;;------------------------------------------------------------------------------  
 
-;;; 模板系统初始化
+(defun org-supertag-db-find-field-values-by-node (node-id)
+  "获取节点的所有字段值."
+  (org-supertag-db-find (lambda (k _v)
+                          (string-match-p (concat ":" (regexp-quote node-id) "$")
+                                        k))))
+
+(defun org-supertag-db-find-field-values-by-field (field-id)
+  "获取指定字段的所有值."
+  (org-supertag-db-find (lambda (k _v)
+                          (string-match-p (concat "^" (regexp-quote field-id) ":")
+                                        k))))
+
+;;------------------------------------------------------------------------------
+;; 标签系统 API
+;;------------------------------------------------------------------------------
+;; 保持原有函数不变，增加新的实现
+(defun org-supertag-find-templates-by-type ()
+  "获取所有模板（使用类型查询）."
+  (let ((template-plists (mapcar #'cdr 
+                                (org-supertag-db-find-by-type :template))))
+    (mapcar #'org-supertag-template-from-plist template-plists)))
+
+;; 更新获取字段函数，使用新的查询函数
+(defun org-supertag-get-all-fields ()
+  "获取所有模板中定义的字段列表."
+  (let (all-fields)
+    ;; 使用新的查询函数
+    (dolist (template (org-supertag-find-templates-by-type))
+      (when-let ((fields (org-supertag-template-fields template)))
+        (dolist (field fields)
+          (let* ((tag-name (org-supertag-template-tag-name template))
+                 (field-name (plist-get field :name))
+                 (full-name (concat field-name)))
+            (push full-name all-fields)))))
+    ;; 返回去重后的字段列表
+    (delete-dups (nreverse all-fields))))
+
+;;------------------------------------------------------------------------------
+;; 模板系统 API
+;;------------------------------------------------------------------------------
+
 (defun org-supertag-tag-templates-init ()
   "初始化模板系统."
   (unless org-supertag-tag-templates

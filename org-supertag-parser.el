@@ -1,4 +1,6 @@
 ;;; org-supertag-parser.el --- Parser for org-supertag -*- lexical-binding: t; -*-
+;;; Commentary:
+;; 解析器模块，用于解析 Org 模式中的标签和节点信息
 
 (require 'org)
 (require 'org-element)

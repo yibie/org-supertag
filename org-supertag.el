@@ -25,9 +25,8 @@
 ;;; 自定义选项
 
 (defgroup org-supertag nil
-  "Org mode 超级标签系统."
-  :group 'org
-  :prefix "org-supertag-")
+  "Org Supertag customization group."
+  :group 'org)
 
 (defcustom org-supertag-auto-sync t
   "是否自动同步节点变更."
@@ -43,6 +42,22 @@
   (expand-file-name "templates.el" org-supertag-data-directory)
   "模板数据文件路径."
   :type 'file
+  :group 'org-supertag)
+
+(defcustom org-supertag-field-types
+  '(property list date choice number)
+  "支持的字段类型列表."
+  :type '(repeat symbol)
+  :group 'org-supertag)
+
+(defcustom org-supertag-template-presets
+  '(("task" . "title* status:choice=TODO priority:choice due:date tags:list")
+    ("note" . "title* tags:list created:date")
+    ("contact" . "name* email phone company")
+    ("project" . "title* status:choice deadline:date members:list priority:choice"))
+  "预定义的标签模板.
+每个预设是一个 (name . fields-spec) 对，其中 fields-spec 是字段定义字符串."
+  :type '(alist :key-type string :value-type string)
   :group 'org-supertag)
 
 ;;; 内部变量
@@ -142,52 +157,26 @@
 
 ;;;###autoload
 (defun org-supertag-add-tag-at-point ()
-  "为当前位置添加标签，将其转换为节点."
+  "为当前位置添加标签."
   (interactive)
-  (message "Debug - 开始添加标签...")
   (unless (org-at-heading-p)
     (user-error "必须在标题处"))
-  (let* ((element (org-element-at-point))
-         (_ (message "Debug - 当前元素: %S" element))
-         (available-tags (mapcar #'car (org-supertag-find-entities :tag)))
-         (_ (message "Debug - 可用标签: %S" available-tags))
-         (selected-tags (completing-read-multiple
-                        "Tags: "
-                        available-tags)))
-    (when selected-tags
-      (message "Debug - 选择的标签: %S" selected-tags)
-      ;; 创建节点（如果还不是节点）
+  
+  (let* ((tag-name (read-string "Tag name: ")))
+    (when (and tag-name (not (string-empty-p tag-name)))
+      ;; 如果是新标签，创建模板
+      (unless (org-supertag-db-get-linked tag-name :tag-template)
+        (org-supertag--create-template-interactive tag-name))
+      
+      ;; 应用标签
       (let ((node-id (org-id-get-create)))
-        (message "Debug - 节点 ID: %s" node-id)
-        ;; 更新数据层
-        (message "Debug - 更新数据层...")
-        (dolist (tag selected-tags)
-          (message "Debug - 添加标签: %s" tag)
-          (org-supertag-tag-add-to-node node-id tag))
-        ;; 更新实例层
-        (message "Debug - 更新实例层...")
-        (let* ((title (org-element-property :raw-value element))
-               (_ (message "Debug - 当前标题: %s" title))
-               ;; 添加新标签
-               (new-tags (mapcar (lambda (tag) (concat "#" tag))
-                                selected-tags))
-               (_ (message "Debug - 新标签: %S" new-tags))
-               (new-title (concat title " " (string-join new-tags " "))))
-          (message "Debug - 新标题: %s" new-title)
+        (org-supertag-tag-add-to-node node-id tag-name)
+        (let* ((element (org-element-at-point))
+               (title (org-element-property :raw-value element))
+               (new-title (concat title " #" tag-name)))
           (org-edit-headline new-title)
-          ;; 为每个新标签添加相应的属性
-          (message "Debug - 处理标签属性...")
-          (dolist (tag selected-tags)
-            (when-let* ((tag-entity (org-supertag-get-entity tag))
-                        (fields (plist-get tag-entity :fields)))
-              (message "Debug - 标签 %s 的字段定义: %S" tag fields)
-              (dolist (field fields)
-                (let ((field-name (plist-get field :name))
-                      (field-default (plist-get field :default)))
-                  (message "Debug - 添加字段: %s 默认值: %s" field-name field-default)
-                  (org-entry-put nil field-name (or field-default "")))))))
-          (message "Debug - 标签添加完成")))))
-
+          (org-supertag--apply-tag-fields tag-name))))))
+          
 ;;;###autoload
 (defun org-supertag-remove-tag-at-point ()
   "从当前位置移除标签."
@@ -242,27 +231,22 @@
 
 ;;;###autoload
 (defun org-supertag-add-field-at-point ()
-  "为当前节点添加字段."
+  "为当前节点添加一个字段."
   (interactive)
-  (message "Debug - 开始添加字段...")
-  (unless (org-at-heading-p)
-    (user-error "必须在标题处"))
-  
-  (let* ((node-id (org-id-get)))
-    ;; 确保有节点 ID
+  ;; 确保在节点上
+  (let ((node-id (org-id-get)))
     (unless node-id
       (user-error "当前标题不是节点（没有 ID）"))
     
-    ;; 获取所有可用的字段定义
     (let* ((available-fields (org-supertag-get-all-fields))
-           (_ (message "Debug - 可用字段: %S" available-fields))
-           (selected-field (completing-read "选择要添加的字段: " available-fields)))
-      
-      (when selected-field
-        (message "Debug - 添加字段: %s" selected-field)
-        ;; 添加字段属性
-        (org-entry-put nil selected-field "")
-        (message "Debug - 字段添加完成")))))
+           (_ (message "Debug - 可用字段: %S" available-fields)))
+      (if (null available-fields)
+          (user-error "没有可用的字段，请先创建模板")
+        (let ((selected-field (completing-read "选择要添加的字段: " available-fields)))
+          (when selected-field
+            (message "Debug - 添加字段: %s" selected-field)
+            (org-entry-put nil selected-field "")
+            (message "Debug - 字段添加完成")))))))
 
 ;;;###autoload
 (defun org-supertag-remove-field-at-point ()
@@ -280,7 +264,7 @@
     ;; 获取当前节点的所有字段
     (let* ((current-fields (org-entry-properties nil))
            (field-names (mapcar #'car current-fields))
-           (_ (message "Debug - 当前字段: %S" field-names))
+           (_ (message "Debug - 当��字段: %S" field-names))
            (selected-field (completing-read "选择要移除的字段: " field-names)))
       
       (when selected-field
@@ -296,7 +280,8 @@
   (let* ((tag-name (completing-read "选择标签: " 
                                   (mapcar #'car (org-supertag-find-entities :tag))
                                   nil t))
-         (fields nil))
+         (fields nil)
+         (template-id (org-supertag-db-get-linked tag-name :tag-template)))
     
     (while (y-or-n-p "添加字段？")
       (let* ((field-name (read-string "字段名称: "))
@@ -348,6 +333,20 @@
        tag-name 
        (list :type :tag
              :fields (nreverse fields)))
+
+      ;; 如果标签没有关联的模板，则创建新模板
+      (unless template-id
+        (let* ((template (make-org-supertag-template
+                         :id (org-supertag--generate-id)
+                         :tag-name tag-name
+                         :display-name tag-name
+                         :fields (vconcat fields))))
+          ;; 保存模板并建立关联
+          (org-supertag-create-template template)
+          (org-supertag-link :tag-template tag-name (org-supertag-template-id template))
+          (org-supertag-link :template-tag (org-supertag-template-id template) tag-name)
+          (message "已为标签 #%s 创建模板" tag-name)))
+      
       (message "标签 #%s 的字段已更新" tag-name))))
 
 ;;;###autoload

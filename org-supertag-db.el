@@ -200,6 +200,18 @@ FROM: 源实体ID
   (let ((key (format "%s:%s" field-id node-id)))
     (ht-remove! org-supertag-db--field-values key)))
 
+(defun org-supertag-db-find-field-values (pred)
+  "查找满足条件的字段值.
+PRED 是一个接受 (field-id . value) 作为参数的函数"
+  (let (results)
+    (ht-map (lambda (k v)
+              (when (funcall pred k v)
+                (push (cons k v) results)))
+            org-supertag-db--field-values)
+    (nreverse results)))
+
+
+
 ;;; 查询功能
 
 (defun org-supertag-db-find (pred)
@@ -222,6 +234,21 @@ PRED 是一个接受 (rel-id . (type from to props)) 作为参数的函数"
             org-supertag-db--relations)
     (nreverse results)))
 
+;;; 新增函数：按属性查询
+(defun org-supertag-db-find-by-props (props)
+  "查找满足属性条件的实体.
+PROPS 是一个 plist，包含要匹配的属性."
+  (let ((pred (lambda (_k v)
+                (cl-loop for (key value) on props by #'cddr
+                         always (equal (plist-get v key) value)))))
+    (org-supertag-db-find pred)))
+
+;;; 新增函数：按类型查询（常用场景的便捷函数）
+(defun org-supertag-db-find-by-type (type)
+  "查找指定类型的实体.
+TYPE 是实体类型，如 :template, :tag 等."
+  (org-supertag-db-find-by-props `(:type ,type)))
+
 ;;; 持久化支持
 
 (defun org-supertag-db-get-entities ()
@@ -242,6 +269,7 @@ TYPE 是实体类型"
             org-supertag-db--entities)
     results))
 
+;; 获取所有关系
 (defun org-supertag-db-get-all-relations ()
   "获取所有关系.
 返回 ((type from to props) ...) 形式的列表"

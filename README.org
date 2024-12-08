@@ -27,8 +27,10 @@ Git clone this repo to your emacs.d directory.
 :ID:       DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
 :END:
 DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
-* Tag Template Test #supertag4
+* Tag Template Test #supertag4 #test&test
 :PROPERTIES:
 :ID:       FC3C2312-393B-4E08-9619-8EFC772D5C81
 :END:
+* Test3
 
+jt

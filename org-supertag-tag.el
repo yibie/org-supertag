@@ -450,6 +450,206 @@ TAG 是标签名称"
       (collect-descendants tag))
     (nreverse result)))
 
+;; 为当前 headline 添加指定标签的字段
+(defun org-supertag--maybe-create-template (tag-name)
+  "如果标签没有模板，提示用户是否创建.
+返回创建的模板 ID 或 nil."
+  (unless (org-supertag-db-get-linked tag-name :tag-template)
+    (when (y-or-n-p (format "标签 '%s' 没有模板，是否创建？" tag-name))
+      ;; 快速创建模板
+      (let* ((fields-input (read-string "输入字段 (用逗号分隔): "))
+             (fields (unless (string-empty-p fields-input)
+                      (mapcar (lambda (name)
+                              (list :type :property
+                                    :name (string-trim name)
+                                    :required nil
+                                    :default ""))
+                              (split-string fields-input "," t "[ \t\n]+"))))
+             (template (make-org-supertag-template
+                       :id (org-supertag--generate-id)
+                       :tag-name tag-name
+                       :display-name tag-name
+                       :fields (vconcat fields))))
+        ;; 保存模板
+        (org-supertag-create-template template)
+        (org-supertag-template-id template)))))
+
+(defun org-supertag--apply-tag-fields (tag-name)
+  "为当前 headline 添加指定标签的字段."
+  (when-let* ((template-id (org-supertag-db-get-linked tag-name :tag-template))
+              (template (org-supertag-get-template template-id))
+              (fields (org-supertag-template-fields template))
+              (node-id (org-id-get)))
+    (dolist (field fields)
+      (let* ((field-name (plist-get field :name))
+             (prop-name (concat field-name))
+             (field-id (format "%s_%s" tag-name field-name))
+             (default-value (plist-get field :default))
+             ;; 获取现有值或使用默认值
+             (value (or (org-entry-get nil prop-name)
+                       default-value
+                       "")))
+        ;; 同时更新属性和数据库
+        (org-entry-put nil prop-name value)
+        (org-supertag-db-set-field-value field-id node-id value)))))
+
+(defun org-supertag--create-template-from-tag (tag-name fields)
+  "从标签和字段创建模板.
+TAG-NAME 是标签名称
+FIELDS 是字段列表，每个字段是 (field-name . default-value) 对"
+  (unless (stringp tag-name)
+    (error "Tag name must be a string"))
+  (unless (listp fields)
+    (error "Fields must be a list"))
+  
+  (let* ((template-id (org-supertag--generate-id))
+         (template-fields 
+          (mapcar (lambda (field)
+                    (unless (consp field)
+                      (error "Each field must be a cons pair"))
+                    (list :type :property
+                          :name (car field)
+                          :required nil
+                          :default (or (cdr field) "")))
+                  fields))
+         (template (make-org-supertag-template
+                   :id template-id
+                   :tag-name tag-name
+                   :display-name tag-name
+                   :fields (vconcat template-fields))))
+    ;; 保存模板
+    (org-supertag-create-template template)
+    template-id))
+
+(defun org-supertag--infer-field-type (name)
+  "根据字段名智能推断字段类型."
+  (cond
+   ((string-match-p "\\(?:date\\|time\\|created\\|updated\\|deadline\\|due\\|start\\|end\\|scheduled\\|timestamp\\)$" name) 
+    :date)
+   ((string-match-p "\\(?:tags?\\|categories\\|labels\\|members\\|links?\\|refs?\\|related\\|topics?\\|skills?\\|languages\\)$" name) 
+    :list)
+   ((string-match-p "\\(?:status\\|state\\|priority\\|type\\|level\\|grade\\|rating\\|category\\|group\\|phase\\|stage\\)$" name) 
+    :choice)
+   ((string-match-p "\\(?:count\\|number\\|amount\\|price\\|age\\|score\\|quantity\\|weight\\|height\\|size\\|duration\\|id\\)$" name) 
+    :number)
+   ((string-match-p "\\(?:url\\|link\\|website\\|homepage\\|repo\\|repository\\)$" name)
+    :url)
+   ((string-match-p "\\(?:email\\|mail\\)$" name)
+    :email)
+   ((string-match-p "\\(?:phone\\|tel\\|mobile\\|fax\\)$" name)
+    :tel)
+   (t :property)))
+
+(defun org-supertag--parse-field-spec (spec)
+  "解析字段规格字符串.
+语法: name[*][:type][=value]
+例如: title* desc tags:list author=John"
+  (when (string-match "^\\([^:*=]+\\)\\(*\\)?\\(?::\\([^=*]+\\)\\)?\\(*\\)?\\(?:=\\(.+\\)\\)?$" spec)
+    (let* ((name (match-string 1 spec))
+           (required1 (match-string 2 spec))
+           (type (or (match-string 3 spec) 
+                    (symbol-name (org-supertag--infer-field-type name))))
+           (required2 (match-string 4 spec))
+           (default (match-string 5 spec)))
+      (list :name (string-trim name)
+            :type (intern type)
+            :required (and (or required1 required2) t)
+            :default (or default "")))))
+
+(defun org-supertag--find-similar-tags (tag-name)
+  "查找与给定标签名相似的已存在标签."
+  (let* ((all-tags (mapcar #'car (org-supertag-find-entities :tag)))
+         (similar-tags '()))
+    (dolist (tag all-tags)
+      (when (or (string-match-p tag-name tag)
+                (string-match-p tag tag-name))
+        (push tag similar-tags)))
+    similar-tags))
+
+(defun org-supertag--get-tag-fields (tag-name)
+  "获取标签的字段定义."
+  (when-let* ((template-id (org-supertag-db-get-linked tag-name :tag-template))
+              (template (org-supertag-find-entity :template template-id)))
+    (mapcar (lambda (field)
+              (format "%s%s:%s%s"
+                      (plist-get field :name)
+                      (if (plist-get field :required) "*" "")
+                      (plist-get field :type)
+                      (if (string-empty-p (plist-get field :default))
+                          ""
+                        (concat "=" (plist-get field :default)))))
+            (org-supertag-template-fields template))))
+
+(defun org-supertag--infer-fields-from-tag (tag-name)
+  "从标签名推断可能的字段."
+  (cond
+   ((string-match-p "\\(?:task\\|todo\\|issue\\|ticket\\)$" tag-name)
+    '("title*" "status:choice=TODO" "priority:choice" "due:date" "assigned:list" "tags:list"))
+   
+   ((string-match-p "\\(?:note\\|doc\\|article\\|post\\|wiki\\)$" tag-name)
+    '("title*" "tags:list" "created:date" "category:choice" "status:choice=Draft"))
+   
+   ((string-match-p "\\(?:project\\|prog\\|program\\)$" tag-name)
+    '("title*" "status:choice=Planning" "start:date" "deadline:date" "members:list" "priority:choice" "budget:number"))
+   
+   ((string-match-p "\\(?:contact\\|person\\|employee\\|user\\|member\\)$" tag-name)
+    '("name*" "email" "phone" "company" "position" "department"))
+   
+   ((string-match-p "\\(?:event\\|meeting\\|appointment\\|session\\)$" tag-name)
+    '("title*" "start:date*" "end:date" "location" "participants:list" "agenda:list"))
+   
+   ((string-match-p "\\(?:book\\|reading\\|literature\\)$" tag-name)
+    '("title*" "author*" "status:choice=ToRead" "rating:number" "tags:list" "notes"))
+   
+   ((string-match-p "\\(?:link\\|resource\\|bookmark\\|ref\\)$" tag-name)
+    '("title*" "url*" "tags:list" "description" "added:date"))
+   
+   ((string-match-p "\\(?:idea\\|concept\\|brainstorm\\)$" tag-name)
+    '("title*" "status:choice=Draft" "category:choice" "related:list" "impact:choice"))
+   
+   ((string-match-p "\\(?:goal\\|objective\\|target\\)$" tag-name)
+    '("title*" "deadline:date" "progress:number" "status:choice=InProgress" "priority:choice"))
+   
+   (t (list "title*" "desc" "tags:list" "created:date"))))
+
+(defun org-supertag--create-template-interactive (tag-name)
+  "交互式创建模板."
+  (let* ((similar-tags (org-supertag--find-similar-tags tag-name))
+         (has-similar (not (null similar-tags)))
+         (use-preset (and org-supertag-template-presets
+                         (y-or-n-p "使用预设模板?")))
+         (fields
+          (cond
+           ;; 使用预设
+           (use-preset
+            (let* ((preset-name (completing-read "选择预设: " 
+                                              org-supertag-template-presets nil t))
+                   (preset (alist-get preset-name org-supertag-template-presets)))
+              (mapcar #'org-supertag--parse-field-spec
+                      (split-string preset))))
+           ;; 有相似标签时提供选择
+           ((and has-similar
+                 (y-or-n-p (format "发现相似标签 %s，是否参考它们的字段?" 
+                                  similar-tags)))
+            (let* ((similar-fields 
+                    (delete-dups
+                     (mapcan #'org-supertag--get-tag-fields similar-tags)))
+                   (selected-fields
+                    (completing-read-multiple
+                     "选择要使用的字段: " similar-fields nil t)))
+              (mapcar #'org-supertag--parse-field-spec selected-fields)))
+           ;; 手动输入或智能推断
+           (t
+            (let ((specs (split-string
+                         (read-string 
+                          "输入字段 (空格分隔,回车智能推断): "))))
+              (mapcar #'org-supertag--parse-field-spec
+                      (if (null specs)
+                          (org-supertag--infer-fields-from-tag tag-name)
+                        specs)))))))
+    (when fields
+      (org-supertag--create-template-from-tag tag-name fields))))
 
 (provide 'org-supertag-tag)
+
 ;;; org-supertag-tag.el ends here
