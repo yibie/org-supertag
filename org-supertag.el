@@ -56,14 +56,16 @@
 (defcustom org-supertag-tag-presets
   '(("task" . (
       (:name "title" :type string :required t)
-      (:name "status" :type choice :values ("TODO" "DONE"))
-      (:name "priority" :type choice :values ("A" "B" "C"))
+      (:name "status" :type options :options ("TODO" "DONE"))
+      (:name "priority" :type options :options ("A" "B" "C"))
     ))
     ("note" . (
       (:name "title" :type string :required t)
       (:name "tags" :type list)
     )))
-  "预定义的标签及其字段定义.")
+  "预定义的标签及其字段定义."
+  :type '(alist :key-type string :value-type sexp)
+  :group 'org-supertag)
 
 ;;; 内部变量
 

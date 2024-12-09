@@ -216,7 +216,7 @@ FIELD 是字段定义"
     field-plist))
 
 (defun org-supertag--parse-field-def (field)
-  "解析字段定义，确保返回标准格式.
+  "解析字段定义，确保返回标准格式。
 FIELD 是字段定义，可以是 plist 或向量"
   (message "Debug - Parsing field: %S" field)
   (let ((field-def nil))
@@ -239,17 +239,17 @@ FIELD 是字段定义，可以是 plist 或向量"
       (let ((name (plist-get field :name))
             (type (plist-get field :type))
             (required (plist-get field :required))
-            (values (plist-get field :values)))
+            (options (or (plist-get field :options)  ; 新格式
+                        (plist-get field :values)))) ; 旧格式
         (setq field-def
               (list :name name
                     :type (if (keywordp type)
-                            (intern (substring (symbol-name type) 1))
-                          type)
+                             (intern (substring (symbol-name type) 1))
+                           type)
                     :required required
-                    :values values)))))
+                    :options options)))))
     
-    (when field-def
-      (message "Debug - Successfully parsed field: %S" field-def))
+    (message "Debug - Parsed field: %S" field-def)
     field-def))
     
 (defun org-supertag--validate-field-def (field)
@@ -553,62 +553,37 @@ TAG-NAME 是标签名称。"
   (when-let* ((tag (org-supertag-db-get tag-name))
               (fields (plist-get tag :fields))
               (node-id (org-id-get-create)))
+    (message "Debug - 应用字段: %S" fields)
+    ;; 首先确保标签被添加到节点
+    ;;(org-toggle-tag tag-name 'on)
     
-    ;; 显示当前正在处理的标签
-    (message "正在应用标签 %s 的字段..." tag-name)
-    
-    ;; 处理每个字段
+    ;; 然后处理字段
     (dolist (field fields)
       (when (org-supertag--validate-field-def field)
         (let* ((field-name (plist-get field :name))
-               (field-type (plist-get field :type))
-               (required (plist-get field :required))
-               (type-def (org-supertag-get-field-type field-type))
-               (formatter (plist-get type-def :formatter)))
-          
-          ;; 显示当前正在处理的字段
-          (message "处理字段: %s (%s)" field-name field-type)
-          
-          ;; 尝试读取和验证值
-          (let ((retry t))
-            (while retry
-              (condition-case err
-                  (let ((value (org-supertag-field-read-value field)))
-                    ;; 验证值
-                    (let ((validation (org-supertag-field-validate field value)))
-                      (if (car validation)
-                          (progn
-                            (when value
-                              (let* ((prop-name (concat ":" field-name))
-                                    ;; 使用类型的格式化器格式化值
-                                    (formatted-value (if formatter
-                                                       (funcall formatter value)
-                                                     value)))
-                                ;; 存储到 org 属性
-                                (org-entry-put nil prop-name formatted-value)
-                                ;; 存储到数据库
-                                (org-supertag-db-set-field-value field-name node-id formatted-value)
-                                (message "字段 %s 设置为: %s" field-name formatted-value)))
-                            (setq retry nil))  ; 成功，退出循环
-                        (progn
-                          (message "Error - %s" (cdr validation))
-                          (setq retry (or required
-                                        (y-or-n-p (format "字段 %s 验证失败。重试? " field-name))))
-                          (when retry
-                            (sit-for 1))))))
-                
-                ;; 错误处理
-                (error
-                 (let ((err-msg (error-message-string err)))
-                   (message "Error - 处理字段 %s 时出错: %s" field-name err-msg)
-                   (setq retry (or required
-                                 (y-or-n-p (format "处理字段 %s 时出错。重试? " field-name))))
-                   (when retry
-                     (sit-for 1))))))))))
+               (field-type (plist-get field :type)))
+          (message "Debug - 处理字段: %s (%s)" field-name field-type)
+          ;; 使用 field 系统的读取函数获取值
+          (condition-case err
+              (when-let* ((value (org-supertag-field-read-value field))
+                         (prop-name field-name)
+                         (prop-value (if (stringp value)
+                                       value
+                                     (format "%s" value))))
+                (message "Debug - Setting property %s to %S (type: %s)" 
+                        prop-name prop-value (type-of prop-value))
+                (org-entry-put nil prop-name prop-value)
+                (message "字段 %s 设置为: %s" field-name prop-value)
+                (org-supertag-db-set-field-value field-name node-id prop-value))
+            (error
+             (message "Error - 处理字段 %s 时出错: %s" 
+                     field-name (error-message-string err)))))))
     
-    ;; 完成处理
-    (message "标签 %s 的字段应用完成" tag-name)))
-
+    ;; 确保标签被正确添加
+    (org-set-tags (org-get-tags))
+    (message "标签 %s 的字段应用完成" tag-name)
+    (message "Debug - 字段应用完成")))
+    
 (defun org-supertag-tag-define-fields (tag-name)
   "定义标签的字段.
 TAG-NAME 是标签名称"
