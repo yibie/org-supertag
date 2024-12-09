@@ -191,14 +191,110 @@ TO 是目标标签"
 
 ;;; 标签操作 API
 
-(defun org-supertag-tag-create (id props)
+(defun org-supertag--normalize-field-def (field)
+  "规范化字段定义.
+FIELD 是字段定义"
+  (message "Debug - Normalizing field: %S" field)
+  (let ((field-plist (if (and (vectorp field) 
+                             (= (length field) 1))
+                        ;; 如果是单元素向量，取其内容
+                        (elt field 0)
+                      ;; 否则尝试转换为列表
+                      (if (vectorp field)
+                          (append field nil)
+                        field))))
+    (message "Debug - Field as plist: %S" field-plist)
+    ;; 将关键字类型转换为普通符号
+    (when-let ((type (plist-get field-plist :type)))
+      (message "Debug - Original type: %S" type)
+      (setq field-plist 
+            (plist-put field-plist :type 
+                      (if (keywordp type)
+                          (intern (substring (symbol-name type) 1))
+                        type)))
+      (message "Debug - Normalized type: %S" (plist-get field-plist :type)))
+    field-plist))
+
+(defun org-supertag--parse-field-def (field)
+  "解析字段定义，确保返回标准格式.
+FIELD 是字段定义，可以是 plist 或向量"
+  (message "Debug - Parsing field: %S" field)
+  (let ((field-def nil))
+    ;; 如果是向量，转换为列表
+    (when (vectorp field)
+      (setq field (append field nil)))
+    
+    ;; 处理字段定义
+    (cond
+     ;; 如果已经是标准格式的 plist
+     ((and (listp field)
+           (plist-member field :name)
+           (plist-member field :type))
+      (setq field-def field))
+     
+     ;; 如果是预设标签的字段格式（一个包含属性的列表）
+     ((and (listp field)
+           (listp (car field))
+           (keywordp (caar field)))
+      (let ((name (plist-get field :name))
+            (type (plist-get field :type))
+            (required (plist-get field :required))
+            (values (plist-get field :values)))
+        (setq field-def
+              (list :name name
+                    :type (if (keywordp type)
+                            (intern (substring (symbol-name type) 1))
+                          type)
+                    :required required
+                    :values values)))))
+    
+    (when field-def
+      (message "Debug - Successfully parsed field: %S" field-def))
+    field-def))
+    
+(defun org-supertag--validate-field-def (field)
+  "验证字段定义是否有效.
+FIELD 是字段定义"
+  (message "Debug - Validating field: %S" field)
+  (let ((valid (and (listp field)
+                    (plist-get field :name)
+                    (plist-get field :type))))
+    (message "Debug - Field validation result: %s" valid)
+    valid))
+
+(defun org-supertag-tag-create (name &rest props)
   "创建标签.
-ID 是标签的唯一标识
-PROPS 是标签的属性"
-  (let ((tag-props (append (copy-sequence props)
-                          `(:id ,id :type :tag))))
-    (org-supertag-db-put id tag-props)
-    tag-props))
+NAME 是标签名称
+PROPS 是标签属性"
+  (let* ((fields (plist-get props :fields))
+         (fields-list (if (vectorp fields)
+                         (append fields nil)
+                       fields)))
+    (message "Debug - Processing fields for tag %s" name)
+    (message "Debug - Raw fields: %S" fields)
+    
+    ;; 处理字段定义
+    (let* ((normalized-fields
+            (mapcar (lambda (field)
+                     (let ((parsed (org-supertag--parse-field-def field)))
+                       (message "Debug - Field %S parsed as: %S" field parsed)
+                       parsed))
+                   fields-list))
+           (valid-fields
+            (cl-remove-if-not
+             (lambda (field)
+               (when field
+                 (message "Debug - Validating field: %S" field)
+                 (org-supertag--validate-field-def field)))
+             normalized-fields))
+           (tag-props (append 
+                      (list :type :tag
+                            :name name
+                            :fields valid-fields)
+                      (org-plist-delete props :fields))))
+      (message "Debug - Normalized fields: %S" normalized-fields)
+      (message "Debug - Valid fields: %S" valid-fields)
+      (org-supertag-db-put name tag-props))))
 
 (defun org-supertag-tag-get (name)
   "获取标签信息.
@@ -423,7 +519,7 @@ TO 是目标标签
 ;;; 独立标签查询
 
 (defun org-supertag-tag-independent-p (tag)
-  "判断标签是否是独立的（没有任何关系）.
+  "判断标签是立的（没有任何关系）.
 TAG 是标签名称"
   (null (org-supertag-tag-get-relations tag)))
 
@@ -450,134 +546,167 @@ TAG 是标签名称"
       (collect-descendants tag))
     (nreverse result)))
 
-;; 为当前 headline 添加指定标签的字段
-(defun org-supertag--maybe-create-template (tag-name)
-  "如果标签没有模板，提示用户是否创建.
-返回创建的模板 ID 或 nil."
-  (unless (org-supertag-get-linked tag-name :tag-template)
-    (when (y-or-n-p (format "标签 '%s' 没有模板，是否创建？" tag-name))
-      ;; 快速创建模板
-      (let* ((fields-input (read-string "输入字段 (用逗号分隔): "))
-             (fields (unless (string-empty-p fields-input)
-                      (mapcar (lambda (name)
-                              (list :type :property
-                                    :name (string-trim name)
-                                    :required nil
-                                    :default ""))
-                              (split-string fields-input "," t "[ \t\n]+"))))
-             (template (make-org-supertag-template
-                       :id (org-supertag--generate-id)
-                       :tag-name tag-name
-                       :display-name tag-name
-                       :fields (vconcat fields))))
-        ;; 保存模板
-        (org-supertag-create-template template)
-        (org-supertag-template-id template)))))
-
+;;; 字段管理
 (defun org-supertag--apply-tag-fields (tag-name)
-  "应用标签的字段到当前节点.
-TAG-NAME 是标签名称"
-  (let* ((template-id (org-supertag-get-linked tag-name :tag-template))
-         (template-data (when template-id 
-                         (gethash template-id org-supertag--tag-templates)))
-         (template (when template-data
-                    (org-supertag-template-from-plist template-data)))
-         (fields (when template 
-                  (org-supertag-template-fields template)))
-         (node-id (org-id-get-create)))
+  "应用标签的字段到当前节点。
+TAG-NAME 是标签名称。"
+  (when-let* ((tag (org-supertag-db-get tag-name))
+              (fields (plist-get tag :fields))
+              (node-id (org-id-get-create)))
     
-    ;; 调试信息
-    (message "Debug - tag-name: %S" tag-name)
-    (message "Debug - template-id: %S" template-id)
-    (message "Debug - template-data: %S" template-data)
-    (message "Debug - template: %S" template)
-    (message "Debug - fields: %S" fields)
-    (message "Debug - node-id: %S" node-id)
+    ;; 显示当前正在处理的标签
+    (message "正在应用标签 %s 的字段..." tag-name)
     
-    (when (and template fields node-id)
-      ;; 将向量转换为列表进行处理
-      (dolist (field (append fields nil))
+    ;; 处理每个字段
+    (dolist (field fields)
+      (when (org-supertag--validate-field-def field)
         (let* ((field-name (plist-get field :name))
-               (prop-name (concat ":" field-name))
-               (field-id (org-supertag-field-create field-name field))
-               (default-value (or (plist-get field :default) ""))
-               (value (read-string (format "%s: " field-name)
-                                 default-value)))
-          ;; 设置属性
-          (org-entry-put nil prop-name value)
-          ;; 保存字段值
-          (org-supertag-db-set-field-value field-id node-id value))))))
+               (field-type (plist-get field :type))
+               (required (plist-get field :required))
+               (type-def (org-supertag-get-field-type field-type))
+               (formatter (plist-get type-def :formatter)))
+          
+          ;; 显示当前正在处理的字段
+          (message "处理字段: %s (%s)" field-name field-type)
+          
+          ;; 尝试读取和验证值
+          (let ((retry t))
+            (while retry
+              (condition-case err
+                  (let ((value (org-supertag-field-read-value field)))
+                    ;; 验证值
+                    (let ((validation (org-supertag-field-validate field value)))
+                      (if (car validation)
+                          (progn
+                            (when value
+                              (let* ((prop-name (concat ":" field-name))
+                                    ;; 使用类型的格式化器格式化值
+                                    (formatted-value (if formatter
+                                                       (funcall formatter value)
+                                                     value)))
+                                ;; 存储到 org 属性
+                                (org-entry-put nil prop-name formatted-value)
+                                ;; 存储到数据库
+                                (org-supertag-db-set-field-value field-name node-id formatted-value)
+                                (message "字段 %s 设置为: %s" field-name formatted-value)))
+                            (setq retry nil))  ; 成功，退出循环
+                        (progn
+                          (message "Error - %s" (cdr validation))
+                          (setq retry (or required
+                                        (y-or-n-p (format "字段 %s 验证失败。重试? " field-name))))
+                          (when retry
+                            (sit-for 1))))))
+                
+                ;; 错误处理
+                (error
+                 (let ((err-msg (error-message-string err)))
+                   (message "Error - 处理字段 %s 时出错: %s" field-name err-msg)
+                   (setq retry (or required
+                                 (y-or-n-p (format "处理字段 %s 时出错。重试? " field-name))))
+                   (when retry
+                     (sit-for 1))))))))))
+    
+    ;; 完成处理
+    (message "标签 %s 的字段应用完成" tag-name)))
 
-(defun org-supertag--create-template-from-tag (tag-name fields)
-  "从标签和字段创建模板.
-TAG-NAME 是标签名称
-FIELDS 是字段列表"
-  (let* ((template-fields 
-          (mapcar (lambda (field)
-                    (list :type :property
-                          :name (car field)
-                          :required nil
-                          :default (or (cdr field) "")))
-                  fields))
-         (template (make-org-supertag-template
-                   :id ""  ; 让 create-template 生成 ID
-                   :tag-name tag-name
-                   :display-name tag-name
-                   :fields (vconcat template-fields))))
-    ;; 使用 API 创建模板
-    (when (org-supertag-create-template template)
-      (org-supertag-template-id template))))
+(defun org-supertag-tag-define-fields (tag-name)
+  "定义标签的字段.
+TAG-NAME 是标签名称"
+  (interactive
+   (list (completing-read "Tag: " (org-supertag-find-entities :tag))))
+  
+  (let* ((tag (org-supertag-tag-get tag-name))
+         (fields nil))
+    ;; 交互式定义字段
+    (while (y-or-n-p "添加字段?")
+      (let* ((field-name (read-string "字段名: "))
+             (field-type (intern
+                         (completing-read "类型: "
+                                        (mapcar #'symbol-name org-supertag-field-types)
+                                        nil t)))
+             (required (y-or-n-p "是否必填? "))
+             (field-def {:name field-name
+                        :type field-type
+                        :required required}))
+        
+        ;; 处理特殊类型的额外属性
+        (pcase field-type
+          ('choice
+           (let ((options (split-string
+                          (read-string "选项 (逗号分隔): ")
+                          "," t "[ \t\n]+")))
+             (setq field-def (plist-put field-def :values options))))
+          
+          ('list
+           (let ((separator (read-string "分隔符 (默认逗号): " ",")))
+             (setq field-def (plist-put field-def :separator separator)))))
+        
+        (push field-def fields)))
+    
+    ;; 更新标签
+    (org-supertag-tag-update tag-name
+                            (list :fields fields))))
 
-(defun org-supertag--ensure-tag-template (tag-name fields)
-  "确保标签有对应的模板.
-如果模板不存在，则创建新模板.
-TAG-NAME 是标签名称
-FIELDS 是字段列表"
-  (let ((template-id (org-supertag-get-linked tag-name :tag-template)))
-    (message "Debug - Existing template-id: %S" template-id)
-    (or template-id
-        (let ((new-template-id (org-supertag--create-template-from-tag tag-name fields)))
-          (message "Debug - New template-id: %S" new-template-id)
-          ;; 建立双向关联，使用已有的 API
-          (org-supertag-add-relation :tag-template tag-name new-template-id)
-          (org-supertag-add-relation :template-tag new-template-id tag-name)
-          new-template-id))))
+(defun org-supertag--read-field-value (field-def)
+  "读字段值.
+FIELD-DEF 是字段定义"
+  (let* ((name (plist-get field-def :name))
+         (type (plist-get field-def :type))
+         (required (plist-get field-def :required))
+         (current (org-entry-get nil (concat ":" name))))
+    
+    (pcase type
+      ('choice
+       (let ((options (plist-get field-def :values)))
+         (completing-read (format "%s: " name)
+                         options nil t current)))
+      
+      ('list
+       (let ((separator (or (plist-get field-def :separator) ",")))
+         (mapconcat #'identity
+                   (completing-read-multiple
+                    (format "%s: " name)
+                    nil nil nil current)
+                   separator)))
+      
+      (_
+       (read-string (format "%s%s: "
+                           name
+                           (if required "*" ""))
+                   (or current ""))))))
 
+(defun org-supertag-tag-apply-preset (preset-name)
+  "应用预设标签.
+PRESET-NAME 是预设名称"
+  (interactive
+   (list (completing-read "预设: " 
+                         (mapcar #'car org-supertag-tag-presets))))
+  
+  (when-let* ((preset (alist-get preset-name org-supertag-tag-presets
+                                nil nil #'string=)))
+    (message "Debug - 应用预设标签: %s" preset-name)
+    (message "Debug - 预设字段: %S" preset)
+    
+    ;; 创建或更新标签
+    (org-supertag-tag-create preset-name :fields preset)
+    
+    ;; 应用标签（包括字段）
+    (org-supertag--apply-tag preset-name)))
 
-(defun org-supertag--infer-field-type (name)
-  "根据字段名智能推断字段类型."
-  (cond
-   ((string-match-p "\\(?:date\\|time\\|created\\|updated\\|deadline\\|due\\|start\\|end\\|scheduled\\|timestamp\\)$" name) 
-    :date)
-   ((string-match-p "\\(?:tags?\\|categories\\|labels\\|members\\|links?\\|refs?\\|related\\|topics?\\|skills?\\|languages\\)$" name) 
-    :list)
-   ((string-match-p "\\(?:status\\|state\\|priority\\|type\\|level\\|grade\\|rating\\|category\\|group\\|phase\\|stage\\)$" name) 
-    :choice)
-   ((string-match-p "\\(?:count\\|number\\|amount\\|price\\|age\\|score\\|quantity\\|weight\\|height\\|size\\|duration\\|id\\)$" name) 
-    :number)
-   ((string-match-p "\\(?:url\\|link\\|website\\|homepage\\|repo\\|repository\\)$" name)
-    :url)
-   ((string-match-p "\\(?:email\\|mail\\)$" name)
-    :email)
-   ((string-match-p "\\(?:phone\\|tel\\|mobile\\|fax\\)$" name)
-    :tel)
-   (t :property)))
+(defun org-supertag--apply-tag (tag-name)
+  "应用标签到当前节点.
+TAG-NAME 是标签名称"
+  (message "Debug - 开始应用标签: %s" tag-name)
+  (let ((node-id (org-id-get-create)))
+    (message "Debug - 节点 ID: %s" node-id)
+    
+    ;; 添加标签关系
+    (org-supertag-tag-add-to-node node-id tag-name)
+    (message "Debug - 已添加标签关系")
+    
+    ;; 更新标题
+    (let* ((element (org-element-at-point))))))
 
-(defun org-supertag--parse-field-spec (spec)
-  "解析字段规格字符串.
-语法: name[*][:type][=value]
-例如: title* desc tags:list author=John"
-  (when (string-match "^\\([^:*=]+\\)\\(*\\)?\\(?::\\([^=*]+\\)\\)?\\(*\\)?\\(?:=\\(.+\\)\\)?$" spec)
-    (let* ((name (match-string 1 spec))
-           (required1 (match-string 2 spec))
-           (type (or (match-string 3 spec) 
-                    (symbol-name (org-supertag--infer-field-type name))))
-           (required2 (match-string 4 spec))
-           (default (match-string 5 spec)))
-      (list :name (string-trim name)
-            :type (intern type)
-            :required (and (or required1 required2) t)
-            :default (or default "")))))
 
 (defun org-supertag--find-similar-tags (tag-name)
   "查找与给定标签名相似的已存在标签."
@@ -603,75 +732,23 @@ FIELDS 是字段列表"
                         (concat "=" (plist-get field :default)))))
             (org-supertag-template-fields template))))
 
-(defun org-supertag--infer-fields-from-tag (tag-name)
-  "从标签名推断可能的字段."
-  (cond
-   ((string-match-p "\\(?:task\\|todo\\|issue\\|ticket\\)$" tag-name)
-    '("title*" "status:choice=TODO" "priority:choice" "due:date" "assigned:list" "tags:list"))
-   
-   ((string-match-p "\\(?:note\\|doc\\|article\\|post\\|wiki\\)$" tag-name)
-    '("title*" "tags:list" "created:date" "category:choice" "status:choice=Draft"))
-   
-   ((string-match-p "\\(?:project\\|prog\\|program\\)$" tag-name)
-    '("title*" "status:choice=Planning" "start:date" "deadline:date" "members:list" "priority:choice" "budget:number"))
-   
-   ((string-match-p "\\(?:contact\\|person\\|employee\\|user\\|member\\)$" tag-name)
-    '("name*" "email" "phone" "company" "position" "department"))
-   
-   ((string-match-p "\\(?:event\\|meeting\\|appointment\\|session\\)$" tag-name)
-    '("title*" "start:date*" "end:date" "location" "participants:list" "agenda:list"))
-   
-   ((string-match-p "\\(?:book\\|reading\\|literature\\)$" tag-name)
-    '("title*" "author*" "status:choice=ToRead" "rating:number" "tags:list" "notes"))
-   
-   ((string-match-p "\\(?:link\\|resource\\|bookmark\\|ref\\)$" tag-name)
-    '("title*" "url*" "tags:list" "description" "added:date"))
-   
-   ((string-match-p "\\(?:idea\\|concept\\|brainstorm\\)$" tag-name)
-    '("title*" "status:choice=Draft" "category:choice" "related:list" "impact:choice"))
-   
-   ((string-match-p "\\(?:goal\\|objective\\|target\\)$" tag-name)
-    '("title*" "deadline:date" "progress:number" "status:choice=InProgress" "priority:choice"))
-   
-   (t (list "title*" "desc" "tags:list" "created:date"))))
 
-(defun org-supertag--create-template-interactive (tag-name)
-  "交互式创建模板."
-  (let* ((similar-tags (org-supertag--find-similar-tags tag-name))
-         (has-similar (not (null similar-tags)))
-         (use-preset (and org-supertag-template-presets
-                         (y-or-n-p "使用预设模板?")))
-         (fields
-          (cond
-           ;; 使用预设
-           (use-preset
-            (let* ((preset-name (completing-read "选择预设: " 
-                                              org-supertag-template-presets nil t))
-                   (preset (alist-get preset-name org-supertag-template-presets)))
-              (mapcar #'org-supertag--parse-field-spec
-                      (split-string preset))))
-           ;; 有相似标签时提供选择
-           ((and has-similar
-                 (y-or-n-p (format "发现相似标签 %s，是否参考它们的字段?" 
-                                  similar-tags)))
-            (let* ((similar-fields 
-                    (delete-dups
-                     (mapcan #'org-supertag--get-tag-fields similar-tags)))
-                   (selected-fields
-                    (completing-read-multiple
-                     "选择要使用的字段: " similar-fields nil t)))
-              (mapcar #'org-supertag--parse-field-spec selected-fields)))
-           ;; 手动输入或智能推断
-           (t
-            (let ((specs (split-string
-                         (read-string 
-                          "输入字段 (空格分隔,回车智能推断): "))))
-              (mapcar #'org-supertag--parse-field-spec
-                      (if (null specs)
-                          (org-supertag--infer-fields-from-tag tag-name)
-                        specs)))))))
-    (when fields
-      (org-supertag--create-template-from-tag tag-name fields))))
+
+(defun org-supertag-tag-define-fields (tag-name)
+  "定义标签的字段.
+TAG-NAME 是标签名称"
+  (interactive
+   (list (completing-read "Tag: " (org-supertag-find-entities :tag))))
+  
+  (let* ((tag (org-supertag-tag-get tag-name))
+         (current-fields (plist-get tag :fields))
+         (new-fields (org-supertag--field-interactive-edit current-fields)))
+    
+    ;; 更新标签
+    (when new-fields
+      (org-supertag-tag-update tag-name
+                              (list :fields (append current-fields 
+                                                  new-fields))))))
 
 (provide 'org-supertag-tag)
 

@@ -12,6 +12,22 @@
 (require 'ht)
 (require 'org-supertag-base)
 
+
+;;------------------------------------------------------------------------------
+;; 核心数据表
+;;------------------------------------------------------------------------------  
+(defvar org-supertag-db--entities (ht-create)
+  "实体存储 id -> plist.")
+
+(defvar org-supertag-db--relations (ht-create)
+  "关系存储 rel-id -> (type from to props).")
+
+(defvar org-supertag-db--field-values (ht-create)
+  "字段值存储 field-id:node-id -> value.")
+
+;;------------------------------------------------------------------------------
+;; 配置
+;;------------------------------------------------------------------------------  
 (defcustom org-supertag-db-file
   (org-supertag-data-file "db.el")
   "数据库文件路径."
@@ -28,15 +44,6 @@
   "保留备份的最大天数."
   :type 'integer
   :group 'org-supertag)
-
-(defvar org-supertag-db--entities (ht-create)
-  "实体存储 id -> plist.")
-
-(defvar org-supertag-db--relations (ht-create)
-  "关系存储 rel-id -> (type from to props).")
-
-(defvar org-supertag-db--field-values (ht-create)
-  "字段值存储 field-id:node-id -> value.")
 
 (defun org-supertag-db-ensure-directories ()
   "确保数据库相关目录存在."
@@ -64,6 +71,9 @@
       (copy-file org-supertag-db-file backup-file t)
       (org-supertag-db-cleanup-backups))))
 
+;;------------------------------------------------------------------------------
+;; 数据保存和加载
+;;------------------------------------------------------------------------------  
 (defun org-supertag-db-save ()
   "保存数据到文件."
   (org-supertag-db-ensure-directories)
@@ -96,6 +106,9 @@
   (when (file-exists-p org-supertag-db-file)
     (load org-supertag-db-file)))
 
+;;------------------------------------------------------------------------------
+;; 初始化
+;;------------------------------------------------------------------------------  
 (defun org-supertag-db-initialize ()
   "初始化数据库.
 在包加载时调用此函数."
@@ -148,10 +161,36 @@ FROM: 源实体ID
     (message "Debug - Relations: %S" (ht-items org-supertag-db--relations))
     (nreverse results)))
 
+(defun org-supertag-db-get-entities ()
+  "获取所有实体的哈希表."
+  org-supertag-db--entities)
 
+(defun org-supertag-db-get-entities-alist ()
+  "获取所有实体的关联列表 ((id . props) ...)."
+  (ht-items org-supertag-db--entities))
 
+(defun org-supertag-db-find-entities (type)
+  "查找指定类型的所有实体.
+TYPE 是实体类型"
+  (let (results)
+    (ht-map (lambda (id props)
+              (when (eq (plist-get props :type) type)
+                (push id results)))
+            org-supertag-db--entities)
+    results))
+
+;; 获取所有关系
+(defun org-supertag-db-get-all-relations ()
+  "获取所有关系.
+返回 ((type from to props) ...) 形式的列表"
+  (let (results)
+    (ht-map (lambda (k v)
+              (push v results))
+            org-supertag-db--relations)
+    results))
+
+ 
 ;;; 辅助函数
-
 (defun org-supertag-db-exists-p (id)
   "检查实体是否存在."
   (ht-contains-p org-supertag-db--entities id))
@@ -185,7 +224,9 @@ FROM: 源实体ID
       (ht-remove! org-supertag-db--relations rel-id)
       t)))
 
-;;; 字段值操作
+;;------------------------------------------------------------------------------
+;; 字段值操作
+;;------------------------------------------------------------------------------  
 
 (defun org-supertag-db-set-field-value (field-id node-id value)
   "设置字段值."
@@ -265,35 +306,9 @@ PROPS 是一个 plist，包含要匹配的属性."
 TYPE 是实体类型，如 :template, :tag 等."
   (org-supertag-db-find-by-props `(:type ,type)))
 
-;;; 持久化支持
 
-(defun org-supertag-db-get-entities ()
-  "获取所有实体的哈希表."
-  org-supertag-db--entities)
 
-(defun org-supertag-db-get-entities-alist ()
-  "获取所有实体的关联列表 ((id . props) ...)."
-  (ht-items org-supertag-db--entities))
 
-(defun org-supertag-db-find-entities (type)
-  "查找指定类型的所有实体.
-TYPE 是实体类型"
-  (let (results)
-    (ht-map (lambda (id props)
-              (when (eq (plist-get props :type) type)
-                (push id results)))
-            org-supertag-db--entities)
-    results))
-
-;; 获取所有关系
-(defun org-supertag-db-get-all-relations ()
-  "获取所有关系.
-返回 ((type from to props) ...) 形式的列表"
-  (let (results)
-    (ht-map (lambda (k v)
-              (push v results))
-            org-supertag-db--relations)
-    results))
 
 (provide 'org-supertag-db)
 ;;; org-supertag-db.el ends here

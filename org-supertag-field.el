@@ -34,6 +34,13 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
   "获取字段类型定义。"
   (gethash type org-supertag-field-types))
 
+(defun org-supertag-get-field-types ()
+  "获取所有已注册的字段类型。"
+  (if (hash-table-p org-supertag-field-types)
+      (hash-table-keys org-supertag-field-types)
+    org-supertag-field-types))
+
+
 ;; 初始化基本字段类型
 (defun org-supertag-init-field-types ()
   "初始化字段类型。"
@@ -44,6 +51,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'string
    '(:validator org-supertag-validate-string
      :formatter org-supertag-format-string
+     :reader org-supertag-read-string-field
      :description "基础字符串类型"))
   
   ;; 日期类型
@@ -51,6 +59,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'date
    '(:validator org-supertag-validate-date
      :formatter org-supertag-format-date
+     :reader org-supertag-read-date-field
      :description "日期类型 (YYYY-MM-DD)"))
   
   ;; 邮箱类型
@@ -58,6 +67,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'email
    '(:validator org-supertag-validate-email
      :formatter org-supertag-format-email
+     :reader org-supertag-read-email-field
      :description "电子邮箱地址"))
   
   ;; URL类型
@@ -65,6 +75,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'url
    '(:validator org-supertag-validate-url
      :formatter org-supertag-format-url
+     :reader org-supertag-read-url-field
      :description "URL地址"))
   
   ;; 引用类型
@@ -72,6 +83,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'reference
    '(:validator org-supertag-validate-reference
      :formatter org-supertag-format-reference
+     :reader org-supertag-read-reference-field
      :description "引用其他带有特定标签的条目"
      :ref-tag nil))  ; 存储被引用的标签名
   
@@ -80,6 +92,7 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'options
    '(:validator org-supertag-validate-options
      :formatter org-supertag-format-options
+     :reader org-supertag-read-options-field
      :description "从预定义选项中选择"))
   
   ;; 数值类型
@@ -87,119 +100,8 @@ SPEC 是包含 :validator 和 :formatter 的 plist。"
    'number
    '(:validator org-supertag-validate-number
      :formatter org-supertag-format-number
-     :description "数值类型"))
-  
-  ;; 整数类型
-  (org-supertag-register-field-type
-   'integer
-   '(:validator (lambda (x) (and (integerp x) (>= x 0)))
-     :formatter number-to-string
-     :description "非负整数类型"))
-  
-  ;; 时间类型
-  (org-supertag-register-field-type
-   'time
-   '(:validator org-supertag-validate-time
-     :formatter org-supertag-format-time
-     :description "时间类型 (HH:MM)"))
-  
-  ;; 日期时间类型
-  (org-supertag-register-field-type
-   'datetime
-   '(:validator org-supertag-validate-datetime
-     :formatter org-supertag-format-datetime
-     :description "日期时间类型 (ISO format)"))
-  
-  ;; 持续时间类型
-  (org-supertag-register-field-type
-   'duration
-   '(:validator org-supertag-valid-duration-p
-     :formatter org-supertag-format-duration
-     :description "持续时间类型"))
-  
-  ;; 列表类型
-  (org-supertag-register-field-type
-   'list
-   '(:validator org-supertag-valid-list-p
-     :formatter org-supertag-format-list
-     :description "列表类型"))
-  
-  ;; 选择类型
-  (org-supertag-register-field-type
-   'choice
-   '(:validator org-supertag-validate-choice
-     :formatter org-supertag-format-choice
-     :description "选择类型"))
-  
-  ;; 复选框类型
-  (org-supertag-register-field-type
-   'checkbox
-   '(:validator org-supertag-validate-checkbox
-     :formatter org-supertag-format-checkbox
-     :description "复选框类型"))
-  
-  ;; 评分类型
-  (org-supertag-register-field-type
-   'rating
-   '(:validator org-supertag-validate-rating
-     :formatter org-supertag-format-rating
-     :description "评分类型 (1-5)"))
-  
-  ;; 进度类型
-  (org-supertag-register-field-type
-   'progress
-   '(:validator org-supertag-validate-progress
-     :formatter org-supertag-format-progress
-     :description "进度类型 (0-100%)"))
-  
-  ;; 文件类型
-  (org-supertag-register-field-type
-   'file
-   '(:validator org-supertag-validate-file
-     :formatter org-supertag-format-file
-     :description "文件类型"))
-  
-  ;; 目录类型
-  (org-supertag-register-field-type
-   'directory
-   '(:validator org-supertag-validate-directory
-     :formatter org-supertag-format-directory
-     :description "目录类型"))
-  
-  ;; 颜色类型
-  (org-supertag-register-field-type
-   'color
-   '(:validator org-supertag-validate-color
-     :formatter org-supertag-format-color
-     :description "颜色类型 (#RRGGBB)"))
-  
-  ;; 人员类型
-  (org-supertag-register-field-type
-   'person
-   '(:validator org-supertag-validate-person
-     :formatter org-supertag-format-person
-     :description "人名类型"))
-  
-  ;; 电话号码类型
-  (org-supertag-register-field-type
-   'telephone
-   '(:validator org-supertag-validate-telephone
-     :formatter org-supertag-format-telephone
-     :description "电话号码类型"))
-  
-  ;; Org链接类型
-  (org-supertag-register-field-type
-   'org-link
-   '(:validator org-supertag-valid-org-link-p
-     :formatter identity
-     :description "Org链接类型"))
-  
-  ;; 密码类型
-  (org-supertag-register-field-type
-   'password
-   '(:validator org-supertag-valid-password-p
-     :formatter identity
-     :description "密码类型")))
+     :reader org-supertag-read-number-field
+     :description "数值类型")))
 
 ;; 初始化字段类型
 (org-supertag-init-field-types)
@@ -281,229 +183,6 @@ SPEC 是字段规格说明，包含 :options。"
 (defun org-supertag-format-number (value)
   "格式化数值类型的值。"
   (number-to-string value))
-
-(defun org-supertag-valid-time-p (val)
-  "验证是否为有效的时间格式."
-  (string-match-p "^\\([0-9]\\|0[0-9]\\|1[0-9]\\|2[0-3]\\):[0-5][0-9]\\(:[0-5][0-9]\\)?$" val))
-
-(defun org-supertag-format-time (time-str)
-  "格式化时间字符串."
-  time-str)
-
-(defun org-supertag-valid-datetime-p (val)
-  "验证是否为有效的日期时间格式."
-  (condition-case nil
-      (progn 
-        (org-parse-time-string val)
-        t)
-    (error nil)))
-
-(defun org-supertag-format-datetime (datetime-str)
-  "格式化日期时间字符串."
-  (condition-case nil
-      (let ((time (org-parse-time-string datetime-str)))
-        (format-time-string "%Y-%m-%d %H:%M:%S" (apply #'encode-time time)))
-    (error datetime-str)))
-
-(defun org-supertag-valid-duration-p (val)
-  "验证是否为有效的持续时间格式."
-  (string-match-p "^\\([0-9]+\\)\\(\\([0-9]+\\)\\)?\\(\\([0-9]+\\)\\)?\\(\\([0-9]+\\)\\)?" val))
-
-(defun org-supertag-format-duration (duration-str)
-  "格式化持续时间字符串."
-  duration-str)
-
-(defun org-supertag-valid-list-p (val)
-  "验证是否为有效的列表格式."
-  (and (stringp val)
-       (string-match-p "^\\[.*\\]$\\|^(.*)\$" val)))
-
-(defun org-supertag-format-list (list-str)
-  "格式化列表字符串."
-  (if (string-match-p "^\\[.*\\]$" list-str)
-      list-str
-    (format "[%s]" list-str)))
-
-(defun org-supertag-valid-choice-p (val choices)
-  "验证值是否在选项列表中."
-  (member val choices))
-
-(defun org-supertag-valid-checkbox-p (val)
-  "验证复选框值."
-  (or (equal val "[ ]") (equal val "[X]")))
-
-(defun org-supertag-valid-tel-p (val)
-  "验证是否为有效的电话号码格式."
-  (string-match-p "^\\+?[0-9() -]+$" val))
-
-(defun org-supertag-valid-file-p (val)
-  "验证是否为有效的文件路径."
-  (file-exists-p val))
-
-(defun org-supertag-valid-directory-p (val)
-  "验证是否为有效的目录路径."
-  (file-directory-p val))
-
-(defun org-supertag-valid-tags-p (val)
-  "验证是否为有效的标签列表."
-  (and (listp val)
-       (every #'stringp val)))
-
-(defun org-supertag-valid-rating-p (val)
-  "验证是否为有效的评分值."
-  (and (numberp val)
-       (>= val 0)
-       (<= val 5)))
-
-(defun org-supertag-valid-progress-p (val)
-  "验证是否为有效的进度值."
-  (and (numberp val)
-       (>= val 0)
-       (<= val 100)))
-
-(defun org-supertag-valid-currency-p (val)
-  "验证是否为有效的货币值."
-  (and (numberp val)
-       (>= val 0)))
-
-(defun org-supertag-valid-color-p (val)
-  "验证是否为有效的颜色值."
-  (and (stringp val)
-       (string-match-p "^#\\([0-9a-fA-F]\\{6\\}\\)$" val)))
-
-(defun org-supertag-valid-location-p (val)
-  "验证是否为有效的位置值."
-  (and (stringp val)
-       (string-match-p "^\\([0-9.-]+\\),\\([0-9.-]+\\)$" val)))
-
-(defun org-supertag-valid-person-p (val)
-  "验证是否为有效的人员值."
-  (and (stringp val)
-       (string-match-p "^\\([^ ]+\\) \\([^ ]+\\)$" val)))
-
-(defun org-supertag-valid-org-link-p (val)
-  "验证是否为有效的 Org 链接值."
-  (and (stringp val)
-       (string-match-p "^\\[\\[.*\\]\\]" val)))
-
-(defun org-supertag-valid-password-p (val)
-  "验证是否为有效的密码值."
-  (and (stringp val)
-       (>= (length val) 8)))
-
-(defun org-supertag-validate-time (val)
-  "Validate if VAL is a valid time string in HH:MM format."
-  (and (stringp val)
-       (string-match-p "^\\([0-1][0-9]\\|2[0-3]\\):[0-5][0-9]$" val)))
-
-(defun org-supertag-format-time (val)
-  "Format time value VAL for display."
-  (if (org-supertag-validate-time val)
-      val
-    "Invalid time"))
-
-(defun org-supertag-validate-datetime (val)
-  "Validate if VAL is a valid datetime string in ISO format."
-  (and (stringp val)
-       (string-match-p "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\(Z\\|[+-]\\d{2}:?\\d{2}\\)?$" val)))
-
-(defun org-supertag-format-datetime (val)
-  "Format datetime value VAL for display."
-  (if (org-supertag-validate-datetime val)
-      (format-time-string "%Y-%m-%d %H:%M:%S" (date-to-time val))
-    "Invalid datetime"))
-
-(defun org-supertag-validate-choice (val)
-  "Validate if VAL is one of the allowed choices."
-  (let ((choices (plist-get (org-supertag-field-get-type-spec) :choices)))
-    (and choices (member val choices))))
-
-(defun org-supertag-format-choice (val)
-  "Format choice value VAL for display."
-  val)
-
-(defun org-supertag-validate-checkbox (val)
-  "Validate if VAL is a valid checkbox value (t or nil)."
-  (memq val '(t nil)))
-
-(defun org-supertag-format-checkbox (val)
-  "Format checkbox value VAL for display."
-  (if val "[X]" "[ ]"))
-
-(defun org-supertag-validate-rating (val)
-  "Validate if VAL is a valid rating (1-5)."
-  (and (integerp val)
-       (<= 1 val 5)))
-
-(defun org-supertag-format-rating (val)
-  "Format rating value VAL for display."
-  (if (org-supertag-validate-rating val)
-      (make-string val ?★)
-    "Invalid rating"))
-
-(defun org-supertag-validate-progress (val)
-  "Validate if VAL is a valid progress percentage (0-100)."
-  (and (integerp val)
-       (<= 0 val 100)))
-
-(defun org-supertag-format-progress (val)
-  "Format progress value VAL for display."
-  (if (org-supertag-validate-progress val)
-      (format "%d%%" val)
-    "Invalid progress"))
-
-(defun org-supertag-validate-file (val)
-  "Validate if VAL is a valid file path."
-  (and (stringp val)
-       (file-exists-p val)))
-
-(defun org-supertag-format-file (val)
-  "Format file value VAL for display."
-  (if (org-supertag-validate-file val)
-      (file-name-nondirectory val)
-    "Invalid file"))
-
-(defun org-supertag-validate-directory (val)
-  "Validate if VAL is a valid directory path."
-  (and (stringp val)
-       (file-directory-p val)))
-
-(defun org-supertag-format-directory (val)
-  "Format directory value VAL for display."
-  (if (org-supertag-validate-directory val)
-      (abbreviate-file-name val)
-    "Invalid directory"))
-
-(defun org-supertag-validate-color (val)
-  "Validate if VAL is a valid color (hex format)."
-  (and (stringp val)
-       (string-match-p "^#[0-9a-fA-F]\\{6\\}$" val)))
-
-(defun org-supertag-format-color (val)
-  "Format color value VAL for display."
-  (if (org-supertag-validate-color val)
-      val
-    "Invalid color"))
-
-(defun org-supertag-validate-person (val)
-  "Validate if VAL is a valid person name."
-  (and (stringp val)
-       (not (string-empty-p val))))
-
-(defun org-supertag-format-person (val)
-  "Format person value VAL for display."
-  val)
-
-(defun org-supertag-validate-telephone (val)
-  "Validate if VAL is a valid telephone number."
-  (and (stringp val)
-       (string-match-p "^\\+?[0-9() -]+$" val)))
-
-(defun org-supertag-format-telephone (val)
-  "Format telephone value VAL for display."
-  (if (org-supertag-validate-telephone val)
-      val
-    "Invalid telephone"))
 
 ;;----------------------------------------------------------------------
 ;; 字段定义操作
@@ -704,43 +383,224 @@ VALUE 是要设置的标签列表"
 ;; 字段值验证
 ;;----------------------------------------------------------------------
 
-(defun org-supertag-field-validate (field-def value)
-  "验证字段值是否符合字段定义.
-FIELD-DEF 是字段定义
+;; 改进字段验证
+(defun org-supertag--validate-field-def (field)
+  "验证字段定义是否有效。
+FIELD 是字段定义 plist。"
+  (and (plist-get field :name)
+       (plist-get field :type)
+       (org-supertag-get-field-type (plist-get field :type))))
+
+;; 改进字段值验证
+(defun org-supertag-field-validate (field value)
+  "验证字段值是否符合字段定义。
+FIELD 是字段定义
 VALUE 是要验证的值
 返回 (t . nil) 如果验证通过，(nil . 错误信息) 如果验证失败"
-  ;; 如果字段定义为空，返回验证失败
-  (if (null field-def)
-      (cons nil "字段定义不存在")
-    (let* ((type (plist-get field-def :type))
-           (type-def (org-supertag-get-field-type type))
-           (type-validator (when type-def (plist-get type-def :validator)))
-           (custom-validator (plist-get field-def :validate)))
-      (message "Debug - Field definition: %S" field-def)
-      (message "Debug - Type: %S" type)
-      (message "Debug - Type definition: %S" type-def)
-      (message "Debug - Type validator: %S" type-validator)
-      (message "Debug - Custom validator: %S" custom-validator)
-      (message "Debug - Value to validate: %S" value)
-      
-      ;; 对枚举类型进行特殊处理
-      (if (eq type :enum)
-          (let ((valid-values (plist-get field-def :values)))
-            (if (memq value valid-values)
-                (cons t nil)
-              (cons nil (format "值必须是以下之一: %S" valid-values))))
-        ;; 其他类型的验证
-        (cond
-         ;; 类型验证
-         ((and type-validator
-               (not (funcall type-validator value)))
-          (cons nil (format "值不符合类型 %s 的要求" type)))
-         ;; 自定义验证
-         ((and custom-validator
-               (not (funcall custom-validator value)))
-          (cons nil "自定义验证失败"))
-         ;; 验证通过
-         (t (cons t nil)))))))
+  (let* ((type (plist-get field :type))
+         (type-def (org-supertag-get-field-type type))
+         (validator (plist-get type-def :validator))
+         (required (plist-get field :required)))
+    
+    ;; 处理必填字段
+    (cond
+     ;; 必填字段为空
+     ((and required
+           (or (null value)
+               (and (stringp value)
+                    (string-empty-p (string-trim value)))))
+      (cons nil "此字段为必填项"))
+     
+     ;; 非必填字段为空
+     ((or (null value)
+          (and (stringp value)
+               (string-empty-p (string-trim value))))
+      (cons t nil))
+     
+     ;; 使用类型验证器
+     ((and validator
+           (not (funcall validator value)))
+      (cons nil (format "值不符合%s类型的要求" type)))
+     
+     ;; 验证通过
+     (t (cons t nil)))))
+
+;;----------------------------------------------------------------------
+;; 字段值读取
+;;----------------------------------------------------------------------
+
+;; 改进字段值读取
+(defun org-supertag-field-read-value (field)
+  "读取字段值。
+FIELD 是字段定义"
+  (let* ((name (plist-get field :name))
+         (type (plist-get field :type))
+         (type-def (org-supertag-get-field-type type))
+         (reader (plist-get type-def :reader))
+         (required (plist-get field :required)))
+    
+    (unless reader
+      (error "字段类型 %s 没有定义读取函数" type))
+    
+    (cl-loop
+     (let ((value (funcall reader name)))
+       ;; 验证值
+       (let ((validation (org-supertag-field-validate field value)))
+         (if (car validation)
+             (cl-return value)  ; 验证通过，返回值
+           (progn
+             (message "Error - %s" (cdr validation))
+             (when (or required
+                      (y-or-n-p "重试? "))
+               (sit-for 1)
+               (cl-continue))  ; 重试
+             (cl-return nil)))))))) ; 用户选择不重试
+
+;; 字段类型的输入函数
+
+;;; 添加默认值处理函数
+(defun org-supertag-field-get-default-value (type)
+  "根据字段类型获取默认值.
+TYPE 是字段类型"
+  (pcase type
+    ;; timestamp 类型自动使用当前时间
+    ('timestamp (format-time-string "%Y-%m-%d %H:%M:%S"))
+    ;; 其他类型默认返回 nil
+    (_ nil)))
+
+
+(defun org-supertag-read-string-field (prompt &optional default)
+  "读取字符串类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值"
+  (let ((input (read-string (format "%s%s: "
+                                   prompt
+                                   (if default
+                                       (format " (默认: %s)" default)
+                                     ""))
+                           nil nil default)))
+    (if (org-supertag-validate-string input)
+        input
+      (progn
+        (message "输入的不是有效的字符串，请重新输入")
+        (sit-for 1)
+        (org-supertag-read-string-field prompt default)))))
+
+(defun org-supertag-read-date-field (prompt &optional default)
+  "读取日期类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值"
+  (let ((input (org-read-date nil t nil prompt nil default)))
+    (if (org-supertag-validate-date input)
+        input
+      (progn
+        (message "输入的不是有效的日期格式 (YYYY-MM-DD)，请重新输入")
+        (sit-for 1)
+        (org-supertag-read-date-field prompt default)))))
+
+(defun org-supertag-read-email-field (prompt &optional default)
+  "读取邮箱类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值"
+  (let ((input (read-string (format "%s (example@domain.com)%s: "
+                                   prompt
+                                   (if default
+                                       (format " (默认: %s)" default)
+                                     ""))
+                           nil nil default)))
+    (if (org-supertag-validate-email input)
+        input
+      (progn
+        (message "输入的不是有效的邮箱地址，请���新输入")
+        (sit-for 1)
+        (org-supertag-read-email-field prompt default)))))
+
+(defun org-supertag-read-url-field (prompt &optional default)
+  "读取URL类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值"
+  (let ((input (read-string (format "%s (https://example.com)%s: "
+                                   prompt
+                                   (if default
+                                       (format " (默认: %s)" default)
+                                     ""))
+                           nil nil default)))
+    (if (org-supertag-validate-url input)
+        input
+      (progn
+        (message "输入的不是有效的URL地址，请重新输入")
+        (sit-for 1)
+        (org-supertag-read-url-field prompt default)))))
+
+(defun org-supertag-read-reference-field (prompt &optional default)
+  "读取引用类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值"
+  (let* ((completion-table (org-supertag-get-all-node-ids))
+         (input (completing-read (format "%s (输入节点ID)%s: "
+                                       prompt
+                                       (if default
+                                           (format " (默认: %s)" default)
+                                         ""))
+                               completion-table
+                               nil t nil nil default)))
+    (if (org-supertag-validate-reference input)
+        input
+      (progn
+        (message "输入的不是有效的节点引用，请重新输入")
+        (sit-for 1)
+        (org-supertag-read-reference-field prompt default)))))
+
+(defun org-supertag-read-options-field (prompt options &optional default)
+  "读取选项类型字段值。
+PROMPT 是提示信息
+OPTIONS 是可选值列表
+DEFAULT 是默认值"
+  (let ((input (completing-read (format "%s (%s)%s: "
+                                      prompt
+                                      (mapconcat #'identity options "/")
+                                      (if default
+                                          (format " (默认: %s)" default)
+                                        ""))
+                              options
+                              nil t nil nil default)))
+    (if (member input options)
+        input
+      (progn
+        (message "请从给选项中选择一个值")
+        (sit-for 1)
+        (org-supertag-read-options-field prompt options default)))))
+
+(defun org-supertag-read-number-field (prompt &optional default min max)
+  "读取数值类型字段值。
+PROMPT 是提示信息
+DEFAULT 是默认值
+MIN 是最小值
+MAX 是最大值"
+  (let* ((range-prompt (cond
+                       ((and min max) (format " (%s-%s)" min max))
+                       (min (format " (>=%s)" min))
+                       (max (format " (<=%s)" max))
+                       (t "")))
+         (input-str (read-string (format "%s%s%s: "
+                                        prompt
+                                        range-prompt
+                                        (if default
+                                            (format " (默认: %s)" default)
+                                          ""))
+                                nil nil default))
+         (input-num (condition-case nil
+                       (string-to-number input-str)
+                     (error nil))))
+    (if (and input-num
+             (numberp input-num)
+             (or (null min) (>= input-num min))
+             (or (null max) (<= input-num max)))
+        input-num
+      (progn
+        (message "请输入有效的数值%s" range-prompt)
+        (sit-for 1)
+        (org-supertag-read-number-field prompt default min max)))))
 
 ;;----------------------------------------------------------------------
 ;; 同步机制
@@ -759,6 +619,79 @@ NODE-ID 是节点ID"
           (org-supertag-set-field node-id 
                                  (plist-get field :name)
                                  value))))))
+
+
+;; 改进字段交互式编辑
+(defun org-supertag--field-interactive-edit (&optional current-fields)
+  "交互式编辑字段定义。
+CURRENT-FIELDS 是当前的字段列表。"
+  (let ((fields (or current-fields nil))
+        (field-types (org-supertag-get-field-types)))
+    
+    ;; 显示当前字段
+    (when fields
+      (message "当前字段:")
+      (dolist (field fields)
+        (message "  %s (%s)"
+                 (plist-get field :name)
+                 (plist-get field :type))))
+    
+    ;; 添加新字段
+    (while (not (equal "完成" 
+                      (completing-read "添加字段 (或选择'完成'): "
+                                     '("+ 添加字段" "完成")
+                                     nil t)))
+      (let* ((field-name (read-string "字段名称: "))
+             ;; 检查字段名唯一性
+             (_ (when (cl-find field-name fields
+                              :key (lambda (f) (plist-get f :name))
+                              :test #'string=)
+                  (user-error "字段名 %s 已存在" field-name)))
+             ;; 选择字段类型
+             (field-type (completing-read "字段类型: "
+                                        (mapcar #'symbol-name field-types)
+                                        nil t))
+             (type-sym (intern field-type))
+             (type-def (org-supertag-get-field-type type-sym))
+             ;; 创建基本字段定义
+             (field-def (list :name field-name
+                            :type type-sym
+                            :required (y-or-n-p "是否必填? "))))
+        
+        ;; 添加类型特定的属性
+        (pcase type-sym
+          ;; 选项类型需要定义可选值
+          ('options
+           (let ((options (split-string
+                          (read-string "输入选项 (用逗号分隔): ")
+                          "," t "[ \t\n\r]+")))
+             (setq field-def (plist-put field-def :options options))))
+          
+          ;; 引用类型需要定义引用的标签
+          ('reference
+           (let ((ref-tag (completing-read "引用哪个标签的条目? "
+                                         (org-supertag-get-all-tags))))
+             (setq field-def (plist-put field-def :ref-tag ref-tag))))
+          
+          ;; 数值类型可以设置范围
+          ('number
+           (when (y-or-n-p "是否设置数值范围? ")
+             (let ((min (read-number "最小值: "))
+                   (max (read-number "最大值: ")))
+               (setq field-def (plist-put field-def :min min))
+               (setq field-def (plist-put field-def :max max))))))
+        
+        ;; 添加验证器和格式化器
+        (when-let ((validator (plist-get type-def :validator)))
+          (setq field-def (plist-put field-def :validate validator)))
+        (when-let ((formatter (plist-get type-def :formatter)))
+          (setq field-def (plist-put field-def :formatter formatter)))
+        
+        ;; 添加到字段列表
+        (push field-def fields)))
+    
+    ;; 返回字段列表
+    (nreverse fields)))
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here
