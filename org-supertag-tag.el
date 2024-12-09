@@ -176,7 +176,7 @@ PROPS 是关系属性"
   "检查是否存在循环关系.
 TYPE 是关系类型
 FROM 是源标签
-TO 是��标标签"
+TO 是目标标签"
   (let ((visited (make-hash-table :test 'equal)))
     (cl-labels ((visit (current)
                   (if (equal current from)
@@ -454,7 +454,7 @@ TAG 是标签名称"
 (defun org-supertag--maybe-create-template (tag-name)
   "如果标签没有模板，提示用户是否创建.
 返回创建的模板 ID 或 nil."
-  (unless (org-supertag-db-get-linked tag-name :tag-template)
+  (unless (org-supertag-get-linked tag-name :tag-template)
     (when (y-or-n-p (format "标签 '%s' 没有模板，是否创建？" tag-name))
       ;; 快速创建模板
       (let* ((fields-input (read-string "输入字段 (用逗号分隔): "))
@@ -475,51 +475,74 @@ TAG 是标签名称"
         (org-supertag-template-id template)))))
 
 (defun org-supertag--apply-tag-fields (tag-name)
-  "为当前 headline 添加指定标签的字段."
-  (when-let* ((template-id (org-supertag-db-get-linked tag-name :tag-template))
-              (template (org-supertag-get-template template-id))
-              (fields (org-supertag-template-fields template))
-              (node-id (org-id-get)))
-    (dolist (field fields)
-      (let* ((field-name (plist-get field :name))
-             (prop-name (concat field-name))
-             (field-id (format "%s_%s" tag-name field-name))
-             (default-value (plist-get field :default))
-             ;; 获取现有值或使用默认值
-             (value (or (org-entry-get nil prop-name)
-                       default-value
-                       "")))
-        ;; 同时更新属性和数据库
-        (org-entry-put nil prop-name value)
-        (org-supertag-db-set-field-value field-id node-id value)))))
+  "应用标签的字段到当前节点.
+TAG-NAME 是标签名称"
+  (let* ((template-id (org-supertag-get-linked tag-name :tag-template))
+         (template-data (when template-id 
+                         (gethash template-id org-supertag--tag-templates)))
+         (template (when template-data
+                    (org-supertag-template-from-plist template-data)))
+         (fields (when template 
+                  (org-supertag-template-fields template)))
+         (node-id (org-id-get-create)))
+    
+    ;; 调试信息
+    (message "Debug - tag-name: %S" tag-name)
+    (message "Debug - template-id: %S" template-id)
+    (message "Debug - template-data: %S" template-data)
+    (message "Debug - template: %S" template)
+    (message "Debug - fields: %S" fields)
+    (message "Debug - node-id: %S" node-id)
+    
+    (when (and template fields node-id)
+      ;; 将向量转换为列表进行处理
+      (dolist (field (append fields nil))
+        (let* ((field-name (plist-get field :name))
+               (prop-name (concat ":" field-name))
+               (field-id (org-supertag-field-create field-name field))
+               (default-value (or (plist-get field :default) ""))
+               (value (read-string (format "%s: " field-name)
+                                 default-value)))
+          ;; 设置属性
+          (org-entry-put nil prop-name value)
+          ;; 保存字段值
+          (org-supertag-db-set-field-value field-id node-id value))))))
 
 (defun org-supertag--create-template-from-tag (tag-name fields)
   "从标签和字段创建模板.
 TAG-NAME 是标签名称
-FIELDS 是字段列表，每个字段是 (field-name . default-value) 对"
-  (unless (stringp tag-name)
-    (error "Tag name must be a string"))
-  (unless (listp fields)
-    (error "Fields must be a list"))
-  
-  (let* ((template-id (org-supertag--generate-id))
-         (template-fields 
+FIELDS 是字段列表"
+  (let* ((template-fields 
           (mapcar (lambda (field)
-                    (unless (consp field)
-                      (error "Each field must be a cons pair"))
                     (list :type :property
                           :name (car field)
                           :required nil
                           :default (or (cdr field) "")))
                   fields))
          (template (make-org-supertag-template
-                   :id template-id
+                   :id ""  ; 让 create-template 生成 ID
                    :tag-name tag-name
                    :display-name tag-name
                    :fields (vconcat template-fields))))
-    ;; 保存模板
-    (org-supertag-create-template template)
-    template-id))
+    ;; 使用 API 创建模板
+    (when (org-supertag-create-template template)
+      (org-supertag-template-id template))))
+
+(defun org-supertag--ensure-tag-template (tag-name fields)
+  "确保标签有对应的模板.
+如果模板不存在，则创建新模板.
+TAG-NAME 是标签名称
+FIELDS 是字段列表"
+  (let ((template-id (org-supertag-get-linked tag-name :tag-template)))
+    (message "Debug - Existing template-id: %S" template-id)
+    (or template-id
+        (let ((new-template-id (org-supertag--create-template-from-tag tag-name fields)))
+          (message "Debug - New template-id: %S" new-template-id)
+          ;; 建立双向关联，使用已有的 API
+          (org-supertag-add-relation :tag-template tag-name new-template-id)
+          (org-supertag-add-relation :template-tag new-template-id tag-name)
+          new-template-id))))
+
 
 (defun org-supertag--infer-field-type (name)
   "根据字段名智能推断字段类型."
@@ -568,7 +591,7 @@ FIELDS 是字段列表，每个字段是 (field-name . default-value) 对"
 
 (defun org-supertag--get-tag-fields (tag-name)
   "获取标签的字段定义."
-  (when-let* ((template-id (org-supertag-db-get-linked tag-name :tag-template))
+  (when-let* ((template-id (org-supertag-get-linked tag-name :tag-template))
               (template (org-supertag-find-entity :template template-id)))
     (mapcar (lambda (field)
               (format "%s%s:%s%s"

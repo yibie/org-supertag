@@ -48,7 +48,7 @@ ID 是模板的唯一标识符."
 (defun org-supertag-get-template-tag (template-id)
   "获取模板关联的标签.
 TEMPLATE-ID 是模板ID."
-  (org-supertag-db-get-linked template-id :template-tag))
+  (org-supertag-get-linked template-id :template-tag))
 
 (defun org-supertag-link-template-tag (template-id tag-name)
   "建立模板和标签的关联.
@@ -1469,7 +1469,7 @@ FIELD-DEF 是字段定义"
               (org-supertag-template--add-field field-def)))
         (error
          (message "Error adding field '%s': %s" spec (error-message-string err)))))
-    (org-supertag-template-refresh)))
+    (org-supertag-template-refresh))))
 
 (defun org-supertag-template-infer-fields ()
   "从模板名称推断并添加字段."

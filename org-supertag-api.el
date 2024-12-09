@@ -234,6 +234,8 @@ TO 是目标实体
         (push (list (nth 1 rel) (nth 3 rel)) results)))
     results))
 
+    
+
 ;;------------------------------------------------------------------------------
 ;; 字段值 API
 ;;------------------------------------------------------------------------------  
@@ -274,7 +276,13 @@ TO 是目标实体
             (push full-name all-fields)))))
     ;; 返回去重后的字段列表
     (delete-dups (nreverse all-fields))))
-
+    
+(defun org-supertag-get-linked (from type)
+  "获取与 FROM 通过 TYPE 关系关联的实体.
+FROM 是源实体的标识符
+TYPE 是关系类型"
+  (when-let ((links (org-supertag-db-get-links type from)))
+    (car (car links))))
 ;;------------------------------------------------------------------------------
 ;; 模板系统 API
 ;;------------------------------------------------------------------------------
@@ -332,7 +340,7 @@ ID 是模板的唯一标识符."
 (defun org-supertag-get-template-tag (template-id)
   "获取模板关联的标签.
 TEMPLATE-ID 是模板ID."
-  (org-supertag-db-get-linked template-id :template-tag))
+  (org-supertag-get-linked template-id :template-tag))
 
 (defun org-supertag--generate-id ()
   "生成唯一的模板ID.
@@ -446,6 +454,7 @@ TEMPLATE 是要验证的模板数据，可以是 struct 或 plist."
     (dolist (pair alist)
       (puthash (car pair) (cdr pair) hash))
     hash))
+
 
 (provide 'org-supertag-api)
 ;;; org-supertag-api.el ends here

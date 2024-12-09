@@ -60,6 +60,17 @@
   :type '(alist :key-type string :value-type string)
   :group 'org-supertag)
 
+(defcustom org-supertag-preset-templates
+  '(("任务" . (("status" . "TODO")
+               ("priority" . "B")
+               ("deadline" . nil)))
+    ("笔记" . (("type" . "note")
+               ("tags" . nil)))
+    ("项目" . (("status" . "PROJ")
+               ("deadline" . nil)
+               ("members" . nil))))
+  "预设的标签模板.")
+
 ;;; 内部变量
 
 (defvar org-supertag--initialized nil
@@ -130,6 +141,7 @@
             (define-key map (kbd "C-c t s") #'org-supertag-sync-node-at-point)
             (define-key map (kbd "C-c t n") #'org-supertag-create-tag-template)
             (define-key map (kbd "C-c t e") #'org-supertag-edit-tag-template)
+            (define-key map (kbd "C-c t a") #'org-supertag-add-tag)
             map)
   (if org-supertag-mode
       (progn
@@ -163,20 +175,37 @@
     (user-error "必须在标题处"))
   
   (let* ((tag-name (read-string "Tag name: ")))
-    (when (and tag-name (not (string-empty-p tag-name)))
-      ;; 如果是新标签，创建模板
-      (unless (org-supertag-db-get-linked tag-name :tag-template)
-        (org-supertag--create-template-interactive tag-name))
+    (when tag-name
+      ;; 如果是新标签，询问是否添加字段
+      (unless (org-supertag-get-linked tag-name :tag-template)
+        (when (y-or-n-p (format "标签 '%s' 是新标签，是否添加字段？" tag-name))
+          (let* ((specs (split-string
+                        (read-string 
+                         "输入字段 (空格分隔, 如 'title* status:choice=TODO'): ")))
+                 ;; 如果用户没有输入，使用推断的字段
+                 (fields-specs (if (null specs)
+                                 (org-supertag--infer-fields-from-tag tag-name)
+                               specs))
+                 ;; 解析字段规格
+                 (fields (mapcar (lambda (spec)
+                                 (let ((field (org-supertag--parse-field-spec spec)))
+                                   (cons (plist-get field :name)
+                                         (plist-get field :default))))
+                               fields-specs)))
+            ;; 创建模板
+            (org-supertag--ensure-tag-template tag-name fields))))
       
-      ;; 应用标签
+      ;; 继续原有的标签添加流程
       (let ((node-id (org-id-get-create)))
         (org-supertag-tag-add-to-node node-id tag-name)
+        ;; 更新标题
         (let* ((element (org-element-at-point))
                (title (org-element-property :raw-value element))
                (new-title (concat title " #" tag-name)))
           (org-edit-headline new-title)
+          ;; 应用字段
           (org-supertag--apply-tag-fields tag-name))))))
-          
+
 ;;;###autoload
 (defun org-supertag-remove-tag-at-point ()
   "从当前位置移除标签."
@@ -264,7 +293,7 @@
     ;; 获取当前节点的所有字段
     (let* ((current-fields (org-entry-properties nil))
            (field-names (mapcar #'car current-fields))
-           (_ (message "Debug - 当��字段: %S" field-names))
+           (_ (message "Debug - 当前字段: %S" field-names))
            (selected-field (completing-read "选择要移除的字段: " field-names)))
       
       (when selected-field
@@ -281,7 +310,7 @@
                                   (mapcar #'car (org-supertag-find-entities :tag))
                                   nil t))
          (fields nil)
-         (template-id (org-supertag-db-get-linked tag-name :tag-template)))
+         (template-id (org-supertag-get-linked tag-name :tag-template)))
     
     (while (y-or-n-p "添加字段？")
       (let* ((field-name (read-string "字段名称: "))
@@ -415,5 +444,111 @@
                    :fields updated-fields))
             (message "字段 %s 已更新" field-to-edit)))))))
 
+(defun org-supertag--get-template-choices ()
+  "获取所有可用的标签模板选项."
+  (let* ((preset-choices
+          (mapcar (lambda (template)
+                   (cons (format "%s [预设]" (car template))
+                         (list :preset (car template))))
+                 org-supertag-preset-templates))
+         (custom-templates
+          (mapcar (lambda (template)
+                   (cons (format "%s [自定义]" 
+                               (org-supertag-template-tag-name template))
+                         (list :custom 
+                               (org-supertag-template-id template))))
+                 (org-supertag-find-templates-by-type))))
+    (append preset-choices
+            custom-templates
+            '(("+ 新建标签" . (:new))))))
+
+(defun org-supertag--apply-template (tag-name fields)
+  "应用模板到当前节点.
+TAG-NAME 是标签名称
+FIELDS 是字段列表，可以是 plist 或 alist"
+  (let ((node-id (org-id-get-create)))
+    ;; 添加标签关系
+    (org-supertag-tag-add-to-node node-id tag-name)
+    
+    ;; 更新标题，添加标签
+    (let* ((element (org-element-at-point))
+           (title (org-element--property :raw-value element nil nil))
+           (new-title (concat title " #" tag-name)))
+      (org-edit-headline new-title))
+    
+    ;; 应用字段
+    (org-supertag--apply-tag-fields tag-name)))
+    
+(defun org-supertag-add-tag ()
+  "为当前位置添加标签，提供预设和自定义模板选项."
+  (interactive)
+  (unless (org-at-heading-p)
+    (user-error "必须在标题处"))
+  
+  (let* ((choices (org-supertag--get-template-choices))
+         (choice (completing-read "选择标签类型: "
+                                (mapcar #'car choices)))
+         (template-info (cdr (assoc choice choices))))
+    (pcase (car template-info)
+      (:preset
+       (let* ((tag-name (cadr template-info))
+              ;; 使用 org-supertag--infer-fields-from-tag 获取字段
+              (fields-specs (org-supertag--infer-fields-from-tag tag-name))
+              ;; 解析字段规格
+              (fields (mapcar (lambda (spec)
+                              (let ((field (org-supertag--parse-field-spec spec)))
+                                (cons (plist-get field :name)
+                                      (plist-get field :default))))
+                            fields-specs)))
+         ;; 先确保模板存在
+         (org-supertag--ensure-tag-template tag-name fields)
+         ;; 添加标签关系并应用字段
+         (let ((node-id (org-id-get-create)))
+           (org-supertag-tag-add-to-node node-id tag-name)
+           (let* ((element (org-element-at-point))
+                  (title (org-element-property :raw-value element))
+                  (new-title (concat title " #" tag-name)))
+             (org-edit-headline new-title)
+             (org-supertag--apply-tag-fields tag-name)))))
+      
+      (:custom
+       (let* ((template-id (cadr template-info))
+              (template (org-supertag-get-template template-id)))
+         (when template
+           (let ((tag-name (org-supertag-template-tag-name template)))
+             (let ((node-id (org-id-get-create)))
+               (org-supertag-tag-add-to-node node-id tag-name)
+               (let* ((element (org-element-at-point))
+                      (title (org-element-property :raw-value element))
+                      (new-title (concat title " #" tag-name)))
+                 (org-edit-headline new-title)
+                 (org-supertag--apply-tag-fields tag-name)))))))
+      
+      (:new
+       (let* ((tag-name (read-string "标签名称: "))
+              (specs (split-string
+                     (read-string
+                      "输入字段 (空格分隔, 如 'title* status:choice=TODO'): ")))
+              (fields-specs (if (null specs)
+                              (org-supertag--infer-fields-from-tag tag-name)
+                            specs))
+              (fields (mapcar (lambda (spec)
+                              (let ((field (org-supertag--parse-field-spec spec)))
+                                (cons (plist-get field :name)
+                                      (plist-get field :default))))
+                            fields-specs)))
+         ;; 创建并保存模板
+         (org-supertag--ensure-tag-template tag-name fields)
+         ;; 添加标签关系并应用字段
+         (let ((node-id (org-id-get-create)))
+           (org-supertag-tag-add-to-node node-id tag-name)
+           (let* ((element (org-element-at-point))
+                  (title (org-element-property :raw-value element))
+                  (new-title (concat title " #" tag-name)))
+             (org-edit-headline new-title)
+             (org-supertag--apply-tag-fields tag-name))))))))
+
+
 (provide 'org-supertag)
 ;;; org-supertag.el ends here 
+ 

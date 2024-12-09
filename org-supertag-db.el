@@ -148,6 +148,8 @@ FROM: 源实体ID
     (message "Debug - Relations: %S" (ht-items org-supertag-db--relations))
     (nreverse results)))
 
+
+
 ;;; 辅助函数
 
 (defun org-supertag-db-exists-p (id)
@@ -210,7 +212,21 @@ PRED 是一个接受 (field-id . value) 作为参数的函数"
             org-supertag-db--field-values)
     (nreverse results)))
 
+;; 按节点查询
+(defun org-supertag-db-find-field-values-by-node (node-id)
+  "获取节点的所有字段值."
+  (org-supertag-db-find-field-values 
+   (lambda (k _v)
+     (string-match-p (concat ":" (regexp-quote node-id) "$")
+                     k))))
 
+;; 按字段查询
+(defun org-supertag-db-find-field-values-by-field (field-id)
+  "获取指定字段的所有值."
+  (org-supertag-db-find-field-values
+   (lambda (k _v)
+     (string-match-p (concat "^" (regexp-quote field-id) ":")
+                     k))))
 
 ;;; 查询功能
 

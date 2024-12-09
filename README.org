@@ -18,19 +18,17 @@ Git clone this repo to your emacs.d directory.
   :hook (org-mode . org-supertag-mode))
 #+END_SRC
 
-* Test
+* Test #项目 #笔记
 :PROPERTIES:
-:ID:       C1735914-E666-4096-B172-E7A63BFDCDBA
+::ID:       C1735914-E666-4096-B172-E7A63BFDCDBA
+::title:   a ?
+::desc:    fuck
+::tags:    now
+::created: ??
 :END:
-* Test #supertag2 #supertag3
-:PROPERTIES:
-:ID:       DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
-:END:
-DFD2F295-0DB1-4437-BFAF-DF2DBF7ABB26
-* Tag Template Test #supertag4 #test&test
-:PROPERTIES:
-:ID:       FC3C2312-393B-4E08-9619-8EFC772D5C81
-:END:
-* Test3
 
-jt
+* Test #good
+:PROPERTIES:
+:ID:       F597E7FD-86B3-4105-A722-5F6D84075E09
+::title:   hao
+:END:
