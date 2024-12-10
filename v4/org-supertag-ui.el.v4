@@ -104,37 +104,24 @@ TAG-NAME 是标签名称."
     (define-key map [remap undo] 'org-supertag-template-undo)
     (define-key map (kbd "M-u") 'org-supertag-template-redo)
     
-    ;; 保存
-    (define-key map (kbd "s") 'org-supertag-template-save)
-    (define-key map (kbd "C-c C-c") 'org-supertag-template-save-and-exit)
-    
     ;; 标签名设置
     (define-key map (kbd "t") 'org-supertag-template-set-tag-name)
 
-    ;; 字段添加命令
-    (define-key map (kbd "a") 'org-supertag-template-add-field-command)
+    ;; 字段编辑命令
+    (define-key map (kbd "a") 'org-supertag-template-add-field)
     (define-key map (kbd "d") 'org-supertag-template-remove-field-command)
-    (define-key map (kbd "e") 'org-supertag-template-edit-field-command)
+    (define-key map (kbd "e") 'org-supertag-template-edit-field)
     (define-key map (kbd "M-p") 'org-supertag-template-move-field-up)
     (define-key map (kbd "M-n") 'org-supertag-template-move-field-down)
+    (define-key map (kbd "M") 'org-supertag-template-move-field-to)
     
     ;; 模板属性编辑命令
     (define-key map (kbd "T r") 'org-supertag-template-rename-command)
     (define-key map (kbd "T C") 'org-supertag-template-copy-command)
     (define-key map (kbd "T d") 'org-supertag-template-delete-command)
     
-    ;; 快速编辑功能
-    (define-key map (kbd "A") 'org-supertag-template-quick-add-field)
-    (define-key map (kbd "E") 'org-supertag-template-quick-edit-field)
-    (define-key map (kbd "M") 'org-supertag-template-move-field-to)
-    (define-key map (kbd "B") 'org-supertag-template-bulk-add-fields)
-    (define-key map (kbd "I") 'org-supertag-template-infer-fields)
-    (define-key map (kbd "W") 'org-supertag-template-copy-field)
-    (define-key map (kbd "Y") 'org-supertag-template-paste-field)
-    
     ;; 扩展功能
     (define-key map (kbd "s") 'org-supertag-template-sort-fields)
-    (define-key map (kbd "d") 'org-supertag-template-duplicate-field)
     (define-key map (kbd "G") 'org-supertag-template-group-fields)
     (define-key map (kbd "v") 'org-supertag-template-toggle-field-visibility)
     (define-key map (kbd "c") 'org-supertag-template-set-field-condition)
@@ -166,35 +153,22 @@ TAG-NAME 是标签名称."
   "刷新模板编辑器buffer."
   (interactive)
   (let ((inhibit-read-only t)
-        ;; 保存当前位置和section状态
         (old-point (point))
         (old-sections (magit-section-get-visibility-cache))
         (window-start (window-start)))
-    
     (condition-case err
         (progn
-          ;; 清空buffer
           (erase-buffer)
-          
-          ;; 重新插入内容
           (magit-insert-section (template)
             (org-supertag-template--insert-header)
             (org-supertag-template--insert-fields))
-          
-          ;; 恢复section状态
           (magit-section-set-visibility-cache old-sections)
-          
-          ;; 恢复光标位置
           (goto-char (min old-point (point-max)))
           (set-window-start (selected-window) window-start))
-      
-      ;; 错误处理
       (error
-       (message "Error refreshing template buffer: %s" (error-message-string err))
-       ;; 如果刷新失败，尝试重置到基本状态
+       (message "刷新模板失败: %s" (error-message-string err))
        (erase-buffer)
-       (insert "Error refreshing template. Press 'g' to try again.\n")
-       (insert (format "Error: %s" (error-message-string err)))))))
+       (insert "刷新失败，按 'g' 重试\n" (error-message-string err))))))
 
 ;; 辅助函数：遍历所有sections
 (defun org-supertag-section-map (fn)
@@ -293,10 +267,8 @@ TAG-NAME 是标签名称."
                              (:string ?S)
                              (:number ?N)
                              (:date ?D)
-                             (:planning ?P)
                              (:priority ?R)
                              (:tags ?T)
-                             (:enum ?E)
                              (_ ??))
                            type))
              ;; 显示字段名称
@@ -547,62 +519,54 @@ NEW-INDEX 是字段的目标索引"
     (org-supertag-template-refresh)))
 
 ;; 字段添加命令
-(defun org-supertag-template-add-field-command ()
-  "添加字段的命令菜单."
+(defun org-supertag-template-add-field ()
+  "添加新字段到当前模板."
   (interactive)
-  (let* ((type-char (read-char-choice
-                     "Field type [p]roperty [d]rawer [t]odo [s]tring [n]umber [D]ate [P]lanning [r]priority [T]ags [e]num: "
-                     '(?p ?d ?t ?s ?n ?D ?P ?r ?T ?e)))
-         (type (pcase type-char
-                (?p :property)
-                (?d :drawer)
-                (?t :todo)
-                (?s :string)
-                (?n :number)
-                (?D :date)
-                (?P :planning)
-                (?r :priority)
-                (?T :tags)
-                (?e :enum)))
-         (name (read-string "Field name: "))
+  (let* ((name (read-string "Field name: "))
+         (type-candidates (org-supertag--field-type-candidates))
+         (type-choice (completing-read 
+                      "Field type: "
+                      (mapcar #'car type-candidates)
+                      nil t))
+         (type (cdr (assoc type-choice type-candidates)))
          (required (y-or-n-p "Required? "))
-         (default (read-string "Default value: "))
-         ;; 创建一个正确的字段定义列表
-         (field-def `(:type ,type
-                     :name ,name
-                     :required ,required
-                     :default ,default)))
-    ;; 添加到字段向量中
-    (org-supertag-template--add-field field-def)
+         (default (read-string "Default value (optional): "))
+         (field (list :name name
+                     :type type
+                     :required required
+                     :default default)))
+    (setf (org-supertag-template-fields org-supertag--current-template)
+          (vconcat (org-supertag-template-fields org-supertag--current-template)
+                   (vector field)))
     (org-supertag-template-refresh)))
 
-;; 字段删除命令
-(defun org-supertag-template-remove-field-command ()
-  "删除当前字段."
-  (interactive)
-  (when-let* ((section (magit-current-section))
-              (field-index (oref section value)))
-    (org-supertag-template--remove-field field-index)
+(defun org-supertag-template-edit-field (index)
+  "编辑指定索引的字段.
+INDEX 是字段的索引"
+  (interactive "nField index: ")
+  (let* ((fields (org-supertag-template-fields org-supertag--current-template))
+         (field (aref fields index))
+         (name (read-string "Field name: " (plist-get field :name)))
+         (type-candidates (org-supertag--field-type-candidates))
+         (current-type (symbol-name (plist-get field :type)))
+         (type-choice (completing-read 
+                      "Field type: "
+                      (mapcar #'car type-candidates)
+                      nil t
+                      (concat current-type " - ")))
+         (type (cdr (assoc type-choice type-candidates)))
+         (required (y-or-n-p "Required? "))
+         (default (read-string "Default value: " (plist-get field :default)))
+         (new-field (list :name name
+                         :type type
+                         :required required
+                         :default default))
+         (new-fields (vconcat (seq-subseq fields 0 index)
+                             (vector new-field)
+                             (seq-subseq fields (1+ index)))))
+    (setf (org-supertag-template-fields org-supertag--current-template)
+          new-fields)
     (org-supertag-template-refresh)))
-
-;; 字段编辑命令
-(defun org-supertag-template-edit-field-command ()
-  "编辑当前字段."
-  (interactive)
-  (when-let* ((section (magit-current-section))
-              (field-index (oref section value))
-              (fields (plist-get org-supertag--current-template :fields))
-              (field-def (aref fields field-index)))
-    (let* ((type (plist-get field-def :type))
-           (name (read-string "Field name: " (plist-get field-def :name)))
-           (required (y-or-n-p "Required? " (plist-get field-def :required)))
-           (default (read-string "Default value: " (plist-get field-def :default)))
-           (new-field-def (list :type type
-                               :name name
-                               :required required
-                               :default default)))
-      (org-supertag-template--modify-field field-index new-field-def)
-      (org-supertag-template-refresh))))
 
 ;; 字段移动命令
 (defun org-supertag-template-move-field-up ()
@@ -1220,54 +1184,16 @@ FIELD-DEF 是字段定义"
 ;; 模板操作命令
 ;; ----------------------------------------------------------------------
 
-(defun org-supertag-template-add-field ()
-  "添加新字段到当前模板."
+(defun org-supertag-template-edit-field ()
+  "编辑当前字段."
   (interactive)
-  (let* ((name (read-string "Field name: "))
-         (type-candidates (org-supertag--field-type-candidates))
-         (type-choice (completing-read 
-                      "Field type: "
-                      (mapcar #'car type-candidates)
-                      nil t))
-         (type (cdr (assoc type-choice type-candidates)))
-         (required (y-or-n-p "Required? "))
-         (default (read-string "Default value (optional): "))
-         (field (list :name name
-                     :type type
-                     :required required
-                     :default default)))
-    (setf (org-supertag-template-fields org-supertag--current-template)
-          (vconcat (org-supertag-template-fields org-supertag--current-template)
-                   (vector field)))
-    (org-supertag-template-refresh)))
-
-(defun org-supertag-template-edit-field (index)
-  "编辑指定索引的字段.
-INDEX 是字段的索引"
-  (interactive "nField index: ")
-  (let* ((fields (org-supertag-template-fields org-supertag--current-template))
-         (field (aref fields index))
-         (name (read-string "Field name: " (plist-get field :name)))
-         (type-candidates (org-supertag--field-type-candidates))
-         (current-type (symbol-name (plist-get field :type)))
-         (type-choice (completing-read 
-                      "Field type: "
-                      (mapcar #'car type-candidates)
-                      nil t
-                      (concat current-type " - ")))
-         (type (cdr (assoc type-choice type-candidates)))
-         (required (y-or-n-p "Required? "))
-         (default (read-string "Default value: " (plist-get field :default)))
-         (new-field (list :name name
-                         :type type
-                         :required required
-                         :default default))
-         (new-fields (vconcat (seq-subseq fields 0 index)
-                             (vector new-field)
-                             (seq-subseq fields (1+ index)))))
-    (setf (org-supertag-template-fields org-supertag--current-template)
-          new-fields)
-    (org-supertag-template-refresh)))
+  (when-let* ((field-info (org-supertag-ui--field-at-point))
+              (field-index (car field-info))
+              (field-def (cdr field-info)))
+    (let ((new-value (org-supertag-ui--read-field-value field-def)))
+      (org-supertag-template-update-field field-index
+                                         (plist-put field-def :value new-value))
+      (org-supertag-template-refresh))))
 
 ;; ----------------------------------------------------------------------
 ;; 快捷键绑定

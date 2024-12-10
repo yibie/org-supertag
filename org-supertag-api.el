@@ -43,17 +43,45 @@ PROPS 是要更新的属性"
   "移除节点的标签."
   (org-supertag-db-unlink :node-tag node-id tag-id))
 
-(defun org-supertag-set-field (node-id field-id value)
+(defun org-supertag-set-field (node-id field-name value)
   "设置节点的字段值.
 NODE-ID: 节点ID
-FIELD-ID: 字段ID
+FIELD-NAME: 字段名称
 VALUE: 字段值
 返回 t 如果设置成功，nil 如果失败"
-  (when (and (org-supertag-db-exists-p node-id)
-             (org-supertag-db-exists-p field-id))
-    (org-supertag-db-link :node-field node-id field-id)
-    (org-supertag-db-set-field-value field-id node-id value)
-    t))
+  (message "Debug - Setting field %s = %s for node %s" field-name value node-id)
+  (when (org-supertag-db-exists-p node-id)
+    (condition-case err
+        (let* ((sanitized-name (org-supertag-sanitize-name field-name))
+               (field-def (org-supertag-get-field sanitized-name))
+               (type (plist-get field-def :type))
+               (type-spec (org-supertag-get-field-type type))
+               (storage (plist-get type-spec :storage))
+               (validator (plist-get type-spec :validator))
+               (formatter (plist-get type-spec :formatter)))
+          
+          ;; 验证值
+          (when validator
+            (unless (funcall validator value)
+              (error "Invalid value for field %s: %s" field-name value)))
+          
+          ;; 格式化值
+          (let* ((formatted-value (if formatter
+                                    (funcall formatter value field-def)
+                                  value)))
+            
+            ;; 更新数据库中的字段值
+            (org-supertag-db-link :node-field node-id sanitized-name)
+            (org-supertag-db-set-field-value sanitized-name node-id formatted-value)
+            
+            ;; 更新 Org 节点的属性
+            (org-with-point-at (org-id-find node-id t)
+              (message "Debug - Found node at point: %s" (point))
+              (org-entry-put nil sanitized-name formatted-value)
+              t))
+      (error
+       (message "Error setting field: %s" (error-message-string err))
+       nil))))) 
 
 ;; 查询操作
 (defun org-supertag-get-node-tags (node-id)
@@ -63,6 +91,13 @@ VALUE: 字段值
 (defun org-supertag-get-node-fields (node-id)
   "获取节点的所有字段."
   (mapcar #'car (org-supertag-db-get-links :node-field node-id)))
+
+(defun org-supertag-get-nodes-with-tag (tag-name)
+  "获取所有使用了指定标签的节点 ID 列表.
+TAG-NAME 是标签名称"
+  (message "Debug - Finding nodes with tag: %s" tag-name)
+  (mapcar #'car 
+          (org-supertag-get-relations-reversed :node-tag tag-name)))
 
 (defun org-supertag-get-field (field-id)
   "获取字段定义.

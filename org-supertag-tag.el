@@ -176,7 +176,7 @@ PROPS 是关系属性"
   "检查是否存在循环关系.
 TYPE 是关系类型
 FROM 是源标签
-TO 是��标标签"
+TO 是目标标签"
   (let ((visited (make-hash-table :test 'equal)))
     (cl-labels ((visit (current)
                   (if (equal current from)
@@ -191,127 +191,72 @@ TO 是��标标签"
 
 ;;; 标签操作 API
 
-(defun org-supertag--normalize-field-def (field)
-  "规范化字段定义.
-FIELD 是字段定义"
-  (message "Debug - Normalizing field: %S" field)
-  (let ((field-plist (if (and (vectorp field) 
-                             (= (length field) 1))
-                        ;; 如果是单元素向量，取其内容
-                        (elt field 0)
-                      ;; 否则尝试转换为列表
-                      (if (vectorp field)
-                          (append field nil)
-                        field))))
-    (message "Debug - Field as plist: %S" field-plist)
-    ;; 将关键字类型转换为普通符号
-    (when-let ((type (plist-get field-plist :type)))
-      (message "Debug - Original type: %S" type)
-      (setq field-plist 
-            (plist-put field-plist :type 
-                      (if (keywordp type)
-                          (intern (substring (symbol-name type) 1))
-                        type)))
-      (message "Debug - Normalized type: %S" (plist-get field-plist :type)))
-    field-plist))
+(defun org-supertag-sanitize-tag-name (name)
+  "将名称转换为有效的标签名称.
+NAME 是要转换的名称
+只处理空格问题，将空格转换为下划线"
+  (if (or (null name) (string-empty-p name))
+      (error "Tag name cannot be empty")
+    (let* ((trimmed (string-trim name))
+           ;; 移除开头的 # （如果有）
+           (without-hash (replace-regexp-in-string "^#+" "" trimmed))
+           ;; 将空格转换为下划线
+           (sanitized (replace-regexp-in-string "\\s-+" "_" without-hash)))
+      (if (string-empty-p sanitized)
+          (error "Invalid tag name: %s" name)
+        sanitized))))
 
-(defun org-supertag--parse-field-def (field)
-  "解析字段定义，确保返回标准格式。
-FIELD 是字段定义，可以是 plist、向量或 cons cell"
-  (message "Debug - Parsing field: %S" field)
-  (let ((field-def nil))
-    ;; 如果是向量，转换为列表
-    (when (vectorp field)
-      (setq field (append field nil)))
-    
-    ;; 处理字段定义
-    (cond
-     ;; 处理 cons cell 格式 ("name" . type)
-     ((and (consp field) 
-           (not (listp (cdr field))))  ; 确保是真正的 cons cell
-      (message "Debug - Processing cons cell format: %S" field)
-      (let ((name (car field))
-            (type (cdr field)))
-        (setq field-def
-              (list :name (if (stringp name) name (symbol-name name))
-                    :type (if (keywordp type)
-                             (intern (substring (symbol-name type) 1))
-                           type)))))
-     
-     ;; 如果已经是标准格式的 plist
-     ((and (listp field)
-           (plist-member field :name)
-           (plist-member field :type))
-      (setq field-def field))
-     
-     ;; 如果是预设标签的字段格式（一个包含属性的列表）
-     ((and (listp field)
-           (listp (car field))
-           (keywordp (caar field)))
-      (let ((name (plist-get field :name))
-            (type (plist-get field :type))
-            (required (plist-get field :required))
-            (options (or (plist-get field :options)  ; 新格式
-                        (plist-get field :values)))) ; 旧格式
-        (setq field-def
-              (list :name name
-                    :type (if (keywordp type)
-                             (intern (substring (symbol-name type) 1))
-                           type)
-                    :required required
-                    :options options)))))
-    
-    (message "Debug - Parsed field: %S" field-def)
-    field-def))
-    
-(defun org-supertag--validate-field-def (field)
-  "验证字段定义是否有效.
-FIELD 是字段定义"
-  (message "Debug - Validating field: %S" field)
-  (let ((valid (and (listp field)
-                    (plist-get field :name)
-                    (plist-get field :type))))
-    (message "Debug - Field validation result: %s" valid)
-    valid))
+(defun org-supertag-format-tag (tag-name)
+  "格式化标签用于显示.
+TAG-NAME 是标签名称"
+  (concat "#" tag-name))
 
 (defun org-supertag-tag-create (name &rest props)
   "创建标签.
 NAME 是标签名称
 PROPS 是标签属性"
-  (let* ((fields (plist-get props :fields))
+  (let* ((sanitized-name (org-supertag-sanitize-tag-name name))
+         (fields (plist-get props :fields))
          (fields-list (if (vectorp fields)
                          (append fields nil)
                        fields)))
-    (message "Debug - Processing fields for tag %s" name)
-    (message "Debug - Raw fields: %S" fields)
+    (message "Debug - 规范化后的标签名: %s" sanitized-name)
+    (message "Debug - 处理标签字段: %S" fields)
     
     ;; 处理字段定义
     (let* ((normalized-fields
             (mapcar (lambda (field)
                      (let ((parsed (org-supertag--parse-field-def field)))
-                       (message "Debug - Field %S parsed as: %S" field parsed)
+                       (message "Debug - 字段 %S 解析为: %S" field parsed)
                        parsed))
                    fields-list))
            (valid-fields
             (cl-remove-if-not
              (lambda (field)
                (when field
-                 (message "Debug - Validating field: %S" field)
+                 (message "Debug - 验证字段: %S" field)
                  (org-supertag--validate-field-def field)))
              normalized-fields))
            (tag-props (append 
                       (list :type :tag
-                            :name name
+                            :name sanitized-name
                             :fields valid-fields)
                       (org-plist-delete props :fields))))
-      (message "Debug - Normalized fields: %S" normalized-fields)
-      (message "Debug - Valid fields: %S" valid-fields)
-      (org-supertag-db-put name tag-props))))
+      
+      (message "Debug - 创建标签实体: %s" sanitized-name)
+      (org-supertag-db-put sanitized-name tag-props))))
 
-(defun org-supertag-tag-get (name)
-  "获取标签信息.
-NAME 是标签名称"
-  (org-supertag-get-entity name))
+(defun org-supertag-tag-get (tag-name)
+  "获取标签定义.
+TAG-NAME 是标签名称"
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    (org-supertag-db-get sanitized-name)))
+
+(defun org-supertag-tag-exists-p (tag-name)
+  "检查标签是否存在.
+TAG-NAME 是标签名称"
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    (org-supertag-db-exists-p sanitized-name)))
 
 (defun org-supertag-tag-update (name props)
   "更新标签属性.
@@ -324,7 +269,7 @@ PROPS 是新的属性"
 NAME 是标签名称"
   (org-supertag-remove-entity name))
 
-;;; ���系操作 API
+;;; 关系操作 API
 
 (defun org-supertag-tag-add-relation (type from to &optional props)
   "添加标签关系.
@@ -593,8 +538,7 @@ TAG-NAME 是标签名称。"
     
     ;; 确保标签被正确添加
     (org-set-tags (org-get-tags))
-    (message "标签 %s 的字段应用完成" tag-name)
-    (message "Debug - 字段应用��成")))
+    (message "标签 %s 的字段应用完成" tag-name)))
     
 (defun org-supertag-tag-define-fields (tag-name)
   "定义标签的字段.
@@ -681,19 +625,36 @@ PRESET-NAME 是预设名称"
     (org-supertag--apply-tag preset-name)))
 
 (defun org-supertag--apply-tag (tag-name)
-  "应用标签到当前节点.
+  "应用标签到当前节点。
 TAG-NAME 是标签名称"
-  (message "Debug - 开始应用标签: %s" tag-name)
-  (let ((node-id (org-id-get-create)))
+  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (node-id (org-id-get-create)))
+    (message "Debug - 开始应用标签: %s -> %s" tag-name sanitized-name)
     (message "Debug - 节点 ID: %s" node-id)
     
     ;; 添加标签关系
-    (org-supertag-tag-add-to-node node-id tag-name)
+    (org-supertag-tag-add-to-node node-id sanitized-name)
     (message "Debug - 已添加标签关系")
     
     ;; 更新标题
-    (let* ((element (org-element-at-point))))))
+    (let* ((element (org-element-at-point))
+           (title (org-element-property :raw-value element))
+           (new-title (concat title " #" sanitized-name)))
+      (message "Debug - 当前标题: %s" title)
+      (message "Debug - 新标题: %s" new-title)
+      (org-edit-headline new-title))
+    
+    ;; 应用字段
+    (message "Debug - 开始应用字段")
+    (org-supertag--apply-tag-fields sanitized-name)
+    (message "Debug - 字段应用完成")))
 
+(defun org-supertag-tag-add-to-node (node-id tag-name)
+  "将标签添加到节点.
+NODE-ID 是节点 ID
+TAG-NAME 是标签名称"
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    (org-supertag-db-link :node-tag node-id sanitized-name)))
 
 (defun org-supertag--find-similar-tags (tag-name)
   "查找与给定标签名相似的已存在标签."

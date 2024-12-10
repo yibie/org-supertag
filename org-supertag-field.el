@@ -42,10 +42,6 @@
              :formatter org-supertag-format-tags
              :reader org-supertag-read-tags-field
              :description "标签列表"))
-    (planning . (:validator org-supertag-validate-planning
-                 :formatter org-supertag-format-planning
-                 :reader org-supertag-read-planning-field
-                 :description "Planning 类型"))
     (list . (:validator org-supertag-validate-list
              :formatter org-supertag-format-list
              :reader org-supertag-read-list-field
@@ -59,7 +55,7 @@
 
 (defun org-supertag-get-field-types ()
   "获取所有支持的字段类型。
-返回 ((显示名称 . 类型符号) ...) 的列表。"
+返回 ((显示名 . 类型符号) ...) 的列表。"
   (mapcar (lambda (type-def)
             (let* ((type-name (car type-def))
                    (type-spec (cdr type-def))
@@ -82,14 +78,15 @@ TYPE 是字段类型的符号。
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-validate-string (value)
-  "验证字符串 VALUE。"
+"验证字符串 VALUE。"
   (message "Debug - Validating string value: %S (type: %S)" value (type-of value))
-  (let* ((is-string (stringp value))
-        (is-non-empty (and value (not (string-empty-p (string-trim value)))))
-        (is-valid (and is-string is-non-empty)))
-    (message "Debug - String validation: is-string=%S, is-non-empty=%S, is-valid=%S"
-             is-string is-non-empty is-valid)
-    is-valid))
+  (let ((is-string (stringp value))
+        (is-non-empty (and value (not (string-empty-p (string-trim value))))))
+        (message "Debug - String validation: is-string=%S, is-non-empty=%S"
+    is-string is-non-empty)
+(and is-string is-non-empty)))
+
+
 
 (defun org-supertag-format-string (value field)
   "格式化字符串值。
@@ -100,22 +97,41 @@ FIELD 是字段定义。"
     (string-trim value)))
 
 (defun org-supertag-validate-date (value)
-  "验证日期 VALUE。"
-  (condition-case nil
-      (progn 
-        (org-parse-time-string value)
+  "验证日期值是否有效.
+VALUE 是要验证的值"
+  (message "Debug - Validating date value: %S" value)
+  (condition-case err
+      (progn
+        ;; org-read-date 返回的是 time value
+        (when (listp value)
+          (setq value (format-time-string "%Y-%m-%d" value)))
+        ;; 如果是字符串，尝试解析
+        (when (stringp value)
+          (org-parse-time-string value))
         t)
-    (error nil)))
+    (error
+     (message "Date validation error: %S" err)
+     nil)))
 
 (defun org-supertag-format-date (value field)
   "格式化日期值。
 VALUE 是要格式化的值
 FIELD 是字段定义。"
   (message "Debug - Formatting date value: %S" value)
-  (condition-case nil
-      (let ((time (org-parse-time-string value)))
-        (format-time-string "%Y-%m-%d" (apply #'encode-time time)))
-    (error value)))
+  (condition-case err
+      (cond
+       ;; 处理 org-read-date 返回的 time value
+       ((listp value)
+        (format-time-string "%Y-%m-%d" value))
+       ;; 处理字符串格式
+       ((stringp value)
+        (let ((time (org-parse-time-string value)))
+          (format-time-string "%Y-%m-%d" (apply #'encode-time time))))
+       ;; 其他情况返回原值
+       (t value))
+    (error
+     (message "Date formatting error: %S" err)
+     value)))
 
 (defun org-supertag-validate-email (value)
   "验证邮箱 VALUE。"
@@ -221,25 +237,52 @@ PROMPT 是提示信息。"
 ;; 字段定义操作
 ;;----------------------------------------------------------------------
 
+(defun org-supertag-sanitize-name (name)
+  "将名称转换为有效的 Org property 名称.
+NAME 是要转换的名称"
+  (if (or (null name) (string-empty-p name))
+      (error "Field name cannot be empty")
+    (let* ((trimmed (string-trim name))
+           (underscored (replace-regexp-in-string "\\s-+" "_" trimmed))
+           (sanitized (replace-regexp-in-string "[^A-Za-z0-9_]" "" underscored)))
+      (if (string-empty-p sanitized)
+          (error "Invalid field name after sanitization: %s" name)
+        (upcase sanitized)))))
+
+(defun org-supertag-validate-name (name)
+  "验证名称是否为有效的 Org property 名称.
+NAME 是要验证的名称"
+  (and (stringp name)
+       (not (string-empty-p name))
+       (let ((valid-name-regex "^[A-Za-z][A-Za-z0-9_]*$"))
+         (string-match-p valid-name-regex name))))
+
 (defun org-supertag-field-create (name props)
   "创建字段定义.
 NAME 是字段名称
 PROPS 是字段属性"
-  ;; 确保必要的属性存在
-  (unless (plist-get props :type)
-    (error "Field must have a :type property"))
+  (when (or (null name) (string-empty-p name))
+    (error "Field name cannot be empty"))
   
-  ;; 确保 :name 属性存在
-  (unless (plist-get props :name)
-    (setq props (plist-put props :name name)))
-  
-  ;; 添加实体类型标记
-  (setq props (plist-put props :entity-type :field))
-  
-  ;; 存字段定义
-  (let ((result (org-supertag-db-put name props)))
-    (message "Debug - Field creation stored: %S" result)
-    result))
+  ;; 验证并规范化名称
+  (let ((sanitized-name (org-supertag-sanitize-name name)))
+    (unless (org-supertag-validate-name sanitized-name)
+      (error "Invalid field name after sanitization: %s" name))
+    
+    ;; 确保必要的属性存在
+    (unless (plist-get props :type)
+      (error "Field must have a :type property"))
+    
+    ;; 确保 :name 属性存在且合法
+    (setq props (plist-put props :name sanitized-name))
+    
+    ;; 添加实体类型标记
+    (setq props (plist-put props :entity-type :field))
+    
+    ;; 存储字段定义
+    (let ((result (org-supertag-db-put sanitized-name props)))
+      (message "Debug - Field creation stored: %S" result)
+      result)))
 
 (defun org-supertag-field-get (name)
   "获取字段定义.
@@ -273,7 +316,6 @@ FIELD-DEF 是字段定义"
     (pcase type
       (:property (org-supertag-field--get-property field-def))
       (:drawer (org-supertag-field--get-drawer field-def))
-      (:planning (org-supertag-field--get-planning field-def))
       (:todo (org-supertag-field--get-todo))
       (:priority (org-supertag-field--get-priority))
       (:tags (org-supertag-field--get-tags))
@@ -283,18 +325,12 @@ FIELD-DEF 是字段定义"
   "设置字段值.
 FIELD-DEF 是字段定义
 VALUE 是要设置的值"
-  (let ((type (plist-get field-def :type)))
+  (let* ((type (plist-get field-def :type))
+         (type-spec (org-supertag-get-field-type type))
+         (storage (plist-get type-spec :storage)))
     (message "Debug - Setting value for field: %S" field-def)
-    (message "Debug - Field type: %S" type)
-    (message "Debug - Value to set: %S" value)
-    (pcase type
-      (:property (org-supertag-field--set-property field-def value))
-      (:drawer (org-supertag-field--set-drawer field-def value))
-      (:planning (org-supertag-field--set-planning field-def value))
-      (:todo (org-supertag-field--set-todo value))
-      (:priority (org-supertag-field--set-priority value))
-      (:tags (org-supertag-field--set-tags value))
-      (_ (error "Unsupported field type: %s" type)))))
+    (message "Debug - Field type: %S, storage: %S" type storage)
+    (message "Debug - Value to set: %S" value)))
 
 (defun org-supertag-field--get-property (field-def)
   "获取 Property 类型字段的值.
@@ -354,36 +390,7 @@ VALUE 是要设置的值"
       (end-of-line)
       (insert "\n:" drawer-name ":\n" formatted-value "\n:END:\n"))))
 
-(defun org-supertag-field--get-planning (field-def)
-  "获取 Planning 类型字段的值.
-FIELD-DEF 是字段定义"
-  (let* ((planning-type (org-supertag-field-get-org-name field-def))
-         (planning-element (org-element-map (org-element-parse-buffer) 'planning
-                           (lambda (p) p)
-                           nil t))
-         (timestamp (when planning-element
-                     (org-element-property 
-                      (intern (concat ":" (downcase planning-type)))
-                      planning-element))))
-    (message "Debug - Getting planning type: %S" planning-type)
-    (message "Debug - Planning element: %S" planning-element)
-    (message "Debug - Timestamp: %S" timestamp)
-    ;; 将 timestamp 对象转换为字符串
-    (when timestamp
-      (org-element-property :raw-value timestamp))))
 
-(defun org-supertag-field--set-planning (field-def value)
-  "设置 Planning 类型字段的值.
-FIELD-DEF 是字段定义
-VALUE 是要设置的值"
-  (let* ((planning-type (org-supertag-field-get-org-name field-def))
-         (type (plist-get field-def :type))
-         (type-spec (org-supertag-get-field-type type))
-         (formatter (plist-get type-spec :formatter))
-         (formatted-value (if formatter
-                            (funcall formatter value)
-                          value)))
-    (org-schedule nil formatted-value)))
 
 (defun org-supertag-field--get-todo ()
   "获取 TODO 状态."
@@ -393,15 +400,6 @@ VALUE 是要设置的值"
   "设置 TODO 状态.
 VALUE 是要设置的状态"
   (org-todo value))
-
-(defun org-supertag-field--get-priority ()
-  "获取优先级."
-  (org-entry-get nil "PRIORITY"))
-
-(defun org-supertag-field--set-priority (value)
-  "设置优先级.
-VALUE 是要设置的优先级"
-  (org-priority (string-to-char value)))
 
 (defun org-supertag-field--get-tags ()
   "获取标签列表."
@@ -417,12 +415,95 @@ VALUE 是要设置的标签列表"
 ;;----------------------------------------------------------------------
 
 ;; 改进字段验证
+;; (defun org-supertag--validate-field-def (field)
+;;   "验证字段定义是否有效。
+;; FIELD 是字段定义 plist。"
+;;   (and (plist-get field :name)
+;;        (plist-get field :type)
+;;        (org-supertag-get-field-type (plist-get field :type))))
+
+(defun org-supertag--normalize-field-def (field)
+  "规范化字段定义.
+FIELD 是字段定义"
+  (message "Debug - Normalizing field: %S" field)
+  (let ((field-plist (if (and (vectorp field) 
+                             (= (length field) 1))
+                        ;; 如果是单元素向量，取其内容
+                        (elt field 0)
+                      ;; 否则尝试转换为列表
+                      (if (vectorp field)
+                          (append field nil)
+                        field))))
+    (message "Debug - Field as plist: %S" field-plist)
+    ;; 将关键字类型转换为普通符号
+    (when-let ((type (plist-get field-plist :type)))
+      (message "Debug - Original type: %S" type)
+      (setq field-plist 
+            (plist-put field-plist :type 
+                      (if (keywordp type)
+                          (intern (substring (symbol-name type) 1))
+                        type)))
+      (message "Debug - Normalized type: %S" (plist-get field-plist :type)))
+    field-plist))
+
+(defun org-supertag--parse-field-def (field)
+  "解析字段定义，确保返回标准格式。
+FIELD 是字段定义，可以是 plist、向量或 cons cell"
+  (message "Debug - Parsing field: %S" field)
+  (let ((field-def nil))
+    ;; 如果是向量，转换为列表
+    (when (vectorp field)
+      (setq field (append field nil)))
+    
+    ;; 处理字段定义
+    (cond
+     ;; 处理 cons cell 格式 ("name" . type)
+     ((and (consp field) 
+           (not (listp (cdr field))))  ; 确保是真正的 cons cell
+      (message "Debug - Processing cons cell format: %S" field)
+      (let ((name (car field))
+            (type (cdr field)))
+        (setq field-def
+              (list :name (if (stringp name) name (symbol-name name))
+                    :type (if (keywordp type)
+                             (intern (substring (symbol-name type) 1))
+                           type)))))
+     
+     ;; 如果已经是标准格式的 plist
+     ((and (listp field)
+           (plist-member field :name)
+           (plist-member field :type))
+      (setq field-def field))
+     
+     ;; 如果是预设标签的字段格式（一个包含属性的列表）
+     ((and (listp field)
+           (listp (car field))
+           (keywordp (caar field)))
+      (let ((name (plist-get field :name))
+            (type (plist-get field :type))
+            (required (plist-get field :required))
+            (options (or (plist-get field :options)  ; 新格式
+                        (plist-get field :values)))) ; 旧格式
+        (setq field-def
+              (list :name name
+                    :type (if (keywordp type)
+                             (intern (substring (symbol-name type) 1))
+                           type)
+                    :required required
+                    :options options)))))
+    
+    (message "Debug - Parsed field: %S" field-def)
+    field-def))
+    
 (defun org-supertag--validate-field-def (field)
-  "验证字段定义是否有效。
-FIELD 是字段定义 plist。"
-  (and (plist-get field :name)
-       (plist-get field :type)
-       (org-supertag-get-field-type (plist-get field :type))))
+  "验证字段定义是否有效.
+FIELD 是字段定义"
+  (message "Debug - Validating field: %S" field)
+  (let ((valid (and (listp field)
+                    (plist-get field :name)
+                    (plist-get field :type))))
+    (message "Debug - Field validation result: %s" valid)
+    valid))
 
 ;; 改进字段值验证
 (defun org-supertag-field-validate (field value)
@@ -576,13 +657,10 @@ PROMPT 是提示信息"
   "读取日期类型字段值。
 PROMPT 是提示信息
 DEFAULT 是默认值"
-  (let ((input (org-read-date nil t nil prompt nil default)))
-    (if (org-supertag-validate-date input)
-        input
-      (progn
-        (message "输入的不是有效的日期格式 (YYYY-MM-DD)，请重新输入")
-        (sit-for 1)
-        (org-supertag-read-date-field prompt default)))))
+  (let* ((input (org-read-date nil t nil prompt nil default))
+         (formatted-date (format-time-string "%Y-%m-%d" input)))
+    (message "Debug - Date input from org-read-date: %S -> %S" input formatted-date)
+    formatted-date))
 
 (defun org-supertag-read-email-field (prompt &optional default)
   "读取邮箱类型字段值。
@@ -674,12 +752,13 @@ MAX 是最大值"
     (if (and input-num
              (numberp input-num)
              (or (null min) (>= input-num min))
-             (or (null max) (<= input-num max)))
         input-num
       (progn
         (message "请输入有效的数值%s" range-prompt)
         (sit-for 1)
-        (org-supertag-read-number-field prompt default min max)))))
+        (org-supertag-read-number-field prompt default min max))))))
+
+
 
 ;;----------------------------------------------------------------------
 ;; 同步机制
@@ -701,6 +780,9 @@ NODE-ID 是节点ID"
 
 
 ;; 改进段交互式编辑
+
+
+
 (defun org-supertag--field-interactive-edit (&optional current-fields)
   "交互式编辑字段定义。
 CURRENT-FIELDS 是当前的字段列表。"
@@ -728,7 +810,7 @@ CURRENT-FIELDS 是当前的字段列表。"
                   (user-error "字段名 %s 已存在" field-name)))
              ;; 选择字段类型
              (type-choice (completing-read "字段类型: "
-                                        '("字符串" "选项" "数字" "日期" "引用" "标签" "Planning")
+                                        '("字符串" "选项" "数字" "日期" "引用" "标签")
                                         nil t))
              (type-sym (cdr (assoc type-choice
                                   '(("字符串" . string)
@@ -737,7 +819,7 @@ CURRENT-FIELDS 是当前的字段列表。"
                                     ("日期" . date)
                                     ("引用" . reference)
                                     ("标签" . tags)
-                                    ("Planning" . planning)))))
+                                    ))))
              (type-def (org-supertag-get-field-type type-sym))
              ;; 创建基本字段定义
              (field-def (list :name field-name

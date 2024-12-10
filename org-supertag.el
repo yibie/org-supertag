@@ -20,7 +20,7 @@
 (require 'org-supertag-perf)
 (require 'org-supertag-node)
 (require 'org-supertag-sync)
-(require 'org-supertag-ui)
+
 
 ;;; 自定义选项
 
@@ -144,7 +144,7 @@
         ;; 确保必要的模块已加载
         (require 'org-supertag-node)
         (require 'org-supertag-sync)
-        (require 'org-supertag-ui)
+
         
         (org-supertag-init)
         ;; 添加节点监控钩子
@@ -178,7 +178,7 @@
                     (cons (format "%s [预设]" (car preset))
                           (list :preset (car preset))))
                   org-supertag-tag-presets)
-           ;; 已存在���标签
+           ;; 已存在的标签
            (mapcar (lambda (tag)
                     (cons (format "%s [已存在]" tag)
                           (list :existing tag)))
@@ -218,29 +218,7 @@
          (org-supertag-tag-create tag-name :fields fields)
          (org-supertag--apply-tag tag-name))))))
 
-(defun org-supertag--apply-tag (tag-name)
-  "应用标签到当前节点。
-TAG-NAME 是标签名称"
-  (message "Debug - 开始应用标签: %s" tag-name)
-  (let ((node-id (org-id-get-create)))
-    (message "Debug - 节点 ID: %s" node-id)
-    
-    ;; 添加标签关系
-    (org-supertag-tag-add-to-node node-id tag-name)
-    (message "Debug - 已添加标签关系")
-    
-    ;; 更新标题
-    (let* ((element (org-element-at-point))
-           (title (org-element-property :raw-value element))
-           (new-title (concat title " #" tag-name)))
-      (message "Debug - 当前标题: %s" title)
-      (message "Debug - 新标题: %s" new-title)
-      (org-edit-headline new-title))
-    
-    ;; 应用字段
-    (message "Debug - 开始应用字段")
-    (org-supertag--apply-tag-fields tag-name)
-    (message "Debug - 字段应用完成")))
+
 
 
 ;;;###autoload
@@ -424,9 +402,6 @@ TAG-NAME 是标签名称"
                                   nil t))
          (current-fields (org-supertag-get-tag-fields tag-name)))
     
-    (message "Editing fields for tag: %s" tag-name)
-    (message "Current fields: %S" current-fields)
-    
     (when current-fields
       (let* ((field-to-edit (completing-read 
                             "Select field to edit: "
@@ -434,45 +409,41 @@ TAG-NAME 是标签名称"
                                     current-fields)
                             nil t))
              (field-def (org-supertag-get-field-definition tag-name field-to-edit))
-             (type-choices (org-supertag-get-field-types))
-             (type-choice (completing-read "Field type: "
-                                  (mapcar #'car type-choices)
-                                  nil t
-                                  (car (rassoc (plist-get field-def :type)
-                                             type-choices))))
-             (type-sym (cdr (assoc type-choice type-choices)))
+             (action (completing-read "Select action: " '("Edit Type" "Edit Value") nil t))
              (new-props (copy-sequence field-def)))
         
-        (message "Editing field: %s" field-to-edit)
-        (message "Current field definition: %S" field-def)
-        (message "Selected type: %s" type-choice)
+        (cond
+         ((string= action "Edit Type")
+          (let* ((type-choices (org-supertag-get-field-types))
+                 (type-choice (completing-read "Field type: "
+                                               (mapcar #'car type-choices)
+                                               nil t
+                                               (car (rassoc (plist-get field-def :type)
+                                                            type-choices))))
+                 (type-sym (cdr (assoc type-choice type-choices))))
+            (setq new-props (plist-put new-props :type type-sym))))
+         
+         ((string= action "Edit Value")
+          (let* ((type (plist-get field-def :type))
+                 (reader (plist-get (org-supertag-get-field-type type) :reader))
+                 (new-value (funcall reader (format "Enter new value for %s: " field-to-edit))))
+            ;; 更新数据库中的字段定义
+            (setq new-props (plist-put new-props :value new-value))
+            ;; 更新所有使用该标签的节点的属性值
+            (dolist (node-id (org-supertag-get-nodes-with-tag tag-name))
+              (message "Debug - Updating node %s with new value for %s: %s" 
+                      node-id field-to-edit new-value)
+              (when-let ((marker (org-id-find node-id t)))
+                (message "Debug - Found node at marker: %s" marker)
+                (save-excursion
+                  (with-current-buffer (marker-buffer marker)
+                    (goto-char marker)
+                    (org-entry-put nil field-to-edit new-value)
+                    (message "Debug - Updated property at point: %s" (point)))))))))
         
-        ;; 确保 new-type 是字符串
-        (let ((new-type (symbol-name type-sym)))
-          (pcase (intern new-type)
-            ('enum
-             (let ((values
-                    (split-string
-                     (read-string "Enter enum values (comma separated): "
-                                  (mapconcat #'symbol-name 
-                                             (plist-get field-def :values)
-                                             ","))
-                     "," t "[ \t\n]+")))
-               (message "Setting enum values: %S" values)
-               (setq new-props 
-                     (plist-put new-props :values 
-                               (mapcar #'intern values)))))
-            
-            ((or 'property 'drawer)
-             (let ((org-name (read-string "Org name: " 
-                                        (plist-get field-def :org-name))))
-               (message "Setting org-name: %s" org-name)
-               (setq new-props 
-                     (plist-put new-props :org-name org-name)))))
-          ;; Update field definition using API
-          (message "Updating with new properties: %S" new-props)
-          (when (org-supertag-update-field tag-name field-to-edit new-props)
-            (message "Field %s updated" field-to-edit)))))))
+        ;; Update field definition using API
+        (when (org-supertag-update-field tag-name field-to-edit new-props)
+          (message "Field %s updated" field-to-edit))))))
 
 (defun org-supertag--get-template-choices ()
   "获取所有可用的标签模板选项."

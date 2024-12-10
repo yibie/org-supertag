@@ -18,9 +18,77 @@ Git clone this repo to your emacs.d directory.
   :hook (org-mode . org-supertag-mode))
 #+END_SRC
 
-* Supertag #note
+* Supertag #P #P1 #P2 #P3 #P4 #P888 #ggg sss
 :PROPERTIES:
-:ID:       2DBBBD04-9C37-41C3-9739-4DCF72A89FFF
-:title:    Learned from Tana
-:tags:     ("org-mode" "note-taking")
+:ID:       40B00168-A4EF-4EA9-925B-8E3D6975AE33
+:title:    bad
+:status:   TODO
+:priority: A
+:tags:     nil
+:Date:     2024-12-11
+:状况:     好
+:END:
+* Supertag #PPPP #Harry Porter #Stars #note #Haary Porter
+:PROPERTIES:
+:ID:       D40DE5C9-D20F-4EDD-9A57-8BDAC3161AF4
+:Day:      2024-12-13
+:status:   Good
+:Stars:    ⭐⭐⭐⭐
+:title:    good task
+:tags:     nil
+:END:
+
+* Supertag #note #hah hah #hahah hhaha #ggg ggg #ggg xxx
+:PROPERTIES:
+:ID:       BB86805F-F2F0-4346-8B81-774983339655
+:title:    good
+:tags:     ("1" "2" "3")
+:END:
+
+* Test #P1_happy #date #day #last_day
+:PROPERTIES:
+:ID:       B56117B8-6537-4B87-B044-C9E2E15670D4
+:plan:     SCHEDULED 2024-12-10
+:todo-list: todo
+:today:    SCHEDULED 2024-12-11
+:Planning: SCHEDULED 2025-03-20
+:END:
+
+* SCHEDUILED #SCUEDUILED #NextDay #NextTwoDay
+DEADLINE: <2024-12-11 Wed>
+:PROPERTIES:
+:ID:       B900CFC4-332E-454B-8F48-06AAD0E2E146
+:Planning: DEADLINE 2024-12-15
+:+1:       DEADLINE 2024-12-11
+:END:
+- Note taken on [2024-12-10 Tue 21:21] \\
+  1.2.3
+
+* Next30Day #+30d #+3d
+:PROPERTIES:
+:ID:       CAF87B34-066C-415B-8EDD-D6098AD1460C
+:+30d:     (SCHEDULED 26495 57280)
+:未来3天:  (SCHEDULED 26460 18300)
+:END:
+
+* NextDay #Next2Day #Next3Day
+:PROPERTIES:
+:ID:       12DC188C-F359-4FF0-8A1A-A3CC2E8DE66C
+:+3d:      (SCHEDULED 26460 14100)
+:+3:       (SCHEDULED 26460 14100)
+:END:
+
+* Next2Day #+1d #1 #date #dd
+:PROPERTIES:
+:ID:       965F67C2-F6C9-493E-923F-D49F25C8FF09
+:+2d:      (SCHEDULED 26457 42528)
+:2:        (SCHEDULED 26485 21980)
+:date:     (SCHEDULED 26457 42828)
+:dd:       2024-12-13
+:END:
+* good #11 #note #note #hh #gg
+:PROPERTIES:
+:ID:       2EC7FD5B-7246-49F5-B0F0-894A372E704F
+:22:       2024-12-10
+:dd:       ff
 :END:
