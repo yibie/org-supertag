@@ -2,6 +2,9 @@
 
 ;;; Commentary:
 ;; 提供高层 API 接口
+;; 不直接修改数据库，而是通过 API 访问和操作数据库
+;; API 提供数据类型转换
+;; 本文件不支持【破坏性更新】，如固有函数不足以支持功能，则实现新函数
 
 ;;; Code:
 (require 'cl-lib)
@@ -243,6 +246,48 @@ TO 是目标实体
   (org-supertag-db-find (lambda (k _v)
                           (string-match-p (concat "^" (regexp-quote field-id) ":")
                                         k))))
+;;------------------------------------------------------------------------------
+;; 字段编辑 API
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-update-field (tag-name field-name new-props)
+  "更新标签中的字段定义.
+TAG-NAME 是标签名称
+FIELD-NAME 是字段名称
+NEW-PROPS 是新的字段属性"
+  (when-let* ((tag-entity (org-supertag-get-entity tag-name))
+              (current-fields (plist-get tag-entity :fields)))
+    ;; 更新字段列表
+    (let ((updated-fields
+           (mapcar (lambda (f)
+                    (if (string= (plist-get f :name) field-name)
+                        new-props
+                      f))
+                  current-fields)))
+      ;; 更新标签实体
+      (org-supertag-update-entity 
+       tag-name 
+       (list :type :tag
+             :fields updated-fields))
+      t)))
+
+(defun org-supertag-get-field-definition (tag-name field-name)
+  "获取标签中字段的定义.
+TAG-NAME 是标签名称
+FIELD-NAME 是字段名称
+返回字段的完整定义，如果不存在返回 nil"
+  (when-let* ((tag-entity (org-supertag-get-entity tag-name))
+              (fields (plist-get tag-entity :fields)))
+    (cl-find field-name fields
+             :key (lambda (f) (plist-get f :name))
+             :test #'string=)))
+
+(defun org-supertag-get-tag-fields (tag-name)
+  "获取标签的所有字段定义.
+TAG-NAME 是标签名称
+返回字段定义列表"
+  (when-let ((tag-entity (org-supertag-get-entity tag-name)))
+    (plist-get tag-entity :fields)))
 
 ;;------------------------------------------------------------------------------
 ;; 标签系统 API
@@ -275,6 +320,37 @@ FROM 是源实体的标识符
 TYPE 是关系类型"
   (when-let ((links (org-supertag-db-get-links type from)))
     (car (car links))))
+    
+(defun org-supertag-get-all-tags ()
+  "获取所有已定义的标签列表."
+  (message "Debug - Starting tag search...")
+  (let* ((entities (org-supertag-find-entities :tag))
+         (_ (message "Debug - Found tag entities: %S" entities))
+         (tags (if (listp (car entities))
+                  (mapcar #'car entities)
+                (if (stringp entities)
+                    (list entities)
+                  entities))))
+    (message "Debug - Extracted tag names: %S" tags)
+    tags))
+
+;;------------------------------------------------------------------------------
+;; 节点 API
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-get-all-node-ids ()
+  "获取所有节点的 ID 列表."
+  (message "Debug - Starting node ID search...")
+  (let* ((entities (org-supertag-find-entities :node))
+         (_ (message "Debug - Found node entities: %S" entities))
+         (node-ids (if (listp (car entities))
+                      (mapcar #'car entities)
+                    (if (stringp entities)
+                        (list entities)
+                      entities))))
+    (message "Debug - Extracted node IDs: %S" node-ids)
+    node-ids))
+
 
 (provide 'org-supertag-api)
 ;;; org-supertag-api.el ends here

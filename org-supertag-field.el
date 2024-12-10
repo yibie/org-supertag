@@ -18,153 +18,64 @@
 ;;; 字段类型系统
 
 (defvar org-supertag-field-types
-  (make-hash-table :test 'equal)
-  "字段类型注册表。
-每个类型是一个 plist，包含：
+  '((string . (:validator org-supertag-validate-string
+               :formatter org-supertag-format-string
+               :reader org-supertag-read-string-field
+               :description "基础字符串类型"))
+    (options . (:validator org-supertag-validate-options
+                :formatter org-supertag-format-options
+                :reader org-supertag-read-options-field
+                :description "从预定义选项中选择"))
+    (number . (:validator org-supertag-validate-number
+               :formatter org-supertag-format-number
+               :reader org-supertag-read-number-field
+               :description "数字类型"))
+    (date . (:validator org-supertag-validate-date
+             :formatter org-supertag-format-date
+             :reader org-supertag-read-date-field
+             :description "日期类型"))
+    (reference . (:validator org-supertag-validate-reference
+                  :formatter org-supertag-format-reference
+                  :reader org-supertag-read-reference-field
+                  :description "引用其他条目"))
+    (tags . (:validator org-supertag-validate-tags
+             :formatter org-supertag-format-tags
+             :reader org-supertag-read-tags-field
+             :description "标签列表"))
+    (planning . (:validator org-supertag-validate-planning
+                 :formatter org-supertag-format-planning
+                 :reader org-supertag-read-planning-field
+                 :description "Planning 类型"))
+    (list . (:validator org-supertag-validate-list
+             :formatter org-supertag-format-list
+             :reader org-supertag-read-list-field
+             :description "可自由输入的列表类型")))
+  "字段类型定义。
+每个类型是一个 cons cell，car 是类型名称（symbol），cdr 是类型定义 plist，包含：
 - :validator  验证函数
 - :formatter  格式化函数
+- :reader     读取函数
 - :description  类型描述")
 
-(defun org-supertag-register-field-type (type spec)
-  "注册字段类型。
-TYPE 是类型名称（symbol），
-SPEC 是包含 :validator 和 :formatter 的 plist。"
-  (puthash type spec org-supertag-field-types))
-
 (defun org-supertag-get-field-types ()
-  "获取所有支持的字段类型。"
-  '(("字符串" . string)
-    ("选项" . options)
-    ("数字" . number)
-    ("日期" . date)
-    ("引用" . reference)
-    ("标签" . tags)
-    ("Planning" . planning)))
+  "获取所有支持的字段类型。
+返回 ((显示名称 . 类型符号) ...) 的列表。"
+  (mapcar (lambda (type-def)
+            (let* ((type-name (car type-def))
+                   (type-spec (cdr type-def))
+                   (description (plist-get type-spec :description)))
+              (cons (or description (symbol-name type-name))
+                    type-name)))
+          org-supertag-field-types))
 
 (defun org-supertag-get-field-type (type)
   "获取字段类型定义。
-TYPE 是字段类型的符号。"
-  (pcase type
-    ('string
-     '(:validator org-supertag-validate-string
-       :formatter org-supertag-format-string
-       :reader org-supertag-read-string-field
-       :description "基础字符串类型"))
-    
-    ('options
-     '(:validator org-supertag-validate-options
-       :formatter org-supertag-format-options
-       :reader org-supertag-read-options-field
-       :description "从预定义选项中选择"))
-    
-    ('number
-     '(:validator org-supertag-validate-number
-       :formatter org-supertag-format-number
-       :reader org-supertag-read-number-field
-       :description "数字类型"))
-    
-    ('date
-     '(:validator org-supertag-validate-date
-       :formatter org-supertag-format-date
-       :reader org-supertag-read-date-field
-       :description "日期类型"))
-    
-    ('reference
-     '(:validator org-supertag-validate-reference
-       :formatter org-supertag-format-reference
-       :reader org-supertag-read-reference-field
-       :description "引用其他条目"))
-    
-    ('tags
-     '(:validator org-supertag-validate-tags
-       :formatter org-supertag-format-tags
-       :reader org-supertag-read-tags-field
-       :description "标签列表"))
-    
-    ('planning
-     '(:validator org-supertag-validate-planning
-       :formatter org-supertag-format-planning
-       :reader org-supertag-read-planning-field
-       :description "Planning 类型"))
-    ('list
-     '(:validator org-supertag-validate-list
-       :formatter org-supertag-format-list
-       :reader org-supertag-read-list-field
-       :description "列表类型"))))  
-
-
-;; 初始化基本字段类型
-(defun org-supertag-init-field-types ()
-  "初始化字段类型。"
-  (clrhash org-supertag-field-types)
-  
-  ;; 字符串类型
-  (org-supertag-register-field-type
-   'string
-   '(:validator org-supertag-validate-string
-     :formatter org-supertag-format-string
-     :reader org-supertag-read-string-field
-     :description "基础字符串类型"))
-  
-  ;; 日期类型
-  (org-supertag-register-field-type
-   'date
-   '(:validator org-supertag-validate-date
-     :formatter org-supertag-format-date
-     :reader org-supertag-read-date-field
-     :description "日期类型 (YYYY-MM-DD)"))
-  
-  ;; 邮箱类型
-  (org-supertag-register-field-type
-   'email
-   '(:validator org-supertag-validate-email
-     :formatter org-supertag-format-email
-     :reader org-supertag-read-email-field
-     :description "电子邮箱地址"))
-  
-  ;; URL类型
-  (org-supertag-register-field-type
-   'url
-   '(:validator org-supertag-validate-url
-     :formatter org-supertag-format-url
-     :reader org-supertag-read-url-field
-     :description "URL地址"))
-  
-  ;; 引用类型
-  (org-supertag-register-field-type
-   'reference
-   '(:validator org-supertag-validate-reference
-     :formatter org-supertag-format-reference
-     :reader org-supertag-read-reference-field
-     :description "引用其他带有特定标签的条目"
-     :ref-tag nil))  ; 存储被引用的标签名
-  
-  ;; 选项类型
-  (org-supertag-register-field-type
-   'options
-   '(:validator org-supertag-validate-options
-     :formatter org-supertag-format-options
-     :reader org-supertag-read-options-field
-     :description "从预定义选项中选择"))
-  
-  ;; 数值类型
-  (org-supertag-register-field-type
-   'number
-   '(:validator org-supertag-validate-number
-     :formatter org-supertag-format-number
-     :reader org-supertag-read-number-field
-     :description "数值类型"))
-  
-  ;; 列表类型
-  (org-supertag-register-field-type
-   'list
-   '(:validator org-supertag-validate-list
-     :formatter org-supertag-format-list
-     :reader org-supertag-read-list-field
-     :description "列表类型")))
-
-;; 初始化字段类型
-(org-supertag-init-field-types)
+TYPE 是字段类型的符号。
+返回类型定义 plist，包含 :validator、:formatter、:reader 和 :description。"
+  (message "Debug - Getting field type: %S" type)
+  (let ((type-def (alist-get type org-supertag-field-types)))
+    (message "Debug - Field type definition: %S" type-def)
+    type-def))
 
 ;;----------------------------------------------------------------------
 ;; 字段类型的验证器和格式化器
@@ -225,19 +136,25 @@ FIELD 是字段定义。"
   (string-trim value))
 
 (defun org-supertag-validate-reference (value)
-  "验证引用值是否有效。
+  "验证引用值是否有效.
 VALUE 应该是一个 org-id。"
-  (and (stringp value)
-       (org-id-find value 'marker)))
+  (message "Debug - Validating reference value: %S" value)
+  (when value
+    (let ((node-ids (org-supertag-get-all-node-ids)))
+      (message "Debug - Available node IDs: %S" node-ids)
+      (member value node-ids))))
 
 (defun org-supertag-format-reference (value field)
   "格式化引用值。
 VALUE 是要格式化的值
 FIELD 是字段定义。"
   (message "Debug - Formatting reference value: %S" value)
-  (when-let ((marker (org-id-find value 'marker)))
-    (org-with-point-at marker
-      (org-get-heading t t t t))))
+  (when value
+    (let ((node-ids (org-supertag-get-all-node-ids)))
+      (if (member value node-ids)
+          (org-with-point-at (org-id-find value t)
+            (org-get-heading t t t t))
+        value))))
 
 (defun org-supertag-validate-options (value field)
   "验证选项值。
@@ -249,7 +166,7 @@ FIELD 是字段定义，包含 :options。"
 
 (defun org-supertag-format-options (value field)
   "格式化选项值。
-VALUE 是要格式化���值
+VALUE 是要格式化的值
 FIELD 是字段定义。"
   (message "Debug - Formatting options value: %S" value)
   (when value
@@ -269,23 +186,34 @@ FIELD 是字段定义。"
 
 (defun org-supertag-validate-list (value)
   "验证列表值。
-VALUE 是要验证的值"
+VALUE 是要验证的值。"
+  (message "Debug - Validating list value: %S" value)
   (or (listp value)
       (and (stringp value)
            (string-match-p "^\\[.*\\]$" value))))
 
-(defun org-supertag-format-list (value)
+(defun org-supertag-format-list (value field)
   "格式化列表值。
-VALUE 是要格式化的值"
-  (if (listp value)
-      (format "%S" value)
-    value))
+VALUE 是要格式化的值
+FIELD 是字段定义。"
+  (message "Debug - Formatting list value: %S" value)
+  (cond
+   ((listp value)
+    (format "%S" value))
+   ((stringp value)
+    (if (string-match-p "^\\[.*\\]$" value)
+        value
+      (format "[%s]" value)))
+   (t (format "[%s]" value))))
 
 (defun org-supertag-read-list-field (prompt)
   "读取列表类型字段值。
-PROMPT 是提示信息"
-  (let ((input (read-string (format "%s (用逗号分隔): " prompt))))
-    (split-string input "," t "[ \t\n\r]+")))
+PROMPT 是提示信息。"
+  (message "Debug - Reading list field with prompt: %s" prompt)
+  (let* ((input (read-string (format "%s (用逗号分隔): " prompt)))
+         (values (split-string input "," t "[ \t\n\r]+")))
+    (message "Debug - List field input: %S -> %S" input values)
+    values))
 
 
 
@@ -296,7 +224,7 @@ PROMPT 是提示信息"
 (defun org-supertag-field-create (name props)
   "创建字段定义.
 NAME 是字段名称
-PROPS 是字段属���"
+PROPS 是字段属性"
   ;; 确保必要的属性存在
   (unless (plist-get props :type)
     (error "Field must have a :type property"))
@@ -690,24 +618,21 @@ DEFAULT 是默认值"
         (sit-for 1)
         (org-supertag-read-url-field prompt default)))))
 
-(defun org-supertag-read-reference-field (prompt &optional default)
+(defun org-supertag-read-reference-field (prompt)
   "读取引用类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
-  (let* ((completion-table (org-supertag-get-all-node-ids))
-         (input (completing-read (format "%s (输入节点ID)%s: "
-                                       prompt
-                                       (if default
-                                           (format " (默认: %s)" default)
-                                         ""))
-                               completion-table
-                               nil t nil nil default)))
-    (if (org-supertag-validate-reference input)
-        input
-      (progn
-        (message "输入的不是有效的节点引用，请重新输入")
-        (sit-for 1)
-        (org-supertag-read-reference-field prompt default)))))
+PROMPT 是提示信息"
+  (message "Debug - Reading reference field...")
+  (let ((node-ids (org-supertag-get-all-node-ids)))
+    (if node-ids
+        (let* ((nodes-with-titles 
+                (mapcar (lambda (id)
+                         (cons (org-with-point-at (org-id-find id t)
+                                (org-get-heading t t t t))
+                               id))
+                       node-ids))
+               (choice (completing-read prompt (mapcar #'car nodes-with-titles) nil t)))
+          (cdr (assoc choice nodes-with-titles)))
+      (user-error "没有可用的节点可供引用"))))
 
 (defun org-supertag-read-options-field (prompt options)
   "读取选项类型字段值。
@@ -721,7 +646,7 @@ OPTIONS 是可选值列表"
     (if (member input options)
         input
       (progn
-        (message "请从给定���项中选择一个值")
+        (message "请从给定选项中选择一个值")
         (sit-for 1)
         (org-supertag-read-options-field prompt options)))))
 
@@ -802,15 +727,25 @@ CURRENT-FIELDS 是当前的字段列表。"
                               :test #'string=)
                   (user-error "字段名 %s 已存在" field-name)))
              ;; 选择字段类型
-             (field-type (completing-read "字段类型: "
-                                        (mapcar #'symbol-name field-types)
+             (type-choice (completing-read "字段类型: "
+                                        '("字符串" "选项" "数字" "日期" "引用" "标签" "Planning")
                                         nil t))
-             (type-sym (intern field-type))
+             (type-sym (cdr (assoc type-choice
+                                  '(("字符串" . string)
+                                    ("选项" . options)
+                                    ("数字" . number)
+                                    ("日期" . date)
+                                    ("引用" . reference)
+                                    ("标签" . tags)
+                                    ("Planning" . planning)))))
              (type-def (org-supertag-get-field-type type-sym))
              ;; 创建基本字段定义
              (field-def (list :name field-name
                             :type type-sym
                             :required (y-or-n-p "是否必填? "))))
+        
+        (message "Debug - Selected type: %S -> %S" type-choice type-sym)
+        (message "Debug - Type definition: %S" type-def)
         
         ;; 添加类型特定的属性
         (pcase type-sym

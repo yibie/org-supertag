@@ -176,7 +176,7 @@ PROPS 是关系属性"
   "检查是否存在循环关系.
 TYPE 是关系类型
 FROM 是源标签
-TO 是目标标签"
+TO 是��标标签"
   (let ((visited (make-hash-table :test 'equal)))
     (cl-labels ((visit (current)
                   (if (equal current from)
@@ -217,7 +217,7 @@ FIELD 是字段定义"
 
 (defun org-supertag--parse-field-def (field)
   "解析字段定义，确保返回标准格式。
-FIELD 是字段定义，可以是 plist 或向量"
+FIELD 是字段定义，可以是 plist、向量或 cons cell"
   (message "Debug - Parsing field: %S" field)
   (let ((field-def nil))
     ;; 如果是向量，转换为列表
@@ -226,6 +226,18 @@ FIELD 是字段定义，可以是 plist 或向量"
     
     ;; 处理字段定义
     (cond
+     ;; 处理 cons cell 格式 ("name" . type)
+     ((and (consp field) 
+           (not (listp (cdr field))))  ; 确保是真正的 cons cell
+      (message "Debug - Processing cons cell format: %S" field)
+      (let ((name (car field))
+            (type (cdr field)))
+        (setq field-def
+              (list :name (if (stringp name) name (symbol-name name))
+                    :type (if (keywordp type)
+                             (intern (substring (symbol-name type) 1))
+                           type)))))
+     
      ;; 如果已经是标准格式的 plist
      ((and (listp field)
            (plist-member field :name)
@@ -312,7 +324,7 @@ PROPS 是新的属性"
 NAME 是标签名称"
   (org-supertag-remove-entity name))
 
-;;; 关系操作 API
+;;; ���系操作 API
 
 (defun org-supertag-tag-add-relation (type from to &optional props)
   "添加标签关系.
@@ -582,7 +594,7 @@ TAG-NAME 是标签名称。"
     ;; 确保标签被正确添加
     (org-set-tags (org-get-tags))
     (message "标签 %s 的字段应用完成" tag-name)
-    (message "Debug - 字段应用完成")))
+    (message "Debug - 字段应用��成")))
     
 (defun org-supertag-tag-define-fields (tag-name)
   "定义标签的字段.
@@ -724,6 +736,7 @@ TAG-NAME 是标签名称"
       (org-supertag-tag-update tag-name
                               (list :fields (append current-fields 
                                                   new-fields))))))
+
 
 (provide 'org-supertag-tag)
 

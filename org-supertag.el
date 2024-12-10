@@ -178,7 +178,7 @@
                     (cons (format "%s [预设]" (car preset))
                           (list :preset (car preset))))
                   org-supertag-tag-presets)
-           ;; 已存在的标签
+           ;; 已存在���标签
            (mapcar (lambda (tag)
                     (cons (format "%s [已存在]" tag)
                           (list :existing tag)))
@@ -417,69 +417,62 @@ TAG-NAME 是标签名称"
 
 ;;;###autoload
 (defun org-supertag-edit-tag-fields ()
-  "编辑标签的字段定义."
+  "Edit tag field definitions."
   (interactive)
-  (let* ((tag-name (completing-read "选择标签: " 
-                                  (mapcar #'car (org-supertag-find-entities :tag))
+  (let* ((tag-name (completing-read "Select tag: " 
+                                  (org-supertag-get-all-tags)
                                   nil t))
-         (tag-entity (org-supertag-get-entity tag-name))
-         (current-fields (plist-get tag-entity :fields)))
+         (current-fields (org-supertag-get-tag-fields tag-name)))
+    
+    (message "Editing fields for tag: %s" tag-name)
+    (message "Current fields: %S" current-fields)
     
     (when current-fields
       (let* ((field-to-edit (completing-read 
-                            "选择要编辑的字段: "
+                            "Select field to edit: "
                             (mapcar (lambda (f) (plist-get f :name)) 
                                     current-fields)
                             nil t))
-             (field-def (cl-find field-to-edit current-fields
-                                :key (lambda (f) (plist-get f :name))
-                                :test #'string=)))
+             (field-def (org-supertag-get-field-definition tag-name field-to-edit))
+             (type-choices (org-supertag-get-field-types))
+             (type-choice (completing-read "Field type: "
+                                  (mapcar #'car type-choices)
+                                  nil t
+                                  (car (rassoc (plist-get field-def :type)
+                                             type-choices))))
+             (type-sym (cdr (assoc type-choice type-choices)))
+             (new-props (copy-sequence field-def)))
         
-        ;; 编辑字段属性
-        (let* ((new-type (completing-read 
-                         "字段类型: "
-                         (mapcar #'symbol-name org-supertag-field-types)
-                         nil t
-                         (symbol-name (plist-get field-def :type))))
-               (new-props
-                `(:type ,(intern (concat ":" new-type))
-                  :name ,field-to-edit)))
-          
-          ;; 处理特殊类型的属性
+        (message "Editing field: %s" field-to-edit)
+        (message "Current field definition: %S" field-def)
+        (message "Selected type: %s" type-choice)
+        
+        ;; 确保 new-type 是字符串
+        (let ((new-type (symbol-name type-sym)))
           (pcase (intern new-type)
             ('enum
              (let ((values
                     (split-string
-                     (read-string "输入枚举值 (用逗号分隔): "
-                                (mapconcat #'symbol-name 
-                                         (plist-get field-def :values)
-                                         ","))
+                     (read-string "Enter enum values (comma separated): "
+                                  (mapconcat #'symbol-name 
+                                             (plist-get field-def :values)
+                                             ","))
                      "," t "[ \t\n]+")))
+               (message "Setting enum values: %S" values)
                (setq new-props 
                      (plist-put new-props :values 
                                (mapcar #'intern values)))))
             
             ((or 'property 'drawer)
-             (let ((org-name (read-string "Org 名称: " 
+             (let ((org-name (read-string "Org name: " 
                                         (plist-get field-def :org-name))))
+               (message "Setting org-name: %s" org-name)
                (setq new-props 
                      (plist-put new-props :org-name org-name)))))
-          
-          ;; 更新字段定义
-          (org-supertag-field-create field-to-edit new-props)
-          
-          ;; 更新标签的字段列表
-          (let ((updated-fields
-                 (mapcar (lambda (f)
-                          (if (string= (plist-get f :name) field-to-edit)
-                              new-props
-                            f))
-                        current-fields)))
-            (org-supertag-update-entity 
-             tag-name 
-             (list :type :tag
-                   :fields updated-fields))
-            (message "字段 %s 已更新" field-to-edit)))))))
+          ;; Update field definition using API
+          (message "Updating with new properties: %S" new-props)
+          (when (org-supertag-update-field tag-name field-to-edit new-props)
+            (message "Field %s updated" field-to-edit)))))))
 
 (defun org-supertag--get-template-choices ()
   "获取所有可用的标签模板选项."
