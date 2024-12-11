@@ -46,12 +46,12 @@ TYPE 是值类型，ENTITY-ID 是实体ID，VALUE 是值
       (when (org-supertag-sync-entity node-id props)
         node-id))))
 
-(defun org-supertag-parse-node ()
-  "解析当前节点的完整信息，包括 ID、标签和大纲路径"
-  (let* ((element (org-element-at-point))
-         (tags-info (org-supertag-parse-node-get-tags))
-         (props (org-supertag-parse-node-props element)))
-    (append props tags-info)))
+(defun org-supertag-sync-node-at-point ()
+  "同步当前位置的节点."
+  (when (org-at-heading-p)
+    (let* ((node-id (org-id-get-create))
+           (node-info (org-supertag-parse-node))) ; 调用 parser 的函数
+      (org-supertag-sync-entity node-id node-info))))
 
 ;;; 变更监控
 

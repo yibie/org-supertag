@@ -104,7 +104,49 @@
   "从文件加载数据."
   (org-supertag-db-ensure-directories)
   (when (file-exists-p org-supertag-db-file)
-    (load org-supertag-db-file)))
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents org-supertag-db-file)
+          (let ((data (read (current-buffer))))
+            ;; 确保数据有效
+            (when (and (listp data)
+                      (assq 'entities data)
+                      (assq 'relations data)
+                      (assq 'field-values data))
+              ;; 初始化哈希表
+              (setq org-supertag-db--entities (ht-create)
+                    org-supertag-db--relations (ht-create)
+                    org-supertag-db--field-values (ht-create))
+              ;; 加载数据
+              (dolist (table '(entities relations field-values))
+                (when-let ((table-data (alist-get table data)))
+                  (pcase table
+                    ('entities 
+                     (ht-merge! org-supertag-db--entities 
+                               (ht<-alist table-data)))
+                    ('relations 
+                     (ht-merge! org-supertag-db--relations 
+                               (ht<-alist table-data)))
+                    ('field-values 
+                     (ht-merge! org-supertag-db--field-values 
+                               (ht<-alist table-data)))))))))
+      (error
+       (message "Error loading database: %S" err)
+       ;; 确保使用空的哈希表
+       (setq org-supertag-db--entities (ht-create)
+             org-supertag-db--relations (ht-create)
+             org-supertag-db--field-values (ht-create))))))
+
+(defun org-supertag-db-ready-p ()
+  "检查数据库是否已正确初始化."
+  (and (hash-table-p org-supertag-db--entities)
+       (hash-table-p org-supertag-db--relations)
+       (hash-table-p org-supertag-db--field-values)))
+
+(defun org-supertag-db-ensure-ready ()
+  "确保数据库已准备就绪."
+  (unless (org-supertag-db-ready-p)
+    (org-supertag-db-initialize)))             
 
 ;;------------------------------------------------------------------------------
 ;; 初始化
@@ -115,8 +157,7 @@
   (org-supertag-db-ensure-directories)
   (org-supertag-db-load))
 
-;; 在包加载时初始化数据库
-(org-supertag-db-initialize)
+
 
 ;;------------------------------------------------------------------------------ 
 ;; Core API

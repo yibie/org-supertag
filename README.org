@@ -86,9 +86,104 @@ DEADLINE: <2024-12-11 Wed>
 :date:     (SCHEDULED 26457 42828)
 :dd:       2024-12-13
 :END:
-* good #11 #note #note #hh #gg
+* good #11 #note #note
 :PROPERTIES:
 :ID:       2EC7FD5B-7246-49F5-B0F0-894A372E704F
 :22:       2024-12-10
-:dd:       ff
 :END:
+dsjdiosfjisodafjiosda
+
+
+* [#A] 项目计划 #project/web #priority:high
+:PROPERTIES:
+:ID:       ABC123-XYZ
+:PERSON_REF: alice
+:DOC_REF:  system_design
+:TEAM_REF: frontend
+:PHASE:    planning
+:QUESTION: ID1
+:STATUS:   active
+:TYPE:     feature
+:SCORE:    85
+:END:
+
+这个前端项目由 @team.frontend 负责开发，@person.alice 作为项目负责人。
+
+** 主要任务 #task.status=active #sprint2
+DEADLINE: <2024-03-15 Fri>
+:PROPERTIES:
+:ID:       34EEA0FA-3692-4DEB-99A4-E3F3DA6AD04A
+:TYPE:     feature
+:SCORE:    85
+:STATUS:   active
+:END:
+
+需要完成以下工作：
+1. 实现用户认证模块 #task.type=feature #security
+2. 优化性能 #task.type=improvement #performance.score=85
+3. 修复已知问题 #task.type=bugfix #priority:high
+
+** 技术栈 #doc/tech #version1
+:PROPERTIES:
+:ID:       314452E6-D2CC-4E79-B5DF-10406FE12307
+:TYPE:     sql
+:END:
+- React #tech/frontend
+- Node.js #tech/backend
+- PostgreSQL #tech/database.type=sql
+
+** 注意事项 #note
+:PROPERTIES:
+:ID:       10E4899C-EB64-46ED-BC02-A7ED5A8E87A4
+:DOC_REF:  system_design
+:PERSON_REF: bob
+:END:
+联系 @person.bob 获取更多技术细节。
+相关文档请参考 @doc.system_design。
+
+** 进度追踪 #task.status=pending
+:PROPERTIES:
+:ID:       F288759E-033B-48C8-A9C2-4B846934DBE3
+:STATUS:   pending
+:TEAM_REF: design
+:END:
+- [ ] 需求分析 #phase1 
+- [ ] 技术评估 #phase1 #review.needed
+- [ ] 原型开发 #phase2 @team.design
+** [#A] 进度追踪 #task.status=pending #priority=high
+:PROPERTIES:
+:ID:       125C7A5F-2FBC-4EA8-AE37-537DFCBF582D
+:STATUS:   pending
+:DOC_REF:  system_design
+:PERSON_REF: bob
+:QUESTION: ID1
+:END:
+联系 @person.bob 获取更多技术细节。
+相关文档请参考 @doc.system_design。
+- 如果有问题 #faq.question=ID1
+** [#A] 任务跟踪 #task #priority=high #project.phase=planning
+:PROPERTIES:
+:ID:       36C49388-6183-4EF2-A6F7-46283BB7C08C
+:PERSON_REF: bob
+:PHASE:    planning
+:DOC_REF:  spec_001
+:STATUS:   pending
+:END:
+联系 @person.bob 了解详情
+
+
+* [#A] 测试节点 #project #priority=high
+:PROPERTIES:
+:ID:       591B4DC9-7CA4-4BFE-A778-5FC619A65FE1
+:DOC_REF:  spec_001
+:PERSON_REF: bob
+:STATUS:   pending
+:END:
+联系 @person.bob 获取细节
+** 子任务 #task.status=pending
+:PROPERTIES:
+:ID:       D92BD4BE-F2AF-4FCD-876A-EA7E116C3C18
+:DOC_REF:  spec_001
+:STATUS:   pending
+:END:
+相关文档：@doc.spec_001

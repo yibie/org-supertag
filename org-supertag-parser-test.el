@@ -144,6 +144,37 @@
       ;; 清理测试环境
       (org-supertag-test-teardown test-buffer))))
 
+(ert-deftest org-supertag-test-parse-references ()
+  "测试引用解析"
+  (interactive)
+  (let* ((text "这个任务分配给 @person.john，优先级是 #task.priority=high")
+         (result (org-supertag-parse-content 
+                 (with-temp-buffer
+                   (insert text)
+                   (point-min))
+                 (with-temp-buffer
+                   (insert text)
+                   (point-max)))))
+    
+    ;; 检查引用
+    (let ((refs (cl-remove-if-not 
+                (lambda (item) (eq (plist-get item :type) 'reference))
+                result)))
+      (should (= (length refs) 1))
+      (let ((ref (car refs)))
+        (should (equal (plist-get ref :entity-type) "person"))
+        (should (equal (plist-get ref :entity-id) "john"))))
+    
+    ;; 检查标签
+    (let ((tags (cl-remove-if-not 
+                (lambda (item) (eq (plist-get item :type) 'tag))
+                result)))
+      (should (= (length tags) 1))
+      (let ((tag (car tags)))
+        (should (equal (plist-get tag :name) "task"))
+        (should (equal (plist-get tag :field) "priority"))
+        (should (equal (plist-get tag :value) "high"))))))
+
 ;;; 运行测试的便捷函数
 (defun org-supertag-run-parser-tests ()
   "运行所有 org-supertag-parser 测试"

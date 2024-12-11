@@ -85,8 +85,16 @@ VALUE: 字段值
 
 ;; 查询操作
 (defun org-supertag-get-node-tags (node-id)
-  "获取节点的所有标签."
-  (mapcar #'car (org-supertag-db-get-links :node-tag node-id)))
+  "获取节点的所有标签.
+NODE-ID 是节点的唯一标识符
+返回标签名称列表"
+  (message "Debug - Getting tags for node: %s" node-id)
+  (let ((relations (org-supertag-db-get-links :node-tag node-id)))
+    (message "Debug - Relations: %S" relations)
+    (when relations
+      (mapcar #'car relations))))
+
+
 
 (defun org-supertag-get-node-fields (node-id)
   "获取节点的所有字段."

@@ -72,32 +72,44 @@
 (defvar org-supertag--initialized nil
   "标记系统是否已初始化.")
 
-;;; 核数
-
 (defun org-supertag-init ()
   "初始化超级标签系统."
   (interactive)
   (org-supertag-with-timer "init"
     (unless org-supertag--initialized
-      ;; 确保数据目录存在
-      (unless (file-exists-p org-supertag-data-directory)
-        (make-directory org-supertag-data-directory t))
+      ;; 1. 确保数据目录存在
+      (org-supertag-ensure-data-directory)
       
-      ;; 载数据
-      (let ((db-file (expand-file-name "db.el" org-supertag-data-directory)))
-        (when (file-exists-p db-file)
-          (org-supertag-db-load db-file)))
+      ;; 2. 初始化数据库核心表
+      (setq org-supertag-db--entities (ht-create)
+            org-supertag-db--relations (ht-create)
+            org-supertag-db--field-values (ht-create))
       
-      ;; 设置钩子
+      ;; 3. 加载已有数据
+      (condition-case err
+          (when (file-exists-p org-supertag-db-file)
+            (org-supertag-db-load)
+            (message "Database loaded successfully"))
+        (error
+         (message "Error loading database: %S" err)))
+      
+      ;; 4. 设置钩子
       (when org-supertag-auto-sync
-        (add-hook 'org-after-todo-state-change-hook #'org-supertag-sync-node-at-point)
-        (add-hook 'org-after-tags-change-hook #'org-supertag-sync-node-at-point)
-        (add-hook 'org-after-promote-entry-hook #'org-supertag-sync-node-at-point)
-        (add-hook 'org-after-demote-entry-hook #'org-supertag-sync-node-at-point))
+        (add-hook 'org-after-todo-state-change-hook 
+                 #'org-supertag-sync-node-at-point)
+        (add-hook 'org-after-tags-change-hook 
+                 #'org-supertag-sync-node-at-point)
+        (add-hook 'org-after-promote-entry-hook 
+                 #'org-supertag-sync-node-at-point)
+        (add-hook 'org-after-demote-entry-hook 
+                 #'org-supertag-sync-node-at-point))
       
-      ;; 标记为已初始化
-      (setq org-supertag--initialized t)
-      (message "Org Supertag system initialized."))))
+      ;; 5. 验证数据库状态
+      (if (org-supertag-db-ready-p)
+          (progn
+            (setq org-supertag--initialized t)
+            (message "Org Supertag system initialized successfully"))
+        (error "Failed to initialize database")))))
 
 (defun org-supertag-save ()
   "保存超级标签系统数据."
@@ -445,44 +457,120 @@
         (when (org-supertag-update-field tag-name field-to-edit new-props)
           (message "Field %s updated" field-to-edit))))))
 
-(defun org-supertag--get-template-choices ()
-  "获取所有可用的标签模板选项."
-  (let* ((preset-choices
-          (mapcar (lambda (template)
-                   (cons (format "%s [预设]" (car template))
-                         (list :preset (car template))))
-                 org-supertag-preset-templates))
-         (custom-templates
-          (mapcar (lambda (template)
-                   (cons (format "%s [自定义]" 
-                               (org-supertag-template-tag-name template))
-                         (list :custom 
-                               (org-supertag-template-id template))))
-                 (org-supertag-find-templates-by-type))))
-    (append preset-choices
-            custom-templates
-            '(("+ 新建标签" . (:new))))))
 
-(defun org-supertag--apply-template (tag-name fields)
-  "应用模板到当前节点.
-TAG-NAME 是标签名称
-FIELDS 是字段列表，可以是 plist 或 alist"
-  (let ((node-id (org-id-get-create)))
-    ;; 添加标签关系
-    (org-supertag-tag-add-to-node node-id tag-name)
     
-    ;; 更新标题，添加标签
+;;------------------------------------------------------------------------------ 
+;; Test
+;;------------------------------------------------------------------------------  
+
+(defun org-supertag-process-node ()
+  "处理当前节点的标签，整合解析器和标签系统."
+  (interactive)
+  (save-excursion
+    (org-back-to-heading t)
     (let* ((element (org-element-at-point))
-           (title (org-element--property :raw-value element nil nil))
-           (new-title (concat title " #" tag-name)))
-      (org-edit-headline new-title))
-    
-    ;; 应用字段
-    (org-supertag--apply-tag-fields tag-name)))
-    
+           (node-id (or (org-id-get) (org-id-get-create)))
+           (parse-results (org-supertag-quick-parse)))
+      
+      (message "\n=== API 层处理 ===")
+      (message "节点 ID: %s" node-id)
+      
+      ;; 1. 处理基本标签
+      (dolist (tag (plist-get parse-results :tags))
+        (when (eq (plist-get tag :type) 'simple)
+          (let ((tag-name (plist-get tag :name)))
+            (message "\n处理基本标签: %s" tag-name)
+            ;; 使用 API 创建和关联标签
+            (org-supertag-ensure-tag tag-name)
+            (org-supertag-add-node-tag node-id tag-name)
+            (message "  → 标签已处理"))))
+      
+      ;; 2. 处理带字段的标签
+      (dolist (tag (plist-get parse-results :tags))
+        (when (memq (plist-get tag :type) '(field-value value))
+          (let* ((tag-name (plist-get tag :name))
+                 (field (plist-get tag :field))
+                 (value (plist-get tag :value)))
+            (message "\n处理字段标签: %s.%s=%s" 
+                    tag-name (or field "") (or value ""))
+            ;; 使用 API 处理字段标签
+            (org-supertag-ensure-tag tag-name)
+            (when field
+              (org-supertag-add-tag-field tag-name field))
+            (when value
+              (org-supertag-set-node-field node-id 
+                                          (or field tag-name) 
+                                          value))
+            (message "  → 字段标签已处理"))))
+      
+      ;; 3. 处理引用
+      (dolist (ref (plist-get parse-results :refs))
+        (let* ((type (plist-get ref :type))
+               (id (plist-get ref :id)))
+          (message "\n处理引用: @%s.%s" type id)
+          ;; 使用 API 处理引用
+          (org-supertag-add-node-reference node-id type id)
+          (message "  → 引用已处理")))
+      
+      ;; 4. 最终验证
+      (message "\n=== 最终验证 ===")
+      (message "节点标签:")
+      (dolist (tag (org-supertag-get-node-tags node-id))
+        (message "  - %s" tag)
+        (let ((fields (org-supertag-get-tag-fields tag)))
+          (when fields
+            (message "    字段:")
+            (dolist (field fields)
+              (let ((value (org-supertag-get-node-field node-id field)))
+                (when value
+                  (message "      %s = %s" field value)))))))
+      
+      (message "\n节点引用:")
+      (dolist (ref (org-supertag-get-node-references node-id))
+        (message "  - @%s.%s" (car ref) (cdr ref)))
+      
+      (message "\n处理完成."))))
 
 
+(defun org-supertag-process-buffer ()
+  "处理当前缓冲区中的所有标签."
+  (interactive)
+  (org-map-entries #'org-supertag-process-node))
+
+
+(defun org-supertag-test-db ()
+  "测试数据层基本功能."
+  (interactive)
+  (let ((node-id "test-node-001")
+        (tag-name "test-tag"))
+    
+    (message "\n=== 数据层测试 ===")
+    
+    ;; 1. 测试标签创建
+    (message "\n1. 创建标签")
+    (org-supertag-tag-create tag-name)
+    (message "标签是否存在: %s" 
+            (org-supertag-tag-exists-p tag-name))
+    
+    ;; 2. 测试关系创建
+    (message "\n2. 创建节点-标签关系")
+    (org-supertag-db-link :node-tag node-id tag-name)
+    (message "关系查询结果: %S" 
+            (org-supertag-db-get-links :node-tag node-id))
+    
+    ;; 3. 测试字段值
+    (message "\n3. 设置字段值")
+    (org-supertag-db-set-field-value "status" node-id "pending")
+    (message "字段值查询结果: %S"
+            (org-supertag-db-get-field-value "status" node-id))
+    
+    ;; 4. 测试引用关系
+    (message "\n4. 创建引用关系")
+    (org-supertag-db-link :tag-ref node-id "person.bob")
+    (message "引用关系查询结果: %S"
+            (org-supertag-db-get-links :tag-ref node-id))))
 
 (provide 'org-supertag)
+
 ;;; org-supertag.el ends here 
  
