@@ -7,18 +7,25 @@
 
 ;;; Code:
 
+;; 基础依赖
 (require 'cl-lib)
 (require 'org)
 (require 'org-element)
 (require 'org-id)
 
+;; 核心系统
 (require 'org-supertag-base)
 (require 'org-supertag-db)
 (require 'org-supertag-api)
 (require 'org-supertag-types)
+
+;; 功能模块
+(require 'org-supertag-field)
 (require 'org-supertag-tag)
-(require 'org-supertag-perf)
 (require 'org-supertag-node)
+
+;; 扩展功能
+(require 'org-supertag-perf)
 (require 'org-supertag-sync)
 
 

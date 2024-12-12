@@ -263,9 +263,10 @@ DEADLINE: <2024-03-15 Fri>
 :ID:       955E8AE5-DA7D-42A0-8520-A21E255DC367
 :FUN:      enthusiasm
 :END:
-* good #great #yeah #oh #Grok! #!Grok #happnies
+* good #great #yeah #oh #Grok! #!Grok #happnies #ddd
 :PROPERTIES:
 :ID:       52C11649-4FA1-4709-A1C1-3441B16EA939
 :HAHAHAHAHAHAHAHHAHA: hhh
 :FUN:      fun
+:WHO:      haha
 :END:
