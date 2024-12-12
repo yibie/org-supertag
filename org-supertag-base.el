@@ -19,7 +19,7 @@
   "Org-supertag 数据存储目录.
 用于存储数据库文件、缓存等数据."
   :type 'directory
-  :group 'org-supertag)
+  :group 'org-supertag) 
 
 (defun org-supertag-ensure-data-directory ()
   "确保数据目录存在."
@@ -39,6 +39,13 @@ NODE-ID 是节点ID
 TAG-NAME 是标签名称"
   (org-supertag-add-relation :node-tag node-id tag-name))
 
+(defun org-supertag-tag-add-to-node (node-id tag-name)
+  "将标签添加到节点.
+NODE-ID 是节点 ID
+TAG-NAME 是标签名称"
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    (org-supertag-db-link :node-tag node-id sanitized-name)))
+
 (defun org-supertag-tag-remove-from-node (node-id tag-name)
   "从节点移除标签.
 NODE-ID 是节点ID
@@ -50,26 +57,6 @@ TAG-NAME 是标签名称"
   (unless (org-id-get)
     (org-id-get-create)))
 
-(defun org-supertag--get-parent ()
-  "获取当前节点的父节点."
-  (save-excursion
-    (org-back-to-heading t)
-    (when (org-up-heading-safe)
-      (org-id-get-create))))
-
-(defun org-supertag--get-children ()
-  "获取当前节点的子节点列表."
-  (let (children)
-    (save-excursion
-      (org-back-to-heading t)
-      (let ((level (org-outline-level)))
-        (while (and (progn
-                     (org-next-visible-heading 1)
-                     (not (eobp)))
-                   (> (org-outline-level) level))
-          (when (= (org-outline-level) (1+ level))
-            (push (org-id-get-create) children)))))
-    (nreverse children)))
 
 (defun org-supertag--extract-node-props (element)
   "从 org-element 中提取节点属性.

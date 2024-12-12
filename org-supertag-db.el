@@ -76,66 +76,41 @@
 ;;------------------------------------------------------------------------------  
 (defun org-supertag-db-save ()
   "保存数据到文件."
+  (interactive)  ; 添加交互式调用
   (org-supertag-db-ensure-directories)
   (org-supertag-db-backup)
-  (with-temp-buffer
-    (let ((print-level nil)
-          (print-length nil))
-      ;; 保存现有数据
-      (when (file-exists-p org-supertag-db-file)
-        (insert-file-contents org-supertag-db-file)
-        (goto-char (point-max)))
-      ;; 添加新数据
-      (print `(setq org-supertag-db--entities
-                    (ht-merge org-supertag-db--entities
-                             ,(ht->alist org-supertag-db--entities)))
-             (current-buffer))
-      (print `(setq org-supertag-db--relations
-                    (ht-merge org-supertag-db--relations
-                             ,(ht->alist org-supertag-db--relations)))
-             (current-buffer))
-      (print `(setq org-supertag-db--field-values
-                    (ht-merge org-supertag-db--field-values
-                             ,(ht->alist org-supertag-db--field-values)))
-             (current-buffer)))
-    (write-region (point-min) (point-max) org-supertag-db-file nil 'silent)))
+  (let ((print-level nil)
+        (print-length nil))
+    (with-temp-file org-supertag-db-file  ; 使用 with-temp-file 而不是 write-region
+      (message "保存数据库到: %s" org-supertag-db-file)
+      (message "当前实体数: %d" (ht-size org-supertag-db--entities))
+      ;; 打印数据结构
+      (pp `(setq org-supertag-db--entities (ht<-alist ',(ht->alist org-supertag-db--entities))
+                 org-supertag-db--relations (ht<-alist ',(ht->alist org-supertag-db--relations))
+                 org-supertag-db--field-values (ht<-alist ',(ht->alist org-supertag-db--field-values)))
+          (current-buffer)))
+    (message "数据库保存完成")))
 
 (defun org-supertag-db-load ()
   "从文件加载数据."
+  (interactive)  ; 添加交互式调用
   (org-supertag-db-ensure-directories)
-  (when (file-exists-p org-supertag-db-file)
-    (condition-case err
-        (with-temp-buffer
-          (insert-file-contents org-supertag-db-file)
-          (let ((data (read (current-buffer))))
-            ;; 确保数据有效
-            (when (and (listp data)
-                      (assq 'entities data)
-                      (assq 'relations data)
-                      (assq 'field-values data))
-              ;; 初始化哈希表
-              (setq org-supertag-db--entities (ht-create)
-                    org-supertag-db--relations (ht-create)
-                    org-supertag-db--field-values (ht-create))
-              ;; 加载数据
-              (dolist (table '(entities relations field-values))
-                (when-let ((table-data (alist-get table data)))
-                  (pcase table
-                    ('entities 
-                     (ht-merge! org-supertag-db--entities 
-                               (ht<-alist table-data)))
-                    ('relations 
-                     (ht-merge! org-supertag-db--relations 
-                               (ht<-alist table-data)))
-                    ('field-values 
-                     (ht-merge! org-supertag-db--field-values 
-                               (ht<-alist table-data)))))))))
-      (error
-       (message "Error loading database: %S" err)
-       ;; 确保使用空的哈希表
-       (setq org-supertag-db--entities (ht-create)
-             org-supertag-db--relations (ht-create)
-             org-supertag-db--field-values (ht-create))))))
+  (if (file-exists-p org-supertag-db-file)
+      (condition-case err
+          (with-temp-buffer
+            (message "从文件加载数据库: %s" org-supertag-db-file)
+            (insert-file-contents org-supertag-db-file)
+            (eval (read (current-buffer)))
+            (message "数据库加载成功：%d 个实体, %d 个关系, %d 个字段值"
+                    (ht-size org-supertag-db--entities)
+                    (ht-size org-supertag-db--relations)
+                    (ht-size org-supertag-db--field-values)))
+        (error
+         (message "数据库加载失败: %S" err)
+         (org-supertag-db-initialize)))
+    (progn
+      (message "数据库文件不存在，初始化空数据库")
+      (org-supertag-db-initialize))))
 
 (defun org-supertag-db-ready-p ()
   "检查数据库是否已正确初始化."
@@ -146,16 +121,16 @@
 (defun org-supertag-db-ensure-ready ()
   "确保数据库已准备就绪."
   (unless (org-supertag-db-ready-p)
-    (org-supertag-db-initialize)))             
-
+    (org-supertag-db-initialize)))   
 ;;------------------------------------------------------------------------------
 ;; 初始化
 ;;------------------------------------------------------------------------------  
 (defun org-supertag-db-initialize ()
-  "初始化数据库.
-在包加载时调用此函数."
-  (org-supertag-db-ensure-directories)
-  (org-supertag-db-load))
+  "初始化空数据库."
+  (message "初始化空数据库...")
+  (setq org-supertag-db--entities (ht-create)
+        org-supertag-db--relations (ht-create)
+        org-supertag-db--field-values (ht-create)))
 
 
 
@@ -169,13 +144,16 @@ ID: 实体唯一标识
 PROPS: 属性列表，必须包含 :type 属性"
   (unless (plist-get props :type)
     (error "Entity must have a :type property"))
+  (message "存储实体: %s -> %S" id props)  ; 添加调试信息
   (ht-set! org-supertag-db--entities id props)
+  (message "当前实体数: %d" (ht-size org-supertag-db--entities))
   id)
 
 (defun org-supertag-db-get (id)
   "获取实体.
 返回实体的属性列表，如果不存在返回 nil"
   (ht-get org-supertag-db--entities id))
+
 
 (defun org-supertag-db-link (type from to &optional props)
   "创建关系.
@@ -184,10 +162,11 @@ FROM: 源实体ID
 TO: 目标实体ID
 PROPS: 关系属性"
   (let ((rel-id (format "%s:%s->%s" type from to)))
+    (message "创建关系: %s" rel-id)  ; 添加调试信息
     (ht-set! org-supertag-db--relations rel-id 
              (list type from to props))
+    (message "当前关系数: %d" (ht-size org-supertag-db--relations))
     t))
-
 (defun org-supertag-db-get-links (type from)
   "获取关系.
 TYPE: 关系类型
@@ -347,9 +326,43 @@ PROPS 是一个 plist，包含要匹配的属性."
 TYPE 是实体类型，如 :template, :tag 等."
   (org-supertag-db-find-by-props `(:type ,type)))
 
+;;------------------------------------------------------------------------------
+;; Status
+;;------------------------------------------------------------------------------    
+
+(defun org-supertag-db-check-status ()
+  "检查数据库状态."
+  (interactive)
+  (message "\n=== 数据库状态 ===")
+  (message "数据库文件: %s" org-supertag-db-file)
+  (message "文件存在: %s" (file-exists-p org-supertag-db-file))
+  (message "当前实体数: %d" (ht-size org-supertag-db--entities))
+  (message "当前关系数: %d" (ht-size org-supertag-db--relations))
+  (message "当前字段值数: %d" (ht-size org-supertag-db--field-values)))
 
 
-
+(defun org-supertag-db-test ()
+  "测试数据库操作."
+  (interactive)
+  (message "\n=== 测试数据库操作 ===")
+  
+  ;; 1. 添加一个测试实体
+  (org-supertag-db-put "test-tag" '(:type :tag :name "test"))
+  (message "添加实体后大小: %d" (ht-size org-supertag-db--entities))
+  
+  ;; 2. 添加一个测试关系
+  (org-supertag-db-link :node-tag "test-node" "test-tag")
+  (message "添加关系后大小: %d" (ht-size org-supertag-db--relations))
+  
+  ;; 3. 保存数据库
+  (org-supertag-db-save)
+  (message "数据已保存")
+  
+  ;; 4. 重新加载
+  (org-supertag-db-load)
+  (message "重新加载后:")
+  (message "实体数: %d" (ht-size org-supertag-db--entities))
+  (message "关系数: %d" (ht-size org-supertag-db--relations)))
 
 (provide 'org-supertag-db)
 ;;; org-supertag-db.el ends here

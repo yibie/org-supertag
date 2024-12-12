@@ -123,7 +123,7 @@ DEADLINE: <2024-03-15 Fri>
 2. 优化性能 #task.type=improvement #performance.score=85
 3. 修复已知问题 #task.type=bugfix #priority:high
 
-** 技术栈 #doc/tech #version1
+** 技术栈 #doc/tech #version1 #note
 :PROPERTIES:
 :ID:       314452E6-D2CC-4E79-B5DF-10406FE12307
 :TYPE:     sql
@@ -187,3 +187,85 @@ DEADLINE: <2024-03-15 Fri>
 :STATUS:   pending
 :END:
 相关文档：@doc.spec_001
+
+
+
+* [#A] 测试节点 #project #task.priority=A #ni #tset
+:PROPERTIES:
+:ID:       1C959763-F8F0-45EA-8B35-EFCFE5941EAD
+:PERSON_REF: alice
+:DUE:      2024-03-15
+:STATUS:   in-progress。
+:dd:       ss
+:END:
+这是一个测试节点，由 @person.alice 负责。
+这个 #task 的状态是  
+
+** 子任务 1 #task #ni
+:PROPERTIES:
+:ID:       D9306430-F3A9-4A96-8370-A8B32A8425A9
+:PERSON_REF: bob
+:DUE:      2024-03-15
+:dd:       hhhh
+:END:
+分配给 @person.bob
+#task.due=2024-03-15
+
+** 子任务 2 #task #good
+:PROPERTIES:
+:ID:       B423BF2F-9F23-4339-A1BB-87F106564564
+:PERSON_REF: carol
+:DUE:      2024-03-20
+:END:
+分配给 @person.carol
+#task.due=2024-03-20
+
+
+* TODO test #priority #good #Edie #Vevinom #Tst #Cool #hahhaahahah
+:PROPERTIES:
+:ID:       6A817F8A-F85F-4EED-A4A0-DE5D7927BA4C
+:HAO:      dd
+:NAME:     nil
+:HAHAHA:   dick
+:3:        s
+:END:
+[[id:1C959763-F8F0-45EA-8B35-EFCFE5941EAD][测试节点 #project #task.priority=A #ni #tset]]
+[[*#task][task]]
+[[id:6A817F8A-F85F-4EED-A4A0-DE5D7927BA4C][test]]
+
+[[id:591B4DC9-7CA4-4BFE-A778-5FC619A65FE1][测试节点 #project #priority=high]]
+
+[[id:ABC123-XYZ][项目计划 #project/web #priority:high]]
+
+[[*#priority][priority]]
+
+
+* ggg[[id:B423BF2F-9F23-4339-A1BB-87F106564564][子任务 2 #task #good]] #happy #weare
+:PROPERTIES:
+:ID:       4A55D4BE-3180-4F30-A8B5-90213A7948F0
+:DATE:     2024-12-13
+:GG:       gg
+:END:
+
+
+
+
+
+
+* annoying #emo
+:PROPERTIES:
+:ID:       D683DA27-B8A3-455E-BB23-13574111E45A
+:TRIED:    Y
+:END:
+
+* good #happy
+:PROPERTIES:
+:ID:       955E8AE5-DA7D-42A0-8520-A21E255DC367
+:FUN:      enthusiasm
+:END:
+* good #great #yeah #oh #Grok! #!Grok #happnies
+:PROPERTIES:
+:ID:       52C11649-4FA1-4709-A1C1-3441B16EA939
+:HAHAHAHAHAHAHAHHAHA: hhh
+:FUN:      fun
+:END:

@@ -378,7 +378,7 @@ VALUE 是要设置的值"
                           value)))
     (save-excursion
       (org-back-to-heading t)
-      ;; 删除现有抽屉
+      ;; 除现有抽屉
       (org-element-map (org-element-at-point) 'drawer
         (lambda (drawer)
           (when (string= (org-element-property :drawer-name drawer) drawer-name)
@@ -496,14 +496,18 @@ FIELD 是字段定义，可以是 plist、向量或 cons cell"
     field-def))
     
 (defun org-supertag--validate-field-def (field)
-  "验证字段定义是否有效.
+  "验证字段定义是否有效。
 FIELD 是字段定义"
-  (message "Debug - Validating field: %S" field)
-  (let ((valid (and (listp field)
-                    (plist-get field :name)
-                    (plist-get field :type))))
-    (message "Debug - Field validation result: %s" valid)
-    valid))
+  (let ((name (plist-get field :name))
+        (type (plist-get field :type)))
+    (message "Debug - Validating field: %S" field)
+    (message "Debug - Field type: %S" type)
+    (when (and name type)
+      (let ((type-def (org-supertag-get-field-type type)))
+        (message "Debug - Field type definition: %S" type-def)
+        (when type-def
+          (message "Debug - Field validation result: %s" type)
+          type)))))
 
 ;; 改进字段值验证
 (defun org-supertag-field-validate (field value)
@@ -577,7 +581,7 @@ FIELD 是字段定义"
     (message "Debug - Using reader: %S" reader)
     
     (unless reader
-      (error "字段类型 %s 没有定义读取函数" type))
+      (error "字段类型 %s 有定义读取函数" type))
     
     (catch 'done
       (while t
@@ -778,93 +782,211 @@ NODE-ID 是节点ID"
                                  (plist-get field :name)
                                  value))))))
 
+;;----------------------------------------------------------------------
+;; 为 org-supertag-tag 提供字段管理功能
+;;----------------------------------------------------------------------
 
-;; 改进段交互式编辑
+(defun org-supertag--sanitize-field-name (name)
+  "将字段名转换为有效的属性名.
+NAME 是原始字段名"
+  (let ((sanitized (replace-regexp-in-string
+                   "\\s-+" "_"  ; 将空格替换为下划线
+                   (upcase (string-trim name)))))  ; 转为大写并去除首尾空格
+    sanitized))
 
+(defun org-supertag--create-custom-field ()
+  "创建自定义字段，返回字段定义."
+  (let* ((type-choice (completing-read "字段类型: "
+                                     '("字符串" "选项" "数字" "日期" "引用" "标签")
+                                     nil t))
+         (type-sym (cdr (assoc type-choice
+                              '(("字符串" . string)
+                                ("选项" . options)
+                                ("数字" . number)
+                                ("日期" . date)
+                                ("引用" . reference)
+                                ("标签" . tags)))))
+         (type-def (org-supertag-get-field-type type-sym))
+         ;; 处理字段名
+         (raw-name (read-string "字段名称: "))
+         (field-name (org-supertag--sanitize-field-name raw-name))
+         (field-def (list :name field-name
+                         :type type-sym
+                         :display-name raw-name)))  ; 保存原始名称用于显示
+    
+    ;; 添加类型特定的属性
+    (pcase type-sym
+      ('options
+       (let ((options (split-string
+                      (read-string "输入选项 (用逗号分隔): ")
+                      "," t "[ \t\n\r]+")))
+         (when options  ; 确保有输入选项
+           (setq field-def (plist-put field-def :options options)))))
+      
+      ('reference
+       (let ((ref-tag (completing-read "引用哪个标签的条目? "
+                                     (org-supertag-get-all-tags))))
+         (when ref-tag  ; 确保选择了标签
+           (setq field-def (plist-put field-def :ref-tag ref-tag)))))
+      
+      ('number
+       (let ((min (read-number "最小值 (直接回车跳过): "))
+             (max (read-number "最大值 (直接回车跳过): ")))
+         (when (and min max)  ; 确保输入了范围
+           (setq field-def (plist-put field-def :min min))
+           (setq field-def (plist-put field-def :max max))))))
+    
+    ;; 添加验证器和格式化器
+    (when-let ((validator (plist-get type-def :validator)))
+      (setq field-def (plist-put field-def :validate validator)))
+    (when-let ((formatter (plist-get type-def :formatter)))
+      (setq field-def (plist-put field-def :formatter formatter)))
+    
+    field-def))
 
+(defun org-supertag--add-single-field (fields)
+  "添加单个字段并设置其值。
+FIELDS 是当前字段列表。
+返回 (是否继续 . (更新后的字段列表 . 字段值列表))"
+  (let* ((choices (append
+                  '("Finish - 完成")
+                  '("+ 新建字段")
+                  (mapcar #'org-supertag-format-preset-field
+                         org-supertag-preset-fields)))
+         (choice (completing-read 
+                 (if fields
+                     "选择字段 (或选择 Finish 完成): "
+                   "选择字段: ")
+                 choices nil t)))
+    
+    (cond
+     ;; 选择完成
+     ((string= choice "Finish - 完成")
+      (cons nil (cons fields nil)))
+     
+     ;; 新建自定义字段
+     ((string= choice "+ 新建字段")
+      (if-let ((new-field (org-supertag--create-custom-field)))
+          (if (cl-find (plist-get new-field :name) fields
+                      :key (lambda (f) (plist-get f :name))
+                      :test #'string=)
+              (progn
+                (message "字段名 %s 已存在" (plist-get new-field :name))
+                (cons t (cons fields nil)))
+            ;; 立即读取字段值
+            (when-let ((value (org-supertag-field-read-value new-field)))
+              (cons t (cons 
+                      (cons new-field fields)
+                      (list (cons (plist-get new-field :name) value))))))
+        (cons t (cons fields nil))))
+     
+     ;; 选择预设字段
+     ((string-prefix-p "- " choice)
+      (let* ((field-name (substring choice 2))
+             (field-name (car (split-string field-name " (")))
+             (preset (org-supertag-get-preset-field field-name)))
+        (if preset
+            (when-let ((value (org-supertag-field-read-value preset)))
+              (cons t (cons 
+                      (cons preset fields)
+                      (list (cons (plist-get preset :name) value)))))
+          (cons t (cons fields nil)))))
+          (cons t fields))))
 
 (defun org-supertag--field-interactive-edit (&optional current-fields)
   "交互式编辑字段定义。
-CURRENT-FIELDS 是当前的字段列表。"
+CURRENT-FIELDS 是当前的字段列表。
+返回 (fields . values) cons cell"
   (let ((fields (or current-fields nil))
-        (field-types (org-supertag-get-field-types)))
-    
-    ;; 显示当前字段
-    (when fields
-      (message "当前字段:")
-      (dolist (field fields)
-        (message "  %s (%s)"
-                 (plist-get field :name)
-                 (plist-get field :type))))
-    
-    ;; 添加新字段
-    (while (not (equal "完成" 
-                      (completing-read "添加字段 (或选择'完成'): "
-                                     '("+ 添加字段" "完成")
-                                     nil t)))
-      (let* ((field-name (read-string "字段名称: "))
-             ;; 检查字段名唯一性
-             (_ (when (cl-find field-name fields
-                              :key (lambda (f) (plist-get f :name))
-                              :test #'string=)
-                  (user-error "字段名 %s 已存在" field-name)))
-             ;; 选择字段类型
-             (type-choice (completing-read "字段类型: "
-                                        '("字符串" "选项" "数字" "日期" "引用" "标签")
-                                        nil t))
-             (type-sym (cdr (assoc type-choice
-                                  '(("字符串" . string)
-                                    ("选项" . options)
-                                    ("数字" . number)
-                                    ("日期" . date)
-                                    ("引用" . reference)
-                                    ("标签" . tags)
-                                    ))))
-             (type-def (org-supertag-get-field-type type-sym))
-             ;; 创建基本字段定义
-             (field-def (list :name field-name
-                            :type type-sym
-                            :required (y-or-n-p "是否必填? "))))
-        
-        (message "Debug - Selected type: %S -> %S" type-choice type-sym)
-        (message "Debug - Type definition: %S" type-def)
-        
-        ;; 添加类型特定的属性
-        (pcase type-sym
-          ;; 选项类型需要定义选值
-          ('options
-           (let ((options (split-string
-                          (read-string "输入选项 (用逗号分隔): ")
-                          "," t "[ \t\n\r]+")))
-             (setq field-def (plist-put field-def :options options))))
-          
-          ;; 引用类型需要定义引用的标签
-          ('reference
-           (let ((ref-tag (completing-read "引用哪个标签的条目? "
-                                         (org-supertag-get-all-tags))))
-             (setq field-def (plist-put field-def :ref-tag ref-tag))))
-          
-          ;; 数值类型可以设置范围
-          ('number
-           (when (y-or-n-p "是否设置数值范围? ")
-             (let ((min (read-number "最小值: "))
-                   (max (read-number "最大值: ")))
-               (setq field-def (plist-put field-def :min min))
-               (setq field-def (plist-put field-def :max max))))))
-        
-        ;; 添加验证器和格式化器
-        (when-let ((validator (plist-get type-def :validator)))
-          (setq field-def (plist-put field-def :validate validator)))
-        (when-let ((formatter (plist-get type-def :formatter)))
-          (setq field-def (plist-put field-def :formatter formatter)))
-        
-        ;; 添加到字段列表
-        (push field-def fields)))
-    
-    ;; 返回字段列表
-    (nreverse fields)))
+        (values nil))
+    (catch 'done
+      (while t
+        (let* ((result (org-supertag--add-single-field fields))
+               (continue (car result))
+               (fields-and-values (cdr result))
+               (updated-fields (car fields-and-values))
+               (new-values (cdr fields-and-values)))
+          (setq fields updated-fields
+                values (append new-values values))
+          (unless continue
+            (throw 'done (cons (nreverse fields) values))))))
+    (cons (nreverse fields) values)))
 
+(defun org-supertag--apply-tag-fields (tag-name field-values)
+  "应用标签的字段到当前节点。
+TAG-NAME 是标签名称。
+FIELD-VALUES 是字段值的 alist"
+  (when-let* ((tag (org-supertag-tag-get tag-name))
+              (fields (plist-get tag :fields))
+              (node-id (org-id-get)))
+    (message "Debug - 应用字段: %S" fields)
+    
+    ;; 处理每个字段
+    (dolist (field fields)
+      (let* ((field-name (plist-get field :name))
+             (value (or (alist-get field-name field-values nil nil #'string=)
+                       (org-supertag-field-read-value field))))
+        (when value
+          (message "Debug - 设置字段 %s = %s" field-name value)
+          (org-entry-put nil field-name value)
+          (org-supertag-db-set-field-value field-name node-id value))))))
 
+;;----------------------------------------------------------------------
+;; 预设字段定义
+;;----------------------------------------------------------------------
+
+(defcustom org-supertag-preset-fields
+  '(("Priority" 
+     :type options
+     :values ("P1" "P2" "P3" "P4")
+     :description "Task Priority")
+    ("Status" 
+     :type options
+     :values ("To Do" "In Progress" "Done" "On Hold")
+     :description "Task Status")
+    ("Deadline" 
+     :type date
+     :description "Task Deadline")
+    ("Progress" 
+     :type number
+     :min 0
+     :max 100
+     :description "Task Completion Percentage")
+    ("Who" 
+     :type string
+     :description "Who is this")
+    ("Tags" 
+     :type list
+     :separator ","
+     :description "Keywords or Tags")
+    ("URL" 
+     :type url
+     :description "Related Links")
+    ("Rating" 
+     :type number
+     :min 1 
+     :max 5
+     :description "Five-star Rating"))
+  "预设字段定义列表.
+每个预设字段是一个 (name . props) 对，其中：
+- name 是字段名称
+- props 是字段属性 plist"
+  :type '(repeat (cons string plist))
+  :group 'org-supertag)
+
+(defun org-supertag-get-preset-field (name)
+  "获取预设字段定义.
+NAME 是字段名称"
+  (cdr (assoc name org-supertag-preset-fields)))
+
+(defun org-supertag-format-preset-field (preset)
+  "格式化预设字段选项.
+PRESET 是预设字段定义"
+  (let ((name (car preset))
+        (desc (plist-get (cdr preset) :description)))
+    (format "- %s%s"
+            name
+            (if desc (format " (%s)" desc) ""))))
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

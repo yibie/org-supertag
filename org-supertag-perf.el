@@ -111,5 +111,17 @@ DURATION 是执行时间"
   "重置性能统计数据."
   (clrhash org-supertag-perf--stats))
 
+(defmacro org-supertag-with-timer (label &rest body)
+  "执行代码并记录执行时间.
+LABEL 是计时标签
+BODY 是要执行的代码"
+  (declare (indent 1))
+  `(let ((start-time (float-time)))
+     (prog1
+         (progn ,@body)
+       (message "[Timer] %s: %.3fs"
+                ,label
+                (- (float-time) start-time)))))
+
 (provide 'org-supertag-perf)
 ;;; org-supertag-perf.el ends here 
