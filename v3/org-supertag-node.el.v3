@@ -173,9 +173,9 @@
   "为节点添加标签。"
   (message "[DEBUG Node] Adding tag %s to node %s" tag-id node-id)
   
-  ;; Create node-tag relationship
+  ;; Create node-tag linkhip
   (let ((rel-id (format "%s-%s" node-id tag-id)))
-    (message "[DEBUG Node] Creating relationship with ID: %s" rel-id)
+    (message "[DEBUG Node] Creating linkhip with ID: %s" rel-id)
     (org-supertag-db-create 'node-tag-rels
                            (list :id rel-id
                                 :node-id node-id

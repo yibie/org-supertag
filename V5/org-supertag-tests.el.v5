@@ -13,9 +13,9 @@
 ;; 测试辅助函数
 (defmacro org-supertag-with-test-env (&rest body)
   "在干净的测试环境中执行测试代码."
-  `(let ((org-supertag-db--entities (ht-create))
-         (org-supertag-db--relations (ht-create))
-         (org-supertag-db--field-values (ht-create))
+  `(let ((org-supertag-db--object (ht-create))
+         (org-supertag-db--link (ht-create))
+         (org-supertag-db--field-value (ht-create))
          (temp-file (make-temp-file "org-supertag-test" nil ".org")))
      (unwind-protect
          (with-current-buffer (find-file-noselect temp-file)
@@ -40,7 +40,7 @@
    (should (equal (plist-get (org-supertag-db-get "node1") :title) "Test Node"))
    
    ;; 测试更新
-   (org-supertag-db-put "node1" '(:type :node :title "Updated Node"))
+   (org-supertag-db-add "node1" '(:type :node :title "Updated Node"))
    (should (equal (plist-get (org-supertag-db-get "node1") :title) "Updated Node"))
    
    ;; 测试删除

@@ -1,0 +1,52 @@
+;;; org-supertag-parser-test.el --- Tests for org-supertag-parser -*- lexical-binding: t; -*-
+
+;; 设置加载路径
+(when load-file-name
+  (add-to-list 'load-path (file-name-directory load-file-name)))
+
+;; 加载依赖
+(require 'ert)
+(require 'org)
+(require 'org-element)
+
+;; 直接加载被测试文件的内容，而不是require
+(load (expand-file-name "org-supertag-parser.el"
+                       (file-name-directory (or load-file-name buffer-file-name))))
+
+;;; 测试辅助函数
+
+(defun org-supertag-test-setup ()
+  "设置测试环境"
+  (let ((org-buffer (get-buffer-create "*org-supertag-test*")))
+    (with-current-buffer org-buffer
+      (erase-buffer)
+      (org-mode)
+      (org-element-cache-reset t)
+      ;; 创建一个临时文件并关联到缓冲区
+      (let ((temp-file (make-temp-file "org-supertag-test-" nil ".org")))
+        (write-file temp-file))
+      ;; 设置必要的 org 变量
+      (setq-local org-id-locations-file 
+                  (expand-file-name ".org-id-locations-test" temporary-file-directory))
+      (setq-local org-id-track-globally nil)
+      (setq-local org-id-locations nil))
+    org-buffer))
+
+(defun org-supertag-test-teardown (buffer)
+  "清理测试环境"
+  (when buffer
+    (with-current-buffer buffer
+      (org-element-cache-reset t)
+      ;; 删除临时文件
+      (when buffer-file-name
+        (delete-file buffer-file-name))
+      ;; 删除 org-id-locations 文件
+      (when (and org-id-locations-file
+                 (file-exists-p org-id-locations-file))
+        (delete-file org-id-locations-file)))
+    (kill-buffer buffer)))
+
+
+(provide 'org-supertag-parser-test)
+
+;;; org-supertag-parser-test.el ends here

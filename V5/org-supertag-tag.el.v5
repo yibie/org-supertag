@@ -79,7 +79,7 @@ PROPS 是标签属性"
                       (org-plist-delete props :fields))))
       
       (message "Debug - 创建标签实体: %s" sanitized-name)
-      (org-supertag-db-put sanitized-name tag-props))))
+      (org-supertag-db-add sanitized-name tag-props))))
 
 (defun org-supertag-tag-get (tag-name)
   "获取标签定义.

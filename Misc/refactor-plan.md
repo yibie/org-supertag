@@ -34,7 +34,7 @@
 
 
 ### 1.2 重构基础操作函数
-- [修改] `org-supertag-db-put` -> `org-supertag-db-create-entity`
+- [修改] `org-supertag-db-add` -> `org-supertag-db-create-entity`
   - 简化参数
   - 移除类型检查
   
@@ -51,29 +51,29 @@
   "删除实体及其相关的所有关系."
   (when (org-supertag-db-exists-p id)
     ;; 删除实体
-    (ht-remove! org-supertag-db--entities id)
+    (ht-remove! org-supertag-db--object id)
     ;; 删除相关的关系
     (let (to-remove)
       (ht-map (lambda (k v)
                 (when (or (equal id (nth 1 v))
                          (equal id (nth 2 v)))
                   (push k to-remove)))
-              org-supertag-db--relations)
+              org-supertag-db--link)
       (dolist (k to-remove)
-        (ht-remove! org-supertag-db--relations k)))
+        (ht-remove! org-supertag-db--link k)))
     ;; 删除相关的字段值
     (let ((prefix (concat id ":")))
       (ht-map (lambda (k _)
                 (when (string-prefix-p prefix k)
-                  (ht-remove! org-supertag-db--field-values k)))
-              org-supertag-db--field-values))
+                  (ht-remove! org-supertag-db--field-value k)))
+              org-supertag-db--field-value))
     t))
 
 (defun org-supertag-db-unlink (type from to)
   "删除特定关系."
   (let ((rel-id (format "%s:%s->%s" type from to)))
-    (when (ht-contains-p org-supertag-db--relations rel-id)
-      (ht-remove! org-supertag-db--relations rel-id)
+    (when (ht-contains-p org-supertag-db--link rel-id)
+      (ht-remove! org-supertag-db--link rel-id)
       t)))
 
 ;;; 字段值操作
@@ -81,12 +81,12 @@
 (defun org-supertag-db-set-field-value (field-id node-id value)
   "设置字段值."
   (let ((key (format "%s:%s" field-id node-id)))
-    (ht-set! org-supertag-db--field-values key value)))
+    (ht-set! org-supertag-db--field-value key value)))
 
 (defun org-supertag-db-get-field-value (field-id node-id)
   "获取字段值."
   (let ((key (format "%s:%s" field-id node-id)))
-    (ht-get org-supertag-db--field-values key)))
+    (ht-get org-supertag-db--field-value key)))
 
 (defun org-supertag-db-remove-field-value (field-id node-id)
 ```
@@ -103,7 +103,7 @@
 - [删除] 移除字段实例相关代码:
 
 ```250:300:org-supertag-db.el
-            org-supertag-db--relations)
+            org-supertag-db--link)
     (nreverse results)))
 
 ;;; 新增函数：按属性查询
@@ -123,32 +123,32 @@ TYPE 是实体类型，如 :template, :tag 等."
 
 ;;; 持久化支持
 
-(defun org-supertag-db-get-entities ()
+(defun org-supertag-db-get-object ()
   "获取所有实体的哈希表."
-  org-supertag-db--entities)
+  org-supertag-db--object)
 
-(defun org-supertag-db-get-entities-alist ()
+(defun org-supertag-db-get-object-alist ()
   "获取所有实体的关联列表 ((id . props) ...)."
-  (ht-items org-supertag-db--entities))
+  (ht-items org-supertag-db--object))
 
-(defun org-supertag-db-find-entities (type)
+(defun org-supertag-db-find-object (type)
   "查找指定类型的所有实体.
 TYPE 是实体类型"
   (let (results)
     (ht-map (lambda (id props)
               (when (eq (plist-get props :type) type)
                 (push id results)))
-            org-supertag-db--entities)
+            org-supertag-db--object)
     results))
 
 ;; 获取所有关系
-(defun org-supertag-db-get-all-relations ()
+(defun org-supertag-db-get-all-link ()
   "获取所有关系.
 返回 ((type from to props) ...) 形式的列表"
   (let (results)
     (ht-map (lambda (k v)
               (push v results))
-            org-supertag-db--relations)
+            org-supertag-db--link)
     results))
 
 (provide 'org-supertag-db)
@@ -259,28 +259,28 @@ TYPE 是实体类型"
   "节点存储 node-id -> plist.")
 
 ;; 关系存储
-(defvar org-supertag-db--relations (ht-create)
+(defvar org-supertag-db--link (ht-create)
   "关系存储 rel-id -> (type from to props).")
 ```
 
 - [删除] 移除旧的实体存储：
-  - `org-supertag-db--entities`
-  - `org-supertag-db--field-values`
+  - `org-supertag-db--object`
+  - `org-supertag-db--field-value`
 
 ### 1.2 基础操作函数 [org-supertag-db.el]
 - [新增] 实体操作函数：
 ```elisp
-(defun org-supertag-db-put-field (name props))
-(defun org-supertag-db-put-field-type (name props))
-(defun org-supertag-db-put-tag (id props))
-(defun org-supertag-db-put-node (id props))
+(defun org-supertag-db-add-field (name props))
+(defun org-supertag-db-add-field-type (name props))
+(defun org-supertag-db-add-tag (id props))
+(defun org-supertag-db-add-node (id props))
 ```
 
 - [新增] 关系操作函数：
 ```elisp
 (defun org-supertag-db-link (type from to &optional props))
 (defun org-supertag-db-unlink (type from to))
-(defun org-supertag-db-get-links (type from))
+(defun org-supertag-db-get-link (type from))
 ```
 
 ## 2. 字段系统实现
@@ -292,13 +292,13 @@ TYPE 是实体类型"
   "定义新字段."
   (when (org-supertag-db-get-field name)
     (user-error "Field %s already exists" name))
-  (org-supertag-db-put-field name props))
+  (org-supertag-db-add-field name props))
 
 (defun org-supertag-define-field-type (name &rest props)
   "定义字段类型."
   (when (org-supertag-db-get-field-type name)
     (user-error "Field type %s already exists" name))
-  (org-supertag-db-put-field-type name props))
+  (org-supertag-db-add-field-type name props))
 ```
 
 ### 2.2 字段值处理 [org-supertag-field.el]
@@ -458,12 +458,12 @@ NAME 是类型名称（唯一标识）"
 3. **关系定义**：
 ```elisp
 ;; 关系类型
-(defconst org-supertag-relation-types
+(defconst org-supertag-db-link-type
   '(:tag-field     ; 标签使用的字段 (tag-id -> field-name)
     :node-tag))    ; 节点应用的标签 (node-id -> tag-id)
 
 ;; 关系存储
-(defvar org-supertag-db--relations (ht-create)
+(defvar org-supertag-db--link (ht-create)
   "关系存储 rel-id -> (type from to props).")
 ```
 
@@ -496,7 +496,7 @@ NAME 是类型名称（唯一标识）"
     (org-supertag-db-link :node-tag node-id tag-id)
     
     ;; 处理字段
-    (let ((fields (org-supertag-db-get-links :tag-field tag-id)))
+    (let ((fields (org-supertag-db-get-link :tag-field tag-id)))
       (dolist (field-name fields)
         (let* ((field-props (ht-get org-supertag-db--fields field-name))
                (field-type (plist-get field-props :type))

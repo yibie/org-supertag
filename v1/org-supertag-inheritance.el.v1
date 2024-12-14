@@ -9,7 +9,7 @@
           :documentation "Hash table of nodes in the graph")
    (edges :initform (ht-create)
           :documentation "Hash table of edges in the graph"))
-  "Graph structure for managing tag inheritance relationships.")
+  "Graph structure for managing tag inheritance linkhips.")
 
 (defvar org-supertag-inheritance-graph (make-instance 'org-supertag-inheritance-graph)
   "Global inheritance graph instance.")

@@ -280,7 +280,7 @@ PROPS 是字段属性"
     (setq props (plist-put props :entity-type :field))
     
     ;; 存储字段定义
-    (let ((result (org-supertag-db-put sanitized-name props)))
+    (let ((result (org-supertag-db-add sanitized-name props)))
       (message "Debug - Field creation stored: %S" result)
       result)))
 

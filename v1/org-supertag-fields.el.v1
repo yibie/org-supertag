@@ -100,7 +100,7 @@
 ;;; Field Inheritance
 
 (defvar org-supertag-inheritance-map (ht-create)
-  "Map of tag inheritance relationships.")
+  "Map of tag inheritance linkhips.")
 
 (defun org-supertag-set-inheritance (child-tag parent-tag)
   "Set PARENT-TAG as parent of CHILD-TAG."

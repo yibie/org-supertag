@@ -28,7 +28,7 @@
       (message "节点 ID: %s" node-id)
       
       ;; 1. 确保节点实体存在
-      (org-supertag-db-put node-id 
+      (org-supertag-db-add node-id 
                           `(:type :node 
                             :title ,(org-get-heading t t t t)
                             :file ,(buffer-file-name)))
@@ -41,7 +41,7 @@
           (message "处理标签引用: %s.%s=%s" tag field value)
           ;; 确保标签实体存在
           (unless (org-supertag-db-exists-p tag)
-            (org-supertag-db-put tag '(:type :tag)))
+            (org-supertag-db-add tag '(:type :tag)))
           ;; 关联标签到节点
           (org-supertag-db-link :node-tag node-id tag)
           ;; 如果有字段值，更新数据库
@@ -56,7 +56,7 @@
           (message "处理节点引用: @%s.%s=%s" node field value)
           ;; 确保节点实体存在
           (unless (org-supertag-db-exists-p node)
-            (org-supertag-db-put node '(:type :node)))
+            (org-supertag-db-add node '(:type :node)))
           ;; 关联引用到节点
           (org-supertag-db-link :node-ref node-id node)
           ;; 如果有字段值，更新数据库

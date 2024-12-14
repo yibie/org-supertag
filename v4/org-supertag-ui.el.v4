@@ -790,7 +790,7 @@ FIELD-NAME 是字段名称"
   "创建标签模板并关联标签."
   (when (org-supertag-template-validate template)
     ;; 保存模板
-    (org-supertag-db-put (org-supertag-template-id template) template)
+    (org-supertag-db-add (org-supertag-template-id template) template)
     
     ;; 创建关联的标签
     (let* ((tag-name (org-supertag-template-tag-name template))
@@ -798,7 +798,7 @@ FIELD-NAME 是字段名称"
                           :name (org-supertag-template-display-name template)
                           :template (org-supertag-template-id template))))
       ;; 保存标签
-      (org-supertag-db-put tag-name tag-props)
+      (org-supertag-db-add tag-name tag-props)
       
       ;; 建立双向关联
       (org-supertag-link :tag-template tag-name (org-supertag-template-id template))

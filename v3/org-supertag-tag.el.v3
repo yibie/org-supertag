@@ -278,7 +278,7 @@ DEFAULT-VALUE 是可选的默认值。"
   (unless (org-supertag-field-get field-id)
     (error "字段 '%s' 不存在" field-id))
     
-  ;; Create relationship ID and data
+  ;; Create linkhip ID and data
   (let* ((rel-id (format "%s-%s" tag-id field-id))
          (rel (make-org-supertag-tag-field-rel
                :tag-id tag-id
@@ -287,9 +287,9 @@ DEFAULT-VALUE 是可选的默认值。"
                :created-at (current-time))))
     
     ;; Store in database with proper ID
-    (org-supertag-db-put 'tag-field-rels rel-id rel)
+    (org-supertag-db-add 'tag-field-rels rel-id rel)
     
-    ;; Return the relationship ID for reference
+    ;; Return the linkhip ID for reference
     rel-id))
 
 (defun org-supertag-tag-add-field (tag-id field-id &optional default-value)
@@ -422,7 +422,7 @@ TAG-ID 是要删除的标签ID。
          (store (org-supertag-db-get-store 'tag-field-rels))
          (fields nil))
     
-    ;; Collect all fields from tag-field relationships
+    ;; Collect all fields from tag-field linkhips
     (maphash (lambda (rel-id rel)
                (when (and (stringp rel-id)
                          (string-prefix-p tag-id rel-id))
@@ -442,7 +442,7 @@ TAG-ID 是要删除的标签ID。
          (rel-id (format "%s-%s" tag-id field-id))
          (rel (gethash rel-id (org-supertag-db-get-store 'tag-field-rels))))
     (when rel
-      (message "[DEBUG Tag] Found relationship: %S" rel)
+      (message "[DEBUG Tag] Found linkhip: %S" rel)
       (org-supertag-tag-field-rel-default-value rel))))
 
 (defun org-supertag-tag-cleanup ()

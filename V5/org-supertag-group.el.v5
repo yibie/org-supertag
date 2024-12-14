@@ -14,7 +14,7 @@
     (setq group-props (plist-put group-props :type :group))
     (setq group-props (plist-put group-props :name name))
     (message "Debug - Creating group with props: %S" group-props)
-    (org-supertag-db-put id group-props)))
+    (org-supertag-db-add id group-props)))
 
 (defun org-supertag-add-tag-to-group (tag-id group-id)
   "将标签添加到组."
@@ -36,7 +36,7 @@
     (let ((group-type (plist-get (org-supertag-db-get group-id) :type)))
       (message "Debug - Getting tags for group: %S (type: %S)" group-id group-type)
       (when (eq group-type :group)
-        (let ((links (org-supertag-db-get-links :tag-group group-id)))
+        (let ((links (org-supertag-db-get-link :tag-group group-id)))
           (message "Debug - Found links: %S" links)
           (mapcar #'car links))))))
 

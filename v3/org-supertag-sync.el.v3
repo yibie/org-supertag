@@ -232,7 +232,7 @@ ELEMENT 是变化的元素。"
       (pcase type
         (:add
          (message "创建节点 - 标题: %S" headline)
-         (org-supertag-db-put 'nodes node-id new-data)
+         (org-supertag-db-add 'nodes node-id new-data)
          (org-supertag-sync--log-change :create node-id nil new-data)
          new-data)
         (:change
@@ -240,7 +240,7 @@ ELEMENT 是变化的元素。"
          (message "旧数据: %S" old-data)
          (message "新数据: %S" new-data)
          (unless (equal old-data new-data)
-           (org-supertag-db-put 'nodes node-id new-data)
+           (org-supertag-db-add 'nodes node-id new-data)
            (org-supertag-sync--log-change :update node-id old-data new-data))
          new-data)
         (:remove
@@ -274,7 +274,7 @@ ELEMENT 是 org-element 结构。"
         (tags (org-element-property :tags element))
         (properties (org-entry-properties nil 'all)))
     ;; 在数据库中创建节点
-    (org-supertag-db-put 'nodes node-id
+    (org-supertag-db-add 'nodes node-id
                          (list :headline headline
                                :tags tags
                                :properties properties))))
@@ -287,8 +287,8 @@ ELEMENT 是 org-element 结构。"
         (tags (org-element-property :tags element))
         (properties (org-entry-properties nil 'all)))
     (message "更新节点 - ID: %S, 标题: %S" node-id headline)
-    ;; 使用 org-supertag-db-put 而不是 update
-    (org-supertag-db-put 'nodes node-id
+    ;; 使用 org-supertag-db-add 而不是 update
+    (org-supertag-db-add 'nodes node-id
                          (list :id node-id
                                :headline headline
                                :tags tags
@@ -399,7 +399,7 @@ PROPS 是属性列表，可包含 :description, :owner-id 等。"
                            `(:created-at ,(current-time))))))
     
     ;; 存储标签
-    (org-supertag-db-put 'tags id tag)
+    (org-supertag-db-add 'tags id tag)
     tag))
 
 ;; 确保在同步标签时使用正确的数据库操作函数
@@ -411,7 +411,7 @@ PROPS 是属性列表，可包含 :name, :description 等。"
       (progn
         (dolist (prop props)
           (plist-put tag (car prop) (cdr prop)))
-        (org-supertag-db-put 'tags tag-id tag))))
+        (org-supertag-db-add 'tags tag-id tag))))
 
 ;; 确保数据一致性检查使用正确的字段
 (defun org-supertag-sync--verify-tag-consistency (tag-id)

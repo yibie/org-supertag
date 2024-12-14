@@ -56,7 +56,7 @@
    (children :initarg :children
              :type list
              :documentation "Child tags"))
-  "Represents a supertag with its properties and relationships.")
+  "Represents a supertag with its properties and linkhips.")
 
 (defclass org-supertag-node ()
   ((id :initarg :id

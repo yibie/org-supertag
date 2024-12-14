@@ -40,11 +40,14 @@
 
 ### 1. Tag 的定义和作用
 
-在 Tana 中，tag 更准确的称呼是 Supertag (超级标签)，它是将普通节点 (node) 转变为特定对象的关键工具。Supertag 不仅仅是简单的标签，更像是赋予节点“身份”和“属性”的特殊标记。通过为节点添加 Supertag，可以将节点归类到特定的对象集合中，并赋予其 Supertag 预设的字段 (Field) 和节点模板。 
+在 Tana 中，tag 更准确的称呼是 Supertag (超级标签)，它是将普通节点 (node) 转变为特定对象的关键工具。Supertag 不仅仅是简单的标签，更像是赋予节点“身份”和“属性”的特殊标记。通过为节点添加 Supertag，可以将节点归类到特定的对象集合中，并赋予其 Supertag 预设的字段 (Field) 和节点模板。
+
+不仅如此，Supertag 还可以触发命令，以 Node 作为操作对象，进行操作。 
 
 例如，"购买牛奶" 这个节点可以添加  #task  这个 Supertag，使其成为一个任务对象，并自动拥有  #task 预设的截止日期、优先级等 Fields。
 
 ### 2. Tag 的创建和管理
+
 
 * **创建 Supertag：**  
     * 在任意节点中输入 "#" 符号，会弹出 Supertag 菜单，继续输入 Supertag 名称即可创建新的 Supertag 或选择已有的 Supertag。
@@ -72,20 +75,7 @@
 * 右键点击 Supertag 并选择 "Config supertag"。
 * 使用 Cmd/Ctrl+Shift+click 点击 Supertag。
 * 在 Tag 页面点击节点选项 (省略号按钮) > "Configure supertag"。
-* 在拥有该 Supertag 的节点上使用命令行执行 "Configure supertag" 命令。
-
-### 5. Tag 模板
-
-Tag 模板是 Supertag 的核心功能之一，它定义了 Supertag 所代表的对象的结构和属性。
-
-* **内容模板：** 定义了每次应用 Supertag 时自动添加到节点的 Fields、Search Node 和普通节点。
-    * **Fields：** 描述对象属性，例如 #task 的截止日期、优先级等。
-    * **Search Node：** 根据 Supertag 实例自定义搜索结果，例如 #project 查找相关的 #task。
-    * **普通节点：** 添加预设的节点内容。
-* **继承：**  可以选择一个 Supertag 进行继承，子标签会继承父标签的模板内容，但子标签自定义的内容优先级更高。
-* **可选字段：**  可以将一些不常用的 Fields 设置为可选字段，在需要时添加。
-* **显示为复选框：** 可以将 Supertag 显示为复选框，并将其状态与 Fields 的值进行映射。
-* **基础标签：**  可以选择一个基础类型，帮助 AI 识别节点的类型，例如会议、任务、组织、人物、地点等。
+* 在拥有该 Supertag 的节点上使用命令行执行 "Configure supertag" 命令。等。
 
 ### 6. AI 和命令
 

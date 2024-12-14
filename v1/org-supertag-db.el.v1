@@ -3,7 +3,7 @@
 ;; 核心数据结构
 (defvar org-supertag-db
   (make-hash-table :test 'equal)
-  "Main storage for tag definitions and relationships.")
+  "Main storage for tag definitions and linkhips.")
 
 ;; 标签定义的结构
 (cl-defstruct (org-supertag (:constructor org-supertag--create)
@@ -39,7 +39,7 @@
 
 ;; 添加标签关系的函数
 (defun org-supertag-add-relation (tag1 tag2 relation-type)
-  "Add a relationship between TAG1 and TAG2 of type RELATION-TYPE.
+  "Add a linkhip between TAG1 and TAG2 of type RELATION-TYPE.
 RELATION-TYPE can be 'parent, 'exclusive, 'depends-on, or 'suggests."
   (let ((tag1-struct (gethash tag1 org-supertag-db))
         (tag2-struct (gethash tag2 org-supertag-db)))

@@ -17,7 +17,7 @@
    (field-cache :initform (make-hash-table :test 'equal)
                :documentation "Cache for field values")
    (tag-cache :initform (make-hash-table :test 'equal)
-             :documentation "Cache for tag relationships")
+             :documentation "Cache for tag linkhips")
    (max-size :initarg :max-size
             :initform 1000
             :type integer

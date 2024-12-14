@@ -23,7 +23,7 @@
 ;;; Commentary:
 
 ;; org-supertag enhances org-mode with a powerful tagging system that supports
-;; inheritance, fields, and complex relationships between nodes.
+;; inheritance, fields, and complex linkhips between nodes.
 
 ;;; Code:
 
