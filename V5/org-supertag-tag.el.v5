@@ -17,8 +17,6 @@
 
 ;;; 标签字段定义
 
-
-
 (defun org-supertag-tag-get-fields (tag-name)
   "获取标签的字段定义.
 TAG-NAME 是标签名称"
@@ -289,6 +287,59 @@ FIELD-VALUES 是字段值的 alist"
           (org-entry-put nil field-name value)
           (org-supertag-db-set-field-value field-name node-id value))))))
 
+(defun org-supertag--apply-tag (tag-name &optional field-values)
+  "应用标签到当前节点.
+TAG-NAME 是标签名称
+FIELD-VALUES 是可选的预设字段值"
+  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (node-id (org-id-get-create)))
+    (message "Debug org-supertag--apply-tag 开始应用标签: %s -> %s (field-values=%S)" 
+             tag-name sanitized-name field-values)
+    
+    ;; 1. 添加标签关系
+    (org-supertag-db-link :node-tag node-id sanitized-name)
+    
+    ;; 2. 更新标题
+    (let* ((element (org-element-at-point))
+           (title (org-element-property :raw-value element))
+           (new-title (concat title " #" sanitized-name)))
+      (org-edit-headline new-title))
+    
+    ;; 3. 应用字段
+    (when-let ((tag (org-supertag-db-tag-get sanitized-name)))
+      (message "Debug org-supertag--apply-tag 获取到标签: %S" tag)
+      (let ((fields (org-supertag-db-get-tag-fields sanitized-name)))
+        (message "Debug org-supertag--apply-tag 标签字段: %S" fields)
+        (when fields
+          (org-supertag--apply-tag-fields sanitized-name field-values))))))
+
+(defun org-supertag--apply-tag-fields (tag-name field-values)
+  "应用标签的字段到当前节点.
+TAG-NAME 是标签名称
+FIELD-VALUES 是字段值的 alist"
+  (when-let* ((tag (org-supertag-tag-get tag-name))
+              (fields (org-supertag-tag-type-fields tag))
+              (node-id (org-id-get)))
+    (message "Debug org-supertag--apply-field 应用字段开始，tag=%S" tag)
+    (message "Debug org-supertag--apply-field 标签字段定义：%S" fields)
+    (message "Debug org-supertag--apply-field 字段值：%S" field-values)
+    
+    ;; 确保在当前节点
+    (save-excursion
+      (when-let ((pos (org-id-find node-id t)))
+        (message "Debug org-supertag--apply-field 找到节点位置：%S" pos)
+        (org-with-point-at pos
+          ;; 处理每个字段
+          (dolist (field fields)
+            (let* ((field-name (plist-get field :name))
+                   (field-def (org-supertag-plist-to-field field))
+                   ;; 获取或读取字段值
+                   (value (or (and field-values  ; 确保 field-values 非空
+                                 (alist-get field-name field-values nil nil #'equal))
+                            (org-supertag--read-field-value field-def))))
+              (when value
+                (message "Debug org-supertag--apply-field 设置字段 %s = %s" field-name value)
+                (org-set-property field-name value)))))))))
 
 
 (provide 'org-supertag-tag)

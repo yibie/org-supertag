@@ -80,7 +80,7 @@
     :date      ; 描述为“Date”，日期，使用 org-mode 的 date-stamp 格式
     :time      ; 描述为“Time”，具体时间，使用 org-mode 的 time-stamp 格式
     :list      ; 描述为“List”，列表
-    :option    ; 描述为“Option”，提供预设列表选择
+    :options    ; 描述为“Option”，提供预设列表选择
     :ref)      ; 描述为“Reference”，引用来自其它标签定义的 Field 以及它的值
   "支持的字段值类型.")
 
@@ -110,10 +110,9 @@
     
     (:type :tag
      :required (;; 基础信息
-                :id          ; 标签唯一标识
-                :name        ; 标签名称
+                :id          ; 标签唯一标识，使用标签名
                 ;; 字段定义
-                :fields)     ; ((field-name . field-props) ...)
+                :fields)     ; ; ((:name "field-name" :type field-type) ...)
      :optional (;; 元信息
                 :description ; 描述， 用于描述标签的用途
                 :icon        ; 图标， 用于标识标签，应用时，将在标签名前显示图标
@@ -133,12 +132,12 @@
                 :modified-at)) ; 修改时间
   "实体结构定义."))
 
-;; 关系类型定义
+;; Link type definition
 (defconst org-supertag-db-link-type
   '(:node-tag     ; 节点-标签关系
     :node-field   ; 节点-字段关系
     :tag-ref)      ; 标签引用关系
-  "系统支持的关系类型.")
+  "System supported link types.")
 
 (defconst org-supertag-db-link-structure
   '((:type :node-tag
@@ -277,14 +276,11 @@
 ;; 类型验证
 ;;------------------------------------------------------------------------------    
 
+;; 实体类型验证
 (defun org-supertag-db-valid-object-type-p (type)
   "检查是否为有效的实体类型.
 TYPE 必须是 :node 或 :tag"
   (memq type org-supertag-db-object-type))
-
-(defun org-supertag-db-valid-link-type-p (type)
-  "检查是否为有效的关系类型."
-  (memq type org-supertag-db-link-type))
 
 (defun org-supertag-db-valid-object-p (type props)
   "验证实体数据是否有效.
@@ -293,25 +289,45 @@ PROPS: 属性列表"
   (let* ((struct (cl-find type org-supertag-db-object-structure
                          :key (lambda (x) (plist-get x :type))))
          (required (plist-get struct :required)))
-    ;; (message "\nValidating object:")
-    ;; (message "Type: %S" type)
-    ;; (message "Required properties: %S" required)
-    (if required
-        (let ((missing-props
-               (cl-remove-if
-                (lambda (key)
-                  (let ((has-prop (plist-member props key)))
-                    (message "Checking %S: %S" key has-prop)
-                    has-prop))
-                required)))
-          (if missing-props
-              (progn
-                (message "Missing required properties: %S" missing-props)
-                nil)
-            (progn
-              (message "All required properties present")
-              t)))
-      t)))
+    (and
+     ;; 验证必需属性存在
+     (if required
+         (cl-every (lambda (key) (plist-member props key))
+                  required)
+       t)
+     ;; 对标签类型进行特殊验证
+     (pcase type
+       (:tag
+        (let ((fields (plist-get props :fields)))
+          (or (null fields)  ; 字段可以为空
+              (org-supertag-db--validate-fields fields))))
+       (_ t)))))
+
+(defun org-supertag-db--validate-fields (fields)
+  "验证字段定义列表.
+FIELDS: 字段定义列表，每个字段定义应该是一个 plist"
+  (when fields
+    (unless (listp fields)
+      (error "Fields must be a list"))
+    
+    (dolist (field fields)
+      ;; 检查必要的属性
+      (unless (plist-get field :name)
+        (error "Field must have a name: %S" field))
+      (unless (plist-get field :type)
+        (error "Field must have a type: %S" field))
+      
+      ;; 检查类型是否支持
+      (let ((type (plist-get field :type)))
+        (unless (alist-get type org-supertag-field-types)
+          (error "Unsupported field type: %s" type)))))
+  t)
+
+;; 关系类型验证
+(defun org-supertag-db-valid-link-type-p (type)
+  "检查关系类型是否有效.
+TYPE: 关系类型"
+  (memq type '(:node-tag :node-field :tag-ref)))
 
 (defun org-supertag-db-valid-link-p (type from to props)
   "验证关系数据是否有效.
@@ -319,33 +335,30 @@ TYPE: 关系类型
 FROM: 源实体ID
 TO: 目标实体ID
 PROPS: 关系属性"
-  (let ((structure (cl-find type org-supertag-db-link-structure
-                           :key (lambda (x) (plist-get x :type))))
-    (and structure
-         ;; 验证实体存在
-         (org-supertag-db-get from)
-         (org-supertag-db-get to)
-         ;; 验证必需属性
-         (let ((required (plist-get structure :required)))
-           (cl-every (lambda (key)
-                      (plist-member props key))
-                    required))
-         ;; 验证关系类型特定规则
+  (let* ((structure (org-supertag-db-get-link-type type))
+         (required (plist-get structure :required))
+         (from-obj (org-supertag-db-get from))
+         (to-obj (org-supertag-db-get to)))
+    ;; 1. 验证必填属性
+    (and (cl-every (lambda (key) 
+                     (plist-member props key)) 
+                   required)
+         ;; 2. 根据类型验证
          (pcase type
-           ;; 节点标签关系
-           (:node-tag
-            (and (eq :node (org-supertag-db-get-type from))
-                 (eq :tag (org-supertag-db-get-type to))))
-           ;; 节点字段关系
            (:node-field
-            (and (eq :node (org-supertag-db-get-type from))
-                 (stringp (plist-get props :tag-id))
+            (and (eq (plist-get from-obj :type) :node)
+                 (stringp to)
                  (plist-get props :value)))
-           ;; 标签引用关系
+           (:node-tag
+            (and (eq (plist-get from-obj :type) :node)
+                 (eq (plist-get to-obj :type) :tag)))
+           
            (:tag-ref
-            (and (eq :tag (org-supertag-db-get-type from))
-                 (eq :tag (org-supertag-db-get-type to)))))))))
+            (and (eq (plist-get from-obj :type) :tag)
+                 (eq (plist-get to-obj :type) :tag)))
+           (_ t)))))
 
+;; 实体属性验证
 (defun org-supertag-db--validate-props (type props)
   "验证实体属性是否符合结构定义.
 TYPE 是实体类型，必须是 :node 或 :tag
@@ -363,6 +376,37 @@ PROPS 是实体属性列表"
             required)))
       (when missing-props
         (error "Missing required properties: %s" missing-props)))))
+
+;;; 标签实体结构
+;;; (:type :tag :name "name" :fields (field-def ...))
+;;; field-def 结构:
+;;; (:name "name" :type type :display-name "display" :description "desc" ...)
+
+(defun org-supertag-db--validate-tag-def (props)
+  "验证标签定义的有效性.
+PROPS 是标签属性列表"
+  (let ((type (plist-get props :type))
+        (name (plist-get props :name))
+        (fields (plist-get props :fields)))
+    (and (eq type :tag)
+         (stringp name)
+         (not (string-empty-p name))
+         ;; 验证字段列表
+         (or (null fields)  ; 字段可以为空
+             (and (listp fields)
+                  (cl-every #'org-supertag-db--validate-field-def fields))))))
+
+(defun org-supertag-db--validate-field-def (field)
+  "验证字段定义的有效性.
+FIELD 是字段定义 plist"
+  (let ((name (plist-get field :name))
+        (type (plist-get field :type)))
+    (and (stringp name)
+         (not (string-empty-p name))
+         (symbolp type)
+         (alist-get type org-supertag-field-types))))
+
+
 ;;------------------------------------------------------------------------------
 ;; 实体构造函数
 ;;------------------------------------------------------------------------------    
@@ -478,54 +522,96 @@ REF-TYPE: 引用类型"
 ;;------------------------------------------------------------------------------    
 
 (defvar org-supertag-db--object (ht-create)
-  "实体存储 id -> plist.")
+  "Entity storage - id -> plist.")
 
 (defvar org-supertag-db--link (ht-create)
-  "关系存储 rel-id -> (type from to props).")
+  "Link storage - rel-id -> (type from to props).")
 
 ;; 事件系统
 (defvar org-supertag-db--events (ht-create)
-  "事件系统 - 存储事件处理器.")
+  "Event system - store event handlers.")
 
 ;; 缓存系统
 (defvar org-supertag-db--cache (ht-create)
-  "缓存系统 - 存储查询缓存.")
+  "Cache system - store query cache.")
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Add
 ;;---------------------------------------------------------------------------------
 
 (defun org-supertag-db-add (id props)
-  "添加或更新实体.
-ID 是实体唯一标识
-PROPS 是实体属性"
-  (let* ((type (plist-get props :type))
-         (old-props (org-supertag-db-get id))
-         (new-props (if old-props
-                       ;; 更新时保留创建时间，更新修改时间
-                       (append
-                        (list :created-at (plist-get old-props :created-at)
-                              :modified-at (current-time))
-                        props)
-                     ;; 新建时设置创建时间
-                     (append
-                      (list :created-at (current-time))
-                      props))))
-    ;; 验证属性
-    (unless (org-supertag-db-valid-object-type-p type)
-      (error "Invalid object type: %s" type))
-    (unless (org-supertag-db-valid-object-p type new-props)
-      (error "Invalid object properties"))
-    ;; 存储实体
-    (ht-set! org-supertag-db--object id new-props)
-    ;; 清除缓存
-    (org-supertag-db--cache-remove 'entity id)
-    ;; 触发事件
-    (if old-props
-        (org-supertag-db-emit 'entity:changed type id new-props)
-      (org-supertag-db-emit 'entity:added type id new-props))
-    ;; 返回ID
-    id))
+  "Add or update entity.
+ID is entity unique identifier
+PROPS is entity properties
+
+Return value:
+- Success: return entity ID
+- Error: throw error"
+  (condition-case err
+      (let* ((type (plist-get props :type))
+             (old-props (org-supertag-db-get id))
+             (is-update (not (null old-props)))
+             (new-props (if is-update
+                           ;; 更新时保留创建时间，更新修改时间
+                           (append
+                            (list :created-at (plist-get old-props :created-at)
+                                  :modified-at (current-time))
+                            props)
+                         ;; 新建时设置创建时间
+                         (append
+                          (list :created-at (current-time))
+                          props))))
+        ;; 1. 验证
+        ;; 1.1 验证类型
+        (unless (org-supertag-db-valid-object-type-p type)
+          (error "Invalid object type: %s" type))
+        ;; 1.2 验证属性
+        (unless (org-supertag-db-valid-object-p type new-props)
+          (error "Invalid object properties"))
+        ;; 2. 存储前处理
+        (when is-update
+          ;; 2.1 处理类型变更
+          (let ((old-type (plist-get old-props :type)))
+            (unless (eq old-type type)
+              ;; 类型变更时清理所有相关缓存
+              (org-supertag-db--cache-clear-for-type old-type id))))
+        ;; 3. 存储实体
+        (ht-set! org-supertag-db--object id new-props)
+        ;; 4. 缓存管理
+        ;; 4.1 清除实体缓存
+        (org-supertag-db--cache-remove 'entity id)
+        ;; 4.2 清除查询缓存
+        (org-supertag-db--cache-remove 'query (format "type:%s" type))
+        ;; 4.3 根据实体类型清除特定缓存
+        (pcase type
+          (:node
+           ;; 清除节点相关缓存
+           (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
+           (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
+           (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
+          (:tag
+           ;; 清除标签相关缓存
+           (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
+           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
+        ;; 5. 触发事件
+        (if is-update
+            (progn
+              (org-supertag-db-emit 'entity:before-update type id old-props new-props)
+              (org-supertag-db-emit 'entity:updated type id old-props new-props))
+          (progn
+            (org-supertag-db-emit 'entity:before-create type id new-props)
+            (org-supertag-db-emit 'entity:created type id new-props)))
+        ;; 6. 数据库状态管理
+        ;; 6.1 标记数据库为脏
+        (org-supertag-db--mark-dirty)
+        ;; 6.2 安排延迟保存
+        (org-supertag-db--schedule-save)
+        ;; 7. 返回ID
+        id)
+    ;; 错误处理
+    (error
+     (message "Error in entity add/update: %s" (error-message-string err))
+     (signal (car err) (cdr err)))))
 
 (defun org-supertag-db-exists-p (id)
   "检查实体是否存在."
@@ -536,34 +622,61 @@ PROPS 是实体属性"
 ;;---------------------------------------------------------------------------------
 
 (defun org-supertag-db-link (type from to &optional props)
-  "创建关系.
-TYPE: 关系类型 (node-tag, node-field, tag-ref)
-FROM: 源实体ID
-TO: 目标实体ID
-PROPS: 关系属性"
+  "Create or update link.
+TYPE: link type (:node-tag, :node-field, :tag-ref)
+FROM: source object ID
+TO: target object ID
+PROPS: link properties"
   (let* ((base-props (list :from from :to to))
          (full-props (if props 
                         (append base-props props)
                       base-props))
          (rel-id (format "%s:%s->%s" type from to)))
-    ;; 验证关系类型
+    ;; 1. 验证
+    ;; 1.1 验证关系类型
     (unless (org-supertag-db-valid-link-type-p type)
       (error "Invalid link type: %s" type))
-    ;; 验证关系数据
+    ;; 1.2 验证关系数据
     (unless (org-supertag-db-valid-link-p type from to full-props)
       (error "Invalid link data"))
-    ;; 存储关系
-    (ht-set! org-supertag-db--link rel-id full-props)
-    ;; 清除缓存
-    (org-supertag-db--cache-remove 'link rel-id)
-    ;; 触发事件
-    (org-supertag-db-emit 'link:created type from to props)
-    ;; 返回关系ID
-    rel-id))
+    
+    ;; 2. 检查是否已存在同样的关系
+    (if-let ((existing (ht-get org-supertag-db--link rel-id)))
+        ;; 如果存在且属性相同，直接返回
+        (if (equal existing full-props)
+            rel-id
+          ;; 否则更新关系
+          (progn
+            (ht-set! org-supertag-db--link rel-id full-props)
+            rel-id))
+      ;; 3. 不存在则创建新关系
+      (progn
+        (ht-set! org-supertag-db--link rel-id full-props)
+        ;; 4. 清除缓存
+        (org-supertag-db--cache-remove 'link rel-id)
+        (org-supertag-db--cache-remove 'query (format "links:%s:%s" type from))
+        (org-supertag-db--cache-remove 'query (format "links:%s:%s" type to))
+        ;; 5. 根据关系类型清除特定缓存
+        (pcase type
+          (:node-field
+           (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
+          (:node-tag
+           (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
+          (:tag-ref
+           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
+           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
+        ;; 6. 触发事件
+        (org-supertag-db-emit 'link:created type from to props)
+        ;; 7. 标记数据库为脏
+        (org-supertag-db--mark-dirty)
+        ;; 8. 安排延迟保存
+        (org-supertag-db--schedule-save)
+        ;; 9. 返回关系ID
+        rel-id))))
 
 (defun org-supertag-db-unlink (type from to &optional dry-run)
   "删除特定关系.
-TYPE: 关系类型
+TYPE: 关系类型 (:node-tag, :node-field, :tag-ref)
 FROM: 源实体ID
 TO: 目标实体ID
 DRY-RUN: 如果非nil，只检查是否存在而不删除
@@ -572,22 +685,91 @@ DRY-RUN: 如果非nil，只检查是否存在而不删除
 - t 表示删除成功或关系存在（dry-run模式）
 - nil 表示关系不存在"
   (let* ((rel-id (format "%s:%s->%s" type from to))
-         (exists (ht-contains-p org-supertag-db--link rel-id)))
+         (exists (ht-contains-p org-supertag-db--link rel-id))
+         (link-props (and exists (ht-get org-supertag-db--link rel-id))))
     (when (and exists (not dry-run))
-      (ht-remove! org-supertag-db--link rel-id))
+      ;; 1. 删除关系
+      (ht-remove! org-supertag-db--link rel-id)
+      ;; 2. 清除相关缓存
+      ;; 2.1 清除关系缓存
+      (org-supertag-db--cache-remove 'link rel-id)
+      ;; 2.2 清除查询缓存
+      (org-supertag-db--cache-remove 'query (format "links:%s:%s" type from))
+      (org-supertag-db--cache-remove 'query (format "links:%s:%s" type to))
+      ;; 3. 根据关系类型清除特定缓存
+      (pcase type
+        (:node-field
+         ;; 清除节点字段缓存
+         (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
+        (:node-tag
+         ;; 清除节点标签缓存
+         (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
+        (:tag-ref
+         ;; 清除标签引用缓存
+         (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
+         (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
+      ;; 4. 触发事件
+      (org-supertag-db-emit 'link:removed type from to link-props)
+      ;; 5. 标记数据库为脏
+      (org-supertag-db--mark-dirty)
+      ;; 6. 安排延迟保存
+      (org-supertag-db--schedule-save))
+    ;; 返回结果
     exists))
 
 
 (defun org-supertag-db-unlink-all (from &optional type)
-  "删除实体的所有关系或特定类型的关系."
-  (let ((count 0))
+  "删除实体的所有关系或特定类型的关系.
+FROM: 源实体ID
+TYPE: 可选的关系类型限制
+
+返回值：
+被删除的关系数量"
+  (let ((count 0)
+        (removed-links nil))  ; 存储被删除的关系，用于事件触发
+    ;; 1. 收集要删除的关系
     (ht-map (lambda (k v)
-              (when (and (equal from (nth 1 v))
+              (when (and (equal from (plist-get v :from))
                         (or (null type)
-                            (equal type (car v))))
-                (ht-remove! org-supertag-db--link k)
-                (cl-incf count)))
+                            (equal type (plist-get v :type))))
+                ;; 保存要删除的关系信息
+                (push (cons k v) removed-links)))
             org-supertag-db--link)
+    ;; 2. 执行删除操作
+    (dolist (link removed-links)
+      (let* ((rel-id (car link))
+             (props (cdr link))
+             (link-type (plist-get props :type))
+             (to (plist-get props :to)))
+        ;; 2.1 删除关系
+        (ht-remove! org-supertag-db--link rel-id)
+        ;; 2.2 清除关系缓存
+        (org-supertag-db--cache-remove 'link rel-id)
+        (org-supertag-db--cache-remove 'query (format "links:%s:%s" link-type from))
+        (org-supertag-db--cache-remove 'query (format "links:%s:%s" link-type to))
+        
+        ;; 2.3 根据关系类型清除特定缓存
+        (pcase link-type
+          (:node-field
+           (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
+          (:node-tag
+           (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
+          (:tag-ref
+           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
+           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
+        
+        ;; 2.4 触发单个关系删除事件
+        (org-supertag-db-emit 'link:removed link-type from to props)
+        (cl-incf count)))
+    ;; 3. 如果有删除操作
+    (when (> count 0)
+      ;; 3.1 触发批量删除事件
+      (org-supertag-db-emit 'links:batch-removed from type count)
+      ;; 3.2 标记数据库为脏
+      (org-supertag-db--mark-dirty)
+      ;; 3.3 安排延迟保存
+      (org-supertag-db--schedule-save))
+    ;; 4. 返回删除数量
     count))
 
 
@@ -639,19 +821,38 @@ DEFAULT: 当实体不存在时返回的默认值
   (org-supertag-db-get-prop id :type))
 
 ;; Get Link
+(defun org-supertag-db-get-link-type (type)
+  "获取关系类型定义.
+TYPE: 关系类型"
+  (pcase type
+    (:node-field
+     '(:type :node-field
+       :required (:from :to :tag-id :value)
+       :optional (:created-at :modified-at)))
+    
+    (:node-tag
+     '(:type :node-tag
+       :required (:from :to)
+       :optional (:created-at :modified-at)))
+    
+    (:tag-ref
+     '(:type :tag-ref
+       :required (:from :to :ref-type)
+       :optional (:created-at :modified-at)))
+    
+    (_ nil)))
+
 (defun org-supertag-db-get-link (type from)
   "获取关系.
 TYPE: 关系类型
-FROM: 源实体ID
-返回 ((to props) ...) 形式的列表"
-  (let (results)
-    (ht-map (lambda (k v)
-              (when (and (equal type (car v))
-                        (equal from (cadr v)))
-                (push (list (nth 2 v) (nth 3 v)) results)))
+FROM: 源实体ID"
+  (let ((links nil)
+        (prefix (format "%s:%s->" type from)))  ; 移除前面的 ":"
+    (ht-map (lambda (key value)
+              (when (string-prefix-p prefix key)
+                (push (cons key value) links)))
             org-supertag-db--link)
-    (message "Debug - link: %S" (ht-items org-supertag-db--link))
-    (nreverse results)))
+    links))
 
 (defun org-supertag-db-get-link-reverse (type to)
   "获取反向关系.
@@ -666,7 +867,7 @@ TO: 目标实体ID
             org-supertag-db--link)
     (nreverse results)))
 
-    (defun org-supertag-db-get-all-link ()
+(defun org-supertag-db-get-all-link ()
   "获取所有关系.
 返回 ((type from to props) ...) 形式的列表"
   (let (results)
@@ -689,6 +890,11 @@ REF-ID 是引用关系的ID"
   (when-let* ((props (org-supertag-db-get-link ref-id))
               (pos (plist-get props :ref-pos)))
     pos))
+
+(defun org-supertag-db-get-all ()
+  "获取数据库中的所有实体."
+  (ht-items org-supertag-db--object))
+
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
 ;;---------------------------------------------------------------------------------
@@ -697,45 +903,56 @@ REF-ID 是引用关系的ID"
 ;;     │       └── org-supertag-db-find-by-type (类型查询便捷函数)
 
 
-
 (defun org-supertag-db-find (pred)
-  "查找满足条件的实体."
+  "Find entities that match the condition.
+PRED is the predicate function."
   (let ((cache-key (format "%s" (sxhash pred))))
-    ;; 尝试从缓存获取
+    ;; Try to get from cache  
     (or (org-supertag-db--cache-get 'query cache-key)
-        ;; 缓存未命中，执行查询
+        ;; Cache miss, execute query
         (let (results)
           (ht-map (lambda (k v)
                     (when (funcall pred k v)
                       (push (cons k v) results)))
                   org-supertag-db--object)
-          ;; 缓存并返回结果
+          ;; Cache and return results
           (let ((final-results (nreverse results)))
             (org-supertag-db--cache-set 'query cache-key final-results)
             final-results)))))
 
 (defun org-supertag-db--check-match (props rules)
-    "检查属性是否匹配条件."
+    "Check if properties match the condition.
+PROPS is the properties to check.
+RULES is the rules to match."
     (cl-loop for (key value) on rules by #'cddr
             always (equal (plist-get props key) value)))
 
 (defun org-supertag-db-find-by-props (props)
-  "查找满足属性条件的实体."
+  "Find entities that match the property condition.
+PROPS is the properties to check."
   (org-supertag-db-find 
    (lambda (_k v) 
      (org-supertag-db--check-match v props))))
 
 (defun org-supertag-db-find-by-type (type)
-  "查找指定类型的实体."
+  "Find entities of the specified type.
+TYPE is the type to find."
   (mapcar #'car (org-supertag-db-find-by-props `(:type ,type))))
 
 (defun org-supertag-db-find-nodes-by-tag (tag-id)
-  "查找使用了指定标签的所有节点."
-  (mapcar #'car 
-          (org-supertag-db-find-links :type :node-tag :to tag-id)))
+  "Find nodes that use the specified tag.
+TAG-ID is the tag ID to find."
+  (let ((links (org-supertag-db-find-links :node-tag nil tag-id)))
+    (message "Found links: %S" links)  ; 调试信息
+    (mapcar (lambda (link)
+              (plist-get link :from))
+            links)))
 
 (defun org-supertag-db-find-nodes-by-field-value (field-name value &optional tag-id)
-  "查找具有指定字段值的所有节点."
+  "Find nodes with the specified field value.
+FIELD-NAME is the field name to check.
+VALUE is the value to check.
+TAG-ID is the tag ID to check."
   (let ((links (org-supertag-db-find-links :type :node-field)))
     (cl-remove-if-not
      (lambda (link)
@@ -745,35 +962,27 @@ REF-ID 是引用关系的ID"
      links)))
 
 (defun org-supertag-db-find-tags-by-field (field-name)
-  "查找包含指定字段的所有标签."
+  "Find tags that contain the specified field.
+FIELD-NAME is the field name to check."
   (org-supertag-db-find
    (lambda (_k v)
      (and (eq (plist-get v :type) :tag)
           (assoc field-name (plist-get v :fields))))))
 
-;; Find Ref Link :TODO 需要更新，以符合org-supertag-db-object-structure 的定义，节点的引用关系是直接存储在节点属性中的id &optional direction)
-;;   "查找节点的引用关系.
-;; NODE-ID 是节点ID
-;; DIRECTION 可以是:
-;; - 'from: 返回该节点引用的其他节点
-;; - 'to: 返回引用该节点的其他节点
-;; - nil: 返回所有相关引用"
-;;   (let ((refs nil))
-;;     (maphash
-;;      (lambda (rel-id props)
-;;        (when (eq :node-ref (plist-get props :type))
-;;          (let ((from (plist-get props :from))
-;;                (to (plist-get props :to)))
-;;            (when (or (and (eq direction 'from)
-;;                          (equal from node-id))
-;;                      (and (eq direction 'to)
-;;                          (equal to node-id))
-;;                      (and (null direction)
-;;                           (or (equal from node-id)
-;;                               (equal to node-id))))
-;;              (push (cons rel-id props) refs)))))
-;;      org-supertag-db--link)
-;;     refs))       
+(defun org-supertag-db-find-links (type from to)
+  "查找指定条件的关系.
+TYPE: 关系类型
+FROM: 来源节点ID（可选）
+TO: 目标节点ID（可选）
+返回符合条件的关系列表"
+  (let (results)
+    (ht-map (lambda (k v)
+              (when (and (or (null type) (eq (plist-get v :type) type))
+                        (or (null from) (equal (plist-get v :from) from))
+                        (or (null to) (equal (plist-get v :to) to)))
+                (push v results)))
+            org-supertag-db--link)
+    results))
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Remove
@@ -782,38 +991,125 @@ REF-ID 是引用关系的ID"
 (defun org-supertag-db-remove-object (id &optional dry-run)
   "删除实体及其相关的所有关系.
 ID: 实体ID
-DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除"
-  (when-let ((entity (org-supertag-db-get id)))
-    (let ((links (org-supertag-db-unlink-all id)))
-      (unless dry-run
-        ;; 删除实体
-        (ht-remove! org-supertag-db--object id)
-        ;; 清除缓存
-        (org-supertag-db--cache-remove 'entity id)
-        ;; 触发事件
-        (org-supertag-db-emit 'entity:removed id entity))
-      ;; 返回删除的数据
-      (cons entity links))))
+DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
+
+返回值：
+(entity . links) 形式的cons单元，其中:
+- entity 是被删除的实体数据
+- links 是被删除的关系列表
+如果实体不存在返回nil"
+  (condition-case err
+      (when-let* ((entity (org-supertag-db-get id))
+                  (type (plist-get entity :type)))
+        ;; 1. 触发删除前事件
+        (org-supertag-db-emit 'entity:before-remove type id entity)
+        ;; 2. 收集要删除的数据
+        (let ((removed-data
+               (list :entity entity
+                     :outgoing-links (org-supertag-db-get-link nil id)
+                     :incoming-links (org-supertag-db-get-link-reverse nil id))))
+          ;; 3. 如果不是dry-run，执行实际删除
+          (unless dry-run
+            ;; 3.1 删除关联关系
+            (let ((link-count (org-supertag-db-unlink-all id)))
+              ;; 3.2 删除反向关系
+              (dolist (rev-link (plist-get removed-data :incoming-links))
+                (org-supertag-db-unlink nil (car rev-link) id)))
+            ;; 3.3 根据实体类型执行特定清理
+            (pcase type
+              (:node
+               ;; 清理节点相关数据
+               (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
+               (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
+               (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
+              (:tag
+               ;; 清理标签相关数据
+               (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
+               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
+            
+            ;; 3.4 删除实体本身
+            (ht-remove! org-supertag-db--object id)
+            
+            ;; 3.5 清除实体缓存
+            (org-supertag-db--cache-remove 'entity id)
+            (org-supertag-db--cache-remove 'query (format "type:%s" type))
+            
+            ;; 3.6 触发删除完成事件
+            (org-supertag-db-emit 'entity:removed type id entity removed-data)
+            
+            ;; 3.7 标记数据库为脏并安排保存
+            (org-supertag-db--mark-dirty)
+            (org-supertag-db--schedule-save))
+          
+          ;; 4. 返回删除的数据
+          (cons entity 
+                (append (plist-get removed-data :outgoing-links)
+                       (plist-get removed-data :incoming-links)))))
+    
+    ;; 错误处理
+    (error
+     (message "Error removing entity %s: %s" id (error-message-string err))
+     (signal (car err) (cdr err)))))
 
 (defun org-supertag-db-remove-link (type from to &optional dry-run)
   "删除特定关系.
-TYPE: 关系类型
+TYPE: 关系类型 (:node-tag, :node-field, :tag-ref)
 FROM: 源实体ID
 TO: 目标实体ID
-DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除"
-  (let* ((rel-id (format "%s:%s->%s" type from to))
-         (link (ht-get org-supertag-db--link rel-id)))
-    (when link
-      (unless dry-run
-        ;; 删除关系
-        (ht-remove! org-supertag-db--link rel-id)
-        ;; 清除缓存
-        (org-supertag-db--cache-remove 'link rel-id)
-        ;; 触发事件
-        (org-supertag-db-emit 'link:removed type from to))
-      ;; 返回删除的数据
-      link)))
+DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
 
+返回值：
+- 如果找到并删除了关系，返回被删除的关系数据
+- 如果关系不存在，返回nil
+- 如果发生错误，抛出异常"
+  (condition-case err
+      (let* ((rel-id (format "%s:%s->%s" type from to))
+             (link (ht-get org-supertag-db--link rel-id)))
+        (when link
+          ;; 1. 验证关系的有效性
+          (unless (and (plist-get link :from)
+                      (plist-get link :to)
+                      (org-supertag-db-valid-link-type-p type))
+            (error "Invalid link data: %S" link))
+          ;; 2. 触发删除前事件
+          (org-supertag-db-emit 'link:before-remove type from to link)
+          
+          ;; 3. 如果不是dry-run，执行实际删除
+          (unless dry-run
+            ;; 3.1 删除关系
+            (ht-remove! org-supertag-db--link rel-id)
+            
+            ;; 3.2 清除缓存
+            ;; 主缓存
+            (org-supertag-db--cache-remove 'link rel-id)
+            ;; 查询缓存
+            (org-supertag-db--cache-remove 'query (format "links:%s:%s" type from))
+            (org-supertag-db--cache-remove 'query (format "links:%s:%s" type to))
+            ;; 3.3 根据关系类型清除特定缓存
+            (pcase type
+              (:node-field
+               ;; 清除节点字段缓存
+               (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
+              (:node-tag
+               ;; 清除节点标签缓存
+               (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
+              (:tag-ref
+               ;; 清除标签引用缓存
+               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
+               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
+            ;; 3.4 触发删除完成事件
+            (org-supertag-db-emit 'link:removed type from to link)
+            ;; 3.5 标记数据库为脏并安排保存
+            (org-supertag-db--mark-dirty)
+            (org-supertag-db--schedule-save))
+          ;; 4. 返回删除的数据
+          link))
+    
+    ;; 错误处理
+    (error
+     (message "Error removing link %s:%s->%s: %s"
+              type from to (error-message-string err))
+     (signal (car err) (cdr err)))))
 ;;------------------------------------------------------------------------------
 ;; Org Element 解析
 ;;------------------------------------------------------------------------------    
@@ -873,12 +1169,50 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除"
                   :created-at (current-time))))))))
 
 (defun org-supertag-db-add-node-at-point ()
-  "添加当前位置的节点到数据库."
-  (when-let ((props (org-supertag-db--parse-node-at-point)))
-    (let ((id (plist-get props :id)))
-      (org-supertag-db-add id props)
-      ;; 返回节点ID
-      id)))
+  "添加当前位置的节点到数据库.
+成功时返回节点ID，失败时返回nil."
+  (condition-case err
+      (progn
+        ;; 1. 检查当前位置是否有效
+        (unless (org-at-heading-p)
+          (error "当前位置不是有效的节点标题"))
+        ;; 2. 解析节点数据
+        (let ((props (org-supertag-db--parse-node-at-point)))
+          (unless props
+            (error "无法解析节点数据"))
+          ;; 3. 验证必要属性
+          (let ((id (plist-get props :id))
+                (title (plist-get props :title))
+                (file (plist-get props :file-path)))
+            (unless (and id title file)
+              (error "缺少必要的节点属性: id=%s, title=%s, file=%s" 
+                     id title file))
+            ;; 4. 如果是更新现有节点，获取旧数据
+            (let ((old-node (org-supertag-db-get id)))
+              ;; 5. 添加或更新节点
+              (org-supertag-db-add id 
+                                  (append
+                                   ;; 5.1 确保基本属性
+                                   `(:type :node
+                                     :id ,id
+                                     :title ,title
+                                     :file-path ,file)
+                                   ;; 5.2 添加时间戳
+                                   (if old-node
+                                       ;; 更新：保留创建时间，更新修改时间
+                                       `(:created-at ,(plist-get old-node :created-at)
+                                         :modified-at ,(current-time))
+                                     ;; 新建：设置创建时间
+                                     `(:created-at ,(current-time)))
+                                   ;; 5.3 其他属性
+                                   props))
+              ;; 6. 解析并更新引用关系
+              (org-supertag-db--parse-node-all-ref)
+              ;; 7. 返回节点 ID
+              id))))
+    (error
+     (message "添加节点失败: %s" (error-message-string err))
+     nil)))
 
 (defun org-supertag-db-update-node-at-point ()
   "更新当前位置节点的数据."
@@ -892,6 +1226,14 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除"
     (setq props (plist-put props :modified-at (current-time)))
     (org-supertag-db-add id props)
     id))
+
+(defun org-supertag-db--validate-node-props (props)
+  "验证节点属性的完整性."
+  (let ((required '(:id :title :file-path :type)))
+    (cl-every (lambda (key)
+                (when-let ((value (plist-get props key)))
+                  (not (string-empty-p (format "%s" value)))))
+              required)))
 
 ;;------------------------------------------------------------------------------
 ;; 批量解析
@@ -1081,6 +1423,8 @@ ARGS: 传递给处理器的参数"
       (error 
        (message "事件处理错误 [%s]: %S" event err)))))
 
+
+
 ;;------------------------------------------------------------------------------
 ;; Status
 ;;------------------------------------------------------------------------------    
@@ -1118,7 +1462,7 @@ ARGS: 传递给处理器的参数"
   (message "关系数: %d" (ht-size org-supertag-db--link)))
 
 ;;-----------------------------------------------------------------------------
-;; 缓存系统
+;; Cache System
 ;;-----------------------------------------------------------------------------
 
 (defvar org-supertag-db--cache (ht-create)
@@ -1152,30 +1496,37 @@ KEY: 具体的键"
   "清除所有缓存."
   (ht-clear! org-supertag-db--cache))
 
-(defcustom org-supertag-db-auto-save-interval 300
-  "自动保存数据库的时间间隔（秒）.
-设置为 nil 禁用自动保存."
-  :type '(choice (const :tag "禁用" nil)
-                (integer :tag "间隔（秒）"))
-  :group 'org-supertag)
+(defun org-supertag-db--cache-clear-for-type (type id)
+  "清除特定类型实体的所有相关缓存.
+TYPE: 实体类型
+ID: 实体ID"
+  (pcase type
+    (:node
+     (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
+     (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
+     (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
+    (:tag
+     (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
+     (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id)))))
 
-(defvar org-supertag-db--auto-save-timer nil
-  "自动保存定时器.")
+;;------------------------------------------------------------------------------
+;; Dirty State
+;;------------------------------------------------------------------------------    
 
-(defun org-supertag-db--setup-auto-save ()
-  "设置自动保存定时器."
-  (when (and org-supertag-db-auto-save-interval
-             (null org-supertag-db--auto-save-timer))
-    (setq org-supertag-db--auto-save-timer
-          (run-with-timer org-supertag-db-auto-save-interval
-                         org-supertag-db-auto-save-interval
-                         #'org-supertag-db-save))))
+(defvar org-supertag-db--dirty nil
+  "标记数据库是否有未保存的更改.")
 
-(defun org-supertag-db--cleanup-auto-save ()
-  "清理自动保存定时器."
-  (when org-supertag-db--auto-save-timer
-    (cancel-timer org-supertag-db--auto-save-timer)
-    (setq org-supertag-db--auto-save-timer nil)))
+(defun org-supertag-db--mark-dirty ()
+  "标记数据库有未保存的更改."
+  (setq org-supertag-db--dirty t))
+
+(defun org-supertag-db--clear-dirty ()
+  "清除数据库未保存更改标记."
+  (setq org-supertag-db--dirty nil))
+
+(defun org-supertag-db--dirty-p ()
+  "检查数据库是否有未保存的更改."
+  org-supertag-db--dirty)
 
 ;;------------------------------------------------------------------------------
 ;; Database Custom
@@ -1195,13 +1546,13 @@ KEY: 具体的键"
     (unless (file-exists-p db-dir)
       (make-directory db-dir t))
     ;; 2. 确保备份目录存在
-    (unless (file-exists-p org-supertag-db-backup-dir)
-      (make-directory org-supertag-db-backup-dir t))
+    (unless (file-exists-p org-supertag-db-backup-directory)
+      (make-directory org-supertag-db-backup-directory t))
     ;; 3. 验证目录创建结果
     (unless (and (file-exists-p db-dir)
-                 (file-exists-p org-supertag-db-backup-dir))
+                 (file-exists-p org-supertag-db-backup-directory))
       (error "无法创建必要的目录: %s 或 %s" 
-             db-dir org-supertag-db-backup-dir))))
+             db-dir org-supertag-db-backup-directory))))
 
 (defun org-supertag-data-file (filename)
   "获取数据文件的完整路径.
@@ -1254,139 +1605,90 @@ FILENAME 是相对于数据目录的文件名."
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-db-save ()
-  "安全地保存数据到文件.
-使用临时文件和原子操作确保数据完整性."
-  (run-hooks 'org-supertag-db-before-save-hook)
-  (condition-case err
-      (let ((temp-file (concat org-supertag-db-file ".tmp"))
-            (backup-file (concat org-supertag-db-file ".bak")))
-        ;; 确保目录存在
-        (org-supertag-db-ensure-data-directory)
-        
-        ;; 1. 写入临时文件
-        (with-temp-file temp-file
-          (let ((print-level nil)
-                (print-length nil))
-            (message "正在保存数据库到临时文件: %s" temp-file)
+  "保存数据库到文件."
+  (when (org-supertag-db--dirty-p)  ; 只在有更改时才保存
+    (message "保存数据库...")
+    (condition-case err
+        (progn
+          ;; 运行保存前钩子
+          (run-hooks 'org-supertag-db-before-save-hook)
+          
+          ;; 确保目录存在
+          (make-directory (file-name-directory org-supertag-db-file) t)
+          
+          ;; 写入文件
+          (with-temp-file org-supertag-db-file
             (insert ";; -*- lexical-binding: t -*-\n")
-            (insert ";;; 自动生成的数据库文件，请勿手动编辑\n\n")
-            ;; 保存数据库状态
-            (insert (format ";; 保存时间: %s\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
-            (insert (format ";; 实体数量: %d\n" (ht-size org-supertag-db--object)))
-            (insert (format ";; 关系数量: %d\n\n" (ht-size org-supertag-db--link)))
-            ;; 重置数据库
+            (insert ";;; 数据库文件 - 请勿手动编辑\n\n")
+            (insert "(require 'ht)\n")
             (insert "(setq org-supertag-db--object (ht-create))\n")
             (insert "(setq org-supertag-db--link (ht-create))\n\n")
-            ;; 保存实体数据
             (ht-map (lambda (k v)
-                     (insert (format "(ht-set! org-supertag-db--object %S '%S)\n"
-                                   k v)))
+                     (insert (format "(ht-set! org-supertag-db--object %S '%S)\n" k v)))
                    org-supertag-db--object)
-            ;; 保存链接数据
             (ht-map (lambda (k v)
-                     (insert (format "(ht-set! org-supertag-db--link %S '%S)\n"
-                                   k v)))
-                   org-supertag-db--link)))
-        
-        ;; 2. 验证临时文件
-        (unless (file-exists-p temp-file)
-          (error "临时文件创建失败"))
-        
-        ;; 3. 备份当前文件（如果存在）
-        (when (file-exists-p org-supertag-db-file)
-          (copy-file org-supertag-db-file backup-file t))
-        
-        ;; 4. 原子替换
-        (rename-file temp-file org-supertag-db-file t)
-        
-        ;; 5. 清理备份文件
-        (when (and (file-exists-p backup-file)
-                  (file-exists-p org-supertag-db-file))
-          (delete-file backup-file))
-        
-        ;; 6. 运行保存后钩子
-        (run-hooks 'org-supertag-db-after-save-hook)
-        (message "数据库保存成功"))
-    
-    (error
-     (message "数据库保存失败: %S" err)
-     ;; 不要在错误时初始化数据库
-     nil)))
+                     (insert (format "(ht-set! org-supertag-db--link %S '%S)\n" k v)))
+                   org-supertag-db--link))
+          
+          ;; 清除脏数据标记
+          (org-supertag-db--clear-dirty)
+          
+          ;; 运行保存后钩子
+          (run-hooks 'org-supertag-db-after-save-hook)
+          
+          (message "数据库保存成功")
+          t)
+      (error
+       (message "保存失败: %S" err)
+       nil))))
+
 
 (defun org-supertag-db-load ()
-  "从文件安全地加载数据.
-包含验证和错误恢复机制."
-  (interactive)
-  (run-hooks 'org-supertag-db-before-load-hook)
+  "加载数据库文件."
+  (message "加载数据库...")
   (condition-case err
-      (progn
-        (org-supertag-db-ensure-data-directory)
-        (if (file-exists-p org-supertag-db-file)
-            (let ((backup-data nil))
-              ;; 1. 保存当前数据作为备份
-              (when (and (boundp 'org-supertag-db--object)
-                        (boundp 'org-supertag-db--link))
-                (setq backup-data
-                      (list :object (ht-copy org-supertag-db--object)
-                            :link (ht-copy org-supertag-db--link))))
-              
-              ;; 2. 尝试加载数据
-              (with-temp-buffer
-                (message "正在加载数据库: %s" org-supertag-db-file)
-                (insert-file-contents org-supertag-db-file)
-                ;; 验证文件基本格式
-                (goto-char (point-min))
-                (unless (looking-at ";; -*-.*-\\*-")
-                  (error "数据库文件格式错误"))
-                
-                ;; 3. 创建新的空哈希表
-                (setq org-supertag-db--object (ht-create)
-                      org-supertag-db--link (ht-create))
-                
-                ;; 4. 读取并执行表达式
-                (let ((success t))
-                  (goto-char (point-min))
-                  (while (and success (not (eobp)))
-                    (condition-case load-err
-                        (eval (read (current-buffer)))
-                      (error
-                       (setq success nil)
-                       (message "加载数据时出错: %S" load-err))))
-                  
-                  (if success
-                      (progn
-                        ;; 5. 验证加载的数据
-                        (unless (and (ht? org-supertag-db--object)
-                                   (ht? org-supertag-db--link))
-                          (error "加载的数据格式无效"))
-                        
-                        (run-hooks 'org-supertag-db-after-load-hook)
-                        (message "数据库加载成功：%d 个实体, %d 个关系"
-                                (ht-size org-supertag-db--object)
-                                (ht-size org-supertag-db--link))
-                        t)
-                    ;; 加载失败，恢复备份数据
-                    (when backup-data
-                      (setq org-supertag-db--object (plist-get backup-data :object)
-                            org-supertag-db--link (plist-get backup-data :link))
-                      (message "恢复到备份数据"))
-                    nil))))
-          
-          ;; 文件不存在时的处理
-          (message "数据库文件不存在，创建新的空数据库")
-          (setq org-supertag-db--object (ht-create)
-                org-supertag-db--link (ht-create))
-          nil))
-    
-    ;; 错误处理
+      (if (file-exists-p org-supertag-db-file)
+          (progn
+            ;; 运行加载前钩子
+            (run-hooks 'org-supertag-db-before-load-hook)
+            
+            ;; 初始化空数据库
+            (setq org-supertag-db--object (ht-create)
+                  org-supertag-db--link (ht-create))
+            
+            ;; 加载文件
+            (load org-supertag-db-file nil t)
+            
+            ;; 清除脏数据标记
+            (org-supertag-db--clear-dirty)
+            
+            ;; 运行加载后钩子
+            (run-hooks 'org-supertag-db-after-load-hook)
+            
+            (message "数据库加载成功：%d 个实体, %d 个关系"
+                    (ht-size org-supertag-db--object)
+                    (ht-size org-supertag-db--link))
+            t)
+        (message "数据库文件不存在")
+        nil)
     (error
-     (message "数据库加载失败: %S" err)
-     ;; 确保至少有空的数据结构
-     (unless (and (boundp 'org-supertag-db--object)
-                 (boundp 'org-supertag-db--link))
-       (setq org-supertag-db--object (ht-create)
-             org-supertag-db--link (ht-create)))
+     (message "加载失败: %S" err)
      nil)))
+
+;;------------------------------------------------------------------------------
+;; Delayed Save
+;;------------------------------------------------------------------------------    
+
+(defvar org-supertag-db--save-timer nil
+  "延迟保存定时器.")
+
+(defun org-supertag-db--schedule-save ()
+  "安排延迟保存.
+在数据变更后等待 2 秒空闲时间再保存，避免频繁保存."
+  (when org-supertag-db--save-timer
+    (cancel-timer org-supertag-db--save-timer))
+  (setq org-supertag-db--save-timer
+        (run-with-idle-timer 2 nil #'org-supertag-db-save)))
 
 ;;------------------------------------------------------------------------------
 ;; Data Save&Load Hooks
@@ -1410,7 +1712,7 @@ FILENAME 是相对于数据目录的文件名."
 
 
 ;;------------------------------------------------------------------------------
-;; 初始化
+;; Auto Save
 ;;------------------------------------------------------------------------------  
 (defcustom org-supertag-db-auto-save-interval 300
   "自动保存数据库的时间间隔（秒）.
@@ -1421,6 +1723,26 @@ FILENAME 是相对于数据目录的文件名."
 
 (defvar org-supertag-db--auto-save-timer nil
   "自动保存定时器.")
+
+(defun org-supertag-db--setup-auto-save ()
+  "设置自动保存定时器."
+  (when (and org-supertag-db-auto-save-interval
+             (null org-supertag-db--auto-save-timer))
+    (setq org-supertag-db--auto-save-timer
+          (run-with-timer org-supertag-db-auto-save-interval
+                         org-supertag-db-auto-save-interval
+                         #'org-supertag-db-save))))
+
+(defun org-supertag-db--cleanup-auto-save ()
+  "清理自动保存定时器."
+  (when org-supertag-db--auto-save-timer
+    (cancel-timer org-supertag-db--auto-save-timer)
+    (setq org-supertag-db--auto-save-timer nil)))
+
+
+;;------------------------------------------------------------------------------
+;; Init
+;;------------------------------------------------------------------------------  
 
 (defun org-supertag-db-init ()
   "初始化数据库.
@@ -1436,6 +1758,28 @@ FILENAME 是相对于数据目录的文件名."
           org-supertag-db--link (ht-create))  
     (message "创建空数据库"))
   
+  ;; 设置数据变更监听
+   (org-supertag-db-on 'entity:changed
+                    (lambda (type id props)
+                      (org-supertag-db--mark-dirty)
+                      (org-supertag-db--schedule-save)))
+  (org-supertag-db-on 'entity:added 
+                    (lambda (type id props)
+                      (org-supertag-db--mark-dirty)
+                      (org-supertag-db--schedule-save)))
+  (org-supertag-db-on 'entity:removed
+                    (lambda (id entity)
+                      (org-supertag-db--mark-dirty)
+                      (org-supertag-db--schedule-save)))
+  (org-supertag-db-on 'link:created
+                    (lambda (type from to props)
+                      (org-supertag-db--mark-dirty)
+                      (org-supertag-db--schedule-save)))
+  (org-supertag-db-on 'link:removed
+                    (lambda (type from to)
+                      (org-supertag-db--mark-dirty)
+                      (org-supertag-db--schedule-save)))
+
   ;; 设置自动保存
   (when (and org-supertag-db-auto-save-interval
              (null org-supertag-db--auto-save-timer))

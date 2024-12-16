@@ -86,8 +86,6 @@ TYPE 是字段类型的符号。
     is-string is-non-empty)
 (and is-string is-non-empty)))
 
-
-
 (defun org-supertag-format-string (value field)
   "格式化字符串值。
 VALUE 是要格式化的值
@@ -644,123 +642,6 @@ TYPE 是字段类型"
     (_ nil)))
 
 
-(defun org-supertag-read-string-field (prompt)
-  "读取字符串类型字段值。
-PROMPT 是提示信息"
-  (message "Debug - Reading string field with prompt: %s" prompt)
-  (let* ((raw-input (read-string (format "%s: " prompt)))
-         (trimmed-input (string-trim raw-input))
-         (result (if (string-empty-p trimmed-input)
-                    nil
-                  trimmed-input)))
-    (message "Debug - String field: raw-input=%S, trimmed=%S, result=%S"
-             raw-input trimmed-input result)
-    result))
-
-(defun org-supertag-read-date-field (prompt &optional default)
-  "读取日期类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
-  (let* ((input (org-read-date nil t nil prompt nil default))
-         (formatted-date (format-time-string "%Y-%m-%d" input)))
-    (message "Debug - Date input from org-read-date: %S -> %S" input formatted-date)
-    formatted-date))
-
-(defun org-supertag-read-email-field (prompt &optional default)
-  "读取邮箱类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
-  (let ((input (read-string (format "%s (example@domain.com)%s: "
-                                   prompt
-                                   (if default
-                                       (format " (默认: %s)" default)
-                                     ""))
-                           nil nil default)))
-    (if (org-supertag-validate-email input)
-        input
-      (progn
-        (message "输入的不是有效的邮箱地址，请重新输入")
-        (sit-for 1)
-        (org-supertag-read-email-field prompt default)))))
-
-(defun org-supertag-read-url-field (prompt &optional default)
-  "读取URL类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
-  (let ((input (read-string (format "%s (https://example.com)%s: "
-                                   prompt
-                                   (if default
-                                       (format " (默认: %s)" default)
-                                     ""))
-                           nil nil default)))
-    (if (org-supertag-validate-url input)
-        input
-      (progn
-        (message "输入的不是有效的URL地址，请重新输入")
-        (sit-for 1)
-        (org-supertag-read-url-field prompt default)))))
-
-(defun org-supertag-read-reference-field (prompt)
-  "读取引用类型字段值。
-PROMPT 是提示信息"
-  (message "Debug - Reading reference field...")
-  (let ((node-ids (org-supertag-get-all-node-ids)))
-    (if node-ids
-        (let* ((nodes-with-titles 
-                (mapcar (lambda (id)
-                         (cons (org-with-point-at (org-id-find id t)
-                                (org-get-heading t t t t))
-                               id))
-                       node-ids))
-               (choice (completing-read prompt (mapcar #'car nodes-with-titles) nil t)))
-          (cdr (assoc choice nodes-with-titles)))
-      (user-error "没有可用的节点可供引用"))))
-
-(defun org-supertag-read-options-field (prompt options)
-  "读取选项类型字段值。
-PROMPT 是提示信息
-OPTIONS 是可选值列表"
-  (let ((input (completing-read (format "%s (%s): " 
-                                      prompt 
-                                      (mapconcat #'identity options "/"))
-                              options
-                              nil t)))
-    (if (member input options)
-        input
-      (progn
-        (message "请从给定选项中选择一个值")
-        (sit-for 1)
-        (org-supertag-read-options-field prompt options)))))
-
-(defun org-supertag-read-number-field (prompt &optional default min max)
-  "读取数值类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值
-MIN 是最小值
-MAX 是最大值"
-  (let* ((range-prompt (cond
-                       ((and min max) (format " (%s-%s)" min max))
-                       (min (format " (>=%s)" min))
-                       (max (format " (<=%s)" max))
-                       (t "")))
-         (input-str (read-string (format "%s%s%s: "
-                                        prompt
-                                        range-prompt
-                                        (if default
-                                            (format " (默认: %s)" default)
-                                          ""))
-                                nil nil default))
-         (input-num (condition-case nil
-                       (string-to-number input-str)
-                     (error nil))))
-    (if (and input-num
-             (numberp input-num)
-             (or (null min) (>= input-num min))
-        input-num
-      (progn
-        (message "请输入有效的数值%s" range-prompt)
-        (sit-for 1)
-        (org-supertag-read-number-field prompt default min max))))))
 
 
 
@@ -853,6 +734,42 @@ PRESET 是预设字段定义"
     (format "- %s%s"
             name
             (if desc (format " (%s)" desc) ""))))
+
+
+;;----------------------------------------------------------------------  
+;; 测试
+;;----------------------------------------------------------------------
+
+(ert-deftest test-org-supertag-field-basic ()
+  "测试基本的字段值操作."
+  (let* ((node-id "test-node-1")
+         (field-name "test-field")
+         (tag-id "test-tag")
+         (value "test-value"))
+    
+    ;; 1. 测试设置字段值
+    (org-supertag-db-set-field-value node-id field-name value tag-id)
+    
+    ;; 2. 测试获取字段值
+    (should (equal (org-supertag-db-get-field-value node-id field-name tag-id)
+                  value))))
+
+(ert-deftest test-org-supertag-field-multiple ()
+  "测试多个字段值操作."
+  (let* ((node-id "test-node-1")
+         (tag-id "test-tag"))
+    
+    ;; 1. 设置多个字段值
+    (org-supertag-db-set-field-value node-id "field1" "value1" tag-id)
+    (org-supertag-db-set-field-value node-id "field2" "value2" tag-id)
+    
+    ;; 2. 测试获取
+    (should (equal (org-supertag-db-get-field-value node-id "field1" tag-id)
+                  "value1"))
+    (should (equal (org-supertag-db-get-field-value node-id "field2" tag-id)
+                  "value2"))))
+
+
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here
 

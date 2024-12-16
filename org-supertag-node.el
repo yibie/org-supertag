@@ -136,6 +136,17 @@ TAG-ID 是标签ID
           (lambda (a b)
             (string< (car a) (car b))))))
 
+(defun org-supertag-node-get-tags (node-id)
+  "获取节点关联的所有标签ID列表.
+NODE-ID 是节点的ID"
+  (let ((result nil))
+    (maphash
+     (lambda (link-id props)
+       (when (and (string-prefix-p ":node-tag:" link-id)
+                  (equal (plist-get props :from) node-id))
+         (push (plist-get props :to) result)))
+     org-supertag-db--link)
+    (nreverse result)))
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------
@@ -229,7 +240,7 @@ NODE-ID 是节点ID
 
 
 ;;------------------------------------------------------------------------------
-;; User Interactive Commands - 用户交互命令
+;; Node Commands 
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-create ()
@@ -249,6 +260,20 @@ NODE-ID 是节点ID
     (user-error "该标题已经有一个节点"))
   (org-supertag-node-sync-at-point))
 
+(defun org-supertag--create-node (node-id)
+  "根据ID创建一个新的 supertag 节点.
+NODE-ID: 节点ID"
+  (let ((node-data (list :id node-id
+                        :type :node
+                        :title (org-get-heading t t t t)
+                        :file-path (buffer-file-name)
+                        :pos (point)
+                        :olp (org-get-outline-path)
+                        :level (org-outline-level)
+                        :created-at (current-time))))
+    (org-supertag-db-add node-id node-data)
+    node-id))
+
 (defun org-supertag-node-update ()
   "更新当前位置的节点.
 
@@ -266,43 +291,58 @@ NODE-ID 是节点ID
     (user-error "该标题没有关联的节点"))
   (org-supertag-node-sync-at-point))
 
-(defun org-supertag-node-add-tags ()
-  "为当前节点添加标签.
+(defun org-supertag-node-remove-tag (node-id tag-id)
+  "从节点移除标签关联.
+NODE-ID 是节点ID
+TAG-ID 是标签ID"
+  (let ((link-id (format ":node-tag:%s->%s" node-id tag-id)))
+    ;; 从数据库中移除关联
+    (remhash link-id org-supertag-db--link)
+    ;; 清除缓存
+    (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
+    (org-supertag-db--cache-remove 'query (format "tag-nodes:%s" tag-id))
+    ;; 标记数据库为脏
+    (org-supertag-db--mark-dirty)
+    ;; 安排保存
+    (org-supertag-db--schedule-save)))
 
-使用场景：
-1. 用户想要给节点添加标签
-2. 通过补全界面选择已有标签
+;; (defun org-supertag-node-add-tags ()
+;;   "为当前节点添加标签.
 
-前置条件：
-1. 光标必须在节点标题处
-2. 节点必须已存在"
-  (interactive)
-  (when-let ((node-id (org-id-get)))
-    (let* ((available-tags (mapcar #'car (org-supertag-find-object :tag)))
-           (selected-tags (completing-read-multiple
-                          "Tags: "
-                          available-tags)))
-      (dolist (tag selected-tags)
-        (org-supertag-add-tag node-id tag)))))
+;; 使用场景：
+;; 1. 用户想要给节点添加标签
+;; 2. 通过补全界面选择已有标签
 
-(defun org-supertag-node-set-field ()
-  "为当前节点设置字段值.
+;; 前置条件：
+;; 1. 光标必须在节点标题处
+;; 2. 节点必须已存在"
+;;   (interactive)
+;;   (when-let ((node-id (org-id-get)))
+;;     (let* ((available-tags (mapcar #'car (org-supertag-find-object :tag)))
+;;            (selected-tags (completing-read-multiple
+;;                           "Tags: "
+;;                           available-tags)))
+;;       (dolist (tag selected-tags)
+;;         (org-supertag-add-tag node-id tag)))))
 
-使用场景：
-1. 用户想要设置节点的字段值
-2. 通过补全界面选择字段并输入值
+;; (defun org-supertag-node-set-field ()
+;;   "为当前节点设置字段值.
 
-前置条件：
-1. 光标必须在节点标题处
-2. 节点必须已存在"
-  (interactive)
-  (when-let ((node-id (org-id-get)))
-    (let* ((available-fields (mapcar #'car (org-supertag-find-object :field)))
-           (field (completing-read
-                  "Field: "
-                  available-fields))
-           (value (read-string "Value: ")))
-      (org-supertag-set-field node-id field value))))
+;; 使用场景：
+;; 1. 用户想要设置节点的字段值
+;; 2. 通过补全界面选择字段并输入值
+
+;; 前置条件：
+;; 1. 光标必须在节点标题处
+;; 2. 节点必须已存在"
+;;   (interactive)
+;;   (when-let ((node-id (org-id-get)))
+;;     (let* ((available-fields (mapcar #'car (org-supertag-find-object :field)))
+;;            (field (completing-read
+;;                   "Field: "
+;;                   available-fields))
+;;            (value (read-string "Value: ")))
+;;       (org-supertag-set-field node-id field value))))
 
 
 ;;------------------------------------------------------------------------------
