@@ -141,11 +141,6 @@ NAME 是原始字段名"
     sanitized))
 
 (defun org-supertag-tag-get-nodes (tag-id)
-  "获取使用了指定标签的所有节点.
-TAG-ID: 标签ID"
-  (org-supertag-db-find-nodes-by-tag tag-id))
-
-(defun org-supertag-tag-get-nodes (tag-id)
   "获取与指定标签关联的所有节点ID.
 TAG-ID: 标签ID（不带'tag:'前缀）"
   (let (result)
@@ -175,7 +170,7 @@ TAG-ID: 标签ID（不带'tag:'前缀）"
 TAG-ID: 标签ID
 NODE-ID: 节点ID
 FIELD-NAME: 字段名
-VALUE: 字段���"
+VALUE: 字段值"
   (message "DEBUG: Setting field value - Tag: %s, Node: %s, Field: %s, Value: %s"
            tag-id node-id field-name value)
   (let* ((tag (org-supertag-tag-db-get tag-id))

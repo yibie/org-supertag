@@ -4,6 +4,7 @@
 (require 'org-supertag-node)
 (require 'org-supertag-field)
 (require 'org-supertag-tag)
+(require 'org-supertag-query)
 
 (defgroup org-supertag nil
   "Org-supertag 配置选项."
@@ -60,6 +61,7 @@
   "设置 org-supertag.
 在 org-mode 缓冲区中自动启用 org-supertag-mode."
   (interactive)
+  (org-supertag-db-init)
   ;; 为所有 org-mode 缓冲区启用 org-supertag-mode
   (add-hook 'org-mode-hook #'org-supertag-mode))
 

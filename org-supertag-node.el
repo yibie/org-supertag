@@ -15,6 +15,7 @@
 (require 'org-element)
 (require 'org-id)
 (require 'org-supertag-db)
+(require 'org-supertag-query)
 
 ;;------------------------------------------------------------------------------
 ;; Database Operations - 数据库操作函数
@@ -50,26 +51,27 @@ PROPS 是节点属性
 (defun org-supertag-node-db-update (id props)
   "更新数据库中的节点.
 ID 是节点唯一标识
-PROPS 是要更新的属性
-
-说明：
-1. 合并现有属性
-2. 更新修改时间
-3. 保存更新
-4. 触发更新事件"
+PROPS 是要更新的属性"
   (when-let ((node (org-supertag-db-get id)))
-    ;; 合并属性，保留原有的系统属性
-    (let ((new-props (append
-                     (list :modified-at (current-time))
-                     props
-                     (list :id id
-                           :type :node
-                           :created-at (plist-get node :created-at)))))
-      ;; 更新节点
-      (org-supertag-db-update-node-at-point id new-props)
-      ;; 触发事件
-      (run-hook-with-args 'org-supertag-node-updated-hook id new-props)
-      ;; 返回更新后的属性
+    (let ((new-props nil))
+      ;; 1. 保留原有的创建时间
+      (setq new-props (list :created-at (plist-get node :created-at)))
+      ;; 2. 添加修改时间
+      (setq new-props (plist-put new-props :modified-at (current-time)))
+      ;; 3. 清理输入属性(移除系统属性)
+      (let ((clean-props (copy-sequence props)))
+        (while (or (plist-member clean-props :created-at)
+                  (plist-member clean-props :modified-at))
+          (setq clean-props (org-plist-delete 
+                           (org-plist-delete clean-props :created-at)
+                           :modified-at)))
+        ;; 4. 合并属性
+        (setq new-props (append new-props clean-props)))
+      ;; 5. 更新数据库
+      (org-supertag-db-add id new-props)
+      ;; 6. 触发事件
+      (org-supertag-emit 'node:updated id new-props)
+      ;; 7. 返回更新后的属性
       new-props)))
 
 (defun org-supertag-node-db-exists-p (id)
@@ -96,19 +98,15 @@ ID 是节点唯一标识
 (defun org-supertag-node-db-add-tag (node-id tag-id)
   "为节点添加标签.
 NODE-ID 是节点ID
-TAG-ID 是标签ID
-
-说明：
-1. 检查节点和标签是否存在
-2. 创建关联关系
-3. 触发标签添加事件"
+TAG-ID 是标签ID"
   (when (and (org-supertag-node-db-exists-p node-id)
              (org-supertag-db-exists-p tag-id))
-    ;; 添加关系
-    (org-supertag-db-link
-     :type :node-tag
-     :from node-id
-     :to tag-id)
+    ;; 添加关系，注意参数顺序
+    (org-supertag-db-link :node-tag 
+                         node-id 
+                         tag-id 
+                         ;; 添加关系属性
+                         `(:created-at ,(current-time)))
     ;; 触发事件
     (run-hook-with-args 'org-supertag-node-tag-added-hook
                         node-id tag-id)))
@@ -152,7 +150,7 @@ NODE-ID 是节点的ID"
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-node-db-set-field (node-id field-id value)
-  "设置节点的字段值.
+  "设置节点的字段���.
 NODE-ID 是节点ID
 FIELD-ID 是字段ID
 VALUE 是字段值
@@ -191,7 +189,7 @@ NODE-ID 是节点ID
           fields))))                       
 
 ;;------------------------------------------------------------------------------
-;; Operation Handlers - 操作处理函数
+;; Operation Funtions
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-sync-at-point ()
@@ -200,6 +198,7 @@ NODE-ID 是节点ID
     (if existing-id
         ;; 更新已存在的节点
         (when (org-supertag-node-db-exists-p existing-id)
+          ;; 直接使用 org-supertag-db-add-node-at-point
           (org-supertag-db-add-node-at-point)
           existing-id)
       ;; 创建新节点
@@ -274,6 +273,26 @@ NODE-ID: 节点ID"
     (org-supertag-db-add node-id node-data)
     node-id))
 
+(defun org-supertag-node-get-props-at-point ()
+  "获取当前位置节点的属性.
+返回值：
+- 节点属性列表
+- nil 如果不是有效节点"
+  (when (org-at-heading-p)
+    (let* ((element (org-element-at-point))
+           (id (org-id-get))
+           (title (org-get-heading t t t t))
+           (level (org-current-level))
+           (olp (org-get-outline-path)))
+      (when (and id title)
+        (list :type :node
+              :id id
+              :title title
+              :file-path (buffer-file-name)
+              :pos (point)
+              :level level
+              :olp olp)))))
+
 (defun org-supertag-node-update ()
   "更新当前位置的节点.
 
@@ -283,13 +302,78 @@ NODE-ID: 节点ID"
 
 前置条件：
 1. 光标必须在标题处
-2. 标题必须有关联的节点ID"
+2. 标题必须有关联的节点ID
+
+返回值：
+- 成功时返回节点ID
+- 失败时抛出错误"
   (interactive)
   (unless (org-at-heading-p)
     (user-error "光标必须在标题处"))
-  (unless (org-id-get)
-    (user-error "该标题没有关联的节点"))
-  (org-supertag-node-sync-at-point))
+  
+  (let ((id (org-id-get)))
+    (unless id
+      (user-error "该标题没有关联的节点"))
+    
+    ;; 获取节点属性
+    (let ((props (org-supertag-node-get-props-at-point)))
+      (unless props
+        (error "无法获取节点属性"))
+      
+      ;; 更新数据库
+      (condition-case err
+          (progn
+            (org-supertag-node-db-update id props)
+            (message "节点更新成功: %s" id)
+            id)
+        (error
+         (message "节点更新失败: %s" (error-message-string err))
+         (signal (car err) (cdr err)))))))
+
+(defun org-supertag-node-db-update (id props)
+  "更新或创建数据库中的节点.
+ID 是节点ID
+PROPS 是节点属性
+
+返回值：
+- 成功时返回更新后的属性
+- 失败时抛出错误"
+  (let* ((existing-node (org-supertag-db-get id))
+         (is-new (not existing-node))
+         (new-props (org-supertag-db--normalize-props
+                    (append
+                     ;; 基本属性
+                     (list :type :node
+                           :id id)
+                     ;; 时间戳
+                     (if is-new
+                         (list :created-at (current-time)
+                               :modified-at (current-time))
+                       (list :created-at (plist-get existing-node :created-at)
+                             :modified-at (current-time)))
+                     ;; 用户提供的属性
+                     props))))
+    
+    ;; 验证必要属性
+    (unless (plist-get new-props :title)
+      (error "Missing required property: title"))
+    (unless (plist-get new-props :file-path)
+      (error "Missing required property: file-path"))
+    ;; 更新数据库
+    (org-supertag-db-add id new-props)
+    ;; 触发相应的钩子
+    (run-hook-with-args 
+     (if is-new
+         'org-supertag-node-created-hook
+       'org-supertag-node-updated-hook)
+     id new-props)
+    ;; 记录操作
+    (message "%s node: %s" 
+             (if is-new "Created new" "Updated")
+             id)
+    ;; 返回更新后的属性
+    new-props))
+
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
   "从节点移除标签关联.
@@ -301,48 +385,8 @@ TAG-ID 是标签ID"
     ;; 清除缓存
     (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
     (org-supertag-db--cache-remove 'query (format "tag-nodes:%s" tag-id))
-    ;; 标记数据库为脏
-    (org-supertag-db--mark-dirty)
     ;; 安排保存
-    (org-supertag-db--schedule-save)))
-
-;; (defun org-supertag-node-add-tags ()
-;;   "为当前节点添加标签.
-
-;; 使用场景：
-;; 1. 用户想要给节点添加标签
-;; 2. 通过补全界面选择已有标签
-
-;; 前置条件：
-;; 1. 光标必须在节点标题处
-;; 2. 节点必须已存在"
-;;   (interactive)
-;;   (when-let ((node-id (org-id-get)))
-;;     (let* ((available-tags (mapcar #'car (org-supertag-find-object :tag)))
-;;            (selected-tags (completing-read-multiple
-;;                           "Tags: "
-;;                           available-tags)))
-;;       (dolist (tag selected-tags)
-;;         (org-supertag-add-tag node-id tag)))))
-
-;; (defun org-supertag-node-set-field ()
-;;   "为当前节点设置字段值.
-
-;; 使用场景：
-;; 1. 用户想要设置节点的字段值
-;; 2. 通过补全界面选择字段并输入值
-
-;; 前置条件：
-;; 1. 光标必须在节点标题处
-;; 2. 节点必须已存在"
-;;   (interactive)
-;;   (when-let ((node-id (org-id-get)))
-;;     (let* ((available-fields (mapcar #'car (org-supertag-find-object :field)))
-;;            (field (completing-read
-;;                   "Field: "
-;;                   available-fields))
-;;            (value (read-string "Value: ")))
-;;       (org-supertag-set-field node-id field value))))
+    (org-supertag-db-save)))
 
 
 ;;------------------------------------------------------------------------------
@@ -503,8 +547,7 @@ NODE-ID 是要移除的引用节点ID.
                           (org-element-property :end element))
             (cl-incf removed)))
         (forward-char)))
-    
-    ;; 2. 更新数据库中的引用关系
+
     (org-supertag-db--parse-node-all-ref)
     
     (message "已移除 %d 处引用" removed)))
@@ -562,127 +605,4 @@ NODE-ID 是要移除的引用节点ID.
   "节点引用关系移除后的钩子.
 参数: (from-id to-id)")
 
-;;------------------------------------------------------------------------------
-;; 测试
-;;------------------------------------------------------------------------------    
-
-(defun org-supertag-node-test ()
-  "测试节点操作.
-
-测试项目：
-1. 基础操作：创建、获取、更新节点
-2. 引用操作：添加、获取引用
-3. 标签操作：添加、获取标签"
-  (interactive)
-  ;; 1. 测试基础操作
-  (let ((node-id (org-supertag-node-sync-at-point)))
-    (message "1. 基础操作测试:")
-    (message "创建节点: %s" node-id)
-    
-    (let ((node (org-supertag-db-get node-id)))
-      (message "节点数据: %S" node))
-    
-    (org-supertag-node-update-at-point)
-    (message "节点已更新\n")
-
-    ;; 2. 测试引用操作
-    (message "2. 引用操作测试:")
-    ;; 创建一个临时节点作为引用目标
-    (save-excursion
-      (org-insert-heading)
-      (insert "引用测试节点")
-      (let ((ref-id (org-supertag-node-sync-at-point)))
-        ;; 添加引用
-        (org-supertag-node-db-add-reference node-id ref-id)
-        (message "添加引用: %s -> %s" node-id ref-id)
-        ;; 获取引用
-        (let ((refs (org-supertag-node-db-get-reference node-id 'to)))
-          (message "节点引用列表: %S\n" refs))))
-
-    ;; 3. 测试标签操作
-    (message "3. 标签操作测试:")
-    ;; 添加标签
-    (let ((tag-name "test-tag"))
-      (org-set-tags (list tag-name))
-      (org-supertag-node-update-at-point)
-      ;; 获取标签
-      (let ((tags (org-supertag-node-db-get-tags node-id)))
-        (message "节点标签列表: %S" tags)))))
-
-(defun org-supertag-node-test-id ()
-  "测试节点 ID 的获取.
-测试场景：
-1. 在当前节点获取 ID
-2. 在目标节点获取 ID
-3. 验证引用关系"
-  (interactive)
-  (save-excursion
-    ;; 1. 获取当前节点信息
-    (org-back-to-heading t)
-    (let* ((current-id (org-id-get))
-           (current-title (org-get-heading t t t t))
-           ;; 获取候选节点列表
-           (candidates (org-supertag-node-db--get-candidates)))
-      
-      (message "当前节点: %s (%s)" current-title current-id)
-      
-      ;; 2. 显示可引用的节点列表
-      (message "可引用节点列表:")
-      (dolist (candidate candidates)
-        (message "  - %s (%s)" (car candidate) (cdr candidate)))
-      
-      ;; 3. 模拟引用过程
-      (let* ((selected-title "test") ; 假设选择了 "test" 节点
-             (selected-id (cdr (assoc selected-title candidates))))
-        (message "\n准备添加引用:")
-        (message "  从: %s (%s)" current-title current-id)
-        (message "  到: %s (%s)" selected-title selected-id)
-        
-        ;; 4. 验证目标节点
-        (when selected-id
-          (org-with-point-at (org-id-find selected-id t)
-            (let ((actual-id (org-id-get))
-                  (actual-title (org-get-heading t t t t)))
-              (message "\n验证目标节点:")
-              (message "  期望 ID: %s" selected-id)
-              (message "  实际 ID: %s" actual-id)
-              (message "  标题: %s" actual-title))))))))    
-
-(defun org-supertag-node-db-check-state ()
-  "检查数据库状态."
-  (interactive)
-  (message "\n=== 数据库状态检查 ===")
-  
-  ;; 1. 检查文件
-  (message "\n文件状态:")
-  (message "  路径: %s" org-supertag-db-file)
-  (message "  存在: %s" (file-exists-p org-supertag-db-file))
-  (when (file-exists-p org-supertag-db-file)
-    (message "  大小: %s bytes" 
-             (file-attribute-size (file-attributes org-supertag-db-file))))
-  
-  ;; 2. 检查内存数据
-  (message "\n内存数据:")
-  (if (and (boundp 'org-supertag-db--object)
-           (boundp 'org-supertag-db--link))
-      (progn
-        (message "  对象数量: %d" (ht-size org-supertag-db--object))
-        (message "  关系数量: %d" (ht-size org-supertag-db--link)))
-    (message "  数据库未初始化"))
-  
-  ;; 3. 检查缓存 - 使用正确的缓存系统函数
-  (message "\n缓存状态:")
-  (if (boundp 'org-supertag-db--cache)
-      (message "  缓存条目: %d" (ht-size org-supertag-db--cache))
-    (message "  缓存系统未初始化"))
-  
-  ;; 4. 检查自动保存
-  (message "\n自动保存状态:")
-  (message "  定时器活动: %s" 
-           (if org-supertag-db--auto-save-timer "是" "否"))
-  (message "  保存间隔: %s" 
-           (if org-supertag-db-auto-save-interval
-               (format "%d秒" org-supertag-db-auto-save-interval)
-             "禁用")))
-        
 (provide 'org-supertag-node)

@@ -75,13 +75,13 @@
 
 ;; 字段值类型定义
 (defconst org-supertag-db-field-type
-  '(:string    ; 描述为“Plain Text”
-    :number    ; 描述为“Number”，可被计算和统计
-    :date      ; 描述为“Date”，日期，使用 org-mode 的 date-stamp 格式
-    :time      ; 描述为“Time”，具体时间，使用 org-mode 的 time-stamp 格式
-    :list      ; 描述为“List”，列表
-    :options    ; 描述为“Option”，提供预设列表选择
-    :ref)      ; 描述为“Reference”，引用来自其它标签定义的 Field 以及它的值
+  '(:string    ; 描述为"Plain Text"
+    :number    ; 描述为"Number"，可被计算和统计
+    :date      ; 描述为"Date"，日期，使用 org-mode 的 date-stamp 格式
+    :time      ; 描述为"Time"，具体时间，使用 org-mode 的 time-stamp 格式
+    :list      ; 描述为"List"，列表
+    :options    ; 描述为"Option"，提供预设列表选择
+    :ref)      ; 描述为"Reference"，引用来自其它标签定义的 Field 以及它的值
   "支持的字段值类型.")
 
 (defconst org-supertag-db-object-structure
@@ -408,116 +408,6 @@ FIELD 是字段定义 plist"
 
 
 ;;------------------------------------------------------------------------------
-;; 实体构造函数
-;;------------------------------------------------------------------------------    
-
-(defun org-supertag-db-make-node (id title file &rest props)
-  "创建节点实体.
-ID: 节点唯一标识
-TITLE: 节点标题
-FILE: 所在文件
-PROPS: 其他属性"
-  (org-supertag-db-add id
-    (append (list :type :node
-                 :id id
-                 :title title
-                 :file-path file  ; file 参数直接用于 file-path
-                 :pos nil 
-                 :olp nil
-                 :level nil
-                 :end nil         ; 节点结束位置
-                 :contents-begin nil ; 节点内容开始位置
-                 :contents-end nil   ; 节点内容结束位置
-                 :contents nil
-                 :created-at (current-time))
-            props)))
-
-(defun org-supertag-db-make-tag (id name &rest props)
-  "创建标签实体.
-ID: 标签唯一标识
-NAME: 标签名称
-PROPS: 其他属性，可包含:
-  :fields - ((field-name . field-props) ...)
-  :description - 描述
-  :icon - 图标
-  :color - 颜色
-  :command - 命令配置"
-  (org-supertag-db-add id
-    (append (list :type :tag
-                 :id id
-                 :name name
-                 :fields nil  ; 默认空字段列表
-                 :created-at (current-time))
-            props)))
-
-(defun org-supertag-db-make-field-props (name type &rest props)
-  "创建字段属性列表.
-NAME: 字段名称
-TYPE: 字段类型 (:string/:number/:date/:time/:list/:option/:ref)
-PROPS: 其他属性，可包含:
-  :description - 描述
-  :default - 默认值
-  :options - 选项列表（用于 :option 类型）
-  :ref-tag - 引用的标签（用于 :ref 类型）"
-  (append (list :name name
-                :type type)
-          props))
-
-;;------------------------------------------------------------------------------
-;; 关系构造函数
-;;------------------------------------------------------------------------------    
-
-(defun org-supertag-db-make-node-tag (node-id tag-id)
-  "创建节点-标签关系."
-  (org-supertag-db-link :node-tag node-id tag-id
-                        (list :created-at (current-time))))
-
-(defun org-supertag-db-make-node-field (node-id field-name value tag-id)
-  "创建节点-字段关系.
-NODE-ID: 节点ID
-FIELD-NAME: 字段名称
-VALUE: 字段值
-TAG-ID: 所属标签ID"
-  (org-supertag-db-link :node-field node-id field-name
-                        (list :tag-id tag-id
-                              :value value
-                              :created-at (current-time))))
-
-(defun org-supertag-db-make-tag-ref (from-tag-id to-tag-id ref-type)
-  "创建标签引用关系.
-FROM-TAG-ID: 源标签ID
-TO-TAG-ID: 目标标签ID
-REF-TYPE: 引用类型"
-  (org-supertag-db-link :tag-ref from-tag-id to-tag-id
-                        (list :ref-type ref-type)))
-
-(defun org-supertag-db-make-node-tag (node-id tag-id)
-  "创建节点-标签关系."
-  (org-supertag-db-link :node-tag node-id tag-id
-                        (list :created-at (current-time))))
-
-(defun org-supertag-db-make-node-field (node-id field-name value tag-id)
-  "创建节点-字段关系.
-NODE-ID: 节点ID
-FIELD-NAME: 字段名称
-VALUE: 字段值
-TAG-ID: 所属标签ID"
-  (org-supertag-db-link :node-field node-id field-name
-                        (list :tag-id tag-id
-                              :value value
-                              :ref-pos nil
-                              :ref-context nil
-                              :created-at (current-time))))
-
-(defun org-supertag-db-make-tag-ref (from-tag-id to-tag-id ref-type)
-  "创建标签引用关系.
-FROM-TAG-ID: 源标签ID
-TO-TAG-ID: 目标标签ID
-REF-TYPE: 引用类型"
-  (org-supertag-db-link :tag-ref from-tag-id to-tag-id
-                        (list :ref-type ref-type)))
-
-;;------------------------------------------------------------------------------
 ;; 核心数据表
 ;;------------------------------------------------------------------------------    
 
@@ -551,16 +441,21 @@ Return value:
       (let* ((type (plist-get props :type))
              (old-props (org-supertag-db-get id))
              (is-update (not (null old-props)))
+             ;; 规范化属性
+             (clean-props (org-supertag-db--normalize-props props))
              (new-props (if is-update
-                           ;; 更新时保留创建时间，更新修改时间
-                           (append
-                            (list :created-at (plist-get old-props :created-at)
-                                  :modified-at (current-time))
-                            props)
-                         ;; 新建时设置创建时间
-                         (append
-                          (list :created-at (current-time))
-                          props))))
+                           ;; 更新时：新属性优先
+                           (org-supertag-db--normalize-props
+                            (append
+                             clean-props
+                             (list :created-at (plist-get old-props :created-at)
+                                   :modified-at (current-time))))
+                         ;; 新建时
+                         (org-supertag-db--normalize-props
+                          (append
+                           clean-props
+                           (list :created-at (current-time)))))))
+        
         ;; 1. 验证
         ;; 1.1 验证类型
         (unless (org-supertag-db-valid-object-type-p type)
@@ -568,6 +463,7 @@ Return value:
         ;; 1.2 验证属性
         (unless (org-supertag-db-valid-object-p type new-props)
           (error "Invalid object properties"))
+        
         ;; 2. 存储前处理
         (when is-update
           ;; 2.1 处理类型变更
@@ -575,8 +471,10 @@ Return value:
             (unless (eq old-type type)
               ;; 类型变更时清理所有相关缓存
               (org-supertag-db--cache-clear-for-type old-type id))))
+        
         ;; 3. 存储实体
         (ht-set! org-supertag-db--object id new-props)
+        
         ;; 4. 缓存管理
         ;; 4.1 清除实体缓存
         (org-supertag-db--cache-remove 'entity id)
@@ -593,6 +491,7 @@ Return value:
            ;; 清除标签相关缓存
            (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
            (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
+        
         ;; 5. 触发事件
         (if is-update
             (progn
@@ -601,16 +500,18 @@ Return value:
           (progn
             (org-supertag-db-emit 'entity:before-create type id new-props)
             (org-supertag-db-emit 'entity:created type id new-props)))
+        
         ;; 6. 数据库状态管理
         ;; 6.1 标记数据库为脏
         (org-supertag-db--mark-dirty)
         ;; 6.2 安排延迟保存
-        (org-supertag-db--schedule-save)
+        (org-supertag-db-save)
+        
         ;; 7. 返回ID
         id)
     ;; 错误处理
     (error
-     (message "Error in entity add/update: %s" (error-message-string err))
+     (message "[org-supertag-db-add] Error in entity add/update: %s" (error-message-string err))
      (signal (car err) (cdr err)))))
 
 (defun org-supertag-db-exists-p (id)
@@ -863,9 +764,10 @@ TO: 目标实体ID
     (ht-map (lambda (k v)
               (when (and (equal type (car v))
                         (equal to (nth 2 v)))
+                        (equal (plist-get v :from) (plist-get v :to)))
                 (push (list (cadr v) (nth 3 v)) results)))
             org-supertag-db--link)
-    (nreverse results)))
+    (nreverse results))
 
 (defun org-supertag-db-get-all-link ()
   "获取所有关系.
@@ -879,16 +781,30 @@ TO: 目标实体ID
 ;; Get Ref Link
 (defun org-supertag-db-get-ref-context (ref-id)
   "获取引用的上下文信息.
-REF-ID 是引用关系的ID"
+REF-ID 是引用关系的ID
+
+返回值：
+- 成功：返回引用的上下文信息
+- 失败：返回 nil"
   (when-let* ((props (org-supertag-db-get-link ref-id))
-              (context (plist-get props :ref-context)))
+              (context (plist-get props :ref-context))
+              (ref-node (org-supertag-db-get ref-id))
+              (ref-from (plist-get ref-node :ref-from)))
     context))
 
 (defun org-supertag-db-get-ref-pos (ref-id)
   "获取引用的位置信息.
-REF-ID 是引用关系的ID"
+REF-ID 是引用关系的ID
+
+返回值：
+- 成功：返回引用的位置信息
+- 失败：返回 nil"
   (when-let* ((props (org-supertag-db-get-link ref-id))
-              (pos (plist-get props :ref-pos)))
+              (pos (plist-get props :ref-pos))
+              (ref-node (org-supertag-db-get ref-id))
+              (ref-from (plist-get ref-node :ref-from))
+              (ref-to (plist-get ref-node :ref-to))
+              (ref-count (plist-get ref-node :ref-count)))
     pos))
 
 (defun org-supertag-db-get-all ()
@@ -927,17 +843,30 @@ RULES is the rules to match."
     (cl-loop for (key value) on rules by #'cddr
             always (equal (plist-get props key) value)))
 
-(defun org-supertag-db-find-by-props (props)
+(defun org-supertag-db-find-by-props (props &optional predicate)
   "Find entities that match the property condition.
-PROPS is the properties to check."
+PROPS is the properties to check.
+PREDICATE is an optional function that takes a property list and returns boolean"
   (org-supertag-db-find 
-   (lambda (_k v) 
-     (org-supertag-db--check-match v props))))
+   (lambda (_k v)
+     (and (org-supertag-db--check-match v props)
+          (or (null predicate)
+              (funcall predicate v))))))
 
-(defun org-supertag-db-find-by-type (type)
-  "Find entities of the specified type.
-TYPE is the type to find."
-  (mapcar #'car (org-supertag-db-find-by-props `(:type ,type))))
+(defun org-supertag-db-find-by-type (type &optional predicate)
+  "Find entities of specified type with optional predicate.
+TYPE is the entity type to find (:node, :tag, etc)
+PREDICATE is an optional function that takes a property list and returns boolean"
+  (let ((base-pred (lambda (k v) 
+                    (eq (plist-get v :type) type))))
+    (if predicate
+        (mapcar #'car 
+                (org-supertag-db-find 
+                 (lambda (k v)
+                   (and (funcall base-pred k v)
+                        (funcall predicate v)))))
+      (mapcar #'car 
+              (org-supertag-db-find base-pred)))))
 
 (defun org-supertag-db-find-nodes-by-tag (tag-id)
   "Find nodes that use the specified tag.
@@ -983,6 +912,9 @@ TO: 目标节点ID（可选）
                 (push v results)))
             org-supertag-db--link)
     results))
+
+
+
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Remove
@@ -1116,14 +1048,52 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
 
 (require 'org-element)
 
+(defun org-supertag-db--normalize-props (props)
+  "规范化属性列表，确保属性顺序正确且无重复.
+PROPS 是属性列表
+
+返回值：
+- 规范化后的属性列表"
+  (let ((result nil)
+        (seen-keys nil))
+    ;; 1. 确保 :type 在最前面
+    (when-let ((type-value (plist-get props :type)))
+      (push :type seen-keys)
+      (setq result (list :type type-value)))
+    ;; 2. 处理其他属性
+    (let ((rest-props props))
+      (while rest-props
+        (let ((key (car rest-props))
+              (value (cadr rest-props)))
+          (unless (memq key seen-keys)  ; 避免重复
+            (push key seen-keys)
+            (setq result (append result (list key value)))))
+        (setq rest-props (cddr rest-props))))
+    ;; 3. 验证结果
+    (let ((final-type (plist-get result :type)))
+      (unless (memq final-type '(:node :tag))
+        (error "Invalid type after normalization: %S in props: %S" 
+               final-type result)))
+    result))
+
+
+(defun org-supertag-db--get-node-title ()
+  "获取当前节点的标题，返回纯文本格式."
+  (substring-no-properties 
+   (or (org-get-heading t t t t)  ; 移除标签、TODO状态等
+       (when-let ((element (org-element-at-point)))
+         (org-element-property :raw-value element))
+       "")))
+
 (defun org-supertag-db--parse-node-at-point ()
   "解析当前位置的节点数据."
   (save-excursion
     (let* ((element (org-element-at-point))
            (type (org-element-type element)))
+      (message "Parsing node at point: type=%s" type)
       (if (eq type 'headline)
           ;; 解析 headline
-          (let* ((title (org-element-property :raw-value element))
+          (let* ((title (org-supertag-db--get-node-title))  ; 使用新函数
                  (level (org-element-property :level element))
                  (id (or (org-element-property :ID element)
                         (org-id-get-create)))
@@ -1137,10 +1107,11 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
                  ;; 其他属性
                  (tags (org-element-property :tags element))
                  (properties (org-element-property :PROPERTIES element)))
-      
+            
+            (message "Parsed headline: id=%s title=%s level=%s" id title level)
             (list :type :node
                   :id id
-                  :title title
+                  :title title  ; 已经是纯文本
                   :file-path (buffer-file-name)
                   :pos (org-element-property :begin element)
                   :olp olp
@@ -1159,9 +1130,10 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
           (let ((title (or (cadr (assoc "TITLE" 
                                        (org-element-property :keywords element)))
                           (file-name-base (buffer-file-name)))))
+            (message "Parsed file node: title=%s" title)
             (list :type :node
                   :id (org-id-get-create)
-                  :title title
+                  :title (substring-no-properties title)  ; 确保是纯文本
                   :file-path (buffer-file-name)
                   :pos 1
                   :olp nil
@@ -1171,61 +1143,71 @@ DRY-RUN: 如果非nil，只返回将被删除的数据而不实际删除
 (defun org-supertag-db-add-node-at-point ()
   "添加当前位置的节点到数据库.
 成功时返回节点ID，失败时返回nil."
-  (condition-case err
+  (condition-case-unless-debug error-data
       (progn
         ;; 1. 检查当前位置是否有效
         (unless (org-at-heading-p)
           (error "当前位置不是有效的节点标题"))
-        ;; 2. 解析节点数据
-        (let ((props (org-supertag-db--parse-node-at-point)))
-          (unless props
-            (error "无法解析节点数据"))
+        
+        ;; 2. 解析节点数据（只调用一次）
+        (let* ((props (org-supertag-db--parse-node-at-point))
+               (id (plist-get props :id))
+               (title (plist-get props :title))
+               (file (plist-get props :file-path)))
+          (message "解析到的节点属性: %S" props)  ; 调试信息
           ;; 3. 验证必要属性
-          (let ((id (plist-get props :id))
-                (title (plist-get props :title))
-                (file (plist-get props :file-path)))
-            (unless (and id title file)
-              (error "缺少必要的节点属性: id=%s, title=%s, file=%s" 
-                     id title file))
-            ;; 4. 如果是更新现有节点，获取旧数据
-            (let ((old-node (org-supertag-db-get id)))
-              ;; 5. 添加或更新节点
-              (org-supertag-db-add id 
-                                  (append
-                                   ;; 5.1 确保基本属性
-                                   `(:type :node
-                                     :id ,id
-                                     :title ,title
-                                     :file-path ,file)
-                                   ;; 5.2 添加时间戳
-                                   (if old-node
-                                       ;; 更新：保留创建时间，更新修改时间
-                                       `(:created-at ,(plist-get old-node :created-at)
-                                         :modified-at ,(current-time))
-                                     ;; 新建：设置创建时间
-                                     `(:created-at ,(current-time)))
-                                   ;; 5.3 其他属性
-                                   props))
-              ;; 6. 解析并更新引用关系
-              (org-supertag-db--parse-node-all-ref)
-              ;; 7. 返回节点 ID
-              id))))
+          (unless (and id title file)
+            (error "缺少必要的节点属性: id=%s, title=%s, file=%s" 
+                   id title file))
+          ;; 4. 获取现有节点数据和引用关系
+          (let* ((old-node (org-supertag-db-get id))
+                 (is-update (not (null old-node)))
+                 (ref-to (org-supertag-db--parse-node-all-ref))
+                 ;; 5. 构建完整属性（使用规范化函数）
+                 (full-props
+                  (org-supertag-db--normalize-props
+                   (append
+                    ;; 基本属性（从已解析的props中获取）
+                    `(:type :node
+                      :id ,id
+                      :title ,title
+                      :file-path ,file
+                      :pos ,(plist-get props :pos)
+                      :olp ,(plist-get props :olp)
+                      :level ,(plist-get props :level))
+                    ;; 任务属性（从已解析的props中获取）
+                    `(:scheduled ,(plist-get props :scheduled)
+                      :deadline ,(plist-get props :deadline)
+                      :priority ,(plist-get props :priority)
+                      :todo ,(plist-get props :todo))
+                    ;; 引用关系
+                    `(:ref-to ,ref-to
+                      :ref-from ,(when is-update (plist-get old-node :ref-from))
+                      :ref-count ,(length ref-to))
+                    ;; 时间戳
+                    (if is-update
+                        `(:created-at ,(plist-get old-node :created-at)
+                          :modified-at ,(current-time))
+                      `(:created-at ,(current-time)))
+                    ;; 其他属性（从已解析的props中获取）
+                    `(:properties ,(plist-get props :properties)
+                      :tags ,(plist-get props :tags))))))
+            
+            ;; 6. 存储节点（最后一步修改数据）
+            (ht-set! org-supertag-db--object id full-props)
+            ;; 7. 触发事件
+            (org-supertag-db-emit (if is-update
+                                    'node:updated
+                                  'node:created)
+                                id full-props)
+            ;; 8. 保存
+            (org-supertag-db-save)
+            ;; 9. 返回ID
+            id)))
+    ;; 错误处理
     (error
-     (message "添加节点失败: %s" (error-message-string err))
+     (message "添加节点失败: %s" (error-message-string error-data))
      nil)))
-
-(defun org-supertag-db-update-node-at-point ()
-  "更新当前位置节点的数据."
-  (when-let* ((props (org-supertag-db--parse-node-at-point))
-              (id (plist-get props :id))
-              (old-props (org-supertag-db-get id)))
-    ;; 保留创建时间
-    (when-let ((created-at (plist-get old-props :created-at)))
-      (setq props (plist-put props :created-at created-at)))
-    ;; 更新修改时间
-    (setq props (plist-put props :modified-at (current-time)))
-    (org-supertag-db-add id props)
-    id))
 
 (defun org-supertag-db--validate-node-props (props)
   "验证节点属性的完整性."
@@ -1382,7 +1364,7 @@ ref-to 是引用的节点ID列表"
 ;; 2. 注册事件处理器
 ;; (org-supertag-db-on 'entity:changed handler)
 ;; handler 函数接收事件相关的参数:
-;; - entity:changed: (id props)     ; 实体ID和新属���
+;; - entity:changed: (id props)     ; 实体ID和新属性
 ;; - link:created:  (type from to)  ; 关系类型,起点,终点
 ;; - link:removed:  (type from to)  ; 关系类型,起点,终点
 ;; - field:changed: (field-id value); 字段ID和新值
@@ -1606,36 +1588,47 @@ FILENAME 是相对于数据目录的文件名."
 
 (defun org-supertag-db-save ()
   "保存数据库到文件."
-  (when (org-supertag-db--dirty-p)  ; 只在有更改时才保存
+  (when (org-supertag-db--dirty-p)
     (message "保存数据库...")
+    (message "保存前检查数据: %S" 
+            (ht-get org-supertag-db--object "21D8EB80-251B-416A-8AE4-4A3E774DF7CE"))
     (condition-case err
         (progn
           ;; 运行保存前钩子
           (run-hooks 'org-supertag-db-before-save-hook)
+          
+          ;; 创建备份
+          (when (file-exists-p org-supertag-db-file)
+            (org-supertag-db-backup))
           
           ;; 确保目录存在
           (make-directory (file-name-directory org-supertag-db-file) t)
           
           ;; 写入文件
           (with-temp-file org-supertag-db-file
-            (insert ";; -*- lexical-binding: t -*-\n")
-            (insert ";;; 数据库文件 - 请勿手动编辑\n\n")
-            (insert "(require 'ht)\n")
-            (insert "(setq org-supertag-db--object (ht-create))\n")
-            (insert "(setq org-supertag-db--link (ht-create))\n\n")
-            (ht-map (lambda (k v)
-                     (insert (format "(ht-set! org-supertag-db--object %S '%S)\n" k v)))
-                   org-supertag-db--object)
-            (ht-map (lambda (k v)
-                     (insert (format "(ht-set! org-supertag-db--link %S '%S)\n" k v)))
-                   org-supertag-db--link))
-          
+            (let ((print-level nil)
+                  (print-length nil)
+                  (print-circle t))  ; 添加这些设置
+              (insert ";; -*- lexical-binding: t -*-\n")
+              (insert ";;; 数据库文件 - 请勿手动编辑\n\n")
+              (insert "(require 'ht)\n")
+              (insert "(setq org-supertag-db--object (ht-create))\n")
+              (insert "(setq org-supertag-db--link (ht-create))\n\n")
+              
+              ;; 使用临时变量保存数据
+              (let ((db-copy (ht-copy org-supertag-db--object)))
+                (ht-map (lambda (k v)
+                         (insert (format "(ht-set! org-supertag-db--object %S '%S)\n" 
+                                       k v)))
+                       db-copy))
+              (ht-map (lambda (k v)
+                       (insert (format "(ht-set! org-supertag-db--link %S '%S)\n" 
+                                     k v)))
+                     org-supertag-db--link)))
           ;; 清除脏数据标记
           (org-supertag-db--clear-dirty)
-          
           ;; 运行保存后钩子
           (run-hooks 'org-supertag-db-after-save-hook)
-          
           (message "数据库保存成功")
           t)
       (error
@@ -1757,7 +1750,6 @@ FILENAME 是相对于数据目录的文件名."
     (setq org-supertag-db--object (ht-create)
           org-supertag-db--link (ht-create))  
     (message "创建空数据库"))
-  
   ;; 设置数据变更监听
    (org-supertag-db-on 'entity:changed
                     (lambda (type id props)
