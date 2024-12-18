@@ -5,31 +5,6 @@
 ;; 核心原则：通过关系连接实体，使用 type、from、to 来表达关系
 
 ;;----------------------------------------------------------------------
-;; Tag Database Operation
-;;---------------------------------------------------------------------
-(defun org-supertag-tag-db-add (tag-id props)
-  "添加标签到数据库.
-TAG-ID: 标签ID
-PROPS: 标签属性"
-  (org-supertag-db-add tag-id props))
-
-(defun org-supertag-tag-db-get (tag-id)
-  "从数据库获取标签.
-TAG-ID: 标签ID"
-  (org-supertag-db-get tag-id))
-
-(defun org-supertag-tag-db-update (tag-id props)
-  "更新数据库中的标签.
-TAG-ID: 标签ID
-PROPS: 新的属性"
-  (org-supertag-db-add tag-id props))
-
-(defun org-supertag-tag-db-delete (tag-id)  
-  "删除数据库中的标签.
-TAG-ID: 标签ID"
-  (org-supertag-db-delete tag-id))
-
-;;----------------------------------------------------------------------
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
@@ -63,15 +38,24 @@ TAG-NAME 是标签名称"
 TAG-NAME: 标签名称
 PROPS: 额外属性"
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (fields (or (plist-get props :fields) '()))  ; 先获取字段
          (base-props (list :type :tag
                           :id sanitized-name
-                          :name sanitized-name  ; 添加必需的 name 属性
-                          :fields (or (plist-get props :fields) '()) ; 确保有 fields
-                          :created-at (current-time)))
-         (full-props (append base-props props)))
-    (org-supertag-db-add sanitized-name full-props)
+                          :name sanitized-name
+                          :fields fields      ; 使用获取的字段
+                          :created-at (current-time))))
+    
+    (message "Debug create-tag: props=%S" props)
+    (message "Debug create-tag: fields=%S" fields)
+    (message "Debug create-tag: base-props=%S" base-props)
+    
+    (org-supertag-db-add sanitized-name base-props)
+    
+    (message "Debug create-tag: 保存后的标签=%S" 
+             (org-supertag-db-get sanitized-name))
+    
     sanitized-name))
-
+    
 (defun org-supertag-get-all-tags ()
   "获取所有已定义的标签."
   (let ((all-entities (org-supertag-db-get-all)))
@@ -93,11 +77,14 @@ TAG-NAME 是标签名称"
 
 (defun org-supertag-tag-apply (tag-id)
   "将标签应用到当前位置的节点."
-  (let* ((tag (org-supertag-tag-get tag-id))
+  (let* ((tag (org-supertag-db-get tag-id))
          (node-id (org-id-get-create)))
     ;; 确保标签存在
     (unless tag
       (error "Tag %s not found" tag-id))
+    ;; 确保是有效的标签
+    (unless (eq (plist-get tag :type) :tag)
+      (error "Invalid tag type for %s" tag-id))
     ;; 确保节点存在或创建
     (unless (org-supertag-db-get node-id)
       (org-supertag--create-node node-id))
@@ -110,11 +97,28 @@ TAG-NAME 是标签名称"
     ;; 初始化字段
     (when-let ((fields (plist-get tag :fields)))
       (dolist (field fields)
-        (let ((field-name (plist-get field :name)))
-          (org-entry-put nil field-name ""))))
+        (let* ((field-name (plist-get field :name))
+               (field-type (plist-get field :type))
+               ;; 根据字段类型设置初始值
+               (initial-value 
+                (pcase field-type
+                  ('options 
+                   (car (plist-get field :options)))  ; 使用第一个选项作为默认值
+                  ('date 
+                   (format-time-string "%Y-%m-%d"))   ; 使用当前日期
+                  ('string 
+                   nil)                               ; 使用 nil 而不是空字符串
+                  (_ nil))))                          ; 默认使用 nil
+          ;; 使用 org-set-property 设置属性
+          (when initial-value  ; 只有当有初始值时才设置属性
+            (org-set-property field-name initial-value))
+          ;; 同时初始化数据库中的字段值
+          (org-supertag-tag--set-field-value 
+           tag-id node-id field-name initial-value))))
     ;; 添加标签到 org tags
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
+    ;; 返回节点ID
     node-id))
 
 (defun org-supertag-tag--remove (tag-id node-id)
@@ -158,12 +162,14 @@ TAG-ID: 标签ID（不带'tag:'前缀）"
   (plist-get (org-supertag-tag-db-get tag-id) :fields))
 
 (defun org-supertag-tag-add-field (tag-id field-def)
-  "为标签添加字段定义."
-  (let* ((tag (org-supertag-tag-db-get tag-id))
+  "为标签添加字段.
+TAG-ID: 标签ID
+FIELD-DEF: 字段定义"
+  (let* ((tag (org-supertag-db-get tag-id))
          (fields (plist-get tag :fields))
-         (new-fields (append fields (list field-def))))
-    (org-supertag-tag-db-update tag-id 
-                               (plist-put tag :fields new-fields))))
+         (new-fields (append fields (list field-def)))
+         (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+    (org-supertag-db-add tag-id new-tag)))
 
 (defun org-supertag-tag--set-field-value (tag-id node-id field-name value)
   "内部函数：为标签的字段设置值.
@@ -173,7 +179,7 @@ FIELD-NAME: 字段名
 VALUE: 字段值"
   (message "DEBUG: Setting field value - Tag: %s, Node: %s, Field: %s, Value: %s"
            tag-id node-id field-name value)
-  (let* ((tag (org-supertag-tag-db-get tag-id))
+  (let* ((tag (org-supertag-db-get tag-id))
          (fields (plist-get tag :fields))
          (field-def (cl-find field-name fields 
                             :key (lambda (f) (plist-get f :name))
@@ -195,13 +201,25 @@ TAG-NAME 是标签名称"
                           (org-supertag-get-all-tags)  ; 已存在的标签
                           org-supertag-preset-tags))))  ; 预设标签
   
-(let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-       ;; 获取或创建标签
-       (tag (or (org-supertag-tag-get sanitized-name)
-                ;; 如果标签不存在，创建一个基础标签
-                (org-supertag-tag-create sanitized-name))))   
-    ;; 应用标签
-    (org-supertag-tag-apply sanitized-name)))
+  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (preset-fields (org-supertag-get-preset-fields sanitized-name)))
+    
+    (message "Debug add-tag: 标签名=%s" sanitized-name)
+    (message "Debug add-tag: 预设字段=%S" preset-fields)
+    
+    ;; 获取或创建标签
+    (let ((tag (or (org-supertag-tag-get sanitized-name)
+                   ;; 如果标签不存在，创建一个带预设字段的标签
+                   (progn
+                     (message "Debug add-tag: 创建新标签，传入字段=%S" preset-fields)
+                     (org-supertag-tag-create sanitized-name 
+                                            :fields preset-fields)))))
+      
+      (message "Debug add-tag: 创建的标签=%S" 
+               (org-supertag-db-get sanitized-name))
+      
+      ;; 应用标签
+      (org-supertag-tag-apply sanitized-name))))
 
 (defun org-supertag-tag-set-field (tag-name)
   "为标签设置字段.
@@ -428,7 +446,7 @@ TAG-NAME 是标签名称"
     
     ("meeting" . ((:name "date"
                   :type date
-                  :description "会议日期")
+                  :description "会议日���")
                  (:name "attendees"
                   :type string
                   :description "参会人")
@@ -512,5 +530,36 @@ TAG-NAME 是标签名称"
       (let ((field-value (org-supertag-field-db-get-value node-id "status" tag-id)))
         (message "Field value: %S" field-value)
         (should (equal field-value "active"))))))
+
+(defun org-supertag-test-tag-creation (tag-name)
+  "测试标签创建过程"
+  (interactive "sTag name: ")
+  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (preset-fields (org-supertag-get-preset-fields sanitized-name)))
+    (message "Sanitized name: %s" sanitized-name)
+    (message "Preset fields: %S" preset-fields)
+    (let ((tag (org-supertag-tag-create sanitized-name :fields preset-fields)))
+      (message "Created tag: %S" (org-supertag-db-get tag)))))
+
+(defun org-supertag-test-tag-apply (tag-id)
+  "测试标签应用过程"
+  (interactive
+   (list (completing-read "Tag ID: " (org-supertag-get-all-tags))))
+  (let ((tag (org-supertag-db-get tag-id)))
+    (message "Tag before apply: %S" tag)
+    (let ((node-id (org-supertag-tag-apply tag-id)))
+      (message "Applied to node: %s" node-id)
+      (message "Node properties: %S" 
+               (org-entry-properties nil 'all)))))
+
+(defun org-supertag-debug-tag (tag-id)
+  "调试标签定义"
+  (interactive
+   (list (completing-read "Tag ID: " (org-supertag-get-all-tags))))
+  (let* ((tag (org-supertag-db-get tag-id))
+         (fields (plist-get tag :fields)))
+    (message "Tag: %S" tag)
+    (message "Fields: %S" fields)))
+
 
 (provide 'org-supertag-tag)

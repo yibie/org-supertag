@@ -106,21 +106,23 @@ FIELD 是字段定义，VALUE 是要验证的值。
     (when (and required (null value))
       (error "字段 '%s' 是必填的" name))
     ;; 如果值为空且不是必填，则验证通过
-    (when (null value)
-      (cl-return-from org-supertag-field-validate t))
-    ;; 类型检查
-    (when (and (eq type 'string) (not (stringp value)))
-      (error "字段 '%s' 需要字符串类型，但得到了 %S" name (type-of value)))
-    ;; 使用类型验证器
-    (when validator
-      (condition-case err
-          (unless (if (eq type 'options)
-                     (funcall validator value field)
-                   (funcall validator value))
-            (error "值 '%s' 不符合%s类型的要求" value type))
-        (error
-         (error "验证字段 '%s' 时出错: %s" name (error-message-string err)))))
-    t))
+    (if (null value)
+        t  ; 直接返回 t，不使用 cl-return-from
+      (progn
+        ;; 类型检查
+        (when (and (eq type 'string) (not (stringp value)))
+          (error "字段 '%s' 需要字符串类型，但得到了 %S" name (type-of value)))
+        
+        ;; 使用类型验证器
+        (when validator
+          (condition-case err
+              (unless (if (eq type 'options)
+                         (funcall validator value field)
+                       (funcall validator value))
+                (error "值 '%s' 不符合%s类型的要求" value type))
+            (error
+             (error "验证字段 '%s' 时出错: %s" name (error-message-string err)))))
+        t))))  ; 所有检查都通过，返回 t
 
 (defun org-supertag-field-get-value (field-def node-id tag-id)
   "Get field value.
@@ -251,10 +253,9 @@ Return the type definition plist, containing :validator, :formatter, :reader and
 (defun org-supertag-validate-string (value)
   "验证字符串值.
 VALUE: 要验证的值"
-  (let ((is-string (stringp value))
-        (is-non-empty (and value 
-                          (not (string-empty-p (string-trim value))))))
-    (and is-string is-non-empty)))
+  (or (null value)                    ; 允许空值
+      (and (stringp value)           ; 非空时必须是字符串
+           (not (string-empty-p (string-trim value))))))
 
 (defun org-supertag-format-string (value field)
   "Format string VALUE.
@@ -426,55 +427,33 @@ PROMPT 是提示信息。"
     values))
 
 (defun org-supertag-validate-range (value)
-  "验证数值范围.
-VALUE 应该是 (MIN . MAX) 格式的 cons cell"
-  (and (consp value)
-       (numberp (car value))
-       (numberp (cdr value))
-       (<= (car value) (cdr value))))
+  "验证范围值.
+VALUE: 要验证的值，格式应为 'min-max'"
+  (when value  ; 允许空值
+    (condition-case nil
+        (let* ((parts (split-string value "-"))
+               (min (string-to-number (car parts)))
+               (max (string-to-number (cadr parts))))
+          (and (= (length parts) 2)     ; 必须有两个部分
+               (numberp min)             ; 最小值必须是数字
+               (numberp max)             ; 最大值必须是数字
+               (< min max)))            ; 最小值必须小于最大值
+      (error nil))))
 
-(defun org-supertag-format-range (value _field)
-  "格式化数值范围.
-VALUE 是 (MIN . MAX) 格式的 cons cell"
-  (format "%s-%s" (car value) (cdr value)))
+(defun org-supertag-format-range (value field-def)
+  "格式化范围值.
+VALUE: 范围值
+FIELD-DEF: 字段定义"
+  value)  ; 直接返回原值
 
-(defun org-supertag-read-range-field (prompt &optional default)
-  "读取数值范围.
-PROMPT 是提示信息
-DEFAULT 是默认值，格式为 (MIN . MAX)"
-  (let* ((default-min (and default (car default)))
-         (default-max (and default (cdr default)))
-         (min-str (read-string 
-                  (format "%s 最小值%s: "
-                          prompt
-                          (if default-min
-                              (format " (默认: %s)" default-min)
-                            ""))
-                  nil nil 
-                  (and default-min (number-to-string default-min))))
-         (max-str (read-string 
-                  (format "%s 最大值%s: "
-                          prompt
-                          (if default-max
-                              (format " (默认: %s)" default-max)
-                            ""))
-                  nil nil
-                  (and default-max (number-to-string default-max)))))
-    ;; 验证输入
-    (if (and (string-match-p "^[0-9.]+$" min-str)
-             (string-match-p "^[0-9.]+$" max-str))
-        (let ((min (string-to-number min-str))
-              (max (string-to-number max-str)))
-          (if (<= min max)
-              (cons min max)
-            (progn
-              (message "最小值必须小于或等于最大值")
-              (sit-for 1)
-              (org-supertag-read-range-field prompt default))))
-      (progn
-        (message "请输入有效的数字")
-        (sit-for 1)
-        (org-supertag-read-range-field prompt default)))))
+(defun org-supertag-read-range-field (field-def)
+  "读取范围值.
+FIELD-DEF: 字段定义"
+  (let ((value (read-string 
+                (format "输入范围 (格式: min-max): "))))
+    (if (org-supertag-validate-range value)
+        value
+      (error "无效的范围格式，请使用 'min-max' 格式，如 '1-10'"))))
 
 ;;----------------------------------------------------------------------
 ;; Read Field Value
