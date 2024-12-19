@@ -1,15 +1,15 @@
 ;;; org-supertag-node.el --- Node management for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; 提供节点的核心功能，包括：
-;; - 节点结构定义
-;; - 节点操作（创建、移动、复制、删除）
-;; - 节点监控
-;; - 节点引用关系
-;; 节点实现方法：别忘了 org-supertag-node--handle-delete 和 org-supertag-node--handle-create
-;; 和 org-supertag-node-cache
-;; 节点每次更新，都要更新两层：1. 数据层，2. 实体层
-
+;; Provides core node functionality including:
+;; - Node structure definition
+;; - Node operations (create, move, copy, delete)
+;; - Node monitoring
+;; - Node reference relationships
+;; Implementation notes:
+;; - Remember to implement org-supertag-node--handle-delete and org-supertag-node--handle-create
+;; - Use org-supertag-node-cache
+;; - Node updates require two layers: 1. Data layer 2. Entity layer
 
 (require 'org)
 (require 'org-element)
@@ -18,125 +18,125 @@
 (require 'org-supertag-query)
 
 ;;------------------------------------------------------------------------------
-;; Database Operations - 数据库操作函数
+;; Database Operations
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-db-create (id props)
-  "在数据库中创建新节点.
-ID 是节点唯一标识
-PROPS 是节点属性
+  "Create a new node in the database.
+ID is the unique node identifier
+PROPS are the node properties
 
-说明：
-1. 验证必要属性
-2. 添加系统属性
-3. 创建节点记录
-4. 触发创建事件"
-  ;; 验证必要属性
+Notes:
+1. Validates required properties
+2. Adds system properties
+3. Creates node record
+4. Triggers creation event"
+  ;; Validate required properties
   (unless (plist-get props :title)
-    (error "节点必须有标题"))
+    (error "Node must have a title"))
   
-  ;; 构建完整的节点属性
+  ;; Build complete node properties
   (let ((node-props (append
                     (list :id id
                           :type :node
                           :created-at (current-time))
                     props)))
-    ;; 存储节点
+    ;; Store node
     (org-supertag-db-add id node-props)
-    ;; 触发事件
+    ;; Trigger event
     (run-hook-with-args 'org-supertag-node-created-hook id node-props)
-    ;; 返回节点属性
+    ;; Return node properties
     node-props))
 
 (defun org-supertag-node-db-update (id props)
-  "更新数据库中的节点.
-ID 是节点唯一标识
-PROPS 是要更新的属性"
+  "Update an existing node in the database.
+ID is the unique node identifier
+PROPS are the properties to update"
   (when-let ((node (org-supertag-db-get id)))
     (let ((new-props nil))
-      ;; 1. 保留原有的创建时间
+      ;; 1. Preserve creation time
       (setq new-props (list :created-at (plist-get node :created-at)))
-      ;; 2. 添加修改时间
+      ;; 2. Add modification time
       (setq new-props (plist-put new-props :modified-at (current-time)))
-      ;; 3. 清理输入属性(移除系统属性)
+      ;; 3. Clean input properties (remove system props)
       (let ((clean-props (copy-sequence props)))
         (while (or (plist-member clean-props :created-at)
                   (plist-member clean-props :modified-at))
           (setq clean-props (org-plist-delete 
                            (org-plist-delete clean-props :created-at)
                            :modified-at)))
-        ;; 4. 合并属性
+        ;; 4. Merge properties
         (setq new-props (append new-props clean-props)))
-      ;; 5. 更新数据库
+      ;; 5. Update database
       (org-supertag-db-add id new-props)
-      ;; 6. 触发事件
+      ;; 6. Trigger event
       (org-supertag-emit 'node:updated id new-props)
-      ;; 7. 返回更新后的属性
+      ;; 7. Return updated properties
       new-props)))
 
 (defun org-supertag-node-db-exists-p (id)
-  "检查节点是否存在于数据库中.
-ID 是节点唯一标识
+  "Check if node exists in database.
+ID is the unique node identifier
 
-返回值：
-- t   节点存在且类型为 :node
-- nil 节点不存在或类型不是 :node"
+Returns:
+- t   if node exists and type is :node
+- nil if node doesn't exist or type isn't :node"
   (when-let ((node (org-supertag-db-get id)))
     (eq (plist-get node :type) :node)))
 
 (defun org-supertag-node-db-get-tags (id)
-  "获取节点的所有标签.
-ID 是节点唯一标识
+  "Get all tags for a node.
+ID is the unique node identifier
 
-返回值：
-标签ID列表，如果节点不存在返回 nil"
+Returns:
+List of tag IDs, or nil if node doesn't exist"
   (when (org-supertag-node-db-exists-p id)
-    (mapcar #'cdr  ; 获取标签ID
+    (mapcar #'cdr  ; Get tag IDs
             (org-supertag-db-get-links-by-type :node-tag
                                               :from id))))
 
 (defun org-supertag-node-db-add-tag (node-id tag-id)
-  "为节点添加标签.
-NODE-ID 是节点ID
-TAG-ID 是标签ID"
+  "Add a tag to a node.
+NODE-ID is the node identifier
+TAG-ID is the tag identifier"
   (when (and (org-supertag-node-db-exists-p node-id)
              (org-supertag-db-exists-p tag-id))
-    ;; 添加关系，注意参数顺序
+    ;; Add relationship, note parameter order
     (org-supertag-db-link :node-tag 
                          node-id 
                          tag-id 
-                         ;; 添加关系属性
+                         ;; Add relationship properties
                          `(:created-at ,(current-time)))
-    ;; 触发事件
+    ;; Trigger event
     (run-hook-with-args 'org-supertag-node-tag-added-hook
                         node-id tag-id)))
 
 (defun org-supertag-node-db--get-candidates ()
-  "获取所有可引用节点的候选列表.
+  "Get list of all referenceable node candidates.
 
-返回值：
-((title . id) ...) 形式的关联列表，其中：
-- title 是节点标题
-- id 是节点唯一标识
+Returns:
+Association list of ((title . id) ...) where:
+- title is the node title
+- id is the unique node identifier
 
-说明：
-1. 遍历数据库中的所有节点
-2. 过滤出类型为 :node 的实体
-3. 构建标题和ID的关联"
+Notes:
+1. Traverses all nodes in database
+2. Filters for type :node entities
+3. Builds title and ID associations"
   (let (candidates)
     (maphash (lambda (id node)
                (when (eq (plist-get node :type) :node)
                  (push (cons (plist-get node :title) id)
                        candidates)))
              org-supertag-db--object)
-    ;; 按标题排序
+    ;; Sort by title
     (sort candidates
           (lambda (a b)
             (string< (car a) (car b))))))
 
 (defun org-supertag-node-get-tags (node-id)
-  "获取节点关联的所有标签ID列表.
-NODE-ID 是节点的ID"
+  "Get list of all tag IDs associated with a node.
+NODE-ID is the node identifier"
   (let ((result nil))
     (maphash
      (lambda (link-id props)
@@ -150,7 +150,7 @@ NODE-ID 是节点的ID"
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-node-db-set-field (node-id field-id value)
-  "设置节点的字段���.
+  "设置节点的字段值.
 NODE-ID 是节点ID
 FIELD-ID 是字段ID
 VALUE 是字段值
@@ -189,45 +189,47 @@ NODE-ID 是节点ID
           fields))))                       
 
 ;;------------------------------------------------------------------------------
-;; Operation Funtions
+;; Operation Functions
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-sync-at-point ()
-  "同步当前位置的节点数据."
+  "Synchronize node data at current point.
+Returns:
+- Node ID if successful
+- nil if no valid node found"
   (let ((existing-id (org-id-get)))
     (if existing-id
-        ;; 更新已存在的节点
+        ;; Update existing node
         (when (org-supertag-node-db-exists-p existing-id)
-          ;; 直接使用 org-supertag-db-add-node-at-point
           (org-supertag-db-add-node-at-point)
           existing-id)
-      ;; 创建新节点
+      ;; Create new node
       (let ((new-id (org-id-get-create)))
         (org-supertag-db-add-node-at-point)
         new-id))))
 
 (defun org-supertag-node-get-props ()
-  "获取当前节点的属性."
+  "Get properties of current node."
   (org-supertag-db--parse-node-at-point))
 
 (defun org-supertag-node-sync-display ()
-  "同步节点的显示状态.
+  "Synchronize node display state.
 
-处理流程：
-1. 确保节点有ID属性
-2. 更新属性抽屉中的字段
-3. 更新标签显示
-4. 更新任务状态显示
+Process:
+1. Ensure node has ID property
+2. Update fields in properties drawer
+3. Update tag display
+4. Update todo state display
 
-说明：
-- 保持显示状态与数据库一致
-- 不触发数据库更新
-- 仅更新显示相关的属性"
+Notes:
+- Keeps display state consistent with database
+- Does not trigger database updates
+- Only updates display-related properties"
   (when-let ((node-id (org-id-get)))
     (when-let ((node (org-supertag-db-get node-id)))
-      ;; 更新属性抽屉
+      ;; Update properties drawer
       (org-set-property "ID" node-id)
-      ;; 更新其他显示状态
+      ;; Update other display states
       (let ((tags (plist-get node :tags))
             (todo (plist-get node :todo)))
         (when tags
@@ -235,33 +237,30 @@ NODE-ID 是节点ID
         (when todo
           (org-todo todo))))))
 
-
-
-
 ;;------------------------------------------------------------------------------
 ;; Node Commands 
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-create ()
-  "在当前位置创建一个新的 supertag 节点.
+  "Create a new supertag node at current position.
 
-使用场景：
-1. 用户想要将普通的 org 标题转换为 supertag 节点
-2. 确保标题没有关联的节点ID
+Use cases:
+1. Convert regular org heading to supertag node
+2. Ensure heading has no associated node ID
 
-前置条件：
-1. 光标必须在标题处
-2. 标题不能已经有节点ID"
+Prerequisites:
+1. Cursor must be on a heading
+2. Heading must not already have a node ID"
   (interactive)
   (unless (org-at-heading-p)
-    (user-error "光标必须在标题处"))
+    (user-error "Cursor must be on a heading"))
   (when (org-id-get)
-    (user-error "该标题已经有一个节点"))
+    (user-error "Heading already has a node"))
   (org-supertag-node-sync-at-point))
 
 (defun org-supertag--create-node (node-id)
-  "根据ID创建一个新的 supertag 节点.
-NODE-ID: 节点ID"
+  "Create a new supertag node with given ID.
+NODE-ID: The node identifier"
   (let ((node-data (list :id node-id
                         :type :node
                         :title (org-get-heading t t t t)
@@ -274,10 +273,10 @@ NODE-ID: 节点ID"
     node-id))
 
 (defun org-supertag-node-get-props-at-point ()
-  "获取当前位置节点的属性.
-返回值：
-- 节点属性列表
-- nil 如果不是有效节点"
+  "Get properties of node at current point.
+Returns:
+- Property list if valid node
+- nil if not a valid node"
   (when (org-at-heading-p)
     (let* ((element (org-element-at-point))
            (id (org-id-get))
@@ -294,98 +293,95 @@ NODE-ID: 节点ID"
               :olp olp)))))
 
 (defun org-supertag-node-update ()
-  "更新当前位置的节点.
+  "Update node at current position.
 
-使用场景：
-1. 用户修改了节点内容后手动更新
-2. 需要强制同步节点数据
+Use cases:
+1. Manual update after node content changes
+2. Force node data synchronization
 
-前置条件：
-1. 光标必须在标题处
-2. 标题必须有关联的节点ID
+Prerequisites:
+1. Cursor must be on a heading
+2. Heading must have an associated node ID
 
-返回值：
-- 成功时返回节点ID
-- 失败时抛出错误"
+Returns:
+- Node ID on success
+- Throws error on failure"
   (interactive)
   (unless (org-at-heading-p)
-    (user-error "光标必须在标题处"))
-  
+    (user-error "Cursor must be on a heading"))
   (let ((id (org-id-get)))
     (unless id
-      (user-error "该标题没有关联的节点"))
-    
-    ;; 获取节点属性
+      (user-error "Heading has no associated node"))
+    ;; Get node properties
     (let ((props (org-supertag-node-get-props-at-point)))
       (unless props
-        (error "无法获取节点属性"))
-      
-      ;; 更新数据库
+        (error "Unable to get node properties"))
+      ;; Update database
       (condition-case err
           (progn
             (org-supertag-node-db-update id props)
-            (message "节点更新成功: %s" id)
+            (message "Node updated successfully: %s" id)
             id)
         (error
-         (message "节点更新失败: %s" (error-message-string err))
+         (message "Node update failed: %s" (error-message-string err))
          (signal (car err) (cdr err)))))))
 
 (defun org-supertag-node-db-update (id props)
-  "更新或创建数据库中的节点.
-ID 是节点ID
-PROPS 是节点属性
+  "Update or create a node in the database.
+ID is the node identifier
+PROPS are the node properties
 
-返回值：
-- 成功时返回更新后的属性
-- 失败时抛出错误"
+Returns:
+- Updated properties on success
+- Throws error on failure"
   (let* ((existing-node (org-supertag-db-get id))
          (is-new (not existing-node))
          (new-props (org-supertag-db--normalize-props
                     (append
-                     ;; 基本属性
+                     ;; Basic properties
                      (list :type :node
                            :id id)
-                     ;; 时间戳
+                     ;; Timestamps
                      (if is-new
                          (list :created-at (current-time)
                                :modified-at (current-time))
                        (list :created-at (plist-get existing-node :created-at)
                              :modified-at (current-time)))
-                     ;; 用户提供的属性
+                     ;; User provided properties
                      props))))
     
-    ;; 验证必要属性
+    ;; Validate required properties
     (unless (plist-get new-props :title)
       (error "Missing required property: title"))
     (unless (plist-get new-props :file-path)
       (error "Missing required property: file-path"))
-    ;; 更新数据库
+    ;; Update database
     (org-supertag-db-add id new-props)
-    ;; 触发相应的钩子
+    ;; Trigger appropriate hook
     (run-hook-with-args 
      (if is-new
          'org-supertag-node-created-hook
        'org-supertag-node-updated-hook)
      id new-props)
-    ;; 记录操作
+    ;; Log operation
     (message "%s node: %s" 
              (if is-new "Created new" "Updated")
              id)
-    ;; 返回更新后的属性
+    ;; Return updated properties
     new-props))
 
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
-  "从节点移除标签关联.
-NODE-ID 是节点ID
-TAG-ID 是标签ID"
+  "Remove tag association from a node.
+NODE-ID is the node identifier
+TAG-ID is the tag identifier"
   (let ((link-id (format ":node-tag:%s->%s" node-id tag-id)))
-    ;; 从数据库中移除关联
+    ;; Remove association from database
     (remhash link-id org-supertag-db--link)
-    ;; 清除缓存
+    ;; Clear caches
     (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
     (org-supertag-db--cache-remove 'query (format "tag-nodes:%s" tag-id))
-    ;; 安排保存
+    ;; Schedule save
     (org-supertag-db-save)))
 
 
@@ -394,70 +390,70 @@ TAG-ID 是标签ID"
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node--in-node-p ()
-  "检查当前位置是否在有效的 org-supertag 节点内.
-有效节点需满足：
-1. 当前位置能回到标题
-2. 标题有 ID 属性
-3. ID 在数据库中存在对应记录
+  "Check if current position is within a valid org-supertag node.
+Valid node requirements:
+1. Current position can reach a heading
+2. Heading has an ID property
+3. ID exists in database
 
-返回值：
-- (id . title) 如果在有效节点内
-- nil 如果不在有效节点内，并提供相应提示"
+Returns:
+- (id . title) if in valid node
+- nil if not in valid node, with appropriate message"
   (condition-case nil
       (save-excursion
         (org-back-to-heading t)
         (let ((id (org-entry-get nil "ID"))
               (title (org-get-heading t t t t)))
           (cond
-           ;; 没有 ID
+           ;; No ID
            ((null id)
-            (message "当前节点未创建，请使用 org-supertag-node-create 命令创建")
+            (message "Current node not created, use org-supertag-node-create command")
             nil)
-           ;; ID 不在数据库中
+           ;; ID not in database
            ((not (org-supertag-node-db-exists-p id))
-            (message "节点 ID 未在数据库中注册，请使用 org-supertag-node-create 命令创建")
+            (message "Node ID not registered in database, use org-supertag-node-create command")
             nil)
-           ;; 有效节点
+           ;; Valid node
            (t (cons id title)))))
-    ;; 不在任何标题下
+    ;; Not under any heading
     (error 
-     (message "当前位置不在任何节点内")
+     (message "Current position not within any node")
      nil)))
 
 (defun org-supertag-node-db-add-reference (from-id to-id)
-  "添加节点间的引用关系.
-FROM-ID 是引用源节点
-TO-ID 是被引用节点
+  "Add reference relationship between nodes.
+FROM-ID is the source node
+TO-ID is the target node
 
-说明：
-1. 检查节点存在性
-2. 创建引用关联
-3. 触发事件"
+Notes:
+1. Checks node existence
+2. Creates reference association
+3. Triggers event"
   (when (and (org-supertag-node-db-exists-p from-id)
              (org-supertag-node-db-exists-p to-id))
-    ;; 添加引用关系
+    ;; Add reference relationship
     (org-supertag-db-link
      :type :node-ref
      :from from-id
      :to to-id)
-    ;; 清除缓存
+    ;; Clear cache
     (org-supertag-db--cache-remove 'query 
                                   (format "node-refs:%s" from-id))
-    ;; 触发事件
+    ;; Trigger event
     (run-hook-with-args 'org-supertag-node-reference-added-hook
                        from-id to-id)))
 
-;; 3. 关系查询
+;; 3. Relationship queries
 (defun org-supertag-node-db-get-reference (node-id &optional direction)
-  "获取节点的引用关系.
-NODE-ID 是节点ID
-DIRECTION 是引用方向:
-  - 'to   获取该节点引用的其他节点
-  - 'from 获取引用该节点的其他节点
-  - nil   获取所有相关引用
+  "Get node reference relationships.
+NODE-ID is the node identifier
+DIRECTION specifies reference direction:
+  - 'to   get nodes referenced by this node
+  - 'from get nodes referencing this node
+  - nil   get all related references
 
-返回值：
-节点ID列表"
+Returns:
+List of node IDs"
   (or (org-supertag-db--cache-get 'query 
                                  (format "node-refs:%s:%s" node-id direction))
       (when-let ((node (org-supertag-db-get node-id)))
@@ -473,61 +469,61 @@ DIRECTION 是引用方向:
 
 
 
-;; 4. 关系清理
+;; 4. Relationship cleanup
 (defun org-supertag-node-db-remove-reference (from-id to-id)
-  "移除节点间的引用关系.
-FROM-ID 是引用源节点
-TO-ID 是被引用节点"
+  "Remove reference relationship between nodes.
+FROM-ID is the source node
+TO-ID is the target node"
   (when-let* ((from-node (org-supertag-db-get from-id))
               (refs-to (plist-get from-node :refs-to)))
-    ;; 使用数据库的引用处理机制
+    ;; Use database reference handling mechanism
     (org-supertag-db--handle-refs-updated 
      from-id 
      (delete to-id refs-to))))
 
 ;;------------------------------------------------------------------------------
-;; 节点引用功能
+;; Node Reference Functions
 ;;------------------------------------------------------------------------------  
 
 
 (defun org-supertag-node--insert-reference (node-id)
-  "在当前位置插入节点引用.
-NODE-ID 是被引用节点的ID"
+  "Insert node reference at current position.
+NODE-ID is the referenced node's identifier"
   (let* ((target-node (org-supertag-db-get node-id))
          (target-title (plist-get target-node :title))
          (link-text (format "[[id:%s][%s]]" node-id target-title)))
-    ;; 直接在当前位置插入链接
+    ;; Insert link at current position
     (insert link-text)))
 
 
 (defun org-supertag-node-add-reference ()
-  "添加节点引用.
-在当前位置插入对选定节点的引用，并更新引用关系."
+  "Add node reference.
+Insert reference to selected node at current position and update relationships."
   (interactive)
   (unless (org-supertag-node--in-node-p)
-    (user-error "必须在节点内"))
+    (user-error "Must be within a node"))
   (when-let* ((candidates (org-supertag-node-db--get-candidates))
               (selected (completing-read
-                        "引用节点: "
+                        "Reference node: "
                         (mapcar #'car candidates)
                         nil t))
               (target-id (cdr (assoc selected candidates))))
-    ;; 1. 插入引用
+    ;; 1. Insert reference
     (org-supertag-node--insert-reference target-id)
-    ;; 2. 更新引用关系
+    ;; 2. Update reference relationships
     (org-supertag-db--parse-node-all-ref)
-    (message "已添加对节点 '%s' 的引用" selected)))
+    (message "Added reference to node '%s'" selected)))
 
 
 
 (defun org-supertag-node-remove-reference (node-id)
-  "移除对指定节点的引用.
-NODE-ID 是要移除的引用节点ID.
-使用 org-element 解析和定位链接，确保准确删除."
+  "Remove reference to specified node.
+NODE-ID is the referenced node identifier.
+Uses org-element to parse and locate links for accurate removal."
   (interactive 
    (let* ((refs (org-supertag-node--collect-reference-id-title))
           (selected (completing-read 
-                    "移除引用: "
+                    "Remove reference: "
                     (mapcar #'car refs)
                     nil t)))
      (list (cdr (assoc selected refs)))))
@@ -536,7 +532,7 @@ NODE-ID 是要移除的引用节点ID.
         (end (org-entry-end-position))
         (removed 0))
     (save-excursion
-      ;; 1. 使用 org-element 解析和删除链接
+      ;; 1. Use org-element to parse and remove links
       (goto-char start)
       (while (< (point) end)
         (let ((element (org-element-context)))
@@ -550,11 +546,11 @@ NODE-ID 是要移除的引用节点ID.
 
     (org-supertag-db--parse-node-all-ref)
     
-    (message "已移除 %d 处引用" removed)))
+    (message "Removed %d references" removed)))
 
 (defun org-supertag-node--collect-reference-id-title ()
-  "收集当前节点中的所有引用信息.
-返回格式: ((title . id) ...)"
+  "Collect all reference information in current node.
+Returns: ((title . id) ...)"
   (let ((refs nil)
         (start (org-entry-beginning-position))
         (end (org-entry-end-position)))
@@ -572,37 +568,35 @@ NODE-ID 是要移除的引用节点ID.
     (nreverse refs)))
 
 ;;------------------------------------------------------------------------------
-;; Event Hooks - 事件钩子
+;; Event Hooks
 ;;------------------------------------------------------------------------------    
 
-
 (defvar org-supertag-node-created-hook nil
-  "节点创建后的钩子.
-参数: (id props)")
+  "Hook run after node creation.
+Arguments: (id props)")
 
 (defvar org-supertag-node-updated-hook nil
-  "节点更新后的钩子.
-参数: (id props)")
+  "Hook run after node update.
+Arguments: (id props)")
 
 (defvar org-supertag-node-deleted-hook nil
-  "节点删除后的钩子.
-参数: (id)")
+  "Hook run after node deletion.
+Arguments: (id)")
 
 (defvar org-supertag-node-tag-added-hook nil
-  "节点添加标签后的钩子.
-参数: (node-id tag-id)")
-
+  "Hook run after tag is added to node.
+Arguments: (node-id tag-id)")
 
 (defvar org-supertag-node-field-updated-hook nil
-  "节点字段更新后的钩子.
-参数: (node-id field-id value)")
+  "Hook run after node field update.
+Arguments: (node-id field-id value)")
 
 (defvar org-supertag-node-reference-added-hook nil
-  "节点引用关系添加后的钩子.
-参数: (from-id to-id)")
+  "Hook run after node reference is added.
+Arguments: (from-id to-id)")
 
 (defvar org-supertag-node-reference-removed-hook nil
-  "节点引用关系移除后的钩子.
-参数: (from-id to-id)")
+  "Hook run after node reference is removed.
+Arguments: (from-id to-id)")
 
 (provide 'org-supertag-node)

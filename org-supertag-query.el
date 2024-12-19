@@ -6,38 +6,38 @@
 (require 'org-supertag-field) 
 
 (defun org-supertag-find-matching-tags (keywords)
-  "查找匹配关键字的标签.
-KEYWORDS 是关键字列表"
+  "Find tags matching the given keywords.
+KEYWORDS is a list of keywords to match against tag names."
   (let ((all-tags (org-supertag-db-find-by-props '(:type :tag)))
         matching-tags)
     (dolist (tag-id (mapcar #'car all-tags))
       (when (cl-some (lambda (keyword)
-                      (string-match-p keyword tag-id))
+                      (string-match-p (concat "(?i)" keyword) tag-id))
                     keywords)
         (push tag-id matching-tags)))
     matching-tags))
 
 (defun org-supertag-find-matching-nodes (keywords)
-  "查找匹配关键字的节点.
-KEYWORDS 是关键字列表"
-  (mapcar #'car  ; 只返回节点 ID
+  "Find nodes matching the given keywords.
+KEYWORDS is a list of keywords to match against node titles.
+Returns a list of matching node IDs."
+  (mapcar #'car  ; Return only node IDs
           (org-supertag-db-find-by-props 
-           '(:type :node)  ; 查找所有节点类型
-           (lambda (props)  ; 标题匹配检查
+           '(:type :node)  ; Find all nodes
+           (lambda (props)  ; Check title matches
              (let ((title (plist-get props :title)))
                (and title
                     (cl-some 
                      (lambda (keyword)
                        (string-match-p 
-                        (regexp-quote keyword) 
+                        (concat "(?i)" (regexp-quote keyword))
                         title))
                      keywords)))))))
 
-
 (defun org-supertag-find-matching-fields (keywords)
-  "查找匹配关键字的字段.
-KEYWORDS 是关键字列表
-返回格式: ((tag-id field-name node-id value) ...)"
+  "Find fields matching the given keywords.
+KEYWORDS is a list of keywords to match against field names and values.
+Returns a list of (tag-id field-name node-id value) tuples."
   (let (results)
     (dolist (link (org-supertag-db-find-links :node-field nil nil))
       (let ((field-name (plist-get link :field-name))
@@ -45,8 +45,8 @@ KEYWORDS 是关键字列表
         (when (and field-name value
                   (cl-some 
                    (lambda (keyword)
-                     (or (string-match-p keyword field-name)
-                         (string-match-p keyword value)))
+                     (or (string-match-p (concat "(?i)" keyword) field-name)
+                         (string-match-p (concat "(?i)" keyword) value)))
                    keywords))
           (push (list (plist-get link :to)      ; tag-id
                      field-name
@@ -56,34 +56,32 @@ KEYWORDS 是关键字列表
     (nreverse results)))
 
 (defun org-supertag-query--get-node-tags (node-id)
-  "获取节点的所有标签，用于查询显示.
-NODE-ID 是节点ID
+  "Get all tags for a node for query display.
+NODE-ID is the node identifier.
 
-返回值：
-- 标签列表
-- nil 如果节点不存在或没有标签"
+Returns:
+- List of tags
+- nil if node doesn't exist or has no tags"
   (when-let* ((props (org-supertag-db-get node-id))
               (file (plist-get props :file-path))
               (pos (plist-get props :pos)))
     (when (file-exists-p file)
       (with-temp-buffer
         (insert-file-contents file)
-        (org-mode)  ; 启用 org-mode
+        (org-mode)  ; Enable org-mode
         (goto-char pos)
         (org-get-tags)))))
 
-
-
 (defun org-supertag-node-has-children-p (node-id)
-  "检查节点是否有子节点.
-NODE-ID 是节点ID"
+  "Check if node has child nodes.
+NODE-ID is the node identifier."
   (when-let* ((props (org-supertag-db-get node-id))
               (file (plist-get props :file-path))
               (pos (plist-get props :pos)))
     (when (file-exists-p file)
       (with-temp-buffer
         (insert-file-contents file)
-        (org-mode)  ; 启用 org-mode
+        (org-mode)  ; Enable org-mode
         (goto-char pos)
         (let ((level (org-current-level)))
           (forward-line)
@@ -91,8 +89,8 @@ NODE-ID 是节点ID"
                (> (org-current-level) level)))))))
 
 (defun org-supertag-query-find-by-tag (tag-name)
-  "通过标签查找节点.
-TAG-NAME 是标签名称"
+  "Find nodes by tag name.
+TAG-NAME is the tag to search for."
   (let ((nodes '()))
     (maphash
      (lambda (id props)
@@ -110,11 +108,11 @@ TAG-NAME 是标签名称"
     nodes))
 
 (defun org-supertag-query-format-node (node)
-  "格式化节点显示.
-NODE 是节点属性列表"
+  "Format node for display.
+NODE is the node property list."
   (let* ((id (plist-get node :id))
          (title (plist-get node :title))
-         (file (plist-get node :file-path))  ; 从 node 中获取，而不是 props
+         (file (plist-get node :file-path))  ; Get from node, not props
          (has-children (org-supertag-node-has-children-p id))
          (tags (org-supertag-query--get-node-tags id))
          (formatted-tags (when tags
@@ -133,7 +131,7 @@ NODE 是节点属性列表"
 ;;---------------------------------------------------------------
 
 (defun org-supertag-query-find-nodes (keywords)
-  "查找匹配关键字的节点."
+  "Find nodes matching keywords."
   (let (results)
     (maphash
      (lambda (id props)
@@ -143,20 +141,20 @@ NODE 是节点属性列表"
            (when (file-exists-p file)
              (with-temp-buffer
                (insert-file-contents file)
-               (org-mode)  ; 启用 org-mode
+               (org-mode)  ; Enable org-mode
                (goto-char pos)
-               ;; 获取节点的所有可搜索内容
+               ;; Get all searchable content
                (let* ((title (plist-get props :title))
                       (tags (org-get-tags))
                       (fields (org-entry-properties nil 'standard))
                       (field-values (mapcar #'cdr fields))
-                      ;; 合并所有可搜索的文本
+                      ;; Combine all searchable text
                       (searchable-text (concat 
                                       title " "
                                       (mapconcat #'identity (or tags '()) " ")
                                       " "
                                       (mapconcat #'identity field-values " "))))
-                 ;; 检查是否所有关键字都匹配
+                 ;; Check if all keywords match
                  (when (cl-every 
                         (lambda (keyword)
                           (string-match-p 
@@ -165,7 +163,7 @@ NODE 是节点属性列表"
                         keywords)
                    (push props results))))))))
      org-supertag-db--object)
-    ;; 返回结果
+    ;; Return results
     (nreverse results)))
 
 (defvar org-supertag-query-mode-map
@@ -175,7 +173,7 @@ NODE 是节点属性列表"
     (define-key map (kbd "C-c C-x n") #'org-supertag-query-export-results-to-new-file)
     (define-key map (kbd "C-c C-x C-r") #'org-supertag-query-toggle-checkbox-region)
     (define-key map (kbd "C-c C-x C-u") #'org-supertag-query-untoggle-checkbox-region)
-    (define-key map (kbd "C-c C-c") #'org-supertag-query-toggle-checkbox)  ; 添加切换复选框的快捷键
+    (define-key map (kbd "C-c C-c") #'org-supertag-query-toggle-checkbox)  ; Add checkbox toggle shortcut
     map)
   "Keymap for `org-supertag-query-mode'.")
 
@@ -186,42 +184,43 @@ NODE 是节点属性列表"
   :keymap org-supertag-query-mode-map)
 
 (defun org-supertag-query-show-results (keyword-list)
-  "显示搜索结果.
-KEYWORD-LIST 是关键字列表"
+  "Display search results.
+KEYWORD-LIST is the list of keywords to search for."
   (with-current-buffer (get-buffer-create "*Org SuperTag Search*")
     (let ((inhibit-read-only t))
       (erase-buffer)
       (org-mode)
       (org-supertag-query-mode)
       
-      ;; 显示搜索信息
+      ;; Display search info
       (insert "#+TITLE: SuperTag Search Results\n\n")
-      (insert (format "* 搜索条件: %s\n" 
+      (insert (format "* Search Terms: %s\n" 
                      (mapconcat #'identity keyword-list " ")))
       (org-show-all)
       
-      ;; 显示操作说明
-      (insert "* 操作说明\n")
-      (insert "- 搜索范围：标题、标签、属性和字段值\n")
-      (insert "- 多个关键字之间是 AND 关系（都需要匹配）\n")
-      (insert "- [+] 表示该节点包含子节点\n\n")
-      (insert "快捷键：\n")
-      (insert "- C-c C-c   : 切换当前行的复选框状态\n")
-      (insert "- C-c C-e f : 导出到指定文件\n")
-      (insert "- C-c C-e h : 导出到当前位置\n")
-      (insert "- C-c C-e n : 导出到新文件\n")
-      (insert "- C-c C-i   : 插入到原始位置\n")
+      ;; Display instructions
+      (insert "* Instructions\n")
+      (insert "- Search scope: titles, tags, properties and field values\n")
+      (insert "- Multiple keywords use AND logic (all must match)\n")
+      (insert "- [+] indicates node has children\n\n")
+      (insert "Shortcuts:\n")
+      (insert "- C-c C-c     : Toggle checkbox state\n")
+      (insert "- C-c C-x f   : Export to file\n") 
+      (insert "- C-c C-x h   : Export to current location\n")
+      (insert "- C-c C-x n   : Export to new file\n")
+      (insert "- C-c C-x C-r : Toggle checkbox region\n")
+      (insert "- C-c C-x C-u : Untoggle checkbox region\n")
       (insert "\n")
       
-      ;; 显示搜索结果
+      ;; Display search results
       (insert "* Search Results\n")
       (let ((nodes (org-supertag-query-find-nodes keyword-list)))
         (if nodes
             (progn
-              (insert (format "找到 %d 个匹配的节点：\n\n" (length nodes)))
+              (insert (format "Found %d matching nodes:\n\n" (length nodes)))
               (dolist (node nodes)
                 (insert (org-supertag-query-format-node node) "\n")))
-          (insert "没有找到匹配的结果\n")))
+          (insert "No matching results found\n")))
       
       (goto-char (point-min))))
   (switch-to-buffer "*Org SuperTag Search*"))
@@ -231,7 +230,7 @@ KEYWORD-LIST 是关键字列表"
 ;;---------------------------------------------------------------------
 
 (defun org-supertag-query-toggle-checkbox ()
-  "切换当前行的复选框状态."
+  "Toggle checkbox state of current line."
   (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
@@ -243,9 +242,9 @@ KEYWORD-LIST 是关键字列表"
           (replace-match (concat "- " current-state)))))))
 
 (defun org-supertag-query-toggle-checkbox-region (start end)
-  "切换区域内所有复选框的状态.
-START 和 END 定义了区域范围."
-  (interactive "r")  ; 自动获取当前选中区域
+  "Toggle checkbox states in region.
+START and END define the region boundaries."
+  (interactive "r")  ; Automatically get selected region
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char start)
@@ -254,7 +253,8 @@ START 和 END 定义了区域范围."
         (replace-match "- [X]")))))
 
 (defun org-supertag-query-untoggle-checkbox-region (start end)
-  "取消区域内所有复选框的选中状态."
+  "Uncheck all checkboxes in region.
+START and END define the region boundaries."
   (interactive "r")
   (let ((inhibit-read-only t))
     (save-excursion
@@ -264,7 +264,7 @@ START 和 END 定义了区域范围."
         (replace-match "- [ ]")))))
 
 (defun org-supertag-toggle-all-boxes ()
-  "全选或取消全选搜索结果."
+  "Toggle all checkboxes in search results."
   (interactive)
   (let* ((inhibit-read-only t)
          (current-state (save-excursion
@@ -277,45 +277,42 @@ START 和 END 定义了区域范围."
       (while (re-search-forward "^- \\[[ X]\\]" nil t)
         (replace-match (format "- [%s]" new-state))))))
 
-
-
 ;;----------------------------------------------------------------------
-;; Export Seleted Results from Query Buffer
+;; Export Selected Results from Query Buffer
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-get-selected-nodes ()
-  "从搜索结果中获取所有被选中的节点 ID.
+  "Get IDs of all selected nodes from search results.
 
-返回值：
-- 选中节点的 ID 列表
-- nil 如果没有选中的节点"
+Returns:
+- List of selected node IDs
+- nil if no nodes are selected"
   (let (selected-nodes)
     (save-excursion
       (goto-char (point-min))
-      ;; 搜索所有选中的条目
+      ;; Search for all checked items
       (while (re-search-forward 
               "^-[ \t]+\\[X\\].*?\\[\\[id:\\([^]]+\\)\\]\\]" 
               nil t)
         (when-let ((node-id (match-string-no-properties 1)))
-          ;; 验证节点是否存在
+          ;; Verify node exists
           (when (org-supertag-node-db-exists-p node-id)
             (push node-id selected-nodes)))))
-    ;; 返回结果
+    ;; Return results
     (when selected-nodes
-      (message "找到 %d 个选中的节点" (length selected-nodes))
+      (message "Found %d selected nodes" (length selected-nodes))
       (nreverse selected-nodes))))
       
-;; org-supertag-query-insert-node 
 (defun org-supertag-get-target-level (level-adjust)
-  "计算目标层级.
-LEVEL-ADJUST 可以是:
-  nil        - 保持原有层级
-  :child     - 作为当前标题的子标题
-  :same-level - 作为当前标题的同级标题
+  "Calculate target heading level.
+LEVEL-ADJUST can be:
+  nil        - Keep original level
+  :child     - Make child of current heading
+  :same-level - Make same level as current heading
 
-返回值：
-- 计算出的目标层级
-- nil 如果不需要调整层级"
+Returns:
+- Calculated target level
+- nil if no adjustment needed"
   (let ((current-level (when (org-at-heading-p)
                         (org-current-level))))
     (cond
@@ -328,12 +325,12 @@ LEVEL-ADJUST 可以是:
      (t nil))))
 
 (defun org-supertag-adjust-node-level (content target-level)
-  "调整节点内容的层级.
-CONTENT 是节点内容
-TARGET-LEVEL 是目标层级
+  "Adjust heading level of node content.
+CONTENT is the node content
+TARGET-LEVEL is the target heading level
 
-返回值：
-- 调整后的内容"
+Returns:
+- Adjusted content string"
   (with-temp-buffer
     (org-mode)
     (insert content)
@@ -352,12 +349,12 @@ TARGET-LEVEL 是目标层级
     (buffer-string)))
 
 (defun org-supertag-delete-node-content (node-id)
-  "从源文件中删除节点内容.
-NODE-ID 是节点ID
+  "Delete node content from source file.
+NODE-ID is the node identifier
 
-返回值：
-- t 删除成功
-- nil 如果节点不存在或删除失败"
+Returns:
+- t if deletion successful
+- nil if node not found or deletion failed"
   (when-let* ((node (org-supertag-db-get node-id))
               (source-file (plist-get node :file-path))
               (loc (org-supertag-find-node-location node-id source-file)))
@@ -374,13 +371,13 @@ NODE-ID 是节点ID
            t))))))
 
 (defun org-supertag-find-node-location (node-id file)
-  "通过 ID 在文件中定位节点.
-NODE-ID 是节点ID
-FILE 是文件路径
+  "Locate node position in file by ID.
+NODE-ID is the node identifier
+FILE is the file path
 
-返回值：
-- (point level olp) 找到节点时返回位置信息
-- nil 未找到节点"
+Returns:
+- (point level olp) if node found
+- nil if not found"
   (when (and file (file-exists-p file))
     (with-current-buffer (find-file-noselect file)
       (org-with-wide-buffer
@@ -396,12 +393,12 @@ FILE 是文件路径
          found)))))
 
 (defun org-supertag-get-node-content (node-id)
-  "获取节点的完整内容.
-NODE-ID 是节点ID
+  "Get complete content of a node.
+NODE-ID is the node identifier
 
-返回值：
-- 节点内容字符串
-- nil 如果未找到节点"
+Returns:
+- Node content string
+- nil if node not found"
   (when-let* ((node (org-supertag-db-get node-id))
               (file (plist-get node :file-path))
               (loc (org-supertag-find-node-location node-id file)))
@@ -413,33 +410,32 @@ NODE-ID 是节点ID
           (org-element-property :begin element)
           (org-element-property :end element)))))))
 
-
 (defun org-supertag-update-node-db (node-id file)
-  "更新节点在数据库中的信息.
-NODE-ID 是节点ID
-FILE 是目标文件路径"
+  "Update node information in database.
+NODE-ID is the node identifier
+FILE is the target file path"
   (unless (org-supertag-ensure-org-file file)
     (error "Invalid org file: %s" file))
   (with-current-buffer (find-file-noselect file)
     (save-excursion
-      ;; 确保在正确的位置
+      ;; Ensure at correct position
       (unless (org-at-heading-p)
         (org-back-to-heading t))
-      ;; 验证我们找到的是正确的节点
+      ;; Verify correct node found
       (let ((current-id (org-id-get)))
         (unless (equal current-id node-id)
           (error "Current heading ID (%s) doesn't match expected ID (%s)"
                  current-id node-id)))
-      ;; 收集节点信息
+      ;; Collect node info
       (let* ((pos (point))
              (level (org-current-level))
              (title (org-get-heading t t t t))
              (olp (org-get-outline-path))
-             ;; 获取现有节点信息以保留某些属性
+             ;; Get existing node info to preserve properties
              (existing-node (org-supertag-db-get node-id))
              (created-at (and existing-node 
                              (plist-get existing-node :created-at))))
-        ;; 构建新的属性列表
+        ;; Build new property list
         (let ((new-props
                (list :type :node
                      :title title
@@ -447,10 +443,10 @@ FILE 是目标文件路径"
                      :pos pos
                      :level level
                      :olp olp)))
-          ;; 如果有创建时间，保留它
+          ;; Preserve creation time if exists
           (when created-at
             (setq new-props (plist-put new-props :created-at created-at)))
-          ;; 更新数据库
+          ;; Update database
           (condition-case err
               (progn
                 (org-supertag-node-db-update node-id new-props)
@@ -462,18 +458,18 @@ FILE 是目标文件路径"
              (signal (car err) (cdr err)))))))))
 
 (defun org-supertag-move-node (node-id target-file &optional target-level)
-  "将节点移动到目标文件.
-NODE-ID 是节点ID
-TARGET-FILE 是目标文件路径
-TARGET-LEVEL 是目标层级
+  "Move node to target file.
+NODE-ID is the node identifier
+TARGET-FILE is the target file path
+TARGET-LEVEL is the target heading level
 
-返回值：
-- t 移动成功
-- nil 如果移动失败"
+Returns:
+- t if move successful
+- nil if move failed"
   (when-let* ((content (org-supertag-get-node-content node-id)))
-    ;; 1. 删除源文件中的节点
+    ;; 1. Delete node from source
     (when (org-supertag-delete-node-content node-id)
-      ;; 2. 插入到目标文件并更新数据库
+      ;; 2. Insert to target and update database
       (with-current-buffer (find-file-noselect target-file)
         (save-excursion
           (let ((adjusted-content 
@@ -483,11 +479,10 @@ TARGET-LEVEL 是目标层级
             (org-supertag-update-node-db node-id target-file)
             t))))))
 
-
 (defun org-supertag-insert-nodes (node-ids &optional level-adjust)
-  "移动节点到当前位置.
-NODE-IDS 是节点 ID 列表
-LEVEL-ADJUST 是层级调整选项"
+  "Insert nodes at current position.
+NODE-IDS is list of node identifiers
+LEVEL-ADJUST is level adjustment option"
   (let ((target-file (buffer-file-name))
         (target-level (org-supertag-get-target-level level-adjust))
         (success-count 0))
@@ -495,27 +490,26 @@ LEVEL-ADJUST 是层级调整选项"
       (error "Current buffer is not visiting a file"))
     
     (dolist (node-id node-ids)
-      (message "处理节点: %s" node-id)
+      (message "Processing node: %s" node-id)
       (condition-case err
           (when (org-supertag-move-node node-id target-file target-level)
             (cl-incf success-count))
         (error
-         (message "处理节点 %s 失败: %s" 
+         (message "Failed processing node %s: %s" 
                   node-id 
                   (error-message-string err)))))
-    
-    (message "完成处理: %d/%d 个节点成功移动" 
+    (message "Processing complete: %d/%d nodes moved successfully" 
              success-count 
              (length node-ids))))
 
 ;; Export result to...
 (defun org-supertag-ensure-org-file (file)
-  "确保文件是有效的org文件.
-FILE 是文件路径
+  "Ensure file is valid org file.
+FILE is the file path
 
-返回值：
-- t 如果是有效的org文件
-- nil 如果不是"
+Returns:
+- t if valid org file
+- nil if not"
   (and file
        (string-match-p "\\.org$" file)
        (or (file-exists-p file)
@@ -523,23 +517,23 @@ FILE 是文件路径
                 (string-match-p "\\.org$" file)))))
 
 (defun org-supertag-query-export-results-to-new-file ()
-  "导出选中的搜索结果到新文件.
-将选中的节点导出为一个独立的 org 文件."
+  "Export selected search results to new file.
+Export selected nodes to a standalone org file."
   (interactive)
   (let ((selected-nodes (org-supertag-get-selected-nodes)))
     (message "Selected nodes: %S" selected-nodes)
     (if (not selected-nodes)
         (message "No items selected")
-      ;; 选择目标文件
+      ;; Select target file
       (let* ((default-name "export.org")
              (file (read-file-name 
                    "Export to new file: " 
                    nil nil nil 
                    default-name)))
-        ;; 验证文件类型
+        ;; Validate file type
         (unless (org-supertag-ensure-org-file file)
           (error "Export target must be an org file: %s" file))
-        ;; 处理目标文件
+        ;; Process target file
         (condition-case err
             (progn
               (when (and (file-exists-p file)
@@ -548,40 +542,38 @@ FILE 是文件路径
                 (error "Export cancelled by user"))
               
               (with-current-buffer (find-file-noselect file)
-                (erase-buffer)  ; 清空新文件
+                (erase-buffer)  ; Clear new file
                 (org-mode)
-                
-                ;; 插入文件头
+                ;; Insert file header
                 (let ((title (file-name-base file)))
                   (insert (format "#+TITLE: %s\n" title)
-                          "#+OPTIONS: ^:nil\n"  ; 禁用上标
-                          "#+STARTUP: showeverything\n\n"))  ; 显示所有内容
-                
+                          "#+OPTIONS: ^:nil\n"  ; Disable superscript
+                          "#+STARTUP: showeverything\n\n"))  ; Show all content
                 (message "Inserting nodes...")
                 (org-supertag-insert-nodes selected-nodes nil)
                 (save-buffer)
-                ;; 显示新文件
+                ;; Display new file
                 (find-file file)
                 (other-window 1)
                 (balance-windows)
                 (message "Export completed successfully to %s" file)))
-          ;; 错误处理
+          ;; Error handling
           (error
            (message "Export failed: %s" (error-message-string err))
            (signal (car err) (cdr err))))))))
 
 (defun org-supertag-query-export-results-to-file ()
-  "导出选中的搜索结果到指定文件的指定位置.
+  "Export selected search results to specified file location.
 
-可选的插入位置:
-1. File End - 插入到文件末尾
-2. Under Heading - 作为选中标题的子标题
-3. Same Level - 作为选中标题的同级标题"
+Available insertion positions:
+1. File End - Insert at end of file
+2. Under Heading - Insert as child of selected heading 
+3. Same Level - Insert as sibling of selected heading"
   (interactive)
   (let* ((selected-nodes (org-supertag-get-selected-nodes)))
     (if (not selected-nodes)
         (message "No nodes selected")
-      ;; 选择目标文件
+      ;; Select target file
       (condition-case err
           (let* ((target-file (read-file-name "Export to file: "))
                  (insert-type (completing-read 
@@ -590,20 +582,19 @@ FILE 是文件路径
                                "Under Heading"
                                "Same Level"))))
             
-            ;; 验证文件类型
+            ;; Validate file type
             (unless (org-supertag-ensure-org-file target-file)
               (error "Export target must be an org file: %s" target-file))
             
-            ;; 处理目标文件
+            ;; Process target file
             (with-current-buffer (find-file-noselect target-file)
               (org-mode)
               (let (target-point level-adjust)
-                ;; 根据不同选项确定插入位置和层级调整
+                ;; Determine insertion point and level adjustment based on option
                 (pcase insert-type
                   ("File End"
                    (setq target-point (point-max)
                          level-adjust nil))
-                  
                   ("Under Heading"
                    (let* ((headlines (org-map-entries 
                                     (lambda () 
@@ -630,76 +621,104 @@ FILE 是文件路径
                      (setq target-point (cdr (assoc selected headlines))
                            level-adjust :same-level))))
                 
-                ;; 插入内容
+                ;; Insert content
                 (goto-char (or target-point (point-max)))
                 (org-supertag-insert-nodes selected-nodes level-adjust)
                 (save-buffer)
                 
-                ;; 显示目标文件
+                ;; Display target file
                 (find-file target-file)
                 (message "Export completed successfully"))))
-        
-        ;; 错误处理
+        ;; Error handling
         (error
          (message "Export failed: %s" (error-message-string err))
          (signal (car err) (cdr err)))))))
 
 ;;; Save org-supertag-query result at cursor place
 (defvar org-supertag-query--original-buffer nil
-  "存储发起搜索的原始缓冲区.")
+  "Store the original buffer where search was initiated.")
 
 (defvar org-supertag-query--original-point nil
-  "存储发起搜索时的光标位置.")
+  "Store cursor position when search was initiated.")
 
 (defun org-supertag-query-export-results-here ()
-  "导出选中的搜索结果到当前光标位置.
-自动调整内容层级以匹配当前位置的上下文.
-
-执行流程:
-1. 记住当前位置
-2. 启动搜索
-3. 在搜索结果中选择内容
-4. 将选中内容插入到原始位置"
-(interactive)
-  (when (and org-supertag-query--original-buffer
-             org-supertag-query--original-point)
-    (let ((selected-nodes (org-supertag-get-selected-nodes)))
-      (when selected-nodes
-        (with-current-buffer org-supertag-query--original-buffer
-          (save-excursion
-            (goto-char org-supertag-query--original-point)
-            (let ((current-level (org-current-level))
-                  level-adjust)
-              ;; 确定层级调整方式
-              (setq level-adjust
-                    (cond
-                     ;; 在标题内部
-                     (current-level
-                      (if (org-at-heading-p)
-                          :same-level  ; 当前在标题行，作为同级
-                        :child))      ; 当前在标题内容中，作为子标题
-                     ;; 不在任何标题下
-                     (t nil)))        ; 保持原有层级
-              
-              ;; 插入内容
-              (org-supertag-insert-nodes selected-nodes level-adjust))))
-        (message "Content inserted at original position")
-        ;; 清理变量
-        (setq org-supertag-query--original-buffer nil
-              org-supertag-query--original-point nil)))))
+  "Insert search results at cursor position."
+  (interactive)
+  (let* ((input (read-string "Enter search keywords (space separated): "))
+         (keywords (split-string input " " t))
+         (block-name (string-join keywords "_"))  ; Use keywords as block name
+         (matched-nodes nil))
+    ;; 1. Find matching nodes
+    (setq matched-nodes (org-supertag-query-find-nodes keywords))
+    ;; 2. If there are matching nodes, continue processing
+    (if matched-nodes
+        (let* ((node-choices 
+                (mapcar (lambda (node)
+                         (let* ((title (plist-get node :title))
+                                (id (plist-get node :id))
+                                (file-path (plist-get node :file-path))
+                                ;; Clean title text
+                                (clean-title 
+                                 (substring-no-properties 
+                                  (if (stringp title)
+                                      title
+                                    (prin1-to-string title))))
+                                ;; Get file name (without path)
+                                (file-name 
+                                 (file-name-nondirectory file-path))
+                                ;; Format display options
+                                (display-text 
+                                 (format "%-30s (%s)"  ; Left align, fixed width
+                                        (truncate-string-to-width 
+                                         clean-title 30 nil nil "...")
+                                        file-name)))
+                           (cons display-text id)))
+                       matched-nodes))
+               (selected-nodes
+                (completing-read-multiple 
+                 "Select nodes (TAB:complete, RET:confirm, ,:multi): "
+                 (mapcar #'car node-choices)
+                 nil t)))
+          ;; 3. Generate link content
+          (let ((content
+                 (with-temp-buffer
+                   (insert (format "#+begin_%s\n" block-name))
+                   (dolist (selection selected-nodes)
+                     (let* ((node-id (cdr (assoc selection node-choices)))
+                            (node (org-supertag-db-get node-id))
+                            (title (plist-get node :title))
+                            (clean-title 
+                             (substring-no-properties 
+                              (if (stringp title)
+                                  title
+                                (prin1-to-string title)))))
+                       (insert (format "- [[id:%s][%s]]\n"
+                                     node-id
+                                     clean-title))))
+                   (insert (format "#+end_%s\n" block-name))
+                   (buffer-string))))
+            (save-excursion
+              (insert content)
+              (message "Inserted %d node links" 
+                       (length selected-nodes)))))
+      (message "No matching nodes found for keywords: %s" 
+               (string-join keywords " ")))))
 
 ;;------------------------------------------------------
 ;; User Interactive Command
 ;;------------------------------------------------------
 
 (defun org-supertag-query ()
-  "交互式搜索."
+  "Interactive search."
   (interactive)
-  ;; 确保数据库已初始化
+  ;; Save current position
+  (setq org-supertag-query--original-buffer (current-buffer)
+        org-supertag-query--original-point (point))
+  ;; Ensure database is initialized
   (unless (and (boundp 'org-supertag-db--object)
-               org-supertag-db--object))
-  
-  (let* ((input (read-string "输入搜索关键字 (空格分隔): "))
+               org-supertag-db--object)
+    (error "Database not initialized"))
+  (let* ((input (read-string "Enter search keywords (space separated): "))
          (keywords (split-string input " " t)))
     (org-supertag-query-show-results keywords)))
 

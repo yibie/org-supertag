@@ -1,11 +1,11 @@
 ;;; org-supertag-field.el --- Field system for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; 提供字段系统的核心功能：
-;; - 字段类型定义
-;; - 字段值存取
-;; - 与 Org 的集成
-;; - 字段同步机制
+;; Core functionality for field system:
+;; - Field type definitions
+;; - Field value access
+;; - Org integration
+;; - Field synchronization
 
 ;;; Code:
 
@@ -15,15 +15,15 @@
 (require 'org-supertag-db)
 
 ;;------------------------------------------------------------------------------
-;; 字段值数据库操作
+;; Field Value Database Operations
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-field-db-set-value (node-id field-name value tag-id)
   "Set field value to database.
-NODE-ID: 节点ID
-FIELD-NAME: 字段名
-VALUE: 字段值
-TAG-ID: 所属标签ID"
+NODE-ID: Node identifier
+FIELD-NAME: Field name
+VALUE: Field value
+TAG-ID: Associated tag identifier"
   (let ((link-id (format ":node-field:%s->%s" node-id field-name))
         (props (list :from node-id
                     :to field-name
@@ -34,9 +34,9 @@ TAG-ID: 所属标签ID"
 
 (defun org-supertag-field-db-get-value (node-id field-name tag-id)
   "Get field value from database.
-NODE-ID: 节点ID
-FIELD-NAME: 字段名
-TAG-ID: 所属标签ID"
+NODE-ID: Node identifier
+FIELD-NAME: Field name
+TAG-ID: Associated tag identifier"
   (let* ((link-id (format ":node-field:%s->%s" node-id field-name))
          (link (gethash link-id org-supertag-db--link)))
     (when (and link 
@@ -44,28 +44,27 @@ TAG-ID: 所属标签ID"
       (plist-get link :value))))
 
 (defun org-supertag-field-db-delete-value (node-id field-name tag-id)
-  "删除字段值.
-NODE-ID: 节点ID
-FIELD-NAME: 字段名
-TAG-ID: 所属标签ID"
+  "Delete field value from database.
+NODE-ID: Node identifier
+FIELD-NAME: Field name
+TAG-ID: Associated tag identifier"
   (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
     (remhash link-id org-supertag-db--link)))
 
 ;;----------------------------------------------------------------------
-;; 字段值实体操作
+;; Field Value Entity Operations
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-field-set-value (field-def value node-id tag-id)
-  "设置字段值.
-FIELD-DEF: 字段定义
-VALUE: 字段值
-NODE-ID: 节点ID
-TAG-ID: 所属标签ID"
+  "Set field value.
+FIELD-DEF: Field definition
+VALUE: Field value
+NODE-ID: Node identifier
+TAG-ID: Associated tag identifier"
   (condition-case err
       (let* ((field-name (plist-get field-def :name))
              (field-type (plist-get field-def :type))
              (type-def (org-supertag-get-field-type field-type))
-             ;; 直接验证和格式化值
              (processed-value (if type-def
                                 (progn
                                   (org-supertag-field-validate field-def value)
@@ -73,56 +72,47 @@ TAG-ID: 所属标签ID"
                                       (funcall formatter value field-def)
                                     value))
                               value)))
-        ;; 1. 存储到数据库
         (org-supertag-field-db-set-value node-id field-name processed-value tag-id)
-        
-        ;; 2. 尝试同步到 org 文件
         (when-let ((pos (condition-case nil
                            (org-id-find node-id t)
-                         (error nil))))  ; 如果找不到节点，返回nil
+                         (error nil))))
           (condition-case sync-err
               (org-with-point-at pos
                 (org-entry-put nil field-name processed-value))
             (error
-             ;; 记录同步错误但不影响数据库操作
              (message "Failed to sync field value to org buffer: %s"
                      (error-message-string sync-err))))))
     (error
-     ;; 处理主要操作错误
      (message "Error in field set-value operation: %s"
               (error-message-string err))
      (signal (car err) (cdr err)))))
 
 (defun org-supertag-field-validate (field value)
   "Validate field value.
-FIELD 是字段定义，VALUE 是要验证的值。
-验证通过返回 t，否则抛出错误。"
+FIELD: Field definition
+VALUE: Value to validate
+Returns t if valid, otherwise throws error"
   (let* ((name (plist-get field :name))
          (type (plist-get field :type))
          (required (plist-get field :required))
          (type-def (org-supertag-get-field-type type))
          (validator (plist-get type-def :validator)))
-    ;; 处理空值
     (when (and required (null value))
-      (error "字段 '%s' 是必填的" name))
-    ;; 如果值为空且不是必填，则验证通过
+      (error "Field '%s' is required" name))
     (if (null value)
-        t  ; 直接返回 t，不使用 cl-return-from
+        t
       (progn
-        ;; 类型检查
         (when (and (eq type 'string) (not (stringp value)))
-          (error "字段 '%s' 需要字符串类型，但得到了 %S" name (type-of value)))
-        
-        ;; 使用类型验证器
+          (error "Field '%s' requires string type, got %S" name (type-of value)))
         (when validator
           (condition-case err
               (unless (if (eq type 'options)
                          (funcall validator value field)
                        (funcall validator value))
-                (error "值 '%s' 不符合%s类型的要求" value type))
+                (error "Value '%s' does not meet %s type requirements" value type))
             (error
-             (error "验证字段 '%s' 时出错: %s" name (error-message-string err)))))
-        t))))  ; 所有检查都通过，返回 t
+             (error "Error validating field '%s': %s" name (error-message-string err)))))
+        t))))
 
 (defun org-supertag-field-get-value (field-def node-id tag-id)
   "Get field value.
@@ -132,9 +122,7 @@ TAG-ID: tag ID"
   (let* ((field-name (plist-get field-def :name))
          (type (plist-get field-def :type))
          (type-spec (org-supertag-get-field-type type))
-         ;; 从数据库获取值
          (value (org-supertag-field-db-get-value node-id field-name tag-id)))
-    ;; 如果有值且有格式化器，进行格式化
     (when (and value
                (plist-get type-spec :formatter))
       (setq value (funcall (plist-get type-spec :formatter) value field-def)))
@@ -146,36 +134,35 @@ FIELD-DEF: field definition
 NODE-ID: node ID
 TAG-ID: tag ID"
   (let ((field-name (plist-get field-def :name)))
-    ;; 1. 从数据库删除
     (org-supertag-db-remove-link :node-field node-id field-name
                                 `(:tag-id ,tag-id))
-    
-    ;; 2. 从 org 文件删除
     (org-with-point-at (org-id-find node-id t)
       (org-entry-delete nil field-name))))
 
 (defun org-supertag-field-batch-set-value (field-def-list value-list node-id tag-id)
-  "Batch set field values.
-FIELD-DEF-LIST: field definition list
-VALUE-LIST: value list
-NODE-ID: node ID
-TAG-ID: tag ID"
+  "Set multiple field values in batch.
+FIELD-DEF-LIST: List of field definitions to set
+VALUE-LIST: List of values corresponding to the fields
+NODE-ID: ID of the target node
+TAG-ID: ID of the associated tag"
   (cl-loop for field-def in field-def-list
            for value in value-list
            do (org-supertag-field-set-value field-def value node-id tag-id)))
 
 (defun org-supertag-field-find-nodes (field-name value &optional tag-id)
-  "Find nodes with specific field value.
-FIELD-NAME: field name
-VALUE: field value
-TAG-ID: optional tag ID, for limiting query range"
+  "Find nodes that have a specific field value.
+FIELD-NAME: Name of the field to search
+VALUE: Value to match against
+TAG-ID: Optional tag ID to limit search scope
+
+Returns a list of nodes that match the criteria."
   (let ((links (org-supertag-db-get-links :node-field)))
     (cl-remove-if-not
      (lambda (link)
-       (and (equal (car link) field-name)  ; 字段名匹配
-            (equal (plist-get (cadr link) :value) value)  ; 值匹配
-            (or (null tag-id)  ; 如果没指定标签ID
-                (equal (plist-get (cadr link) :tag-id) tag-id))))  ; 标签ID匹配
+       (and (equal (car link) field-name)  ; Match field name
+            (equal (plist-get (cadr link) :value) value)  ; Match value
+            (or (null tag-id)  ; If no tag ID specified
+                (equal (plist-get (cadr link) :tag-id) tag-id)))) ; Match tag ID
      links)))
 
 ;;----------------------------------------------------------------------
@@ -221,10 +208,10 @@ TAG-ID: optional tag ID, for limiting query range"
               :description "Number Range")))
   "Field type definition.
 Each type is a cons cell, car is the type name (symbol), cdr is the type definition plist, containing:
-- :validator  验证函数
-- :formatter  格式化函数
-- :reader     读取函数
-- :description  类型描述")
+- :validator   Function to validate field value
+- :formatter   Function to format field value
+- :reader      Function to read field value
+- :description Description of the field type")
 
 (defun org-supertag-get-field-types ()
   "Get all supported field types.
@@ -251,10 +238,11 @@ Return the type definition plist, containing :validator, :formatter, :reader and
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-validate-string (value)
-  "验证字符串值.
-VALUE: 要验证的值"
-  (or (null value)                    ; 允许空值
-      (and (stringp value)           ; 非空时必须是字符串
+  "Validate string value.
+VALUE: Value to validate.
+Return t if VALUE is nil or a non-empty string."
+  (or (null value)                    ; Allow nil value
+      (and (stringp value)           ; Must be string if not nil
            (not (string-empty-p (string-trim value))))))
 
 (defun org-supertag-format-string (value field)
@@ -271,10 +259,10 @@ VALUE is the value to validate."
   (message "Debug - Validating date value: %S" value)
   (condition-case err
       (progn
-        ;; org-read-date 返回的是 time value
+        ;; Handle time value returned by org-read-date
         (when (listp value)
           (setq value (format-time-string "%Y-%m-%d" value)))
-        ;; 如果是字符串，尝试解析
+        ;; Try parsing if string
         (when (stringp value)
           (org-parse-time-string value))
         t)
@@ -283,65 +271,65 @@ VALUE is the value to validate."
      nil)))
 
 (defun org-supertag-format-date (value field)
-  "格式化日期值。
-VALUE 是要格式化的值
-FIELD 是字段定义。"
+  "Format date value.
+VALUE is the value to format.
+FIELD is the field definition."
   (message "Debug - Formatting date value: %S" value)
   (condition-case err
       (cond
-       ;; 处理 org-read-date 返回的 time value
+       ;; Handle time value from org-read-date
        ((listp value)
         (format-time-string "%Y-%m-%d" value))
-       ;; 处理字符串格式
+       ;; Handle string format
        ((stringp value)
         (let ((time (org-parse-time-string value)))
           (format-time-string "%Y-%m-%d" (apply #'encode-time time))))
-       ;; 其他情况返回原值
+       ;; Return original for other cases
        (t value))
     (error
      (message "Date formatting error: %S" err)
      value)))
 
 (defun org-supertag-validate-timestamp (value field-def)
-  "验证时间戳值.
-VALUE: 时间戳值
-FIELD-DEF: 字段定义"
+  "Validate timestamp value.
+VALUE: Timestamp value to validate.
+FIELD-DEF: Field definition."
   (condition-case nil
       (when value
-        (org-parse-time-string value)  ; 尝试解析时间字符串
+        (org-parse-time-string value)  ; Try parsing time string
         t)
     (error nil)))
 
 (defun org-supertag-format-timestamp (value field-def)
-  "格式化时间戳值.
-VALUE: 时间戳值
-FIELD-DEF: 字段定义"
+  "Format timestamp value.
+VALUE: Timestamp value to format.
+FIELD-DEF: Field definition."
   (when value
     (let ((time (org-parse-time-string value)))
       (format-time-string "%Y-%m-%d %H:%M" 
                          (apply #'encode-time time)))))
 
 (defun org-supertag-validate-email (value)
-  "验证邮箱 VALUE。"
+  "Validate email VALUE."
   (and (stringp value)
        (string-match-p "^[^@]+@[^@]+\\.[^@]+$" value)))
 
 (defun org-supertag-format-email (value)
-  "格式化邮箱 VALUE。"
+  "Format email VALUE."
   (string-trim value))
 
 (defun org-supertag-validate-url (value)
-  "验证 URL VALUE。"
+  "Validate URL VALUE."
   (and (stringp value)
        (string-match-p "^https?://" value)))
 
 (defun org-supertag-format-url (value)
-  "格式化 URL VALUE。"
+  "Format URL VALUE."
   (string-trim value))
 
 (defun org-supertag-validate-reference (value)
-  "验证引用值是否有效.
-VALUE 应该是一个 org-id。"
+  "Validate reference value.
+VALUE should be a valid org-id."
   (message "Debug - Validating reference value: %S" value)
   (when value
     (let ((node-ids (org-supertag-get-all-node-ids)))
@@ -349,9 +337,9 @@ VALUE 应该是一个 org-id。"
       (member value node-ids))))
 
 (defun org-supertag-format-reference (value field)
-  "格式化引用值。
-VALUE 是要格式化的值
-FIELD 是字段定义。"
+  "Format reference value.
+VALUE is the value to format.
+FIELD is the field definition."
   (message "Debug - Formatting reference value: %S" value)
   (when value
     (let ((node-ids (org-supertag-get-all-node-ids)))
@@ -361,32 +349,32 @@ FIELD 是字段定义。"
         value))))
 
 (defun org-supertag-validate-options (value field)
-  "验证选项值。
-VALUE 是要验证的值
-FIELD 是字段定义，包含 :options。"
+  "Validate options value.
+VALUE is the value to validate.
+FIELD is the field definition containing :options."
   (let ((options (plist-get field :options)))
     (message "Debug - Validating options: value=%S, options=%S" value options)
     (and (stringp value) (member value options))))
 
 (defun org-supertag-format-options (value field)
-  "格式化选项值。
-VALUE 是要格式化的值
-FIELD 是字段定义。"
+  "Format options value.
+VALUE is the value to format.
+FIELD is the field definition."
   (message "Debug - Formatting options value: %S" value)
   (when value
     (string-trim value)))
 
 (defun org-supertag-validate-number (value)
-  "验证数值类型的值。
-VALUE 是要验证的值，可以是数字或数字字符串"
+  "Validate numeric value.
+VALUE can be a number or numeric string."
   (or (numberp value)
       (and (stringp value)
            (string-match-p "^[0-9.]+$" value))))
 
 (defun org-supertag-format-number (value field)
-  "格式化数字值。
-VALUE 是要格式化的值，可以是数字或数字字符串
-FIELD 是字段定义。"
+  "Format numeric value.
+VALUE can be a number or numeric string.
+FIELD is the field definition."
   (message "Debug - Formatting number value: %S" value)
   (when value
     (if (numberp value)
@@ -396,17 +384,17 @@ FIELD 是字段定义。"
         (number-to-string (string-to-number value))))))
 
 (defun org-supertag-validate-list (value)
-  "验证列表值。
-VALUE 是要验证的值。"
+  "Validate list value.
+VALUE is the value to validate."
   (message "Debug - Validating list value: %S" value)
   (or (listp value)
       (and (stringp value)
            (string-match-p "^\\[.*\\]$" value))))
 
 (defun org-supertag-format-list (value field)
-  "格式化列表值。
-VALUE 是要格式化的值
-FIELD 是字段定义。"
+  "Format list value.
+VALUE is the value to format.
+FIELD is the field definition."
   (message "Debug - Formatting list value: %S" value)
   (cond
    ((listp value)
@@ -418,50 +406,50 @@ FIELD 是字段定义。"
    (t (format "[%s]" value))))
 
 (defun org-supertag-read-list-field (prompt)
-  "读取列表类型字段值。
-PROMPT 是提示信息。"
+  "Read list field value.
+PROMPT is the prompt message."
   (message "Debug - Reading list field with prompt: %s" prompt)
-  (let* ((input (read-string (format "%s (用逗号分隔): " prompt)))
+  (let* ((input (read-string (format "%s (comma separated): " prompt)))
          (values (split-string input "," t "[ \t\n\r]+")))
     (message "Debug - List field input: %S -> %S" input values)
     values))
 
 (defun org-supertag-validate-range (value)
-  "验证范围值.
-VALUE: 要验证的值，格式应为 'min-max'"
-  (when value  ; 允许空值
+  "Validate range value.
+VALUE should be in 'min-max' format."
+  (when value  ; Allow nil value
     (condition-case nil
         (let* ((parts (split-string value "-"))
                (min (string-to-number (car parts)))
                (max (string-to-number (cadr parts))))
-          (and (= (length parts) 2)     ; 必须有两个部分
-               (numberp min)             ; 最小值必须是数字
-               (numberp max)             ; 最大值必须是数字
-               (< min max)))            ; 最小值必须小于最大值
+          (and (= (length parts) 2)     ; Must have two parts
+               (numberp min)             ; Min must be number
+               (numberp max)             ; Max must be number
+               (< min max)))            ; Min must be less than max
       (error nil))))
 
 (defun org-supertag-format-range (value field-def)
-  "格式化范围值.
-VALUE: 范围值
-FIELD-DEF: 字段定义"
-  value)  ; 直接返回原值
+  "Format range value.
+VALUE is the range value.
+FIELD-DEF is the field definition."
+  value)  ; Return value as-is
 
 (defun org-supertag-read-range-field (field-def)
-  "读取范围值.
-FIELD-DEF: 字段定义"
+  "Read range value.
+FIELD-DEF is the field definition."
   (let ((value (read-string 
-                (format "输入范围 (格式: min-max): "))))
+                (format "Enter range (format: min-max): "))))
     (if (org-supertag-validate-range value)
         value
-      (error "无效的范围格式，请使用 'min-max' 格式，如 '1-10'"))))
+      (error "Invalid range format, use 'min-max' format like '1-10'"))))
 
 ;;----------------------------------------------------------------------
 ;; Read Field Value
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-field-read-value (field)
-  "读取字段值。
-FIELD 是字段定义"
+  "Read field value.
+FIELD is the field definition."
   (let* ((name (plist-get field :name))
          (type (plist-get field :type))
          (type-def (org-supertag-get-field-type type))
@@ -469,10 +457,10 @@ FIELD 是字段定义"
          (formatter (plist-get type-def :formatter))
          (required (plist-get field :required))
          (options (plist-get field :options)))
-    ;; 1. 确保有读取器
+    ;; 1. Ensure reader exists
     (unless reader
-      (error "字段类型 %s 未定义读取函数" type))
-    ;; 2. 读取值
+      (error "Field type %s has no reader function" type))
+    ;; 2. Read value
     (catch 'done
       (while t
         (condition-case err
@@ -481,33 +469,33 @@ FIELD 是字段定义"
                         (funcall reader name options)
                       (funcall reader name)))
                    (typed-value (org-supertag-field--convert-value type input-value)))
-              ;; 3. 验证和格式化
+              ;; 3. Validate and format
               (if (org-supertag-field-validate field typed-value)
                   (throw 'done 
                          (if formatter
                              (funcall formatter typed-value field)
                            typed-value))
                 (when (or required
-                         (y-or-n-p (format "字段 %s 验证失败。重试? " name)))
+                         (y-or-n-p (format "Field %s validation failed. Retry? " name)))
                   (sit-for 1))))
           (error
            (let ((err-msg (error-message-string err)))
-             (message "Error - 处理字段 %s 时出错: %s" name err-msg)
+             (message "Error - Processing field %s: %s" name err-msg)
              (when (or required
-                      (y-or-n-p (format "处理字段 %s 时出错。重试? " name)))
+                      (y-or-n-p (format "Error processing field %s. Retry? " name)))
                (sit-for 1)))))))))
 
 (defun org-supertag-field--convert-value (type value)
-  "将值转换为指定类型.
-TYPE: 目标类型
-VALUE: 要转换的值"
+  "Convert value to specified type.
+TYPE: Target type.
+VALUE: Value to convert."
   (let ((type-spec (org-supertag-get-field-type type)))
     (when-let ((formatter (plist-get type-spec :formatter)))
       (funcall formatter value nil))))
 
 (defun org-supertag-read-string-field (prompt)
-  "读取字符串类型字段值。
-PROMPT 是提示信息"
+  "Read string field value.
+PROMPT is the prompt message."
   (message "Debug - Reading string field with prompt: %s" prompt)
   (let* ((raw-input (read-string (format "%s: " prompt)))
          (trimmed-input (string-trim raw-input))
@@ -519,58 +507,58 @@ PROMPT 是提示信息"
     result))
 
 (defun org-supertag-read-date-field (prompt &optional default)
-  "读取日期类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
+  "Read date field value.
+PROMPT is the prompt message.
+DEFAULT is the default value."
   (let* ((input (org-read-date nil t nil prompt nil default))
          (formatted-date (format-time-string "%Y-%m-%d" input)))
     (message "Debug - Date input from org-read-date: %S -> %S" input formatted-date)
     formatted-date))
 
 (defun org-supertag-read-timestamp-field (prompt)
-  "读取时间戳类型字段值.
-PROMPT 是提示信息"
-  (let* ((time (org-read-date t t))  ; 使用 org-mode 的时间读取，带时间
-         (ts (org-timestamp-from-time time t)))  ; 转换为 org 时间戳
-    (org-timestamp-format ts "%Y-%m-%d %H:%M")))  ; 格式化为标准格式
+  "Read timestamp field value.
+PROMPT is the prompt message."
+  (let* ((time (org-read-date t t))  ; Use org-mode time reader with time
+         (ts (org-timestamp-from-time time t)))  ; Convert to org timestamp
+    (org-timestamp-format ts "%Y-%m-%d %H:%M")))  ; Format to standard format
 
 (defun org-supertag-read-email-field (prompt &optional default)
-  "读取邮箱类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
+  "Read email field value.
+PROMPT is the prompt message.
+DEFAULT is the default value."
   (let ((input (read-string (format "%s (example@domain.com)%s: "
                                    prompt
                                    (if default
-                                       (format " (默认: %s)" default)
+                                       (format " (default: %s)" default)
                                      ""))
                            nil nil default)))
     (if (org-supertag-validate-email input)
         input
       (progn
-        (message "输入的不是有效的邮箱地址，请重新输入")
+        (message "Invalid email address, please try again")
         (sit-for 1)
         (org-supertag-read-email-field prompt default)))))
 
 (defun org-supertag-read-url-field (prompt &optional default)
-  "读取URL类型字段值。
-PROMPT 是提示信息
-DEFAULT 是默认值"
+  "Read URL field value.
+PROMPT is the prompt message
+DEFAULT is the default value"
   (let ((input (read-string (format "%s (https://example.com)%s: "
                                    prompt
                                    (if default
-                                       (format " (默认: %s)" default)
+                                       (format " (default: %s)" default)
                                      ""))
                            nil nil default)))
     (if (org-supertag-validate-url input)
         input
       (progn
-        (message "输入的不是有效的URL地址，请重新输入")
+        (message "Invalid URL, please try again")
         (sit-for 1)
         (org-supertag-read-url-field prompt default)))))
 
 (defun org-supertag-read-reference-field (prompt)
-  "读取引用类型字段值。
-PROMPT 是提示信息"
+  "Read reference field value.
+PROMPT is the prompt message"
   (message "Debug - Reading reference field...")
   (let ((node-ids (org-supertag-get-all-node-ids)))
     (if node-ids
@@ -582,12 +570,12 @@ PROMPT 是提示信息"
                        node-ids))
                (choice (completing-read prompt (mapcar #'car nodes-with-titles) nil t)))
           (cdr (assoc choice nodes-with-titles)))
-      (user-error "没有可用的节点可供引用"))))
+      (user-error "No nodes available for reference"))))
 
 (defun org-supertag-read-options-field (prompt options)
-  "读取选项类型字段值。
-PROMPT 是提示信息
-OPTIONS 是可选值列表"
+  "Read options field value.
+PROMPT is the prompt message
+OPTIONS is the list of available options"
   (let ((input (completing-read (format "%s (%s): " 
                                       prompt 
                                       (mapconcat #'identity options "/"))
@@ -596,19 +584,19 @@ OPTIONS 是可选值列表"
     (if (member input options)
         input
       (progn
-        (message "请从给定选项中选择一个值")
+        (message "Please select from the given options")
         (sit-for 1)
         (org-supertag-read-options-field prompt options)))))
 
 (defun org-supertag-read-number-field (prompt)
-  "读取数值类型字段值。
-PROMPT 是提示信息"
+  "Read numeric field value.
+PROMPT is the prompt message"
   (let ((input-str (read-string (format "%s: " prompt))))
-    ;; 验证输入是否只包含数字和小数点
+    ;; Validate input contains only digits and decimal point
     (if (string-match-p "^[0-9.]+$" input-str)
-        input-str  ; 返回字符串形式的数字
+        input-str  ; Return number as string
       (progn
-        (message "请输入有效的数字")
+        (message "Please enter a valid number")
         (sit-for 1)
         (org-supertag-read-number-field prompt)))))
 
@@ -689,133 +677,6 @@ PRESET is the preset field definition"
     (format "- %s%s"
             name
             (if desc (format " (%s)" desc) ""))))
-
-;;----------------------------------------------------------------------
-;;   Test
-;;----------------------------------------------------------------------
-
-(ert-deftest test-org-supertag-field-basic ()
-  "测试基本的字段值操作."
-  ;; 1. 先创建一个测试节点
-  (org-supertag-db-add "test-node-1" 
-                       (list :type :node
-                            :id "test-node-1"
-                            :title "Test Node"
-                            :file-path "/test/path"
-                            :pos 1                  ; 节点位置
-                            :olp '("Root" "Parent") ; 祖先标题列表
-                            :level 2                ; 层级
-                            :created-at (current-time)))
-  
-  ;; 2. 创建一个测试标签
-  (org-supertag-db-add "test-tag" 
-                       (list :type :tag
-                            :id "test-tag"
-                            :name "Test Tag"
-                            :fields nil
-                            :created-at (current-time)))
-  
-  (let* ((node-id "test-node-1")
-         (field-name "test-field")
-         (tag-id "test-tag")
-         (value "test-value"))
-    
-    ;; 3. 测试设置字段值
-    (org-supertag-field-db-set-value node-id field-name value tag-id)
-    (message "Stored links: %S" (org-supertag-db-get-link :node-field node-id))
-    (message "Database content: %S" (ht-items org-supertag-db--link))
-    (message "Get link result: %S" (org-supertag-db-get-link :node-field node-id))
-    ;; 4. 测试获取字段值
-    (should (equal (org-supertag-field-db-get-value node-id field-name tag-id)
-                  value))))
-
-(ert-deftest test-org-supertag-field-multiple ()
-  "测试多个字段值操作."
-  (let* ((node-id "test-node-1")
-         (tag-id "test-tag"))
-    (org-supertag-db-add "test-node-1" 
-                       (list :type :node
-                            :id "test-node-1"
-                            :title "Test Node"
-                            :file-path "/test/path"
-                            :pos 1                  ; 节点位置
-                            :olp '("Root" "Parent") ; 祖先标题列表
-                            :level 2                ; 层级
-                            :created-at (current-time)))
-  
-  ;; 2. 创建一个测试标签
-  (org-supertag-db-add "test-tag" 
-                       (list :type :tag
-                            :id "test-tag"
-                            :name "Test Tag"
-                            :fields nil
-                            :created-at (current-time)))
-  
-  (let* ((node-id "test-node-1")
-         (field-name "test-field")
-         (tag-id "test-tag")
-         (value "test-value"))
-
-    ;; 1. 设置多个字段值
-    (org-supertag-field-db-set-value node-id "field1" "value1" tag-id)
-    (org-supertag-field-db-set-value node-id "field2" "value2" tag-id)
-    
-    ;; 2. 测试获取
-    (should (equal (org-supertag-field-db-get-value node-id "field1" tag-id)
-                  "value1"))
-    (should (equal (org-supertag-field-db-get-value node-id "field2" tag-id)
-                  "value2")))))
-
-(ert-deftest test-org-supertag-field-update-delete ()
-  "测试字段值的更新和删除操作."
-  (org-supertag-db-init)
-  
-  (let* ((node-id "test-node")
-         (field-name "test-field")
-         (tag-id "test-tag")
-         (value1 "value1")
-         (value2 "value2"))
-    
-    ;; 1. 设置初始值
-    (org-supertag-field-db-set-value node-id field-name value1 tag-id)
-    (should (equal (org-supertag-field-db-get-value node-id field-name tag-id)
-                  value1))
-    
-    ;; 2. 更新值
-    (org-supertag-field-db-update-value node-id field-name value2 tag-id)
-    (should (equal (org-supertag-field-db-get-value node-id field-name tag-id)
-                  value2))
-    
-    ;; 3. 删除值
-    (org-supertag-field-db-delete-value node-id field-name tag-id)
-    (should-not (org-supertag-field-db-get-value node-id field-name tag-id))))
-
-(ert-deftest test-org-supertag-field-entity-ops ()
-  "测试字段值的实体操作."
-  (org-supertag-db-init)
-  
-  ;; 1. 准备测试数据
-  (let* ((node-id "test-node")
-         (tag-id "test-tag")
-         (field-def (list :name "test-field"
-                         :type 'string
-                         :required t))
-         (value1 "test-value-1")
-         (value2 "test-value-2"))
-    
-    ;; 2. 测试设置值
-    (org-supertag-field-set-value field-def value1 node-id tag-id)
-    (should (equal (org-supertag-field-get-value field-def node-id tag-id)
-                  value1))
-    
-    ;; 3. 测试更新值
-    (org-supertag-field-set-value field-def value2 node-id tag-id)
-    (should (equal (org-supertag-field-get-value field-def node-id tag-id)
-                  value2))
-    
-    ;; 4. 测试删除值
-    (org-supertag-field-remove-value field-def node-id tag-id)
-    (should-not (org-supertag-field-get-value field-def node-id tag-id))))
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

@@ -1,19 +1,19 @@
 ;;; org-supertag-tag.el --- Tag relation management for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; 提供标签关系管理功能
-;; 核心原则：通过关系连接实体，使用 type、from、to 来表达关系
+;; Provides tag relationship management functionality
+;; Core principle: Connect entities through relationships using type, from, and to
 
 ;;----------------------------------------------------------------------
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-sanitize-tag-name (name)
-  "将名称转换为有效的标签名称.
-NAME 是要转换的名称
-- 移除开头的 #
-- 将空格转换为下划线
-- 验证非空"
+  "Convert a name into a valid tag name.
+NAME is the name to convert
+- Remove leading '#' characters
+- Convert spaces to underscores
+- Validate non-empty"
   (if (or (null name) (string-empty-p name))
       (error "Tag name cannot be empty")
     (let* ((trimmed (string-trim name))
@@ -24,19 +24,20 @@ NAME 是要转换的名称
         sanitized))))
 
 (defun org-supertag-tag-exists-p (tag-name)
-  "检查标签是否存在.
-TAG-NAME 是标签名称"
+  "Check if a tag exists.
+TAG-NAME is the name of the tag to check"
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     (org-supertag-tag-db-get sanitized-name)))
+
 
 ;;----------------------------------------------------------------------
 ;; Tag Base Operation
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-tag-create (tag-name &rest props)
-  "创建新标签.
-TAG-NAME: 标签名称
-PROPS: 额外属性"
+  "Create a new tag.
+TAG-NAME: Name of the tag
+PROPS: Additional properties"
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
          (fields (or (plist-get props :fields) '()))  ; 先获取字段
          (base-props (list :type :tag
@@ -48,24 +49,16 @@ PROPS: 额外属性"
     (message "Debug create-tag: props=%S" props)
     (message "Debug create-tag: fields=%S" fields)
     (message "Debug create-tag: base-props=%S" base-props)
-    
     (org-supertag-db-add sanitized-name base-props)
-    
     (message "Debug create-tag: 保存后的标签=%S" 
              (org-supertag-db-get sanitized-name))
-    
     sanitized-name))
-    
-(defun org-supertag-get-all-tags ()
-  "获取所有已定义的标签."
-  (let ((all-entities (org-supertag-db-get-all)))
-    (cl-loop for (_id . entity) in all-entities
-             when (eq (plist-get entity :type) :tag)
-             collect (plist-get entity :id))))
 
 (defun org-supertag-tag-get (tag-name)
-  "获取标签定义.
-TAG-NAME 是标签名称"
+  "Get tag definition.
+TAG-NAME is the name of the tag to retrieve.
+Returns the tag entity if found and is a valid tag type,
+otherwise returns nil."
   (let ((entity (org-supertag-db-get tag-name)))
     (when (and entity 
                (eq (plist-get entity :type) :tag))
@@ -76,58 +69,70 @@ TAG-NAME 是标签名称"
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-tag-apply (tag-id)
-  "将标签应用到当前位置的节点."
+  "Apply tag to the node at current position.
+TAG-ID is the tag identifier.
+
+This function will:
+1. Validate the tag exists and is valid
+2. Create node ID if needed 
+3. Link the tag to the node
+4. Initialize tag fields with default values
+5. Add tag to org tags"
   (let* ((tag (org-supertag-db-get tag-id))
          (node-id (org-id-get-create)))
-    ;; 确保标签存在
+    ;; Ensure tag exists
     (unless tag
       (error "Tag %s not found" tag-id))
-    ;; 确保是有效的标签
+    ;; Ensure it's a valid tag
     (unless (eq (plist-get tag :type) :tag)
       (error "Invalid tag type for %s" tag-id))
-    ;; 确保节点存在或创建
+    ;; Create node if needed
     (unless (org-supertag-db-get node-id)
       (org-supertag--create-node node-id))
-    ;; 创建标签关联
+    ;; Create tag association
     (org-supertag-db-link 
      :node-tag 
      node-id 
      tag-id 
      (list :created-at (current-time)))
-    ;; 初始化字段
+    ;; Initialize fields
     (when-let ((fields (plist-get tag :fields)))
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
                (field-type (plist-get field :type))
-               ;; 根据字段类型设置初始值
+               ;; Set initial value based on field type
                (initial-value 
                 (pcase field-type
                   ('options 
-                   (car (plist-get field :options)))  ; 使用第一个选项作为默认值
+                   (car (plist-get field :options)))  ; Use first option as default
                   ('date 
-                   (format-time-string "%Y-%m-%d"))   ; 使用当前日期
+                   (format-time-string "%Y-%m-%d"))   ; Use current date
                   ('string 
-                   nil)                               ; 使用 nil 而不是空字符串
-                  (_ nil))))                          ; 默认使用 nil
-          ;; 使用 org-set-property 设置属性
-          (when initial-value  ; 只有当有初始值时才设置属性
+                   nil)                               ; Use nil instead of empty string
+                  (_ nil))))                          ; Default to nil
+          ;; Set property only if initial value exists
+          (when initial-value
             (org-set-property field-name initial-value))
-          ;; 同时初始化数据库中的字段值
+          ;; Initialize field value in database
           (org-supertag-tag--set-field-value 
            tag-id node-id field-name initial-value))))
-    ;; 添加标签到 org tags
+    ;; Add tag to org tags
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
-    ;; 返回节点ID
+    ;; Return node ID
     node-id))
 
 (defun org-supertag-tag--remove (tag-id node-id)
-  "从节点移除标签.
-TAG-ID: 标签ID
-NODE-ID: 节点ID"
-  ;; 1. 移除标签-节点关系
+  "Remove a tag from a node.
+TAG-ID: The tag identifier
+NODE-ID: The node identifier
+
+This function:
+1. Removes the tag-node relationship
+2. Removes all associated field values"
+  ;; 1. Remove tag-node relationship
   (org-supertag-db-remove-link :node-tag node-id tag-id)
-  ;; 2. 移除相关的字段值
+  ;; 2. Remove associated field values
   (let ((tag (org-supertag-tag-db-get tag-id)))
     (dolist (field-def (plist-get tag :fields))
       (org-supertag-field-remove-value field-def node-id tag-id))))
@@ -137,34 +142,42 @@ NODE-ID: 节点ID"
 ;;----------------------------------------------------------------------
 
 (defun org-supertag--sanitize-field-name (name)
-  "将字段名转换为有效的属性名.
-NAME 是原始字段名"
+  "Convert field name to valid property name.
+NAME is the original field name.
+
+This function:
+1. Trims leading/trailing whitespace
+2. Replaces spaces with underscores
+3. Converts to uppercase"
   (let ((sanitized (replace-regexp-in-string
-                   "\\s-+" "_"  ; 将空格替换为下划线
-                   (upcase (string-trim name)))))  ; 转为大写并去除首尾空格
+                   "\\s-+" "_"  ; Replace spaces with underscores
+                   (upcase (string-trim name)))))  ; Convert to uppercase and trim
     sanitized))
 
 (defun org-supertag-tag-get-nodes (tag-id)
-  "获取与指定标签关联的所有节点ID.
-TAG-ID: 标签ID（不带'tag:'前缀）"
+  "Get all node IDs associated with a tag.
+TAG-ID: The tag identifier (without 'tag:' prefix)
+
+Returns a list of node IDs that have this tag attached."
   (let (result)
     (maphash
      (lambda (link-id props)
        (message "Checking link: %s with props: %s" link-id props)
        (when (and (string-prefix-p ":node-tag:" link-id)
-                  (equal (plist-get props :to) tag-id))  ; 直接比较，不处理前缀
+                  (equal (plist-get props :to) tag-id))  ; Direct comparison, no prefix handling
          (push (plist-get props :from) result)))
      org-supertag-db--link)
     (delete-dups result)))
 
 (defun org-supertag-tag-get-fields (tag-id)
-  "获取标签定义的字段列表."
+  "Get list of fields defined for a tag.
+TAG-ID: The tag identifier"
   (plist-get (org-supertag-tag-db-get tag-id) :fields))
 
 (defun org-supertag-tag-add-field (tag-id field-def)
-  "为标签添加字段.
-TAG-ID: 标签ID
-FIELD-DEF: 字段定义"
+  "Add a field to a tag.
+TAG-ID: The tag identifier
+FIELD-DEF: The field definition plist"
   (let* ((tag (org-supertag-db-get tag-id))
          (fields (plist-get tag :fields))
          (new-fields (append fields (list field-def)))
@@ -172,11 +185,11 @@ FIELD-DEF: 字段定义"
     (org-supertag-db-add tag-id new-tag)))
 
 (defun org-supertag-tag--set-field-value (tag-id node-id field-name value)
-  "内部函数：为标签的字段设置值.
-TAG-ID: 标签ID
-NODE-ID: 节点ID
-FIELD-NAME: 字段名
-VALUE: 字段值"
+  "Internal function to set a value for a tag field.
+TAG-ID: The tag identifier
+NODE-ID: The node identifier 
+FIELD-NAME: Name of the field
+VALUE: Value to set for the field"
   (message "DEBUG: Setting field value - Tag: %s, Node: %s, Field: %s, Value: %s"
            tag-id node-id field-name value)
   (let* ((tag (org-supertag-db-get tag-id))
@@ -193,63 +206,59 @@ VALUE: 字段值"
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-tag-add-tag (tag-name)
-  "为当前 headline 添加标签.
-TAG-NAME 是标签名称"
+  "Add a tag to the current headline.
+TAG-NAME can be an existing tag or a new tag name"
   (interactive
-   (list (completing-read "选择或输入标签: "
-                         (append 
-                          (org-supertag-get-all-tags)  ; 已存在的标签
-                          org-supertag-preset-tags))))  ; 预设标签
+   (let* ((existing-tags (org-supertag-db-find-by-type :tag))  ; Get all existing tags
+          (tag-choices
+           (delete-dups
+            (append
+             ;; 1. Existing tags
+             (mapcar (lambda (tag-id)
+                      (let ((tag (org-supertag-db-get tag-id)))
+                        (plist-get tag :name)))
+                    existing-tags)
+             ;; 2. Preset tags (unused)
+             (cl-remove-if
+              (lambda (preset-name)
+                (member preset-name
+                        (mapcar (lambda (tag-id)
+                                (plist-get (org-supertag-db-get tag-id) :name))
+                              existing-tags)))
+              org-supertag-preset-tags)))))
+     (list
+      (completing-read "Select or enter new tag name: " tag-choices nil nil))))
   
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
          (preset-fields (org-supertag-get-preset-fields sanitized-name)))
     
-    (message "Debug add-tag: 标签名=%s" sanitized-name)
-    (message "Debug add-tag: 预设字段=%S" preset-fields)
-    
-    ;; 获取或创建标签
-    (let ((tag (or (org-supertag-tag-get sanitized-name)
-                   ;; 如果标签不存在，创建一个带预设字段的标签
-                   (progn
-                     (message "Debug add-tag: 创建新标签，传入字段=%S" preset-fields)
-                     (org-supertag-tag-create sanitized-name 
-                                            :fields preset-fields)))))
+    ;; Get or create the tag
+    (let ((tag-id
+           (if (org-supertag-tag-get sanitized-name)
+               sanitized-name  ; If tag exists, use name as ID
+             ;; If new tag, create it
+             (org-supertag-tag-create sanitized-name 
+                                    :fields preset-fields))))
       
-      (message "Debug add-tag: 创建的标签=%S" 
-               (org-supertag-db-get sanitized-name))
-      
-      ;; 应用标签
-      (org-supertag-tag-apply sanitized-name))))
-
-(defun org-supertag-tag-set-field (tag-name)
-  "为标签设置字段.
-TAG-NAME 是标签名称"
-  (interactive
-   (list (completing-read "选择标签: "
-                         (org-supertag-get-all-tags))))
-  (when-let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-              (tag (org-supertag-tag-get sanitized-name)))
-    (let* ((current-fields (plist-get tag :fields))
-           (fields-and-values (org-supertag--field-interactive-edit current-fields)))
-      ;; 更新标签字段
-      (org-supertag-tag-db-update sanitized-name
-                                 (plist-put tag :fields (car fields-and-values)))      
-      ;; 提供反馈
-      (message "已更新标签 '%s' 的字段" sanitized-name))))
+      ;; Apply the tag
+      (org-supertag-tag-apply tag-id))))
 
 (defun org-supertag-tag-set-field-value ()
-  "为当前节点的标签字段设置值."
+  "Set field value for tags on current node.
+This function allows interactive editing of field values for all tags
+attached to the current node. It displays a list of fields with their
+current values and lets the user select and modify them one by one."
   (interactive)
   (let* ((node-id (org-id-get))
-         ;; 获取节点的所有标签
+         ;; Get all tags for the node
          (tags (org-supertag-node-get-tags node-id))
-         ;; 收集所有标签的字段信息
+         ;; Collect field information for all tags
          (tag-fields (cl-loop for tag-id in tags
                              for tag = (org-supertag-tag-get tag-id)
                              when tag
                              collect (cons tag-id 
                                          (plist-get tag :fields))))
-         ;; 构建所有字段的列表
+         ;; Build list of all fields
          (all-fields (cl-loop for (tag-id . fields) in tag-fields
                              when fields
                              append (mapcar (lambda (field)
@@ -258,7 +267,7 @@ TAG-NAME 是标签名称"
                                                   :current-value (org-entry-get nil 
                                                                              (plist-get field :name))))
                                           fields)))
-         ;; 显示和编辑
+         ;; Display and edit options
          (field-values
           (cl-loop for field-info in all-fields
                    for tag-id = (plist-get field-info :tag-id)
@@ -268,17 +277,17 @@ TAG-NAME 是标签名称"
                    collect
                    (cons
                     (format "[%s] %s (current: %s)" tag-id field-name 
-                           (or current-value "未设置"))
+                           (or current-value "unset"))
                     (cons tag-id field)))))
     
-    ;; 让用户选择要编辑的字段
-    (while (when-let* ((choice (completing-read "选择要编辑的字段 (完成请按 C-g): "
+    ;; Let user select fields to edit
+    (while (when-let* ((choice (completing-read "Select field to edit (C-g to finish): "
                                               (mapcar #'car field-values)
                                               nil t))
                        (field-info (cdr (assoc choice field-values)))
                        (tag-id (car field-info))
                        (field-def (cdr field-info)))
-             ;; 设置字段值
+             ;; Set the field value
              (org-supertag-field-set-value field-def
                                           (org-supertag-field-read-value field-def)
                                           node-id
@@ -286,280 +295,252 @@ TAG-NAME 是标签名称"
              t))))
 
 (defun org-supertag-tag-set-field-and-value ()
-  "为当前节点的标签添加字段并设置值."
+  "Set field values for tags on the current node.
+This function allows setting field values for tags attached to the current node.
+It provides options to:
+1. Edit existing fields
+2. Add new fields 
+3. Add preset fields from templates"
   (interactive)
   (let* ((node-id (org-id-get))
-         (tags (org-supertag-node-get-tags node-id))
-         (tag-id (completing-read "选择标签: " tags nil t))
-         (tag (org-supertag-tag-get tag-id))
-         (fields (plist-get tag :fields))
-         (create-new (or (null fields)
-                        (y-or-n-p "创建新字段？")))
-         (field-def
-          (when create-new
-            (let* ((field-name (read-string "字段名称: "))
-                  (field-type (completing-read "字段类型: "
-                                             (org-supertag-get-field-types)
-                                             nil t))
-                  (type-symbol (cdr (assoc field-type 
-                                          (org-supertag-get-field-types))))
-                  (base-def (list :name (org-supertag--sanitize-field-name field-name)
-                                 :type type-symbol)))
-              base-def)))
-         (field-def (or field-def
-                       (let ((field-name (completing-read "选择字段: "
-                                                        (mapcar (lambda (f)
-                                                                (plist-get f :name))
-                                                              fields)
-                                                        nil t)))
-                         (cl-find field-name fields
-                                 :key (lambda (f)
-                                       (plist-get f :name))
-                                 :test #'equal)))))
+         (tags (org-supertag-node-get-tags node-id)))
     
-    ;; 如果是新字段，添加到标签定义
-    (when create-new
-      (org-supertag-tag-add-field tag-id field-def))
+    (unless node-id
+      (error "Not on a valid node"))
     
-    ;; 设置字段值
-    (org-supertag-field-set-value field-def
-                                 (org-supertag-field-read-value field-def)
-                                 node-id
-                                 tag-id)
+    (when (null tags)
+      (when (y-or-n-p "No tags on current node. Add a tag?")
+        (call-interactively #'org-supertag-tag-add-tag)
+        ;; Refresh tags list
+        (setq tags (org-supertag-node-get-tags node-id))))
     
-    (message "已%s字段 '%s' 并设置值"
-             (if create-new "创建" "更新")
-             (plist-get field-def :name))))
+    (unless tags
+      (user-error "At least one tag is required to set fields"))
+    
+    ;; Build choices list
+    (let* ((choices
+            (cl-loop for tag-id in tags
+                     for tag = (org-supertag-tag-get tag-id)
+                     append
+                     ;; Existing fields
+                     (cl-loop for field in (plist-get tag :fields)
+                             for field-name = (plist-get field :name)
+                             for current-value = (org-supertag-field-get-value 
+                                                field node-id tag-id)
+                             collect
+                             (cons (format "[%s] %s (current: %s)"
+                                         tag-id field-name 
+                                         (or current-value "unset"))
+                                   (list :type :existing
+                                        :tag-id tag-id
+                                        :field field)))
+                     ;; New field option
+                     collect (cons (format "[%s] + Add new field" tag-id)
+                                 (list :type :new
+                                      :tag-id tag-id))
+                     ;; Preset fields
+                     append
+                     (cl-loop for preset in org-supertag-preset-fields
+                             for preset-name = (car preset)
+                             for preset-desc = (plist-get (cdr preset) :description)
+                             collect
+                             (cons (format "[%s] + Preset: %s (%s)"
+                                         tag-id preset-name preset-desc)
+                                   (list :type :preset
+                                        :tag-id tag-id
+                                        :preset-name preset-name))))))
+      ;; Loop until user presses C-g
+      (while t
+        (let* ((choice (completing-read "Select field: " choices nil t))
+               (choice-data (cdr (assoc choice choices))))
+          
+          (pcase (plist-get choice-data :type)
+            ;; Existing field
+            (:existing
+             (let ((field (plist-get choice-data :field))
+                   (tag-id (plist-get choice-data :tag-id)))
+               (org-supertag-field-set-value 
+                field
+                (org-supertag-field-read-value field)
+                node-id
+                tag-id)))
+            ;; New field
+            (:new
+             (let* ((tag-id (plist-get choice-data :tag-id))
+                    (field-name (read-string "Field name: "))
+                    (field-type (completing-read 
+                               "Field type: "
+                               org-supertag-field-types
+                               nil t))
+                    (field-def (list :name field-name
+                                    :type (intern field-type))))
+               (org-supertag-tag-add-field tag-id field-def)
+               (org-supertag-field-set-value 
+                field-def
+                (org-supertag-field-read-value field-def)
+                node-id
+                tag-id)))
+            ;; Preset field
+            (:preset
+             (let* ((tag-id (plist-get choice-data :tag-id))
+                    (preset-name (plist-get choice-data :preset-name))
+                    (field-def (org-supertag-get-preset-field preset-name)))
+               (org-supertag-tag-add-field tag-id field-def)
+               (org-supertag-field-set-value 
+                field-def
+                (org-supertag-field-read-value field-def)
+                node-id
+                tag-id)))))))))
 
 (defun org-supertag-tag-batch-add-tag (tag-name)
-  "批量为选中的 headlines 添加标签.
-TAG-NAME 是标签名称"
+  "Batch add tags to selected headlines.
+TAG-NAME is the name of the tag to add"
   (interactive
    (list (completing-read "选择或输入标签: "
                          (append 
                           (org-supertag-get-all-tags)
-                          org-supertag-preset-tags))))
-  
+                          org-supertag-preset-tags)))
   (let* ((ast (org-element-parse-buffer))
          (headlines '())
          (selected-headlines '())
          (tag (org-supertag-tag-get tag-name)))
-    
-    ;; 收集所有无 ID 的 headlines
+    ;; Collect all headlines without ID
     (org-element-map ast 'headline
       (lambda (headline)
         (unless (org-element-property :ID headline)
           (push headline headlines))))
     
-    ;; 构建选择列表
+    ;; Build choices list
     (let ((choices (append 
-                   '(("Finish" . :finish))  ; 添加完成选项
+                   '(("Finish" . :finish))  ; Add finish option
                    (mapcar (lambda (hl)
                             (cons (org-element-property :raw-value hl)
                                  hl))
                           headlines))))
       
-      ;; 循环选择，直到选择 Finish
+      ;; Loop until user selects Finish
       (while (when-let* ((title (completing-read 
-                                (format "选择 headline (已选择 %d 个): "
+                                (format "Select headline (%d selected): "
                                        (length selected-headlines))
                                 (mapcar #'car choices)
                                 nil t))
                         (choice (cdr (assoc title choices))))
                (unless (eq choice :finish)
-                 ;; 添加到选中列表
+                ;; Add to selected list
                  (push choice selected-headlines)
-                 ;; 从选项中移除已选项
+                 ;; Remove selected option
                  (setq choices (assoc-delete-all title choices))
-                 t)))  ; 继续循环，除非选择了 Finish
-      
-      ;; 应用标签到所有选中的 headlines
+                 t)))  ; Continue loop unless Finish is selected
+      ;; Apply tags to all selected headlines
       (when selected-headlines
         (dolist (hl selected-headlines)
           (save-excursion
             (goto-char (org-element-property :begin hl))
             (org-supertag-tag-add-tag tag-name)))
-        (message "已为 %d 个 headlines 添加标签 %s" 
-                 (length selected-headlines)
-                 tag-name)))))
+        (message "Added tag %s to %d headlines" 
+                 tag-name
+                 (length selected-headlines)))))))
 
 
 (defun org-supertag-tag-remove ()
-  "从当前节点移除标签关联及其字段值."
+  "Remove tag association and its field values from current node."
   (interactive)
   (let* ((node-id (org-id-get))
          (tags (org-supertag-node-get-tags node-id))
-         (tag-id (completing-read "选择要移除的标签: " tags nil t)))
+         (tag-id (completing-read "Select tag to remove: " tags nil t)))
     
-    ;; 使用内部函数移除标签
+    ;; Remove tag using internal function
     (org-supertag-tag--remove tag-id node-id)
     
-    (message "已移除节点的标签 '%s' 关联及其字段值" tag-id)))
+    (message "Removed tag '%s' association and its field values" tag-id)))
 ;;----------------------------------------------------------------------
 ;; Preset Tag
 ;;----------------------------------------------------------------------
 
 (defconst org-supertag-preset-tags
   '("project" "task" "person" "meeting" "place" "company" "note")
-  "预设标签列表.")
+  "List of predefined tags.")
 
 (defconst org-supertag-preset-tag-fields
-  '(("project" . ((:name "status" 
-                  :type options
+  '(("project" . ((:name "status"
+                  :type options 
                   :options ("planning" "active" "on-hold" "completed" "cancelled")
-                  :description "项目状态")
+                  :description "Project status")
                  (:name "priority"
                   :type options
-                  :options ("high" "medium" "low")
-                  :description "优先级")
+                  :options ("high" "medium" "low") 
+                  :description "Priority level")
                  (:name "deadline"
                   :type date
-                  :description "截止日期")
+                  :description "Due date")
                  (:name "owner"
                   :type string
-                  :description "负责人")))
-    
+                  :description "Project owner")))
+
     ("task" . ((:name "status"
                 :type options
                 :options ("todo" "in-progress" "blocked" "done" "cancelled")
-                :description "任务状态")
-               (:name "priority"
-                :type options  
+                :description "Task status")
+               (:name "priority" 
+                :type options
                 :options ("A" "B" "C")
-                :description "优先级")
+                :description "Priority level")
                (:name "due"
                 :type date
-                :description "到期日")
+                :description "Due date")
                (:name "assignee"
                 :type string
-                :description "执行人")))
-    
+                :description "Assigned to")))
+
     ("person" . ((:name "role"
                  :type string
-                 :description "角色")
+                 :description "Role")
                 (:name "email"
                  :type string
-                 :description "邮箱")
+                 :description "Email address")
                 (:name "phone"
                  :type string
-                 :description "电话")))
-    
+                 :description "Phone number")))
+
     ("meeting" . ((:name "date"
                   :type date
-                  :description "会议日���")
+                  :description "Meeting date")
                  (:name "attendees"
                   :type string
-                  :description "参会人")
+                  :description "Attendees")
                  (:name "location"
                   :type string
-                  :description "地点")))
-    
+                  :description "Location")))
+
     ("place" . ((:name "address"
                 :type string
-                :description "地址")
+                :description "Address")
                (:name "category"
                 :type options
                 :options ("office" "home" "public" "other")
-                :description "场所类型")))
-    
+                :description "Place type")))
+
     ("company" . ((:name "industry"
                   :type string
-                  :description "行业")
+                  :description "Industry")
                  (:name "website"
                   :type string
-                  :description "网站")
+                  :description "Website")
                  (:name "contact"
                   :type string
-                  :description "联系人")))
-    
+                  :description "Contact person")))
+
     ("note" . ((:name "category"
                 :type options
                 :options ("idea" "reference" "summary" "other")
-                :description "笔记类型")
+                :description "Note type")
                (:name "source"
                 :type string
-                :description "来源")))))
+                :description "Source")))))
 
 (defun org-supertag-get-preset-fields (tag-name)
-  "获取预设标签的字段定义.
-TAG-NAME 是标签名称"
+  "Get predefined fields for a tag.
+TAG-NAME is the name of the tag."
   (cdr (assoc tag-name org-supertag-preset-tag-fields)))
-
-
-;;----------------------------------------------------------------------
-;; Test
-;;----------------------------------------------------------------------  
-
-(ert-deftest test-org-supertag-tag-basic ()
-  "测试标签基本操作."
-  (org-supertag-db-init)  ;; 初化数据库
-  
-  ;; 1. 创建标签
-  (let* ((tag-id "test-tag")
-         (fields '((:name "status" :type string :required t)))
-         (tag (org-supertag-tag-create tag-id :fields fields)))
-    
-    ;; 2. 验证标签创建
-    (should (equal tag tag-id))
-    (let ((stored-tag (org-supertag-db-get tag-id)))
-      (should stored-tag)
-      (should (eq (plist-get stored-tag :type) :tag))
-      (should (equal (plist-get stored-tag :id) tag-id))
-      (should (equal (plist-get stored-tag :fields) fields)))
-    
-    ;; 3. 创建节点并应用标签
-    (let ((node-id "test-node"))
-      (org-supertag-db-add node-id
-                          (list :type :node
-                                :id node-id
-                                :title "Test Node"
-                                :file-path "/test/path"
-                                :pos 1
-                                :olp nil
-                                :level 1))
-      
-      ;; 4. 应用标签到节点
-      (org-supertag-tag-apply tag-id node-id
-                             '(("status" . "active")))
-      
-      ;; 5. 验证节点-标签关系
-      (should (member node-id (org-supertag-tag-get-nodes tag-id)))
-      
-      ;; 6. 验证字段值
-      (message "Database links: %S" (ht-items org-supertag-db--link))
-      (let ((field-value (org-supertag-field-db-get-value node-id "status" tag-id)))
-        (message "Field value: %S" field-value)
-        (should (equal field-value "active"))))))
-
-(defun org-supertag-test-tag-creation (tag-name)
-  "测试标签创建过程"
-  (interactive "sTag name: ")
-  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (preset-fields (org-supertag-get-preset-fields sanitized-name)))
-    (message "Sanitized name: %s" sanitized-name)
-    (message "Preset fields: %S" preset-fields)
-    (let ((tag (org-supertag-tag-create sanitized-name :fields preset-fields)))
-      (message "Created tag: %S" (org-supertag-db-get tag)))))
-
-(defun org-supertag-test-tag-apply (tag-id)
-  "测试标签应用过程"
-  (interactive
-   (list (completing-read "Tag ID: " (org-supertag-get-all-tags))))
-  (let ((tag (org-supertag-db-get tag-id)))
-    (message "Tag before apply: %S" tag)
-    (let ((node-id (org-supertag-tag-apply tag-id)))
-      (message "Applied to node: %s" node-id)
-      (message "Node properties: %S" 
-               (org-entry-properties nil 'all)))))
-
-(defun org-supertag-debug-tag (tag-id)
-  "调试标签定义"
-  (interactive
-   (list (completing-read "Tag ID: " (org-supertag-get-all-tags))))
-  (let* ((tag (org-supertag-db-get tag-id))
-         (fields (plist-get tag :fields)))
-    (message "Tag: %S" tag)
-    (message "Fields: %S" fields)))
-
 
 (provide 'org-supertag-tag)

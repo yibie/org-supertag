@@ -1,33 +1,25 @@
-* test                                                             :#project:
-:PROPERTIES:
-:ID:       3FE87D4A-52AB-4E84-A450-0D8A0A4FE849
-:status:
-:priority:
-:deadline:
-:owner:
-:END:
+* 介绍
 
-* test2                                                             :#person:
-:PROPERTIES:
-:ID:       D8025719-8FA0-4D32-ABFF-2907610CB8D0
-:END:
-[[id:B0B357CF-0036-420E-890E-5E13C16416D6][test7]]
+Org-supertag 是一个旨在增强 org-mode 的标签功能的 Package，它的主要灵感来自一款名为 Tana 的双链笔记软件。
 
-* test14                                                           :#meeting:
-:PROPERTIES:
-:ID:       C307A0F7-79BC-40B5-B681-CDD9E7226D0F
-:END:
+它对你有什么用？在这里我简单分享我的经验，大部分我们平时制作的笔记是线性的，它按照某种顺序排列。然而，当我们需要切换角度对这些笔记进行重新整理时，就会遇到一定的困难。
 
-* test15                                                           :#project:
-:PROPERTIES:
-:ID:       81C814C4-273F-43EE-8FA9-3D92462FAAAA
-:status:
-:priority:
-:deadline:
-:owner:
-:END:
+比如，很多笔记是关于概念的， 很多笔记是关于方法的，但在线性记录笔记时，这些属性很难被展现。因为在记录笔记的过程中，我们更关注对知识本身的理解，在当时也无法马上抽身在一个更高的层次去看待。当我们回顾时，通过标签标记原来记录的知识，这样子就对自己的知识进行了再结构化。这样子，无论是查询，整理都是相当方便的。
 
-* test18                                                           :#company:
-:PROPERTIES:
-:ID:       C6F946AB-07D9-4AD6-BAEF-179A76FA6F63
-:END:
+最重要的，是增加知识的重复使用率，形成知识的复利效应。
+
+以下是我制作的概念示意图：
+
+[[file:picture/figure2.png]]
+
+* 使用
+** 形成节点
+1. ~M-x org-supertag-node-create~
+   通过这一方式生成的节点，无标签信息，可以被检索，也可以被引用
+2. ~M-x org-supertag-tag-add-tag~
+   直接
+
+* 安装
+
+
+
