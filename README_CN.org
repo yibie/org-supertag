@@ -1,0 +1,162 @@
+* 介绍
+
+Org-supertag 是一个旨在增强 org-mode 的标签功能的 Package，它的主要灵感来自一款名为 Tana 的双链笔记软件。和它一样，org-supertag 的标签既能为节点赋予属性，也能够直接操作节点。
+
+Org-supertag 秉持非破坏更新的原则，使用它不会破坏 org-mode 原有的特性，原有的标签系统依然有效（只不过不能被 org-supertag 识别），我相信两者的组合会创造更多有趣的可能性。
+
+* 为什么需要标签？
+
+在这里我简单分享我的经验，大部分我们平时制作的笔记是线性的，它按照某种顺序排列。然而，当我们需要切换角度对这些笔记进行重新整理时，就会遇到一定的困难。
+
+比如，很多笔记是关于概念的， 很多笔记是关于方法的，但在线性记录笔记时，这些属性很难被展现。因为在记录笔记的过程中，我们更关注对知识本身的理解，在当时也无法马上抽身在一个更高的层次去看待。当我们回顾时，通过标签标记原来记录的知识，这样子就对自己的知识进行了再结构化。这样子，无论是查询还是整理都是相当方便的。
+
+最重要的，是增加知识的重复使用率，形成知识的复利效应。——鉴于标签是非常灵活的组织方式，因此这种复利效应远远不止在知识层面。
+
+以下是我制作的概念示意图：
+
+[[file:picture/figure2.png]]
+
+* 主要概念
+
+** 节点 (Node)
+节点是 org-supertag 的基本单位，它对应 org-mode 中的标题。每个节点都有唯一的 ID，可以被引用和检索。
+
+节点包括了 org-mode 的 headline 和属性抽屉，以及标题之下所包含的所有内容（包括特殊区块，子标题等等）。
+
+** 标签 (Tag)
+标签不仅仅是简单的标记，它还定义了一组字段模板。当一个节点被赋予标签时，这些字段模板会被应用到节点上。比如:
+
+- 一个标记为 "任务" 的标签可能包含 "优先级"、"状态"、"截止日期" 等字段
+- 一个标记为 "联系人" 的标签可能包含 "邮箱"、"电话"、"地址" 等字段
+
+Org-supertag 的标签将节点视为对象，因此未来标签还会引入更多功能，比如：自动命令触发，与 AI 结合等等。
+
+Org-supertag 的标签长这样： ~:#tag-name:~ ，仅仅在表现形式上与 org-mode 的标签有所不同。
+
+如果你点击它，同样可以看到 org-agenda 的菜单（当然我不推荐你这么做）。
+
+** 字段 (Field)
+字段是节点的属性（一旦创建，将同步到 org-mode 中的属性抽屉中去），它们由标签定义。每个字段都有:
+
+- 类型：如字符串、数字、日期、选项、引用等
+- 名称：字段的标识符
+- 值：字段的具体内容
+- 验证规则：确保字段值符合预期格式
+
+支持的字段类型包括:
+- string: 文本
+- options: 预定义选项
+- number: 数字
+- date: 日期
+- timestamp: 时间戳
+- reference: 节点引用
+- tags: 标签列表
+- list: 列表
+- range: 数值范围
+
+** 查询
+org-supertag 提供了强大的查询功能:
+
+- 同时查询：输入关键字，可以同时查询节点，标签和字段
+- 可以输入多个关键字，将以 AND 的逻辑进行查询
+- 导出查询结果：可以选中一个或多个查询结果，将它们移动到一个新建的文件，或另外一个文件中去。也可以直接在光标处插入查询结果。
+
+* 常用命令
+
+** 节点操作
+- ~M-x org-supertag-node-create~ :: 将当前标题转换为 supertag 节点
+- ~M-x org-supertag-query~ :: 搜索节点
+
+** 标签操作
+- ~M-x org-supertag-tag-add-tag~ :: 为当前 org-headline 添加标签，添加标签的同时，自动创建节点，同时设置字段（如果字段存在）
+- ~M-x org-supertag-tag-batch-add-tag~ :: 批量为多个 org-headline 添加标签
+- ~M-x org-supertag-tag-remove~ :: 移除当前节点的标签
+- ~M-x org-supertag-tag-set-field-value~ :: 设置字段值
+- ~M-x org-supertag-tag-set-field-and-value~ :: 同时设置标签字段和值
+
+** 预设标签
+org-supertag 提供了一些预设的标签类型，以下仅为举例:
+
+- project :: 项目管理
+  - status: 状态 (planning/active/on-hold/completed/cancelled)
+  - priority: 优先级 (high/medium/low)
+  - deadline: 截止日期
+  - owner: 负责人
+
+- task :: 任务管理
+  - status: 状态 (todo/in-progress/blocked/done/cancelled)
+  - priority: 优先级 (A/B/C)
+  - due: 截止日期
+  - assignee: 负责人
+
+其他预设标签包括: person, meeting, place, company, note 等。
+
+** 查询命令
+- ~M-x org-supertag-query~ :: 启动查询界面
+  1. 输入关键字（多个关键字用空格分隔）
+  2. 选择查询结果（可多选，用逗号分隔）
+  3. 选择导出方式:
+     - 导出到新文件
+     - 导出到已有文件
+     - 在当前位置插入链接
+
+查询结果会以 org-mode 的链接形式呈现，点击链接可以直接跳转到对应节点。
+
+** 查询结果导出
+查询结果的导出有三种方式，可以通过以下命令或快捷键触发：
+
+*** 导出到新文件
+- 命令: ~M-x org-supertag-query-export-results-to-new-file~
+- 快捷键: ~C-c C-x n~
+1. 选择查询结果后，选择 "Export to New File"
+2. 输入新文件名
+3. 选择插入位置:
+   - File End :: 插入到文件末尾
+   - Under Heading :: 作为选定标题的子标题插入
+   - Same Level :: 作为选定标题的同级标题插入
+
+*** 导出到已有文件
+- 命令: ~M-x org-supertag-query-export-results-to-file~
+- 快捷键: ~C-c C-x f~
+1. 选择查询结果后，选择 "Export to Existing File"
+2. 选择目标文件
+3. 选择插入位置（同上）
+
+*** 在当前位置插入
+- 命令: ~M-x org-supertag-query-export-results-here~
+- 快捷键: ~C-c C-x h~
+1. 选择查询结果后，选择 "Insert at Point"
+2. 结果将以 org-mode 特殊区块的形式插入，例如：
+   #+begin_query
+   - [[id:node-id][节点标题]]
+   #+end_query
+
+*** 其他相关命令
+- ~C-c C-c~ :: 切换当前行的选择状态
+- ~C-c C-x C-r~ :: 选中区域内的所有结果
+- ~C-c C-x C-u~ :: 取消选中区域内的所有结果
+
+* 安装
+
+#+begin_src emacs-lisp
+(use-package org-supertag
+  :straight (:host github :repo "yibie/org-supertag")
+  :after org
+  :config
+  (org-supertag-setup))
+#+end_src
+
+* 未来计划
+
+- 能够提供更多查询的范围，比如针对一个文件或多个文件的查询
+- 初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
+- 初步与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
+- 实现一个任务调度系统，让多个节点组合起来，完成一系列的任务，比如自动设置晚上 9 点进行每日回顾，并自动将回顾结果插入到回顾节点中（实验性功能，未必会实现）
+- 像 Tana 那样，提供更多视图（实验性功能，未必会实现）
+
+* 鸣谢
+
+感谢 Tana 的灵感，感谢 org-mode 的强大，感谢 emacs 的强大。
+
+我衷心祝愿你能够喜欢这个 Package，并从中受益。
+

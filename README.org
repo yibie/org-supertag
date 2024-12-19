@@ -1,142 +1,147 @@
-* 介绍
+[[file:README_CN.org][中文版说明]]
 
-Org-supertag 是一个旨在增强 org-mode 的标签功能的 Package，它的主要灵感来自一款名为 Tana 的双链笔记软件。和它一样，org-supertag 的标签既能为节点赋予属性，也能够直接操作节点。
+* Introduction
 
-Org-supertag 秉持非破坏更新的原则，使用它不会破坏 org-mode 原有的特性，原有的标签系统依然有效（只不过不能被 org-supertag 识别），我相信两者的组合会创造更多有趣的可能性。
+Org-supertag is a package designed to enhance the tagging functionality of org-mode, drawing its main inspiration from Tana, a bi-directional linking note-taking software. Like Tana, org-supertag's tags can both assign properties to nodes and directly operate on them.
 
-* 为什么需要标签？
+Org-supertag follows the principle of non-destructive updates, meaning its use won't interfere with org-mode's existing features. The original tagging system remains functional (though not recognized by org-supertag), and I believe the combination of both systems will create more interesting possibilities.
 
-在这里我简单分享我的经验，大部分我们平时制作的笔记是线性的，它按照某种顺序排列。然而，当我们需要切换角度对这些笔记进行重新整理时，就会遇到一定的困难。
+* Why Tags?
 
-比如，很多笔记是关于概念的， 很多笔记是关于方法的，但在线性记录笔记时，这些属性很难被展现。因为在记录笔记的过程中，我们更关注对知识本身的理解，在当时也无法马上抽身在一个更高的层次去看待。当我们回顾时，通过标签标记原来记录的知识，这样子就对自己的知识进行了再结构化。这样子，无论是查询还是整理都是相当方便的。
+Let me share my experience: most of our notes are linear, arranged in a certain order. However, when we need to reorganize these notes from different perspectives, we encounter some difficulties.
 
-最重要的，是增加知识的重复使用率，形成知识的复利效应。——鉴于标签是非常灵活的组织方式，因此这种复利效应远远不止在知识层面。
+For example, many notes are about concepts, and many are about methods, but these properties are hard to express in linear note-taking. This is because when recording notes, we focus more on understanding the knowledge itself, and it's difficult to step back and view it from a higher level at that moment. When we review later, by tagging previously recorded knowledge, we restructure our knowledge. This makes both querying and organizing much more convenient.
 
-以下是我制作的概念示意图：
+Most importantly, it increases the reuse rate of knowledge, creating a compound effect. Given that tagging is a very flexible way of organization, this compound effect extends far beyond the knowledge level.
+
+Here's my concept diagram:
 
 [[file:picture/figure2.png]]
 
-* 主要概念
+* Main Concepts
 
-** 节点 (Node)
-节点是 org-supertag 的基本单位，它对应 org-mode 中的标题。每个节点都有唯一的 ID，可以被引用和检索。
+** Node
+A node is the basic unit in org-supertag, corresponding to a headline in org-mode. Each node has a unique ID and can be referenced and searched.
 
-节点包括了 org-mode 的 headline 和属性抽屉，以及标题之下所包含的所有内容（包括特殊区块，子标题等等）。
+A node includes the org-mode headline, its property drawer, and all content under the headline (including special blocks, subheadings, etc.).
 
-** 标签 (Tag)
-标签不仅仅是简单的标记，它还定义了一组字段模板。当一个节点被赋予标签时，这些字段模板会被应用到节点上。比如:
+** Tag
+Tags are not just simple markers; they define a set of field templates. When a tag is applied to a node, these field templates are applied to the node. For example:
 
-- 一个标记为 "任务" 的标签可能包含 "优先级"、"状态"、"截止日期" 等字段
-- 一个标记为 "联系人" 的标签可能包含 "邮箱"、"电话"、"地址" 等字段
+- A tag marked as "task" might include fields like "priority", "status", "deadline", etc.
+- A tag marked as "contact" might include fields like "email", "phone", "address", etc.
 
-Org-supertag 的标签将节点视为对象，因此未来标签还会引入更多功能，比如：自动命令触发，与 AI 结合等等。
+Org-supertag treats nodes as objects, so tags will introduce more functionality in the future, such as automatic command triggers and AI integration.
 
-Org-supertag 的标签长这样： ~:#tag-name:~ ，仅仅在表现形式上与 org-mode 的标签有所不同。
+Org-supertag tags look like this: ~:#tag-name:~, differing from org-mode tags only in appearance.
 
-如果你点击它，同样可以看到 org-agenda 的菜单（当然我不推荐你这么做）。
+If you click it, you can still see the org-agenda menu (though I don't recommend doing this).
 
-** 字段 (Field)
-字段是节点的属性（一旦创建，将同步到 org-mode 中的属性抽屉中去），它们由标签定义。每个字段都有:
+** Field
+Fields are node properties (once created, they are synchronized to the property drawer in org-mode) defined by tags. Each field has:
 
-- 类型：如字符串、数字、日期、选项、引用等
-- 名称：字段的标识符
-- 值：字段的具体内容
-- 验证规则：确保字段值符合预期格式
+- Type: such as string, number, date, options, reference, etc.
+- Name: field identifier
+- Value: field content
+- Validation rules: ensure field values meet expected formats
 
-支持的字段类型包括:
-- string: 文本
-- options: 预定义选项
-- number: 数字
-- date: 日期
-- timestamp: 时间戳
-- reference: 节点引用
-- tags: 标签列表
-- list: 列表
-- range: 数值范围
+Supported field types include:
+- string: text
+- options: predefined options
+- number: numeric values
+- date: dates
+- timestamp: timestamps
+- reference: node references
+- tags: tag lists
+- list: lists
+- range: numeric ranges
 
-** 查询
-org-supertag 提供了强大的查询功能:
+** Query
+Org-supertag provides powerful query capabilities:
 
-- 同时查询：输入关键字，可以同时查询节点，标签和字段
-- 可以输入多个关键字，将以 AND 的逻辑进行查询
-- 导出查询结果：可以选中一个或多个查询结果，将它们移动到一个新建的文件，或另外一个文件中去。也可以直接在光标处插入查询结果。
+- Unified search: keywords can search across nodes, tags, and fields simultaneously
+- Multiple keywords can be used with AND logic
+- Query results can be exported to:
+  1. A new file
+  2. An existing file
+  3. Inserted at the current cursor position
 
-* 常用命令
+* Common Commands
 
-** 节点操作
-- ~M-x org-supertag-node-create~ :: 将当前标题转换为 supertag 节点
-- ~M-x org-supertag-query~ :: 搜索节点
+** Node Operations
+- ~M-x org-supertag-node-create~ :: Convert current headline to a supertag node
+- ~M-x org-supertag-query~ :: Search nodes
 
-** 标签操作
-- ~M-x org-supertag-tag-add-tag~ :: 为当前 org-headline 添加标签，添加标签的同时，自动创建节点，同时设置字段（如果字段存在）
-- ~M-x org-supertag-tag-batch-add-tag~ :: 批量为多个 org-headline 添加标签
-- ~M-x org-supertag-tag-remove~ :: 移除当前节点的标签
-- ~M-x org-supertag-tag-set-field-value~ :: 设置字段值
-- ~M-x org-supertag-tag-set-field-and-value~ :: 同时设置标签字段和值
+** Tag Operations
+- ~M-x org-supertag-tag-add-tag~ :: Add a tag to the current org-headline, automatically creating a node and setting fields (if they exist)
+- ~M-x org-supertag-tag-batch-add-tag~ :: Batch add tags to multiple org-headlines
+- ~M-x org-supertag-tag-remove~ :: Remove a tag from the current node
+- ~M-x org-supertag-tag-set-field-value~ :: Set field value
+- ~M-x org-supertag-tag-set-field-and-value~ :: Set both tag field and value simultaneously
 
-** 预设标签
-org-supertag 提供了一些预设的标签类型，以下仅为举例:
+** Preset Tags
+Org-supertag provides some preset tag types, here are examples:
 
-- project :: 项目管理
-  - status: 状态 (planning/active/on-hold/completed/cancelled)
-  - priority: 优先级 (high/medium/low)
-  - deadline: 截止日期
-  - owner: 负责人
+- project :: Project management
+  - status: Status (planning/active/on-hold/completed/cancelled)
+  - priority: Priority level (high/medium/low)
+  - deadline: Due date
+  - owner: Project owner
 
-- task :: 任务管理
-  - status: 状态 (todo/in-progress/blocked/done/cancelled)
-  - priority: 优先级 (A/B/C)
-  - due: 截止日期
-  - assignee: 负责人
+- task :: Task management
+  - status: Status (todo/in-progress/blocked/done/cancelled)
+  - priority: Priority level (A/B/C)
+  - due: Due date
+  - assignee: Assigned to
 
-其他预设标签包括: person, meeting, place, company, note 等。
+Other preset tags include: person, meeting, place, company, note, etc.
 
-** 查询命令
-- ~M-x org-supertag-query~ :: 启动查询界面
-  1. 输入关键字（多个关键字用空格分隔）
-  2. 选择查询结果（可多选，用逗号分隔）
-  3. 选择导出方式:
-     - 导出到新文件
-     - 导出到已有文件
-     - 在当前位置插入链接
+** Query Commands
+- ~M-x org-supertag-query~ :: Start query interface
+  1. Enter keywords (multiple keywords separated by spaces)
+  2. Select query results (multiple selections separated by commas)
+  3. Choose export method:
+     - Export to new file
+     - Export to existing file
+     - Insert at current position
 
-查询结果会以 org-mode 的链接形式呈现，点击链接可以直接跳转到对应节点。
+Query results are presented as org-mode links, clicking a link jumps directly to the corresponding node.
 
-** 查询结果导出
-查询结果的导出有三种方式，可以通过以下命令或快捷键触发：
+** Query Result Export
+Query results can be exported in three ways, triggered by the following commands or shortcuts:
 
-*** 导出到新文件
-- 命令: ~M-x org-supertag-query-export-results-to-new-file~
-- 快捷键: ~C-c C-x n~
-1. 选择查询结果后，选择 "Export to New File"
-2. 输入新文件名
-3. 选择插入位置:
-   - File End :: 插入到文件末尾
-   - Under Heading :: 作为选定标题的子标题插入
-   - Same Level :: 作为选定标题的同级标题插入
+*** Export to New File
+- Command: ~M-x org-supertag-query-export-results-to-new-file~
+- Shortcut: ~C-c C-x n~
+1. After selecting results, choose "Export to New File"
+2. Enter new filename
+3. Choose insertion position:
+   - File End :: Insert at end of file
+   - Under Heading :: Insert as child of selected heading
+   - Same Level :: Insert as sibling of selected heading
 
-*** 导出到已有文件
-- 命令: ~M-x org-supertag-query-export-results-to-file~
-- 快捷键: ~C-c C-x f~
-1. 选择查询结果后，选择 "Export to Existing File"
-2. 选择目标文件
-3. 选择插入位置（同上）
+*** Export to Existing File
+- Command: ~M-x org-supertag-query-export-results-to-file~
+- Shortcut: ~C-c C-x f~
+1. After selecting results, choose "Export to Existing File"
+2. Select target file
+3. Choose insertion position (same as above)
 
-*** 在当前位置插入
-- 命令: ~M-x org-supertag-query-export-results-here~
-- 快捷键: ~C-c C-x h~
-1. 选择查询结果后，选择 "Insert at Point"
-2. 结果将以 org-mode 特殊区块的形式插入，例如：
+*** Insert at Current Position
+- Command: ~M-x org-supertag-query-export-results-here~
+- Shortcut: ~C-c C-x h~
+1. After selecting results, choose "Insert at Point"
+2. Results will be inserted as an org-mode special block, for example:
    #+begin_query
-   - [[id:node-id][节点标题]]
+   - [[id:node-id][Node Title]]
    #+end_query
 
-*** 其他相关命令
-- ~C-c C-c~ :: 切换当前行的选择状态
-- ~C-c C-x C-r~ :: 选中区域内的所有结果
-- ~C-c C-x C-u~ :: 取消选中区域内的所有结果
+*** Other Related Commands
+- ~C-c C-c~ :: Toggle selection state of current line
+- ~C-c C-x C-r~ :: Select all results in region
+- ~C-c C-x C-u~ :: Deselect all results in region
 
-* 安装
+* Installation
 
 #+begin_src emacs-lisp
 (use-package org-supertag
@@ -146,16 +151,16 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
   (org-supertag-setup))
 #+end_src
 
-* 未来计划
+* Future Plans
 
-- 能够提供更多查询的范围，比如针对一个文件或多个文件的查询
-- 初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
-- 初步与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
-- 实现一个任务调度系统，让多个节点组合起来，完成一系列的任务，比如自动设置晚上 9 点进行每日回顾，并自动将回顾结果插入到回顾节点中
+- Expand query scope to support searching within specific files or multiple files
+- Implement a command system allowing tags to trigger commands automatically. For example, when a node is tagged as "Task", it automatically sets TODO state, priority A, and changes the background color to yellow
+- Initial AI integration, with different tags associated with different prompts. For example, when a node is tagged as "task", it automatically triggers an AI command to generate a task list
+- Implement a task scheduling system that combines multiple nodes to complete a series of tasks. For example, automatically schedule daily reviews at 9 PM and insert review results into a review node (experimental feature, may not be implemented)
+- Provide more views like Tana (experimental feature, may not be implemented)
 
-* 鸣谢
+* Acknowledgments
 
-感谢 Tana 的灵感，感谢 org-mode 的强大，感谢 emacs 的强大。
+Thanks to Tana for inspiration, and thanks to the power of org-mode and emacs.
 
-我衷心祝愿你能够喜欢这个 Package，并从中受益。
-
+I sincerely hope you enjoy this package and benefit from it.
