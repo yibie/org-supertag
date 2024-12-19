@@ -68,7 +68,7 @@ org-supertag 提供了强大的查询功能:
 - ~M-x org-supertag-query~ :: 搜索节点
 
 ** 标签操作
-- ~M-x org-supertag-tag-add-tag~ :: 为当前 org-headline 添加标签，添加标签的同时，自��创建节点，同时设置字段（如果字段存在）
+- ~M-x org-supertag-tag-add-tag~ :: 为当前 org-headline 添加标签，添加标签的同时，自动创建节点，同时设置字段（如果字段存在）
 - ~M-x org-supertag-tag-batch-add-tag~ :: 批量为多个 org-headline 添加标签
 - ~M-x org-supertag-tag-remove~ :: 移除当前节点的标签
 - ~M-x org-supertag-tag-set-field-value~ :: 设置字段值
