@@ -771,4 +771,103 @@ Shows results in a dedicated buffer with selection and export options."
          (nodes (org-supertag-query--find-nodes-in-buffer keywords)))
     (org-supertag-query-show-results keywords nodes)))
 
+;;----------------------------------------------------------------------
+;;  Query nodes in selected files 
+;;----------------------------------------------------------------------
+
+(defun org-supertag-query--get-org-files ()
+  "Get list of org files in database.
+Returns a list of absolute file paths."
+  (let* ((node-ids (org-supertag-db-find-by-type :node))
+         (nodes (mapcar #'org-supertag-db-get node-ids)))  ; 获取完整的节点数据
+    (message "Debug: Found nodes: %S" nodes)  ; 调试信息
+    (let ((files (delete-dups
+                  (mapcar (lambda (props)
+                           (plist-get props :file-path))
+                         nodes))))
+      (message "Debug: Extracted files: %S" files)  ; 调试信息
+      files)))
+
+(defun org-supertag-query--select-files ()
+  "Select files for search scope.
+Returns:
+- List of file paths
+- nil if no files selected"
+  (let* ((choices '(("Single file" . :single)
+                   ("Multiple files" . :multiple)
+                   ("Agenda files" . :agenda)))
+         (scope (cdr (assoc 
+                     (completing-read "Select scope: " choices nil t)
+                     choices)))
+         (files (org-supertag-query--get-org-files)))
+    
+    (unless files
+      (user-error "No files found in database"))
+    (pcase scope
+      (:single 
+       (when-let ((file (completing-read 
+                        "Select file: " 
+                        (lambda (string pred action)
+                          (if (eq action 'metadata)
+                              '(metadata (display-sort-function . identity)
+                                       (cycle-sort-function . identity))
+                            (complete-with-action 
+                             action files string pred)))
+                        nil t)))
+         (list file)))
+      (:multiple 
+       (completing-read-multiple 
+        "Select files (TAB:complete, RET:confirm, ,:multi): "
+        (lambda (string pred action)
+          (if (eq action 'metadata)
+              '(metadata (display-sort-function . identity)
+                       (cycle-sort-function . identity))
+            (complete-with-action 
+             action files string pred)))
+        nil t))
+      (:agenda 
+       (unless org-agenda-files
+         (user-error "No agenda files defined"))
+       org-agenda-files))))
+
+(defun org-supertag-query--find-nodes-in-files (keywords files)
+  "Find nodes matching KEYWORDS in FILES.
+KEYWORDS is a list of keywords to match
+FILES is a list of file paths to search
+
+Returns:
+- List of matched nodes
+- nil if no matches found"
+  (let (results)
+    (dolist (file files)
+      (when (and file (file-exists-p file))
+        (with-current-buffer (find-file-noselect file)
+          (let ((nodes (org-supertag-query--find-nodes-in-buffer keywords)))
+            (when nodes
+              (push nodes results))))))
+    (apply #'append (nreverse results))))
+
+(defun org-supertag-query-in-files ()
+  "Search for nodes in selected files.
+Shows results in a dedicated buffer with selection and export options."
+  (interactive)
+  ;; Save current position
+  (setq org-supertag-query--original-buffer (current-buffer)
+        org-supertag-query--original-point (point))
+  
+  ;; Ensure database is initialized
+  (unless (and (boundp 'org-supertag-db--object)
+               org-supertag-db--object)
+    (error "Database not initialized"))
+  
+  ;; Select files
+  (when-let* ((files (org-supertag-query--select-files)))
+    ;; Get search keywords
+    (let* ((input (read-string "Enter search keywords (space separated): "))
+           (keywords (split-string input " " t))
+           (nodes (org-supertag-query--find-nodes-in-files keywords files)))
+      
+      ;; Display results
+      (org-supertag-query-show-results keywords nodes))))
+
 (provide 'org-supertag-query)
