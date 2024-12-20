@@ -209,7 +209,8 @@ VALUE: Value to set for the field"
 
 (defun org-supertag-tag-add-tag (tag-name)
   "Add a tag to the current headline.
-TAG-NAME can be an existing tag or a new tag name"
+TAG-NAME can be an existing tag or a new tag name.
+Will prevent duplicate tag application."
   (interactive
    (let* ((existing-tags (org-supertag-db-find-by-type :tag))  ; Get all existing tags
           (tag-choices
@@ -231,17 +232,20 @@ TAG-NAME can be an existing tag or a new tag name"
      (list
       (completing-read "Select or enter new tag name: " tag-choices nil nil))))
   
-  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (preset-fields (org-supertag-get-preset-fields sanitized-name)))
-    
-    ;; Get or create the tag
-    (let ((tag-id
-           (if (org-supertag-tag-get sanitized-name)
-               sanitized-name  ; If tag exists, use name as ID
-             ;; If new tag, create it
-             (org-supertag-tag-create sanitized-name 
-                                    :fields preset-fields))))
-      
+  (let* ((node-id (org-id-get))
+         (sanitized-name (org-supertag-sanitize-tag-name tag-name))
+         (current-tags (org-supertag-node-get-tags node-id)))
+    ;; Check for duplicate tag
+    (when (member sanitized-name current-tags)
+      (user-error "Tag '%s' is already applied to this node" sanitized-name))
+    (let* ((preset-fields (org-supertag-get-preset-fields sanitized-name))
+           ;; Get or create the tag
+           (tag-id
+            (if (org-supertag-tag-get sanitized-name)
+                sanitized-name  ; If tag exists, use name as ID
+              ;; If new tag, create it
+              (org-supertag-tag-create sanitized-name 
+                                     :fields preset-fields))))
       ;; Apply the tag
       (org-supertag-tag-apply tag-id))))
 
