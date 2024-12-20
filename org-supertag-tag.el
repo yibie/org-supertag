@@ -82,6 +82,7 @@ This function will:
 5. Add tag to org tags"
   (let* ((tag (org-supertag-db-get tag-id))
          (node-id (org-id-get-create)))
+    (message "Debug apply: tag=%S" tag)  ;; 调试信息
     ;; Ensure tag exists
     (unless tag
       (error "Tag %s not found" tag-id))
@@ -99,6 +100,7 @@ This function will:
      (list :created-at (current-time)))
     ;; Initialize fields
     (when-let ((fields (plist-get tag :fields)))
+      (message "Debug apply: fields=%S" fields)  ;; 调试信息
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
                (field-type (plist-get field :type))
@@ -112,6 +114,7 @@ This function will:
                   ('string 
                    nil)                               ; Use nil instead of empty string
                   (_ nil))))                          ; Default to nil
+          (message "Debug apply: field=%S value=%S" field-name initial-value)  ;; 调试信息
           ;; Set property only if initial value exists
           (when initial-value
             (org-set-property field-name initial-value))
@@ -228,7 +231,7 @@ Will prevent duplicate tag application."
                         (mapcar (lambda (tag-id)
                                 (plist-get (org-supertag-db-get tag-id) :name))
                               existing-tags)))
-              org-supertag-preset-tags)))))
+              (mapcar #'car org-supertag-preset-tags))))))  ; 只获取预设标签的名称
      (list
       (completing-read "Select or enter new tag name: " tag-choices nil nil))))
   
@@ -405,7 +408,7 @@ TAG-NAME is the name of the tag to add"
    (list (completing-read "选择或输入标签: "
                          (append 
                           (org-supertag-get-all-tags)
-                          org-supertag-preset-tags)))
+                          (mapcar #'car org-supertag-preset-tags)))))  ; Only get preset tag names
   (let* ((ast (org-element-parse-buffer))
          (headlines '())
          (selected-headlines '())
@@ -445,7 +448,7 @@ TAG-NAME is the name of the tag to add"
             (org-supertag-tag-add-tag tag-name)))
         (message "Added tag %s to %d headlines" 
                  tag-name
-                 (length selected-headlines)))))))
+                 (length selected-headlines))))))
 
 
 (defun org-supertag-tag-remove ()
@@ -474,11 +477,7 @@ This function:
 ;; Preset Tag
 ;;----------------------------------------------------------------------
 
-(defconst org-supertag-preset-tags
-  '("project" "task" "person" "meeting" "place" "company" "note")
-  "List of predefined tags.")
-
-(defconst org-supertag-preset-tag-fields
+(defvar org-supertag-preset-tags
   '(("project" . ((:name "status"
                   :type options 
                   :options ("planning" "active" "on-hold" "completed" "cancelled")
@@ -553,11 +552,235 @@ This function:
                 :description "Note type")
                (:name "source"
                 :type string
-                :description "Source")))))
+                :description "Source"))))
+  "Default preset tags with their field definitions.
+Users can override this by setting it in their config files.
+
+Format:
+((tag-name . field-definitions) ...)
+
+Each field definition is a plist with properties:
+- :name        Field name
+- :type        Field type (string, options, date, number, etc)
+- :options     List of options (for options type)
+- :description Field description
+
+Example user configuration:
+(setq org-supertag-preset-tags
+      '((\"book\" . ((name \"status\"
+                     :type options
+                     :options (\"reading\" \"completed\" \"want-to-read\")
+                     :description \"Reading status\")
+                    (:name \"rating\"
+                     :type number
+                     :min 1
+                     :max 5
+                     :description \"Book rating\")
+                    (:name \"author\"
+                     :type string
+                     :description \"Author\")))))")
 
 (defun org-supertag-get-preset-fields (tag-name)
   "Get predefined fields for a tag.
 TAG-NAME is the name of the tag."
-  (cdr (assoc tag-name org-supertag-preset-tag-fields)))
+  (cdr (assoc tag-name org-supertag-preset-tags)))
+
+(defun org-supertag-tag-edit-preset ()
+  "Edit preset tag definitions interactively.
+This function allows:
+1. View current preset tag definitions
+2. Edit fields of existing preset tags
+3. Add new preset tags
+4. Remove preset tags"
+  (interactive)
+  (let* ((choices
+          (append
+           ;; View definitions
+           '(("View preset definitions" . :view))
+           ;; Add new preset
+           '(("Add new preset tag" . :new))
+           ;; Edit existing presets
+           (mapcar (lambda (preset)
+                    (cons (format "Edit '%s'" (car preset))
+                          (car preset)))
+                  org-supertag-preset-tags)))
+         (choice (completing-read "Select action: " 
+                                (mapcar #'car choices)
+                                nil t))
+         (action (cdr (assoc choice choices))))
+    
+    (pcase action
+      ;; View definitions
+      (:view
+       (with-current-buffer (get-buffer-create "*Org Supertag Presets*")
+         (erase-buffer)
+         (insert "Org Supertag Preset Definitions:\n\n")
+         (dolist (preset org-supertag-preset-tags)
+           (let ((tag-name (car preset))
+                 (fields (cdr preset)))
+             (insert (format "* %s\n" tag-name))
+             (dolist (field fields)
+               (insert (format "  - %s (%s)\n"
+                             (plist-get field :name)
+                             (plist-get field :type))))))
+         (org-mode)
+         (display-buffer (current-buffer))))
+      
+      ;; Add new preset
+      (:new
+       (let* ((tag-name (read-string "Tag name: "))
+              (fields '()))
+         ;; Add fields interactively
+         (while (y-or-n-p "Add field? ")
+           (let* ((field-name (read-string "Field name: "))
+                  (field-type (completing-read 
+                             "Field type: "
+                             '("string" "options" "date" "number")
+                             nil t))
+                  (field-def
+                   (list :name field-name
+                         :type (intern field-type))))
+             ;; Add options for options type
+             (when (string= field-type "options")
+               (let ((options
+                      (split-string
+                       (read-string "Options (comma separated): ")
+                       "," t "[ \t]+")))
+                 (setq field-def 
+                       (plist-put field-def :options options))))
+             ;; Add description
+             (let ((desc (read-string "Description (optional): ")))
+               (when (not (string-empty-p desc))
+                 (setq field-def 
+                       (plist-put field-def :description desc))))
+             (push field-def fields)))
+         ;; Add new preset
+         (customize-save-variable
+          'org-supertag-preset-tags
+          (cons (cons tag-name (nreverse fields))
+                org-supertag-preset-tags))))
+      
+      ;; Edit existing preset
+      ((pred stringp)
+       (let* ((tag-name action)
+              (current-fields (cdr (assoc tag-name org-supertag-preset-tags)))
+              (field-choices
+               (append
+                '(("Add new field" . :new)
+                  ("Remove tag" . :remove))
+                (mapcar (lambda (field)
+                         (cons (format "Edit '%s'" 
+                                     (plist-get field :name))
+                               field))
+                       current-fields)))
+              (field-choice
+               (completing-read 
+                (format "Edit '%s': " tag-name)
+                (mapcar #'car field-choices)
+                nil t))
+              (field-action (cdr (assoc field-choice field-choices))))
+         
+         (pcase field-action
+           ;; Add new field
+           (:new
+            (let* ((field-name (read-string "Field name: "))
+                   (field-type (completing-read 
+                              "Field type: "
+                              '("string" "options" "date" "number")
+                              nil t))
+                   (field-def
+                    (list :name field-name
+                          :type (intern field-type))))
+              ;; Add options for options type
+              (when (string= field-type "options")
+                (let ((options
+                       (split-string
+                        (read-string "Options (comma separated): ")
+                        "," t "[ \t]+")))
+                  (setq field-def 
+                        (plist-put field-def :options options))))
+              ;; Add description
+              (let ((desc (read-string "Description (optional): ")))
+                (when (not (string-empty-p desc))
+                  (setq field-def 
+                        (plist-put field-def :description desc))))
+              ;; Update preset
+              (customize-save-variable
+               'org-supertag-preset-tags
+               (cons (cons tag-name 
+                          (append current-fields (list field-def)))
+                     (assoc-delete-all 
+                      tag-name org-supertag-preset-tags)))))
+           
+           ;; Remove tag
+           (:remove
+            (when (yes-or-no-p 
+                   (format "Remove preset tag '%s'? " tag-name))
+              (customize-save-variable
+               'org-supertag-preset-tags
+               (assoc-delete-all tag-name org-supertag-preset-tags))))
+           
+           ;; Edit field
+           ((pred listp)
+            (let* ((field field-action)
+                   (field-name (plist-get field :name))
+                   (field-type (plist-get field :type))
+                   (actions
+                    '(("Edit options" . :options)
+                      ("Edit description" . :description)
+                      ("Remove field" . :remove)))
+                   (action
+                    (intern
+                     (completing-read 
+                      (format "Edit field '%s' (%s): "
+                              field-name field-type)
+                      actions
+                      nil t))))
+              (pcase action
+                (:options
+                 (when (eq field-type 'options)
+                   (let ((new-options
+                          (split-string
+                           (read-string "New options (comma separated): ")
+                           "," t "[ \t]+")))
+                     (setq field
+                           (plist-put field :options new-options))
+                     (customize-save-variable
+                      'org-supertag-preset-tags
+                      (cons (cons tag-name
+                                 (mapcar (lambda (f)
+                                         (if (equal (plist-get f :name)
+                                                  field-name)
+                                             field
+                                           f))
+                                       current-fields))
+                            (assoc-delete-all 
+                             tag-name org-supertag-preset-tags))))))
+                (:description
+                 (let ((new-desc
+                        (read-string "New description: "
+                                    (plist-get field :description))))
+                   (setq field
+                         (plist-put field :description new-desc))
+                   (customize-save-variable
+                    'org-supertag-preset-tags
+                    (cons (cons tag-name
+                               (mapcar (lambda (f)
+                                       (if (equal (plist-get f :name)
+                                                field-name)
+                                           field
+                                         f))
+                                     current-fields))
+                          (assoc-delete-all 
+                           tag-name org-supertag-preset-tags)))))
+                (:remove
+                 (when (yes-or-no-p 
+                        (format "Remove field '%s'? " field-name))
+                   (customize-save-variable
+                    'org-supertag-preset-tags
+                    (cons (cons tag-name
+                               (remove field current-fields))
+                          (assoc-delete-all 
+                           tag-name org-supertag-preset-tags))))))))))))))
 
 (provide 'org-supertag-tag)
