@@ -183,9 +183,10 @@ NODE is the node property list."
   :lighter " OrgST"
   :keymap org-supertag-query-mode-map)
 
-(defun org-supertag-query-show-results (keyword-list)
+(defun org-supertag-query-show-results (keyword-list nodes)
   "Display search results.
-KEYWORD-LIST is the list of keywords to search for."
+KEYWORD-LIST is the list of keywords to search for.
+NODES is the list of matched nodes to display."
   (with-current-buffer (get-buffer-create "*Org SuperTag Search*")
     (let ((inhibit-read-only t))
       (erase-buffer)
@@ -211,17 +212,14 @@ KEYWORD-LIST is the list of keywords to search for."
       (insert "- C-c C-x C-r : Toggle checkbox region\n")
       (insert "- C-c C-x C-u : Untoggle checkbox region\n")
       (insert "\n")
-      
       ;; Display search results
       (insert "* Search Results\n")
-      (let ((nodes (org-supertag-query-find-nodes keyword-list)))
-        (if nodes
-            (progn
-              (insert (format "Found %d matching nodes:\n\n" (length nodes)))
-              (dolist (node nodes)
-                (insert (org-supertag-query-format-node node) "\n")))
-          (insert "No matching results found\n")))
-      
+      (if nodes
+          (progn
+            (insert (format "Found %d matching nodes:\n\n" (length nodes)))
+            (dolist (node nodes)
+              (insert (org-supertag-query-format-node node) "\n")))
+        (insert "No matching results found\n"))
       (goto-char (point-min))))
   (switch-to-buffer "*Org SuperTag Search*"))
 
@@ -709,7 +707,7 @@ Available insertion positions:
 ;;------------------------------------------------------
 
 (defun org-supertag-query ()
-  "Interactive search."
+  "Interactive search across all indexed files."
   (interactive)
   ;; Save current position
   (setq org-supertag-query--original-buffer (current-buffer)
@@ -718,8 +716,59 @@ Available insertion positions:
   (unless (and (boundp 'org-supertag-db--object)
                org-supertag-db--object)
     (error "Database not initialized"))
+  
   (let* ((input (read-string "Enter search keywords (space separated): "))
-         (keywords (split-string input " " t)))
-    (org-supertag-query-show-results keywords)))
+         (keywords (split-string input " " t))
+         (nodes (org-supertag-query-find-nodes keywords)))
+    (org-supertag-query-show-results keywords nodes)))
+
+(defun org-supertag-query--find-nodes-in-buffer (keywords)
+  "Find nodes matching KEYWORDS in current buffer.
+KEYWORDS is a list of keywords to match against node content."
+  (let (results)
+    (save-excursion
+      (goto-char (point-min))
+      (while (outline-next-heading)
+        (when-let* ((node-id (org-id-get))
+                    (props (org-supertag-db-get node-id)))
+          ;; Get all searchable content
+          (let* ((title (org-get-heading t t t t))
+                 (tags (org-get-tags))
+                 (fields (org-entry-properties nil 'standard))
+                 (field-values (mapcar #'cdr fields))
+                 ;; Combine all searchable text
+                 (searchable-text (concat 
+                                 title " "
+                                 (mapconcat #'identity (or tags '()) " ")
+                                 " "
+                                 (mapconcat #'identity field-values " "))))
+            ;; Check if all keywords match
+            (when (cl-every 
+                   (lambda (keyword)
+                     (string-match-p 
+                      (regexp-quote keyword) 
+                      searchable-text))
+                   keywords)
+              (push props results))))))
+    ;; Return results
+    (nreverse results)))
+
+(defun org-supertag-query-buffer ()
+  "Search for nodes in current buffer.
+Shows results in a dedicated buffer with selection and export options."
+  (interactive)
+  ;; Save current position
+  (setq org-supertag-query--original-buffer (current-buffer)
+        org-supertag-query--original-point (point))
+  
+  ;; Ensure database is initialized
+  (unless (and (boundp 'org-supertag-db--object)
+               org-supertag-db--object)
+    (error "Database not initialized"))
+  
+  (let* ((input (read-string "Enter search keywords (space separated): "))
+         (keywords (split-string input " " t))
+         (nodes (org-supertag-query--find-nodes-in-buffer keywords)))
+    (org-supertag-query-show-results keywords nodes)))
 
 (provide 'org-supertag-query)
