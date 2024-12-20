@@ -18,6 +18,50 @@ Here's my concept diagram:
 
 [[file:picture/figure2.png]]
 
+* Practical Example
+Let's say you have the following content in your inbox.org:
+#+begin_example
+* Read a good article about Emacs performance optimization
+https://example.com/emacs-performance
+
+* Need to contact John about project progress
+Phone: 123-456-7890
+
+* Ideas for improving project documentation
+1. Add more examples
+2. Optimize formatting
+#+end_example
+
+Processing steps:
+1. Convert to nodes and add tags
+   #+begin_example
+   * Read a good article about Emacs performance optimization  :#article:
+   https://example.com/emacs-performance
+
+   * Need to contact John about project progress  :#contact: :#task:
+   Phone: 123-456-7890
+
+   * Ideas for improving project documentation  :#idea:
+   1. Add more examples
+   2. Optimize formatting
+   #+end_example
+
+2. Use query function for batch processing
+   - ~M-x org-supertag-query~ enter "article" to find all articles
+   - Export selected results to articles.org
+   - Repeat these steps for other types of content
+
+3. Results after processing
+   - articles.org now contains article collections
+   - tasks.org now contains new tasks
+   - contacts.org now contains contact information
+   - ideas.org now contains new ideas
+
+Advantages of this workflow:
+1. Quick collection: Don't worry about where to put things, just put everything in inbox first
+2. Delayed organization: Organize when convenient
+3. Batch processing: Quickly categorize and organize using tags and queries
+
 * Main Concepts
 
 ** Node
@@ -71,6 +115,8 @@ Org-supertag provides powerful query capabilities:
 ** Node Operations
 - ~M-x org-supertag-node-create~ :: Convert current headline to a supertag node
 - ~M-x org-supertag-query~ :: Search nodes
+- ~M-x org-supertag-node-add-reference~ :: Add reference to current node
+- ~M-x org-supertag-node-remove-reference~ :: Remove reference from current node
 
 ** Tag Operations
 - ~M-x org-supertag-tag-add-tag~ :: Add a tag to the current org-headline, automatically creating a node and setting fields (if they exist)
@@ -96,6 +142,33 @@ Org-supertag provides some preset tag types, here are examples:
 
 Other preset tags include: person, meeting, place, company, note, etc.
 
+- ~M-x org-supertag-tag-edit-preset~ :: Edit preset tags
+Use this command to edit preset tags, it will automatically add custom-set-variables configuration to your init.el.
+
+*** Customizing Preset Tags in init.el
+You can customize preset tags by setting the `org-supertag-preset-tags` variable in your init.el. Each preset tag consists of a tag name and field definitions:
+
+#+begin_src emacs-lisp
+(setq org-supertag-preset-tags
+      '(("book" . ((:name "status"
+                   :type options 
+                   :options ("reading" "completed" "want-to-read")
+                   :description "Reading status")
+                  (:name "rating"
+                   :type number
+                   :description "Rating")
+                  (:name "author"
+                   :type string
+                   :description "Author")))))
+#+end_src
+
+Field definitions support the following properties:
+- :name :: Field name
+- :type :: Field type (string/options/date/number etc.)
+- :options :: List of options (only for options type)
+- :description :: Field description
+- :min/:max :: Number range (only for number type)
+
 ** Query Commands
 - ~M-x org-supertag-query~ :: Start query interface
   1. Enter keywords (multiple keywords separated by spaces)
@@ -106,6 +179,9 @@ Other preset tags include: person, meeting, place, company, note, etc.
      - Insert at current position
 
 Query results are presented as org-mode links, clicking a link jumps directly to the corresponding node.
+
+- ~M-x org-supertag-query-in-buffer~ :: Query within current buffer
+- ~M-x org-supertag-query-in-files~ :: Query in specified files, can specify multiple files
 
 ** Query Result Export
 Query results can be exported in three ways, triggered by the following commands or shortcuts:
@@ -151,6 +227,16 @@ Query results can be exported in three ways, triggered by the following commands
   (org-supertag-setup))
 #+end_src
 
+* Changelog
+
+- 2024-12-20 :: 0.0.2 release
+  - fix org-supertag-remove :: Fix issue of adding duplicate tags to org-headline when removing tags
+  - fix org-supertag-tag-add-tag :: Fix issue of adding duplicate tags to org-headline when adding tags
+  - feat org-supertag-tag-edit-preset :: Edit preset tags
+  - feat org-supertag-query-in-buffer :: Query within current buffer
+  - feat org-supertag-query-in-files :: Query in specified files
+- 2024-12-19 :: 0.0.1 release
+
 * Future Plans
 
 - Expand query scope to support searching within specific files or multiple files
@@ -165,58 +251,3 @@ Thanks to Tana for inspiration, and thanks to the power of org-mode and emacs.
 
 I sincerely hope you enjoy this package and benefit from it.
 
-* Workflow Examples
-
-Here are some examples of how org-supertag can streamline your work:
-
-** Knowledge Management
-1. Create notes as usual in org-mode
-2. When reviewing notes, use ~org-supertag-node-create~ to convert important headlines into nodes
-3. Add appropriate tags using ~org-supertag-tag-add-tag~, such as "concept", "method", or "example"
-4. Fill in the fields that come with the tags (e.g., difficulty level, related topics)
-5. Use ~org-supertag-query~ to find related notes when needed
-6. Export query results to create new documents or presentations
-
-** Project Management
-1. Create a project outline in org-mode
-2. Convert the main project headline to a node and tag it as "project"
-3. Tag subtasks with "task" tag
-4. Use preset fields to:
-   - Set priorities and deadlines
-   - Assign team members
-   - Track progress
-5. Use query to:
-   - Find all tasks assigned to a specific person
-   - List all tasks due this week
-   - Generate status reports by exporting query results
-
-** Research Workflow
-1. Create nodes for research papers using ~org-supertag-node-create~
-2. Tag them with appropriate tags like "paper", "reference"
-3. Use fields to record:
-   - Publication date
-   - Authors
-   - Key findings
-   - Methodology
-4. Use query to:
-   - Find papers by topic or methodology
-   - Create literature review sections
-   - Generate citation lists
-
-** Daily Notes and Reviews
-1. Create daily notes as usual
-2. Tag important entries with appropriate tags
-3. Use query to:
-   - Review all tasks completed this week
-   - Collect all insights about a specific topic
-   - Prepare weekly/monthly reviews
-4. Export selected entries to:
-   - Share with team members
-   - Create progress reports
-   - Build knowledge bases
-
-The power of org-supertag lies in its ability to:
-- Add structure to your notes without changing your writing habits
-- Find connections across different files and topics
-- Generate new documents from existing content
-- Maintain flexibility while providing organization

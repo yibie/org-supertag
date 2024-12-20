@@ -110,6 +110,8 @@ org-supertag 提供了强大的查询功能:
 ** 节点操作
 - ~M-x org-supertag-node-create~ :: 将当前标题转换为 supertag 节点
 - ~M-x org-supertag-query~ :: 搜索节点
+- ~M-x org-supertag-node-add-reference~ :: 为当前节点添加引用 
+- ~M-x org-supertag-node-remove-reference~ :: 移除当前节点的引用
 
 ** 标签操作
 - ~M-x org-supertag-tag-add-tag~ :: 为当前 org-headline 添加标签，添加标签的同时，自动创建节点，同时设置字段（如果字段存在）
@@ -135,6 +137,33 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
 
 其他预设标签包括: person, meeting, place, company, note 等。
 
+- ~M-x org-supertag-tag-edit-preset~ :: 编辑预设标签
+使用该命令编辑预设标签，将在 init.el 中自动添加 custom-set-variables 的配置。
+
+*** 在 init.el 中设置自定义预设标签
+可以在 init.el 中通过设置 `org-supertag-preset-tags` 变量来自定义预设标签。每个预设标签由标签名和字段定义组成:
+
+#+begin_src emacs-lisp
+(setq org-supertag-preset-tags
+      '(("book" . ((:name "status"
+                   :type options 
+                   :options ("reading" "completed" "want-to-read")
+                   :description "阅读状态")
+                  (:name "rating"
+                   :type number
+                   :description "评分")
+                  (:name "author"
+                   :type string
+                   :description "作者")))))
+#+end_src
+
+字段定义支持以下属性:
+- :name :: 字段名称
+- :type :: 字段类型 (string/options/date/number 等)
+- :options :: 选项列表 (仅用于 options 类型)
+- :description :: 字段描述
+- :min/:max :: 数值范围 (仅用于 number 类型)
+
 ** 查询命令
 - ~M-x org-supertag-query~ :: 启动查询界面
   1. 输入关键字（多个关键字用空格分隔）
@@ -145,6 +174,9 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
      - 在当前位置插入链接
 
 查询结果会以 org-mode 的链接形式呈现，点击链接可以直接跳转到对应节点。
+
+- ~M-x org-supertag-query-in-buffer~ :: 在当前 buffer 中查询
+- ~M-x org-supertag-query-in-files~ :: 在指定文件中查询，可以指定多个文件
 
 ** 查询结果导出
 查询结果的导出有三种方式，可以通过以下命令或快捷键触发：
@@ -189,6 +221,16 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
   :config
   (org-supertag-setup))
 #+end_src
+
+* Changelog
+
+- 2024-12-20 :: 0.0.2 release
+  - fix org-supertag-remove :: 修复移除标签时，添加重复标签到 org-headline 的问题
+  - fix org-supertag-tag-add-tag :: 修复添加标签时，添加重复标签到 org-headline 的问题
+  - feat org-supertag-tag-edit-preset :: 编辑预设标签
+  - feat org-supertag-query-in-buffer :: 在当前 buffer 中查询
+  - feat org-supertag-query-in-files :: 在指定文件中查询，可以指定多个文件
+- 2024-12-19 :: 0.0.1 release
 
 * 未来计划
 
