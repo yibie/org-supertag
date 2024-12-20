@@ -8,6 +8,8 @@
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
+
+
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert
@@ -27,7 +29,7 @@ NAME is the name to convert
   "Check if a tag exists.
 TAG-NAME is the name of the tag to check"
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
-    (org-supertag-tag-db-get sanitized-name)))
+    (org-supertag-tag-get sanitized-name)))
 
 
 ;;----------------------------------------------------------------------
@@ -133,7 +135,7 @@ This function:
   ;; 1. Remove tag-node relationship
   (org-supertag-db-remove-link :node-tag node-id tag-id)
   ;; 2. Remove associated field values
-  (let ((tag (org-supertag-tag-db-get tag-id)))
+  (let ((tag (org-supertag-tag-get tag-id)))
     (dolist (field-def (plist-get tag :fields))
       (org-supertag-field-remove-value field-def node-id tag-id))))
 
@@ -172,7 +174,7 @@ Returns a list of node IDs that have this tag attached."
 (defun org-supertag-tag-get-fields (tag-id)
   "Get list of fields defined for a tag.
 TAG-ID: The tag identifier"
-  (plist-get (org-supertag-tag-db-get tag-id) :fields))
+  (plist-get (org-supertag-tag-get tag-id) :fields))
 
 (defun org-supertag-tag-add-field (tag-id field-def)
   "Add a field to a tag.
@@ -443,16 +445,27 @@ TAG-NAME is the name of the tag to add"
 
 
 (defun org-supertag-tag-remove ()
-  "Remove tag association and its field values from current node."
+  "Remove tag from current node.
+This function:
+1. Removes tag from org tags
+2. Calls internal function to remove tag data"
   (interactive)
   (let* ((node-id (org-id-get))
          (tags (org-supertag-node-get-tags node-id))
          (tag-id (completing-read "Select tag to remove: " tags nil t)))
-    
-    ;; Remove tag using internal function
+    (unless node-id
+      (error "Not on a valid node"))
+    (unless tags
+      (error "No tags on current node"))
+    ;; 1. Remove from org tags
+    (let* ((current-tags (org-get-tags))
+           (tag-name (concat "#" tag-id))
+           (new-tags (delete tag-name current-tags)))
+      (org-set-tags new-tags))
+    ;; 2. Remove tag data using internal function
     (org-supertag-tag--remove tag-id node-id)
-    
-    (message "Removed tag '%s' association and its field values" tag-id)))
+    (message "Removed tag '%s' and its fields" tag-id)))
+
 ;;----------------------------------------------------------------------
 ;; Preset Tag
 ;;----------------------------------------------------------------------
