@@ -69,8 +69,8 @@ A node is the basic unit in org-supertag, corresponding to a headline in org-mod
 
 A node includes the org-mode headline, its property drawer, and all content under the headline (including special blocks, subheadings, etc.).
 
-** Tag
-Tags are not just simple markers; they define a set of field templates. When a tag is applied to a node, these field templates are applied to the node. For example:
+** Super Tag
+Super tags are not just simple markers; they define a set of field templates. When a super tag is applied to a node, these field templates are applied to the node. For example:
 
 - A tag marked as "task" might include fields like "priority", "status", "deadline", etc.
 - A tag marked as "contact" might include fields like "email", "phone", "address", etc.
@@ -80,6 +80,8 @@ Org-supertag treats nodes as objects, so tags will introduce more functionality 
 Org-supertag tags look like this: ~:#tag-name:~, differing from org-mode tags only in appearance.
 
 If you click it, you can still see the org-agenda menu (though I don't recommend doing this).
+
+⚠️Warning: org-supertag only records tags set through org-supertag, not tags set through org-mode.
 
 ** Field
 Fields are node properties (once created, they are synchronized to the property drawer in org-mode) defined by tags. Each field has:
@@ -230,7 +232,7 @@ Query results can be exported in three ways, triggered by the following commands
 * Changelog
 
 - 2024-12-20 :: 0.0.2 release
-  - fix org-supertag-remove :: Fix issue of adding duplicate tags to org-headline when removing tags
+  - fix org-supertag-remove :: Fix issue of removing tags not taking effect
   - fix org-supertag-tag-add-tag :: Fix issue of adding duplicate tags to org-headline when adding tags
   - feat org-supertag-tag-edit-preset :: Edit preset tags
   - feat org-supertag-query-in-buffer :: Query within current buffer

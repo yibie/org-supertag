@@ -67,8 +67,8 @@ https://example.com/emacs-performance
 
 节点包括了 org-mode 的 headline 和属性抽屉，以及标题之下所包含的所有内容（包括特殊区块，子标题等等）。
 
-** 标签 (Tag)
-标签不仅仅是简单的标记，它还定义了一组字段模板。当一个节点被赋予标签时，这些字段模板会被应用到节点上。比如:
+** 超级标签 (Super Tag)
+超级标签与 org-mode 的标签不同，它不仅仅是一个简单的标记，它还定义了一组字段模板。当一个节点被赋予超级标签时，这些字段模板会被应用到节点上。比如:
 
 - 一个标记为 "任务" 的标签可能包含 "优先级"、"状态"、"截止日期" 等字段
 - 一个标记为 "联系人" 的标签可能包含 "邮箱"、"电话"、"地址" 等字段
@@ -78,6 +78,8 @@ Org-supertag 的标签将节点视为对象，因此未来标签还会引入更�
 Org-supertag 的标签长这样： ~:#tag-name:~ ，仅仅在表现形式上与 org-mode 的标签有所不同。
 
 如果你点击它，同样可以看到 org-agenda 的菜单（当然我不推荐你这么做）。
+
+⚠️注意：org-supertag 不会记录你通过 org-mode 设置的标签，它只会记录通过 org-supertag 设置的标签。
 
 ** 字段 (Field)
 字段是节点的属性（一旦创建，将同步到 org-mode 中的属性抽屉中去），它们由标签定义。每个字段都有:
@@ -225,8 +227,8 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
 * Changelog
 
 - 2024-12-20 :: 0.0.2 release
-  - fix org-supertag-remove :: 修复移除标签时，添加重复标签到 org-headline 的问题
-  - fix org-supertag-tag-add-tag :: 修复添加标签时，添加重复标签到 org-headline 的问题
+  - fix org-supertag-remove :: 修复移除标签不生效的问题
+  - fix org-supertag-tag-add-tag :: 修复添加标签时，可添加重复标签到 org-headline 的问题
   - feat org-supertag-tag-edit-preset :: 编辑预设标签
   - feat org-supertag-query-in-buffer :: 在当前 buffer 中查询
   - feat org-supertag-query-in-files :: 在指定文件中查询，可以指定多个文件
