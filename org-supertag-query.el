@@ -207,7 +207,6 @@ NODES is the list of matched nodes to display."
       (insert "Shortcuts:\n")
       (insert "- C-c C-c     : Toggle checkbox state\n")
       (insert "- C-c C-x f   : Export to file\n") 
-      (insert "- C-c C-x h   : Export to current location\n")
       (insert "- C-c C-x n   : Export to new file\n")
       (insert "- C-c C-x C-r : Toggle checkbox region\n")
       (insert "- C-c C-x C-u : Untoggle checkbox region\n")

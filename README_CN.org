@@ -202,12 +202,14 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
 
 *** 在当前位置插入
 - 命令: ~M-x org-supertag-query-export-results-here~
-- 快捷键: ~C-c C-x h~
+- 快捷键: 未定义
 1. 选择查询结果后，选择 "Insert at Point"
 2. 结果将以 org-mode 特殊区块的形式插入，例如：
    #+begin_query
    - [[id:node-id][节点标题]]
    #+end_query
+
+⚠️注意: ~org-supertag-query-export-results-here~ 可以直接在搜索结果页之外使用，不可以在搜索结果页里使用
 
 *** 其他相关命令
 - ~C-c C-c~ :: 切换当前行的选择状态

@@ -1,0 +1,1194 @@
+;;; org-supertag-command.el --- Behavior system for org-supertag -*- lexical-binding: t; -*-
+
+(require 'org-supertag-db)
+
+;;----------------------------------------------------------------------------- 
+;; Core Functions
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior-define (name props)
+  "Define a behavior with NAME and PROPS.
+PROPS should include :when, :what, and :how specifications.
+
+Example:
+  (org-supertag-behavior-define 'auto-archive
+    '(:when (:timing :immediate
+             :condition (:type :node :todo \"DONE\"))
+      :what (:operation :move
+             :target \"archive.org\")
+      :how (:method :sync)))"
+  (let ((when-spec (plist-get props :when))
+        (what-spec (plist-get props :what))
+        (how-spec (plist-get props :how)))
+    ;; validate required properties
+    (unless (and when-spec what-spec how-spec)
+      (error "Behavior %s missing required properties" name))
+    ;; store behavior in database
+    (org-supertag-db-add (format "behavior:%s" name)
+                         (list :type :behavior
+                               :name name
+                               :when when-spec
+                               :what what-spec
+                               :how how-spec))
+    ;; setup event listeners based on timing
+    (org-supertag-behavior--setup-triggers name props)))
+
+
+(defun org-supertag-behavior--setup-triggers (name props)
+  "Setup event triggers for behavior NAME based on PROPS."
+  (let* ((when-spec (plist-get props :when))
+         (timing (plist-get when-spec :timing))
+         (condition (plist-get when-spec :condition)))
+    (pcase timing
+      (:immediate
+       (org-supertag-db-on 'entity:changed
+         (lambda (type id props)
+           (when (org-supertag-behavior--check-condition condition 
+                                                        (list :node-id id))
+             (org-supertag-behavior-execute name (list :node-id id))))))
+      (:deferred
+       ;; Setup deferred execution
+       ))))
+
+(defun org-supertag-behavior-execute (name context)
+  "Execute behavior with NAME using CONTEXT."
+  (let ((behavior (org-supertag-db-get (format "behavior:%s" name))))
+    (when behavior
+      (org-supertag-db-emit 'behavior:before-execute behavior context)
+      (let ((result (org-supertag-behavior--execute-operation 
+                     (plist-get behavior :what)
+                     (plist-get behavior :how)
+                     context)))
+        (org-supertag-db-emit 'behavior:after-execute behavior context result)
+        result))))
+
+;;----------------------------------------------------------------------------- 
+;; Internal Functions
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior--check-condition (condition context)
+  "Check if CONDITION is met given CONTEXT."
+  (message "\n=== Checking Condition ===")
+  (message "Raw condition: %S" condition)
+  (message "Context: %S" context)
+  (let* ((type (plist-get condition :type))
+         (processed-condition 
+          (org-supertag-behavior--process-args condition context)))
+    (message "Condition type: %S" type)
+    (message "Processed condition: %S" processed-condition)
+    (let ((result
+           (pcase type
+             (:node (progn
+                     (message "Checking node condition...")
+                     (org-supertag-behavior--check-node processed-condition context)))
+             (:custom (progn
+                       (message "Checking custom condition...")
+                       (org-supertag-behavior--check-custom processed-condition context)))
+             (:todo (progn
+                     (message "Checking todo condition...")
+                     (org-supertag-behavior--check-todo processed-condition context)))
+             (:deadline (progn
+                         (message "Checking deadline condition...")
+                         (org-supertag-behavior--check-deadline processed-condition context)))
+             (:property (progn
+                         (message "Checking property condition...")
+                         (org-supertag-behavior--check-property processed-condition context)))
+             (:function (progn
+                         (message "Checking function condition...")
+                         (org-supertag-behavior--check-function processed-condition context)))
+             (_ (error "Unknown condition type: %s" type)))))
+      (message "Condition check result: %S" result)
+      (message "=== Condition Check Complete ===\n")
+      result)))
+
+(defun org-supertag-behavior--check-node (condition context)
+  "Check node-specific conditions.
+CONDITION is a plist of conditions to check.
+CONTEXT must contain :node-id."
+  (message "Node condition check:")
+  (message "  Condition: %S" condition)
+  (message "  Context: %S" context)
+  (let* ((node-id (plist-get context :node-id))
+         (node (org-supertag-db-get node-id))  ;; Get node from datebase first
+         (todo-state (plist-get condition :todo)))
+    (unless node
+      (message "  Node '%s' not found" node-id)
+      (error "Node not found: %s" node-id))
+    (let ((result 
+           (if todo-state
+               (progn
+                 (message "  Checking todo state: %S" todo-state)
+                 (let ((actual-todo (plist-get node :todo)))  ;; Get todo state from node
+                   (message "  Actual todo state: %S" actual-todo)
+                   (equal todo-state actual-todo)))
+             (progn
+               (message "  No todo state specified, returning true")
+               t))))
+      (message "  Node check result: %S" result)
+      result)))
+
+(defun org-supertag-behavior--check-custom (condition context)
+  "Check custom function condition.
+CONDITION must include :function that can be 'always or a custom function.
+CONTEXT is passed to the custom function if specified."
+  (message "Custom condition check:")
+  (message "  Condition: %S" condition)
+  (message "  Context: %S" context)
+  (let* ((func (plist-get condition :function))
+         (args (plist-get condition :args))  ;; Add argument support
+         (result 
+          (cond
+           ((eq func 'always)
+            (message "  Using 'always' function")
+            t)
+           ((functionp func)
+            (message "  Calling custom function: %S" func)
+            (if args
+                (apply func context args)  ;; Support extra arguments
+              (funcall func context)))
+           (t 
+            (error "Invalid function specification: %S" func)))))
+    (message "  Custom check result: %S" result)
+    result))
+
+(defun org-supertag-behavior--execute-operation (what-spec how-spec context)
+  "Execute operation defined by WHAT-SPEC using HOW-SPEC with CONTEXT."
+  (message "\n=== Executing Operation ===")
+  (message "What spec: %S" what-spec)
+  (message "How spec: %S" how-spec)
+  (message "Context: %S" context)
+  
+  (let* ((operation (plist-get what-spec :operation))
+         (method (plist-get how-spec :method)))
+    (message "Operation type: %S" operation)
+    (message "Method: %S" method)
+    
+    (let ((result
+           (pcase operation
+             (:transform (org-supertag-behavior--execute-transform what-spec context))
+             (:create (org-supertag-behavior--execute-create what-spec context))
+             (:delete (org-supertag-behavior--execute-delete what-spec context))
+             (:move (org-supertag-behavior--execute-move what-spec context))
+             (:notify (org-supertag-behavior--execute-notify what-spec context))
+             (:function (org-supertag-behavior--execute-function what-spec context))
+             (_ (error "Invalid operation type: %s" operation)))))
+      (message "Operation result: %S" result)
+      (message "=== Operation Complete ===\n")
+      (org-supertag-behavior--handle-result result method context))))
+
+(defun org-supertag-behavior--process-args (args context)
+  "Process ARGS with CONTEXT, replacing placeholders.
+ARGS is a list of arguments that may contain placeholders.
+CONTEXT is a plist containing values for replacement.
+
+Example:
+  (org-supertag-behavior--process-args 
+   '(:title \"{title}\" :days 3)
+   '(:node-id \"123\" :title \"Task\"))"
+  (let ((processed-args args))
+    (dolist (key (map-keys context))
+      (let ((placeholder (format "{%s}" (substring (symbol-name key) 1)))
+            (value (plist-get context key)))
+        (setq processed-args 
+              (org-supertag-behavior--replace-placeholder 
+               processed-args placeholder value))))
+    processed-args))
+
+(defun org-supertag-behavior--replace-placeholder (args placeholder value)
+  "Replace PLACEHOLDER with VALUE in ARGS structure."
+  (cond
+   ;; If args is a string, do string replacement
+   ((stringp args)
+    (replace-regexp-in-string (regexp-quote placeholder) 
+                            (format "%s" value) args))
+   ;; If args is a list, recurse through elements
+   ((listp args)
+    (mapcar (lambda (arg)
+              (org-supertag-behavior--replace-placeholder arg placeholder value))
+            args))
+   ;; Otherwise return unchanged
+   (t args)))
+
+
+(defun org-supertag-behavior--check-todo (condition context)
+  "Check TODO state condition.
+CONDITION should include :value to match against.
+CONTEXT should include :node-id."
+  (let* ((node-id (plist-get context :node-id))
+         (node (org-supertag-db-get node-id))
+         (expected (plist-get condition :value))
+         (actual (plist-get node :todo)))  ;; 直接从节点获取 todo 状态
+    (string= expected actual)))
+
+(defun org-supertag-behavior--check-deadline (condition context)
+  "Check deadline condition.
+CONDITION should include :days and optionally :direction.
+CONTEXT should include :node-id."
+  (let* ((node-id (plist-get context :node-id))
+         (node (org-supertag-db-get node-id))
+         (days (plist-get condition :days))
+         (direction (or (plist-get condition :direction) 'before))
+         (deadline (plist-get node :deadline))  ;; 直接从节点获取 deadline
+         (current (current-time))
+         (diff (when deadline 
+                (float-time (time-subtract deadline current)))))
+    (when diff
+      (let ((diff-days (/ diff 86400)))
+        (pcase direction
+          ('before (< diff-days days))
+          ('after (> diff-days days))
+          (_ (= diff-days days)))))))
+
+(defun org-supertag-behavior--check-property (condition context)
+  "Check property condition.
+CONDITION should include :name and :value.
+CONTEXT should include :node-id."
+  (let* ((node-id (plist-get context :node-id))
+         (node (org-supertag-db-get node-id))
+         (name (plist-get condition :name))
+         (expected (plist-get condition :value))
+         (actual (plist-get node (intern (concat ":" name)))))  ;; 直接从节点获取属性
+    (string= expected actual)))
+
+(defun org-supertag-behavior--check-function (condition context)
+  "Check function condition.
+CONDITION should include :function and optionally :args.
+CONTEXT is passed to the function."
+  (let* ((fn (plist-get condition :function))
+         (args (plist-get condition :args))
+         (processed-args (org-supertag-behavior--process-args args context)))
+    (message "\n=== Checking Function ===")
+    (message "Function: %S" fn)
+    (message "Raw args: %S" args)
+    (message "Processed args: %S" processed-args)
+    (let ((result (apply fn (list context processed-args))))
+      (message "Function check result: %S" result)
+      (message "=== Function Check Complete ===\n")
+      result)))
+
+(defun org-supertag-behavior--execute-function (what-spec context)
+  "Execute function component.
+WHAT-SPEC should include :function and optionally :args.
+CONTEXT is passed to the function."
+  (message "\n=== Executing Function ===")
+  (message "What spec: %S" what-spec)
+  (message "Context: %S" context)
+  (let* ((fn (plist-get what-spec :function))
+         (args (plist-get what-spec :args))
+         (processed-args (org-supertag-behavior--process-args args context)))
+    (message "Function: %S" fn)
+    (message "Raw args: %S" args)
+    (message "Processed args: %S" processed-args)
+    (let ((result (apply fn (list context processed-args))))
+      (message "Function result: %S" result)
+      (message "=== Function Execution Complete ===\n")
+      result)))
+
+;;----------------------------------------------------------------------------- 
+;; Basic Operations
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior--execute-transform (what-spec context)
+  "Execute transform operation.
+Transforms node properties or content.
+WHAT-SPEC should include :transform and :value.
+CONTEXT should include :node-id."
+  (message "\n=== Executing Transform ===")
+  (message "What spec: %S" what-spec)
+  (message "Context: %S" context)
+  
+  (let* ((node-id (plist-get context :node-id))
+         (transform-type (plist-get what-spec :transform))
+         (value (org-supertag-behavior--process-args 
+                (plist-get what-spec :value)
+                context)))
+    (message "Node ID: %s" node-id)
+    (message "Transform type: %s" transform-type)
+    (message "Value: %s" value)
+    
+    (let ((result
+           (pcase transform-type
+             (:property 
+              (let ((property (plist-get what-spec :property)))
+                (message "Setting property '%s' to '%s'" property value)
+                (org-supertag-db-set-property node-id property value)))
+             (:field 
+              (let ((field (plist-get what-spec :field)))
+                (message "Setting field '%s' to '%s'" field value)
+                (org-supertag-db-set-field node-id field value)))
+             (:content 
+              (message "Setting content to '%s'" value)
+              (org-supertag-db-set-content node-id value))
+             (_ (error "Invalid transform type: %s" transform-type)))))
+      (message "Transform result: %S" result)
+      (message "=== Transform Complete ===\n")
+      result)))
+
+(defun org-supertag-behavior--execute-create (what-spec context)
+  "Execute create operation.
+Creates new nodes or content.
+WHAT-SPEC should include :create and :props.
+CONTEXT may include :node-id for child creation."
+  (message "\n=== Executing Create ===")
+  (message "What spec: %S" what-spec)
+  (message "Context: %S" context)
+  
+  (let* ((create-type (plist-get what-spec :create))
+         (props (org-supertag-behavior--process-args 
+                (plist-get what-spec :props)
+                context)))
+    (message "Create type: %s" create-type)
+    (message "Properties: %S" props)
+    
+    (let ((result
+           (pcase create-type
+             (:node 
+              (message "Creating new node")
+              (org-supertag-db-add nil props))
+             (:child 
+              (let ((parent-id (plist-get context :node-id)))
+                (message "Creating child node for parent '%s'" parent-id)
+                (org-supertag-db-add-child parent-id props)))
+             (_ (error "Invalid create type: %s" create-type)))))
+      (message "Create result: %S" result)
+      (message "=== Create Complete ===\n")
+      result)))
+
+(defun org-supertag--delete-by-scope (scope)
+  "Delete org content based on SCOPE.
+SCOPE can be:
+- node: Delete current node only
+- subtree: Delete current subtree
+- properties: Delete node properties only"
+  (pcase scope
+    ("node"
+     (org-mark-element)
+     (delete-region (region-beginning) (region-end))
+     (delete-char 1))  ; Remove extra newline
+    
+    ("subtree"
+     (org-mark-subtree)
+     (delete-region (region-beginning) (region-end))
+     (delete-char 1))
+    
+    ("properties"
+     (org-delete-property-drawer))
+    
+    (_ (error "Invalid delete scope: %s" scope))))
+
+(defun org-supertag-execute-delete (params)
+  "Execute delete operation with PARAMS.
+PARAMS should contain :scope specifying what to delete."
+  (let ((scope (plist-get params :scope)))
+    (save-excursion
+      (org-back-to-heading t)
+      (org-supertag--delete-by-scope scope))))
+
+(defun org-supertag-behavior--execute-move (what-spec context)
+  "Execute move operation.
+Moves nodes to different locations.
+WHAT-SPEC may include :node-id to override context node and must include :target.
+CONTEXT should include :node-id if not in WHAT-SPEC."
+  (message "\n=== Executing Move ===")
+  (message "What spec: %S" what-spec)
+  (message "Context: %S" context)
+  
+  (let* ((node-id (or (plist-get what-spec :node-id)
+                     (plist-get context :node-id)))
+         (target (org-supertag-behavior--process-args 
+                 (plist-get what-spec :target)
+                 context)))
+    (message "Moving node: %s" node-id)
+    (message "Target: %s" target)
+    
+    (let ((result (org-supertag-db-move-node node-id target)))
+      (message "Move result: %S" result)
+      (message "=== Move Complete ===\n")
+      result)))
+
+(defun org-supertag-behavior--execute-notify (what-spec context)
+  "Execute notify operation.
+Sends notifications.
+WHAT-SPEC must include :message and optionally :type.
+Valid types are :message, :warning, and :error."
+  (message "\n=== Executing Notify ===")
+  (message "What spec: %S" what-spec)
+  (message "Context: %S" context)
+  
+  (let* ((msg (org-supertag-behavior--process-args 
+               (plist-get what-spec :message)
+               context))
+         (type (or (plist-get what-spec :type) :message)))
+    (message "Message: %s" msg)
+    (message "Type: %s" type)
+    
+    (let ((result
+           (pcase type
+             (:message (message "%s" msg))
+             (:warning (warn "%s" msg))
+             (:error (error "%s" msg))
+             (_ (error "Invalid notification type: %s" type)))))
+      (message "=== Notify Complete ===\n")
+      result)))
+
+;;; Result Handling
+
+(defun org-supertag-behavior--handle-result (result method context)
+  "Handle operation RESULT based on METHOD and CONTEXT.
+METHOD can be :sync, :batch, or :transact.
+For :batch, adds result to batch-results in CONTEXT.
+For :transact, adds undo information to transaction-log in CONTEXT."
+  (message "\n=== Handling Result ===")
+  (message "Result: %S" result)
+  (message "Method: %s" method)
+  (message "Context: %S" context)
+  (let ((handled-result
+         (pcase method
+           (:sync result)
+           (:batch 
+            (push result (plist-get context :batch-results))
+            context)
+           (:transact 
+            (push (cons :undo result) (plist-get context :transaction-log))
+            result)
+           (_ result))))
+    (message "Handled result: %S" handled-result)
+    (message "=== Result Handling Complete ===\n")
+    handled-result))
+
+;;; Example Usage:
+;; (org-supertag-behavior-define 'auto-archive
+;;   '(:when (:timing :deferred
+;;           :condition (:node (:todo "DONE")))
+;;     :what (:operation :move
+;;           :target "archive.org")
+;;     :how (:method :sync)))
+
+;;----------------------------------------------------------------------------- 
+;; Component System
+;;-----------------------------------------------------------------------------
+
+(defvar org-supertag-component-registry (make-hash-table :test 'equal)
+  "Registry for behavior components.")
+
+(defun org-supertag-component-define (name spec)
+  "Define a component with NAME and SPEC.
+SPEC should be a valid behavior specification."
+  (message "\n=== Defining Component ===")
+  (message "Name: %s" name)
+  (message "Spec: %S" spec)
+  
+  (unless (and (plist-get spec :when)
+               (plist-get spec :what)
+               (plist-get spec :how))
+    (error "Invalid component spec for %s: missing required properties" name))
+  
+  (puthash name spec org-supertag-component-registry)
+  (message "Component '%s' defined" name)
+  (message "=== Component Definition Complete ===\n"))
+
+(defun org-supertag-component-get (name)
+  "Get component by NAME."
+  (or (gethash name org-supertag-component-registry)
+      (error "Component not found: %s" name)))
+
+(defun org-supertag-component-list ()
+  "List all registered components."
+  (let (components)
+    (maphash (lambda (k _v) (push k components))
+             org-supertag-component-registry)
+    (sort components #'string<)))
+
+;;; Component Composition
+
+(defun org-supertag-behavior--compose-components (components context)
+  "Compose multiple COMPONENTS with CONTEXT.
+COMPONENTS can be a list of component names or (name . args) pairs."
+  (message "\n=== Composing Components ===")
+  (message "Components: %S" components)
+  (message "Context: %S" context)
+  
+  (let ((results nil))
+    (dolist (component components)
+      (let* ((component-name (if (listp component) (car component) component))
+             (component-args (if (listp component) (cdr component) nil))
+             (component-spec (org-supertag-component-get component-name))
+             (merged-context (append component-args context)))
+        (message "Processing component: %s" component-name)
+        (message "Component args: %S" component-args)
+        (message "Merged context: %S" merged-context)
+        
+        (push (org-supertag-behavior-execute component-spec merged-context)
+              results)))
+    (message "=== Component Composition Complete ===\n")
+    (nreverse results)))
+
+;;; Monitoring System
+
+(defvar org-supertag-monitor-registry (make-hash-table :test 'equal)
+  "Registry for active monitors.")
+
+(defun org-supertag-behavior--setup-monitor (monitor-spec context)
+  "Setup monitor based on MONITOR-SPEC and CONTEXT.
+MONITOR-SPEC should include :target and :handler.
+CONTEXT should include :node-id."
+  (message "\n=== Setting Up Monitor ===")
+  (message "Monitor spec: %S" monitor-spec)
+  (message "Context: %S" context)
+  
+  (let* ((target (plist-get monitor-spec :target))
+         (node-id (plist-get context :node-id))
+         (handler (plist-get monitor-spec :handler))
+         (monitor-key (format "%s-%s" node-id target)))
+    
+    (unless (and target handler node-id)
+      (error "Invalid monitor setup: missing required properties"))
+    
+    (message "Target: %s" target)
+    (message "Node ID: %s" node-id)
+    (message "Handler: %S" handler)
+    
+    (puthash monitor-key 
+             (cons handler context)
+             org-supertag-monitor-registry)
+    (org-supertag-behavior--add-monitor-hook target handler)
+    (message "=== Monitor Setup Complete ===\n")))
+
+(defun org-supertag-behavior--remove-monitor (monitor-key)
+  "Remove monitor identified by MONITOR-KEY."
+  (message "\n=== Removing Monitor ===")
+  (message "Monitor key: %s" monitor-key)
+  
+  (when-let ((monitor (gethash monitor-key org-supertag-monitor-registry)))
+    (message "Found monitor: %S" monitor)
+    (org-supertag-behavior--remove-monitor-hook 
+     (car monitor))
+    (remhash monitor-key org-supertag-monitor-registry)
+    (message "Monitor removed"))
+  
+  (message "=== Monitor Removal Complete ===\n"))
+
+;;----------------------------------------------------------------------------- 
+;; SuperTag Command Event
+;;-----------------------------------------------------------------------------
+
+;; Event Integration
+(defun org-supertag-behavior--wrap-execution (behavior context)
+  "Wrap behavior execution with event emissions.
+BEHAVIOR is the behavior specification to execute.
+CONTEXT is the execution context."
+  (message "\n=== Wrapping Behavior Execution ===")
+  (message "Behavior: %S" behavior)
+  (message "Context: %S" context)
+  
+  (org-supertag-db-emit 'behavior:before-execute behavior context)
+  (let ((result (org-supertag-behavior-execute behavior context)))
+    (message "Execution result: %S" result)
+    (org-supertag-db-emit 'behavior:after-execute behavior context result)
+    (message "=== Behavior Execution Complete ===\n")
+    result))
+
+(defun org-supertag-behavior--wrap-operation (operation what-spec how-spec context)
+  "Wrap operation execution with event emissions.
+OPERATION is the operation type.
+WHAT-SPEC defines what to do.
+HOW-SPEC defines how to do it.
+CONTEXT is the execution context."
+  (message "\n=== Wrapping Operation ===")
+  (message "Operation: %S" operation)
+  (message "What spec: %S" what-spec)
+  (message "How spec: %S" how-spec)
+  (message "Context: %S" context)
+  
+  (org-supertag-db-emit 'operation:before operation what-spec context)
+  (let ((result (org-supertag-behavior--execute-operation what-spec how-spec context)))
+    (message "Operation result: %S" result)
+    (org-supertag-db-emit 'operation:after operation what-spec context result)
+    (message "=== Operation Complete ===\n")
+    result))
+
+;;; User Interface
+
+(defun org-supertag-behavior-attach (tag-name behavior-spec)
+  "Attach behavior specified by BEHAVIOR-SPEC to TAG-NAME.
+TAG-NAME is the name of the tag to attach behavior to.
+BEHAVIOR-SPEC is the behavior specification to attach."
+  (message "\n=== Attaching Behavior ===")
+  (message "Tag name: %s" tag-name)
+  (message "Behavior spec: %S" behavior-spec)
+  (let* ((tag (org-supertag-db-get-tag tag-name))
+         (behaviors (plist-get tag :behaviors)))
+    (unless tag
+      (error "Tag not found: %s" tag-name))
+    (org-supertag-db-update tag-name
+                           (plist-put tag :behaviors
+                                    (cons behavior-spec behaviors)))
+    (message "Behavior attached to tag '%s'" tag-name)
+    (message "=== Behavior Attachment Complete ===\n")))
+
+;;----------------------------------------------------------------------------- 
+;; UI Integration
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior--update-headline (node-id property value)
+  "Update org headline property and refresh buffer display.
+NODE-ID is the node identifier.
+PROPERTY is the property to update (:todo, :priority, or :face).
+VALUE is the new value to set."
+  (let* ((marker (org-supertag-db-get-marker node-id))
+         (buffer (marker-buffer marker))
+         (pos (marker-position marker)))
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char pos)
+        (pcase property
+          (:todo 
+           (org-todo value))
+          (:priority 
+           (org-priority (string-to-char value)))
+          (:face
+           (org-set-property "FACE" (format "%S" value))))
+        (org-indent-refresh-maybe)
+        (font-lock-ensure pos (line-end-position))))))
+
+(defun org-supertag-behavior--setup-face ()
+  "Setup support for custom faces in org headlines."
+  (require 'org)
+  (require 'org-element)
+  (unless (boundp 'org-property-list)
+    (setq-default org-property-list nil))
+  (add-to-list 'org-property-list "FACE")
+  (add-hook 'org-mode-hook
+            (lambda ()
+              (add-function :after-while
+                           (local 'org-fontify-headline-function)
+                           (lambda (text level &optional todo priority tags)
+                             ;; 获取当前 headline 的 element
+                             (when-let* ((element (org-element-at-point))
+                                       (face-prop (org-element-property :FACE element))
+                                       (face-value (when face-prop (read face-prop))))
+                               ;; 应用自定义 face
+                               (add-face-text-property
+                                0 (length text)
+                                face-value nil text)))
+                           '((name . org-supertag-headline-face)))
+              (unless org-element-use-cache
+                (setq-local org-element-use-cache t))
+              (org-element-cache-reset))))
+
+(with-eval-after-load 'org
+  (org-supertag-behavior--setup-face))
+
+(add-hook 'org-mode-hook #'org-supertag-behavior--setup-face)
+(org-supertag-db-on 'field:changed
+  (lambda (node-id tag-id field-name value)
+    (org-supertag-behavior--apply-field-mapping 
+     node-id tag-id field-name value)))
+;;----------------------------------------------------------------------------- 
+;; Field Mapping System
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior--apply-field-mapping (node-id tag-id field-name value)
+  "Apply field value mappings to org properties with UI updates.
+NODE-ID is the node identifier.
+TAG-ID is the tag identifier.
+FIELD-NAME is the name of the field.
+VALUE is the new value to set."
+  (let* ((tag (org-supertag-db-get tag-id))
+         (fields (plist-get tag :fields))
+         (field-def (cl-find field-name fields 
+                            :key (lambda (f) (plist-get f :name))
+                            :test #'equal))
+         (mappings (plist-get field-def :property-map)))
+    (when mappings
+      (dolist (map mappings)
+        (let* ((prop-name (plist-get map :property))
+               (value-map (plist-get map :values))
+               (prop-value (cdr (assoc value value-map))))
+          (when prop-value
+            (org-supertag-db-set-property node-id prop-name prop-value)
+            (org-supertag-behavior--update-headline
+             node-id
+             (intern (concat ":" (downcase prop-name)))
+             prop-value)))))))
+
+;;----------------------------------------------------------------------------- 
+;; Field Operation System
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-behavior--check-field (condition context)
+  "Check field-specific conditions.
+CONDITION should contain :field and :compare.
+CONTEXT must contain :node-id.
+Returns t if condition is met, nil otherwise."
+  (let* ((field-name (plist-get condition :field))
+         (compare-type (plist-get condition :compare))
+         (compare-value (plist-get condition :value))
+         (node-id (plist-get context :node-id))
+         (field-value (org-supertag-db-get-field node-id field-name)))
+    (pcase compare-type
+      (:equal (equal field-value compare-value))
+      (:changed (org-supertag-db-field-changed-p node-id field-name))
+      (:contains (and (stringp field-value)
+                     (string-match-p compare-value field-value)))
+      (:greater (and (numberp field-value)
+                    (> field-value (string-to-number compare-value))))
+      (:less (and (numberp field-value)
+                  (< field-value (string-to-number compare-value))))
+      (_ nil))))
+
+(defun org-supertag-behavior--execute-function (what-spec how-spec context)
+  "Execute function operation specified by WHAT-SPEC.
+HOW-SPEC defines execution method.
+CONTEXT provides execution context.
+Returns function execution result."
+  (let* ((func (plist-get what-spec :function))
+         (raw-args (plist-get what-spec :args))
+         ;; 处理参数中的模板变量
+         (processed-args (org-supertag-behavior--process-args raw-args context)))
+    (unless (functionp func)
+      (error "Invalid function specification: %S" func))
+    
+    (condition-case err
+        (funcall func context processed-args)
+      (error
+       (message "Function execution failed: %S" err)
+       nil))))
+
+(defun org-supertag-behavior--setup-field-monitor (field-name handler)
+  "Setup monitor for FIELD-NAME changes.
+HANDLER will be called when field changes.
+Returns monitor identifier for later removal."
+  (let ((monitor-id (format "field-monitor-%s-%s" 
+                           field-name 
+                           (symbol-name (cl-gensym)))))
+    ;; 注册监听器
+    (org-supertag-db-on 'field:changed
+      (lambda (node-id tag-id field value)
+        (when (equal field field-name)
+          (condition-case err
+              (funcall handler node-id tag-id value)
+            (error
+             (message "Field monitor handler failed: %S" err))))))
+    ;; 返回监听器ID
+    monitor-id))
+
+(defun org-supertag-behavior--remove-field-monitor (monitor-id)
+  "Remove field monitor by MONITOR-ID.
+Returns t if monitor was removed, nil otherwise."
+  (when (stringp monitor-id)
+    (org-supertag-db-remove-listener 'field:changed monitor-id)))
+
+;;; Field Change Detection
+(defvar org-supertag-behavior--field-change-cache (make-hash-table :test 'equal)
+  "Cache for tracking field value changes.")
+
+(defun org-supertag-behavior--track-field-change (node-id field-name value)
+  "Track field value change for change detection.
+NODE-ID is the node identifier.
+FIELD-NAME is the name of the field.
+VALUE is the new value."
+  (let ((cache-key (format "%s-%s" node-id field-name)))
+    (puthash cache-key value org-supertag-behavior--field-change-cache)))
+
+(defun org-supertag-behavior--clear-field-changes ()
+  "Clear field change tracking cache."
+  (clrhash org-supertag-behavior--field-change-cache))
+
+
+(add-hook 'org-supertag-mode-hook #'org-supertag-behavior--clear-field-changes)
+
+;;----------------------------------------------------------------------------- 
+;; State Management System
+;;-----------------------------------------------------------------------------
+
+(defvar org-supertag-behavior--state (make-hash-table :test 'equal)
+  "State management for behaviors.
+Stores execution states and other runtime information.")
+
+(defun org-supertag-behavior--state-get (key &optional default)
+  "Get state value for KEY, return DEFAULT if not found.
+KEY should be a string or symbol identifying the state entry."
+  (gethash key org-supertag-behavior--state default))
+
+(defun org-supertag-behavior--state-set (key value)
+  "Set state KEY to VALUE.
+Emits behavior:state-changed event after setting."
+  (puthash key value org-supertag-behavior--state)
+  (org-supertag-db-emit 'behavior:state-changed key value))
+
+(defun org-supertag-behavior--state-update (key updater)
+  "Update state at KEY using UPDATER function.
+UPDATER is called with old value and should return new value."
+  (unless (functionp updater)
+    (error "Updater must be a function"))
+  (let* ((old-value (org-supertag-behavior--state-get key))
+         (new-value (funcall updater old-value)))
+    (org-supertag-behavior--state-set key new-value)))
+
+(defun org-supertag-behavior--state-remove (key)
+  "Remove state at KEY.
+Does nothing if KEY does not exist."
+  (remhash key org-supertag-behavior--state))
+
+;;; Execution State Tracking
+
+(defun org-supertag-behavior--track-execution (behavior-id context)
+  "Track execution state for BEHAVIOR-ID with CONTEXT.
+Initializes execution tracking with running status."
+  (unless behavior-id
+    (error "Behavior ID is required"))
+  (let ((state-key (format "execution:%s" behavior-id)))
+    (org-supertag-behavior--state-set state-key
+                                     `(:status :running
+                                       :started-at ,(current-time)
+                                       :context ,context))))
+
+(defun org-supertag-behavior--complete-execution (behavior-id result)
+  "Mark execution complete for BEHAVIOR-ID with RESULT.
+Updates existing execution state with completion information."
+  (let* ((state-key (format "execution:%s" behavior-id))
+         (current-state (org-supertag-behavior--state-get state-key)))
+    (when current-state
+      (org-supertag-behavior--state-set 
+       state-key
+       (append current-state
+               `(:status :completed
+                 :completed-at ,(current-time)
+                 :result ,result))))))
+
+(defun org-supertag-behavior--fail-execution (behavior-id error)
+  "Mark execution failed for BEHAVIOR-ID with ERROR.
+Updates existing execution state with failure information."
+  (let* ((state-key (format "execution:%s" behavior-id))
+         (current-state (org-supertag-behavior--state-get state-key)))
+    (when current-state
+      (org-supertag-behavior--state-set 
+       state-key
+       (append current-state
+               `(:status :failed
+                 :failed-at ,(current-time)
+                 :error ,error))))))
+
+;;----------------------------------------------------------------------------- 
+;; Execution Engine
+;;-----------------------------------------------------------------------------
+
+;; Task Scheduler
+(defvar org-supertag-behavior--task-queue nil
+  "Queue for scheduled behavior tasks.
+Each task is a plist with :behavior, :context, and :scheduled-time.")
+
+(defun org-supertag-behavior--schedule-task (behavior context &optional delay)
+  "Schedule BEHAVIOR with CONTEXT to run after DELAY seconds.
+BEHAVIOR is the behavior specification to execute.
+CONTEXT is the execution context.
+DELAY if specified, is the number of seconds to wait before execution."
+  (unless behavior
+    (error "Behavior is required"))
+  (let ((task (list :behavior behavior
+                    :context context
+                    :scheduled-time (if delay
+                                      (time-add (current-time)
+                                              (seconds-to-time delay))
+                                    (current-time)))))
+    (push task org-supertag-behavior--task-queue)
+    (org-supertag-db-emit 'behavior:task-scheduled task)))
+
+(defun org-supertag-behavior--process-task-queue ()
+  "Process scheduled tasks that are due.
+Executes all tasks whose scheduled time has passed.
+Failed tasks are logged but do not stop queue processing."
+  (let ((current-time (current-time))
+        (due-tasks nil))
+    ;; Collect due tasks
+    (setq org-supertag-behavior--task-queue
+          (cl-loop for task in org-supertag-behavior--task-queue
+                   if (time-less-p (plist-get task :scheduled-time)
+                                 current-time)
+                   do (push task due-tasks)
+                   else collect task))
+    ;; Execute due tasks
+    (dolist (task (nreverse due-tasks))
+      (condition-case err
+          (org-supertag-behavior-execute
+           (plist-get task :behavior)
+           (plist-get task :context))
+        (error
+         (message "Task execution failed: %S" err))))))
+
+;; Batch Executor
+(defvar org-supertag-behavior--batch-queue nil
+  "Queue for batch operations.
+Each operation is a plist with :what, :how, and :context.")
+
+(defun org-supertag-behavior--batch-start ()
+  "Start a new batch operation.
+Clears any existing operations in the batch queue."
+  (setq org-supertag-behavior--batch-queue nil))
+
+(defun org-supertag-behavior--batch-add (operation)
+  "Add OPERATION to current batch.
+OPERATION should be a plist with :what, :how, and :context keys."
+  (unless (and (plist-get operation :what)
+               (plist-get operation :how)
+               (plist-get operation :context))
+    (error "Invalid operation spec: missing required properties"))
+  (push operation org-supertag-behavior--batch-queue))
+
+(defun org-supertag-behavior--batch-execute ()
+  "Execute all operations in current batch.
+Returns a list of results from all operations.
+Clears the batch queue after execution."
+  (let ((results nil))
+    (dolist (op (nreverse org-supertag-behavior--batch-queue))
+      (push (org-supertag-behavior--execute-operation
+             (plist-get op :what)
+             (plist-get op :how)
+             (plist-get op :context))
+            results))
+    (setq org-supertag-behavior--batch-queue nil)
+    (nreverse results)))
+
+;;----------------------------------------------------------------------------- 
+;; Transaction Manager
+;;-----------------------------------------------------------------------------
+
+(defvar org-supertag-behavior--transaction-log nil
+  "Log for tracking transaction operations.
+Each entry is a cons of (operation . result) for potential rollback.")
+
+(defun org-supertag-behavior--transaction-start ()
+  "Start a new transaction.
+Clears any existing transaction log."
+  (setq org-supertag-behavior--transaction-log nil))
+
+(defun org-supertag-behavior--transaction-log (operation result)
+  "Log OPERATION and its RESULT in current transaction.
+OPERATION is the operation to be logged.
+RESULT is the operation's result for potential rollback."
+  (unless operation
+    (error "Operation is required"))
+  (push (cons operation result) org-supertag-behavior--transaction-log))
+
+(defun org-supertag-behavior--transaction-commit ()
+  "Commit current transaction.
+Clears the transaction log after successful commit."
+  (setq org-supertag-behavior--transaction-log nil))
+
+(defun org-supertag-behavior--transaction-rollback ()
+  "Rollback current transaction.
+Executes undo operations in reverse order and clears the log."
+  (dolist (entry (nreverse org-supertag-behavior--transaction-log))
+    (let ((operation (car entry))
+          (result (cdr entry)))
+      (condition-case err
+          (org-supertag-behavior--undo-operation operation result)
+        (error
+         (message "Rollback failed for operation: %S, error: %S" 
+                 operation err)))))
+  (setq org-supertag-behavior--transaction-log nil))
+
+;;-----------------------------------------------------------------------------
+;; Task Scheduler Timer
+;;-----------------------------------------------------------------------------
+
+(defvar org-supertag-behavior--scheduler-timer nil
+  "Timer for processing scheduled tasks.
+Holds the timer object for periodic task processing.")
+
+(defun org-supertag-behavior--start-scheduler ()
+  "Start the task scheduler.
+Cancels any existing scheduler before starting a new one.
+Runs the task processor every second."
+  (when org-supertag-behavior--scheduler-timer
+    (cancel-timer org-supertag-behavior--scheduler-timer))
+  (setq org-supertag-behavior--scheduler-timer
+        (run-with-timer 1 1 #'org-supertag-behavior--process-task-queue)))
+
+(defun org-supertag-behavior--stop-scheduler ()
+  "Stop the task scheduler.
+Cancels the scheduler timer if it exists."
+  (when org-supertag-behavior--scheduler-timer
+    (cancel-timer org-supertag-behavior--scheduler-timer)
+    (setq org-supertag-behavior--scheduler-timer nil)))
+
+;; Start scheduler when package is loaded
+(add-hook 'org-supertag-mode-hook #'org-supertag-behavior--start-scheduler)
+(add-hook 'kill-emacs-hook #'org-supertag-behavior--stop-scheduler)
+
+;;----------------------------------------------------------------------------- 
+;; Behavior Command
+;;-----------------------------------------------------------------------------
+
+(defun org-supertag-define-behavior (name &optional description)
+  "Interactive define a new behavior.
+NAME is the name of the behavior.
+DESCRIPTION is the optional description.
+
+The function will prompt for:
+- Trigger timing (immediate or deferred)
+- Trigger condition (optional)
+- Operation type (transform, create, delete, move, notify)
+- Operation-specific parameters"
+  (interactive "sBehavior name: \nsDescription (optional): ")
+  (unless name
+    (error "Behavior name is required"))
+  
+  ;; 基本配置
+  (let* ((timing (completing-read "Trigger timing: "
+                                '("immediate" "deferred" "scheduled" "periodic")
+                                nil t))
+         ;; 添加触发条件
+         (condition-type (when (y-or-n-p "Add trigger condition? ")
+                          (completing-read "Condition type: "
+                                         '("node" "time" "field" "reference" "custom")
+                                         nil t)))
+         ;; 操作类型
+         (operation (completing-read "Operation type: "
+                                   '("transform" "create" "delete" "move" "notify" "custom")
+                                   nil t))
+         (spec (pcase operation
+                ("transform"
+                 (let* ((transform-type (completing-read 
+                                       "Transform type: "
+                                       '("property" "field" "content")
+                                       nil t)))
+                   (pcase transform-type
+                     ("property"
+                      `(:transform :property
+                        :name ,(read-string "Property name: ")
+                        :value ,(read-string "Value or expression: ")))
+                     ("field"
+                      `(:transform :field
+                        :name ,(read-string "Field name: ")
+                        :value ,(read-string "Value or expression: ")))
+                     ("content"
+                      `(:transform :content
+                        :function ,(read-string "Transform function: "))))))
+                
+                ("move"
+                 `(:target ,(read-file-name "Target file: ")
+                   :method ,(completing-read "Move method: "
+                                          '("copy" "move" "refile")
+                                          nil t)))
+                
+                ("notify"
+                 `(:message ,(read-string "Message template: ")
+                   :type ,(completing-read "Notification type: "
+                                         '("message" "warning" "error")
+                                         nil t)
+                   :channel ,(completing-read "Channel: "
+                                           '("echo" "buffer" "external")
+                                           nil t)))
+                
+                ("create"
+                 `(:template ,(read-string "Template: ")
+                   :location ,(completing-read "Location: "
+                                            '("same-file" "other-file")
+                                            nil t)))
+                
+                ("delete"
+                 `(:scope ,(completing-read "Delete scope: "
+                                         '("node" "subtree" "properties")
+                                         nil t)))
+                
+                ("custom"
+                 `(:function ,(read-string "Custom function name: ")))
+                
+                (_ (error "Invalid operation type: %s" operation))))
+         
+         ;; 构建完整的行为定义
+         (behavior `(:when (:timing ,(intern (concat ":" timing))
+                          ,@(when condition-type
+                              `(:condition (,(intern (concat ":" condition-type))
+                                          ,@(org-supertag--read-condition-params
+                                             condition-type)))))
+                    :what (:operation ,(intern (concat ":" operation))
+                          ,@spec)
+                    :how (:method :sync))))
+    
+    ;; 添加描述（如果提供）
+    (when (and description (not (string-empty-p description)))
+      (setq behavior (plist-put behavior :description description)))
+    
+    ;; 注册行为组件
+    (org-supertag-component-define name behavior)
+    
+    ;; 返回行为定义
+    behavior))
+
+(defun org-supertag--read-condition-params (condition-type)
+  "Read condition parameters based on CONDITION-TYPE."
+  (pcase condition-type
+    ("node"
+     `(:todo ,(completing-read "Todo state: "
+                             (append '("any") org-todo-keywords-1)
+                             nil t)
+       :priority ,(completing-read "Priority: "
+                                '("any" "A" "B" "C")
+                                nil t)))
+    ("time"
+     `(:type ,(completing-read "Time condition: "
+                             '("after" "before" "between")
+                             nil t)
+       :value ,(read-string "Time specification: ")))
+    ("field"
+     `(:name ,(read-string "Field name: ")
+       :condition ,(read-string "Field condition: ")))
+    ("reference"
+     `(:type ,(completing-read "Reference type: "
+                             '("has-refs" "no-refs")
+                             nil t)))
+    ("custom"
+     `(:predicate ,(read-string "Predicate function: ")))
+    
+    (_ nil)))
+
+(defun org-supertag-attach-behavior (tag-name)
+  "Interactive attach behavior to TAG-NAME.
+TAG-NAME is the name of the tag to attach behavior to.
+Prompts for selecting a behavior from registered components."
+  (interactive
+   (list (completing-read "Select tag: "
+                         (mapcar (lambda (tag-id)
+                                 (plist-get (org-supertag-tag-get tag-id) :name))
+                                (org-supertag-db-find-by-type :tag))
+                         nil t)))
+  (let ((tag (org-supertag-tag-get tag-name)))
+    (unless tag
+      (error "Tag not found: %s" tag-name))
+    (let* ((components (org-supertag-component-list))
+           (behavior-name (completing-read "Select behavior: " components nil t)))
+      (unless behavior-name
+        (user-error "No behavior selected"))
+      (org-supertag-behavior-attach tag-name behavior-name)
+      (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name))))
+
+(defun org-supertag-list-behaviors (tag-name)
+  "List all behaviors defined for a tag.
+TAG-NAME is the name of the tag to check."
+  (interactive
+   (list (completing-read "Select tag: " 
+                         (org-supertag-get-all-tags))))
+  (let* ((tag (org-supertag-tag-get tag-name)) 
+         (behaviors (plist-get tag :behaviors)))
+    (unless tag
+      (error "Tag not found: %s" tag-name))
+    (save-current-buffer
+      (set-buffer (get-buffer-create "*Behaviors*"))
+      (erase-buffer)
+      (insert (format "Behavior list - %s:\n\n" tag-name))
+      (if behaviors
+          (dolist (behavior behaviors)
+            (insert (format "- %s\n" behavior)))
+        (insert "No behaviors attached.\n"))
+      (special-mode)
+      (pop-to-buffer (current-buffer)))))
+
+
+
+
+
+(provide 'org-supertag-command)
+

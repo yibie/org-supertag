@@ -81,7 +81,7 @@ Org-supertag tags look like this: ~:#tag-name:~, differing from org-mode tags on
 
 If you click it, you can still see the org-agenda menu (though I don't recommend doing this).
 
-⚠️Warning: org-supertag only records tags set through org-supertag, not tags set through org-mode.
+⚠️Note: org-supertag only records tags set through org-supertag, not tags set through org-mode.
 
 ** Field
 Fields are node properties (once created, they are synchronized to the property drawer in org-mode) defined by tags. Each field has:
@@ -207,12 +207,14 @@ Query results can be exported in three ways, triggered by the following commands
 
 *** Insert at Current Position
 - Command: ~M-x org-supertag-query-export-results-here~
-- Shortcut: ~C-c C-x h~
+- Shortcut: Undefined
 1. After selecting results, choose "Insert at Point"
 2. Results will be inserted as an org-mode special block, for example:
    #+begin_query
    - [[id:node-id][Node Title]]
    #+end_query
+
+⚠️Note: ~org-supertag-query-export-results-here~ can be used outside the search results page, but cannot be used within the search results page
 
 *** Other Related Commands
 - ~C-c C-c~ :: Toggle selection state of current line

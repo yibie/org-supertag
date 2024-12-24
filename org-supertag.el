@@ -5,6 +5,7 @@
 (require 'org-supertag-field)
 (require 'org-supertag-tag)
 (require 'org-supertag-query)
+(require 'org-supertag-command)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -72,5 +73,20 @@ Automatically enables org-supertag-mode in org-mode buffers."
   (org-supertag-db-init)
   ;; Enable org-supertag-mode for all org-mode buffers
   (add-hook 'org-mode-hook #'org-supertag-mode))
+
+
+(defun org-supertag--init-custom-command ()
+  "Initialize custom command file if not exists."
+  (let ((custom-file (expand-file-name "org-supertag-custom-command.el"
+                                     org-supertag-data-directory)))
+    (unless (file-exists-p custom-file)
+      ;; create data directory if not exists
+      (unless (file-exists-p org-supertag-data-directory)
+        (make-directory org-supertag-data-directory t))
+      ;; copy default config file
+      (copy-file (locate-library "org-supertag-custom-command.el")
+                 custom-file))))
+;; initialize when package is loaded
+(add-hook 'org-supertag-mode-hook #'org-supertag--init-custom-command)
 
 (provide 'org-supertag)

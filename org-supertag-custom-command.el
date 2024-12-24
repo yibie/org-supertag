@@ -1,0 +1,175 @@
+;;; org-supertag-custom-command.el --- User defined commands for org-supertag -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;; 这个文件用于定义自定义的组件和行为。
+;; 
+;; 1. 组件系统 (org-supertag-component-define)
+;;    基本格式：
+;;    (org-supertag-component-define NAME SPEC)
+;;    
+;;    参数说明：
+;;    - NAME: 组件名称（字符串）
+;;    - SPEC: 行为规范，必须包含三个部分：
+;;      :when - 执行条件
+;;        :timing - 执行时机
+;;          :immediate - 立即执行
+;;          :deferred - 延迟执行（需要监控）
+;;        :condition - 具体条件（用于 deferred）
+;;      :what - 执行内容
+;;        :operation - 操作类型：
+;;          :transform - 转换操作
+;;            :transform - 转换类型 (:property/:field/:content)
+;;            :property - 属性名
+;;            :value - 新值
+;;          :create - 创建操作
+;;            :create - 创建类型 (:node/:child)
+;;            :props - 属性列表
+;;          :delete - 删除操作
+;;          :move - 移动操作
+;;            :target - 目标位置
+;;          :notify - 通知操作
+;;            :message - 消息内容
+;;            :type - 类型 (:message/:warning/:error)
+;;      :how - 执行方式
+;;        :method - 处理方法
+;;          :sync - 同步执行
+;;          :batch - 批量处理
+;;          :transact - 事务处理
+;;    
+;;    示例：
+;;    (org-supertag-component-define "move-to-archive"
+;;      '(:when (:timing :immediate)
+;;        :what (:operation :move
+;;              :target "archive.org")
+;;        :how (:method :sync)))
+;;
+;; 2. 行为定义 (org-supertag-behavior-define)
+;;    基本格式：
+;;    (org-supertag-behavior-define NAME PROPS)
+;;    
+;;    示例：
+;;    (org-supertag-behavior-define "auto-archive"
+;;      '(:when (:timing :deferred
+;;              :condition (:todo "DONE"))
+;;        :what (:operation :move
+;;              :target "archive.org")
+;;        :how (:method :sync)))
+;;
+;; 3. 上下文变量：
+;;    behavior-execute 和 component-execute 时可用的上下文：
+;;    :node-id - 当前节点ID
+;;    :batch-results - 批处理结果（用于 :batch 方法）
+;;    :transaction-log - 事务日志（用于 :transact 方法）
+;;
+;; 4. 使用流程：
+;;    1) 定义基础组件
+;;    2) 组合组件定义行为
+;;    3) 使用 M-x org-supertag-attach-behavior 绑定到标签
+
+;;; Code:
+
+;;; 基础组件
+;; TODO 状态
+(org-supertag-component-define "todo-is"
+  '(:when (:timing :immediate)
+    :what (:operation :check-todo)
+    :how (:method :sync)))
+
+;; 截止日期
+(org-supertag-component-define "deadline-within"
+  '(:when (:timing :deferred)
+    :what (:operation :check-deadline)
+    :how (:method :sync)))
+
+;;; 基础动作组件
+;; 移动
+(org-supertag-component-define "move-to"
+  '(:when (:timing :immediate)
+    :what (:operation :move)
+    :how (:method :sync)))
+
+;; 通知
+(org-supertag-component-define "notify"
+  '(:when (:timing :immediate)
+    :what (:operation :notify)
+    :how (:method :sync)))
+
+;;; 预定义行为
+;; 自动归档
+(org-supertag-behavior-define "auto-archive"
+  '(:when (:timing :deferred
+          :condition (:todo "DONE"))
+    :what (:operation :move
+          :target "archive.org")
+    :how (:method :sync)))
+
+;; 截止日期提醒
+(org-supertag-behavior-define "deadline-alert"
+  '(:when (:timing :deferred
+          :condition (:deadline "< 3 days"))
+    :what (:operation :notify
+          :message "Task due soon: {title}")
+    :how (:method :sync)))
+
+;;; 字段监控组件
+(org-supertag-component-define "field-monitor"
+  '(:when (:timing :immediate)
+    :what (:operation :check-field
+          :field "{field-name}"  ; 使用模板变量，可在使用时指定
+          :compare :changed)      ; 使用 :changed 检查变化
+    :how (:method :sync)))
+
+;;; UI 更新组件
+(org-supertag-component-define "update-property"
+  '(:when (:timing :immediate)
+    :what (:operation :transform
+          :transform :property
+          :property "{property-name}"  ; 使用模板变量
+          :value "{property-value}")   ; 使用模板变量
+    :how (:method :sync)))
+
+;;; 预定义的状态同步行为
+(org-supertag-behavior-define "sync-task-status"
+  '(:when (:timing :immediate
+          :condition (:field "status" :compare :changed))
+    :what (:operation :function
+          :function org-supertag-behavior--apply-field-mapping
+          :args (:field "status"))
+    :how (:method :sync)))
+
+;;; 预定义的优先级同步行为
+(org-supertag-behavior-define "sync-task-priority"
+  '(:when (:timing :immediate
+          :condition (:field "priority" :compare :changed))
+    :what (:operation :function
+          :function org-supertag-behavior--apply-field-mapping
+          :args (:field "priority"))
+    :how (:method :sync)))
+
+;;; Tag 定义示例
+(org-supertag-component-define "task-tag"
+  '(:type :tag
+    :fields ((:name "status"
+              :type :options
+              :options ("todo" "in-process" "done")
+              :property-map ((:property "TODO"
+                            :values (("todo" . "TODO")
+                                   ("in-process" . "IN-PROCESS") 
+                                   ("done" . "DONE")))
+                           (:property "FACE"
+                            :values (("todo" . (:foreground "red" :background "white"))
+                                   ("in-process" . (:foreground "yellow" :background "black"))
+                                   ("done" . (:foreground "green" :background "white"))))))
+             (:name "priority"
+              :type :options 
+              :options ("A" "B" "C")
+              :property-map ((:property "PRIORITY"
+                            :values (("A" . "A")
+                                   ("B" . "B")
+                                   ("C" . "C")))
+                           (:property "FACE"
+                            :values (("A" . (:foreground "red" :background "black"))
+                                   ("B" . (:foreground "yellow" :background "black")) 
+                                   ("C" . (:foreground "green" :background "black")))))))))
+
+(provide 'org-supertag-custom-command)

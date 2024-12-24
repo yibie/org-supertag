@@ -41,19 +41,21 @@ TAG-NAME is the name of the tag to check"
 TAG-NAME: Name of the tag
 PROPS: Additional properties"
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (fields (or (plist-get props :fields) '()))  ; 先获取字段
+         (fields (or (plist-get props :fields) '()))
          (base-props (list :type :tag
                           :id sanitized-name
                           :name sanitized-name
-                          :fields fields      ; 使用获取的字段
+                          :fields fields
                           :created-at (current-time))))
     
     (message "Debug create-tag: props=%S" props)
     (message "Debug create-tag: fields=%S" fields)
     (message "Debug create-tag: base-props=%S" base-props)
     (org-supertag-db-add sanitized-name base-props)
-    (message "Debug create-tag: 保存后的标签=%S" 
-             (org-supertag-db-get sanitized-name))
+    (let ((saved-tag (org-supertag-db-get sanitized-name)))
+      (message "Debug create-tag: 保存后的标签=%S" saved-tag)
+      (unless saved-tag
+        (error "Failed to create tag: %s" sanitized-name)))
     sanitized-name))
 
 (defun org-supertag-tag-get (tag-name)
@@ -66,6 +68,15 @@ otherwise returns nil."
                (eq (plist-get entity :type) :tag))
       entity)))
 
+(defun org-supertag-get-all-tags ()
+  "Get a list of all defined tags."
+  (let ((tags '()))
+    (maphash
+     (lambda (id entity)
+       (when (eq (plist-get entity :type) :tag)
+         (push (plist-get entity :name) tags)))
+     org-supertag-db--object)
+    (delete-dups tags)))
 ;;----------------------------------------------------------------------
 ;; Tag-Node Relation Operation
 ;;----------------------------------------------------------------------
@@ -340,9 +351,9 @@ It provides options to:
                              (cons (format "[%s] %s (current: %s)"
                                          tag-id field-name 
                                          (or current-value "unset"))
-                                   (list :type :existing
-                                        :tag-id tag-id
-                                        :field field)))
+                                       (list :type :existing
+                                            :tag-id tag-id
+                                            :field field)))
                      ;; New field option
                      collect (cons (format "[%s] + Add new field" tag-id)
                                  (list :type :new
@@ -608,7 +619,6 @@ This function allows:
                                 (mapcar #'car choices)
                                 nil t))
          (action (cdr (assoc choice choices))))
-    
     (pcase action
       ;; View definitions
       (:view
@@ -659,7 +669,6 @@ This function allows:
           'org-supertag-preset-tags
           (cons (cons tag-name (nreverse fields))
                 org-supertag-preset-tags))))
-      
       ;; Edit existing preset
       ((pred stringp)
        (let* ((tag-name action)
@@ -679,7 +688,6 @@ This function allows:
                 (mapcar #'car field-choices)
                 nil t))
               (field-action (cdr (assoc field-choice field-choices))))
-         
          (pcase field-action
            ;; Add new field
            (:new
@@ -711,7 +719,6 @@ This function allows:
                           (append current-fields (list field-def)))
                      (assoc-delete-all 
                       tag-name org-supertag-preset-tags)))))
-           
            ;; Remove tag
            (:remove
             (when (yes-or-no-p 
@@ -782,5 +789,7 @@ This function allows:
                                (remove field current-fields))
                           (assoc-delete-all 
                            tag-name org-supertag-preset-tags))))))))))))))
+
+
 
 (provide 'org-supertag-tag)
