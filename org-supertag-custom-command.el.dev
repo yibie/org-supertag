@@ -95,16 +95,16 @@
     :how (:method :sync)))
 
 ;;; 预定义行为
-;; 自动归档
-(org-supertag-behavior-define "auto-archive"
+;; 自动归档行为
+(org-supertag-register-behavior "auto-archive"
   '(:when (:timing :deferred
           :condition (:todo "DONE"))
     :what (:operation :move
           :target "archive.org")
     :how (:method :sync)))
 
-;; 截止日期提醒
-(org-supertag-behavior-define "deadline-alert"
+;; 截止日期提醒行为
+(org-supertag-register-behavior "deadline-alert"
   '(:when (:timing :deferred
           :condition (:deadline "< 3 days"))
     :what (:operation :notify
@@ -146,30 +146,39 @@
           :args (:field "priority"))
     :how (:method :sync)))
 
-;;; Tag 定义示例
-(org-supertag-component-define "task-tag"
-  '(:type :tag
-    :fields ((:name "status"
-              :type :options
-              :options ("todo" "in-process" "done")
-              :property-map ((:property "TODO"
-                            :values (("todo" . "TODO")
-                                   ("in-process" . "IN-PROCESS") 
-                                   ("done" . "DONE")))
-                           (:property "FACE"
-                            :values (("todo" . (:foreground "red" :background "white"))
-                                   ("in-process" . (:foreground "yellow" :background "black"))
-                                   ("done" . (:foreground "green" :background "white"))))))
-             (:name "priority"
-              :type :options 
-              :options ("A" "B" "C")
-              :property-map ((:property "PRIORITY"
-                            :values (("A" . "A")
-                                   ("B" . "B")
-                                   ("C" . "C")))
-                           (:property "FACE"
-                            :values (("A" . (:foreground "red" :background "black"))
-                                   ("B" . (:foreground "yellow" :background "black")) 
-                                   ("C" . (:foreground "green" :background "black")))))))))
+;; 定义外观组件
+(org-supertag-component-define "appearance"
+  '(:when (:timing :immediate)
+    :what (:operation :transform
+           :type :appearance
+           :rules (;; 完成的任务 - 灰色
+                  (:predicate (:todo "DONE")
+                   :face (:foreground "gray50")
+                   :priority 100)
+                  ;; 高优先级 - 红色
+                  (:predicate (:priority "A")
+                   :face (:foreground "red" :weight bold)
+                   :priority 90)
+                  ;; 紧急标签 - 橙色背景
+                  (:predicate (:tag "URGENT")
+                   :face (:background "orange" :foreground "black")
+                   :priority 80)
+                  ;; 进行中 - 绿色
+                  (:predicate (:todo "DOING")
+                   :face (:foreground "green3")
+                   :priority 70)
+                  ;; 等待中 - 蓝色
+                  (:predicate (:todo "WAITING")
+                   :face (:foreground "DeepSkyBlue")
+                   :priority 60)))
+    :how (:method :sync)))
+
+;; 定义使用外观组件的行为
+(org-supertag-behavior-define "dynamic-appearance"
+  '(:when (:timing :deferred
+          :condition (:node (:any-change t)))
+    :what (:operation :component
+           :name "appearance")
+    :how (:method :sync)))
 
 (provide 'org-supertag-custom-command)

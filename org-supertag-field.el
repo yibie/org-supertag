@@ -56,32 +56,37 @@ TAG-ID: Associated tag identifier"
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-field-set-value (field-def value node-id tag-id)
-  "Set field value.
-FIELD-DEF: Field definition
-VALUE: Field value
-NODE-ID: Node identifier
-TAG-ID: Associated tag identifier"
+  "Set field value for node.
+FIELD-DEF is the field definition
+VALUE is the field value
+NODE-ID is the target node ID
+TAG-ID is the tag ID"
+  (message "Setting field value: %S = %S" field-def value)  ; Debug
   (condition-case err
       (let* ((field-name (plist-get field-def :name))
              (field-type (plist-get field-def :type))
              (type-def (org-supertag-get-field-type field-type))
+             ;; 确保值不为 nil
              (processed-value (if type-def
                                 (progn
                                   (org-supertag-field-validate field-def value)
-                                  (if-let ((formatter (plist-get type-def :formatter)))
-                                      (funcall formatter value field-def)
-                                    value))
+                                  (let* ((formatter (plist-get type-def :formatter)))
+                                    (if formatter
+                                        (funcall formatter value field-def)
+                                      value)))
                               value)))
+        ;; 存储值
         (org-supertag-field-db-set-value node-id field-name processed-value tag-id)
+        ;; 同步到 org buffer
         (when-let ((pos (condition-case nil
                            (org-id-find node-id t)
                          (error nil))))
           (condition-case sync-err
               (org-with-point-at pos
-                (org-entry-put nil field-name processed-value))
+                (org-set-property field-name processed-value))
             (error
              (message "Failed to sync field value to org buffer: %s"
-                     (error-message-string sync-err))))))
+                      (error-message-string sync-err))))))
     (error
      (message "Error in field set-value operation: %s"
               (error-message-string err))
@@ -205,7 +210,11 @@ Returns a list of nodes that match the criteria."
     (range . (:validator org-supertag-validate-range
               :formatter org-supertag-format-range
               :reader org-supertag-read-range-field
-              :description "Number Range")))
+              :description "Number Range"))
+    (behavior . (:validator org-supertag-validate-behavior
+                 :formatter org-supertag-format-behavior
+                 :reader org-supertag-read-behavior-field
+                 :description "Tag Behavior")))
   "Field type definition.
 Each type is a cons cell, car is the type name (symbol), cdr is the type definition plist, containing:
 - :validator   Function to validate field value
@@ -270,7 +279,7 @@ VALUE is the value to validate."
      (message "Date validation error: %S" err)
      nil)))
 
-(defun org-supertag-format-date (value field)
+(defun org-supertag-format-date (value &optional _field)
   "Format date value.
 VALUE is the value to format.
 FIELD is the field definition."
@@ -371,7 +380,7 @@ VALUE can be a number or numeric string."
       (and (stringp value)
            (string-match-p "^[0-9.]+$" value))))
 
-(defun org-supertag-format-number (value field)
+(defun org-supertag-format-number (value &optional _field)
   "Format numeric value.
 VALUE can be a number or numeric string.
 FIELD is the field definition."
@@ -442,6 +451,63 @@ FIELD-DEF is the field definition."
     (if (org-supertag-validate-range value)
         value
       (error "Invalid range format, use 'min-max' format like '1-10'"))))
+
+
+;;------------------------------------------------------------------------------
+;; Behavior Field Type
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-validate-behavior (value)
+  "Validate behavior field value.
+VALUE should be a plist with :trigger and either :action or :style."
+  (and (plistp value)
+       (plist-member value :trigger)
+       (memq (plist-get value :trigger) 
+             '(:on-add :on-remove :on-change :on-schedule :always))
+       (or (functionp (plist-get value :action))
+           (plistp (plist-get value :style)))))
+
+(defun org-supertag-format-behavior (value &optional _field)
+  "Format behavior field value for display.
+VALUE is the behavior plist.
+_FIELD is the field definition (ignored).
+
+Format example:
+- Behavior[:on-add +action +style:📦]
+- Behavior[:always +action]
+- Behavior[:on-change +style:🔄]"
+  (let ((trigger (plist-get value :trigger))
+        (has-action (plist-get value :action))
+        (style (plist-get value :style)))
+    (format "Behavior[%s%s%s]"
+            (or trigger "nil")
+            (if has-action " +action" "")
+            (if style 
+                (format " +style:%s" 
+                        (or (plist-get style :prefix) ""))
+              ""))))
+
+(defun org-supertag-read-behavior-field (prompt &optional initial)
+  "Read behavior field value.
+PROMPT is the prompt string
+INITIAL is the initial value."
+  (let* ((trigger (intern 
+                  (completing-read 
+                   "Trigger: "
+                   '("on-add" "on-remove" "on-change" "on-schedule" "always")
+                   nil t nil nil "on-add")))
+         (has-action (y-or-n-p "Add action? "))
+         (action (when has-action
+                  (read-from-minibuffer "Action (lambda form): "
+                                      "(lambda (node-id)\n  )")))
+         (has-style (y-or-n-p "Add style? "))
+         (style (when has-style
+                 (list :face (read-from-minibuffer "Face properties: "
+                                                  "(:foreground \"blue\")")
+                       :prefix (read-string "Prefix: " "📋")))))
+    (list :trigger trigger
+          :action (when has-action (eval (read action)))
+          :style style)))
 
 ;;----------------------------------------------------------------------
 ;; Read Field Value
@@ -677,6 +743,22 @@ PRESET is the preset field definition"
     (format "- %s%s"
             name
             (if desc (format " (%s)" desc) ""))))
+
+(defun org-supertag-field-get-initial-value (field)
+  "Get initial value for FIELD."
+  (let ((field-type (plist-get field :type))
+        (field-value (plist-get field :value)))
+    (cond
+     ;; 对于 behavior 类型，保持原始值
+     ((eq field-type 'behavior)
+      field-value)
+     ;; 对于其他类型，使用原有的逻辑
+     ((eq field-type 'options)
+      (car (plist-get field :options)))
+     ((eq field-type 'date)
+      (format-time-string "%Y-%m-%d"))
+     (t nil))))
+
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

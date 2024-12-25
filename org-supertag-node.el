@@ -145,6 +145,13 @@ NODE-ID is the node identifier"
          (push (plist-get props :to) result)))
      org-supertag-db--link)
     (nreverse result)))
+
+(defun org-supertag-node-get-tag (node-id)
+  "Get tag ID for NODE-ID.
+Returns the first tag ID found for the node."
+  (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
+    (car node-tags)))
+
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------

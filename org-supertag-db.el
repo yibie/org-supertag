@@ -87,7 +87,8 @@
     :time      ; Time using org-mode time-stamp format
     :list      ; List of values
     :options   ; Selection from predefined options
-    :ref)      ; Reference to fields and values from other tags
+    :ref       ; Reference to fields and values from other tags
+    :behavior) ; Behavior definition
   "Supported field value types.")
 
 (defconst org-supertag-db-object-structure
@@ -123,19 +124,7 @@
                 :description ; Description of tag purpose
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
-     :behaviors  ; Behavior definitions
-                           ; Example:
-                           ; (("auto-archive" . (:when (:timing :deferred
-                           ;                           :condition (:node (:todo "DONE")))
-                           ;                    :what (:operation :move
-                           ;                           :target "archive.org")
-                           ;                    :how (:method :batch)))
-                           ;  ("auto-summarize" . (:when (:timing :immediate
-                           ;                             :condition (:field :changed))
-                           ;                      :what (:operation :transform
-                           ;                             :function 'generate-summary)
-                           ;                      :how (:method :sync))))
-                ;; Event Information
+     :behaviors  
                 :created-at  ; Creation time
                 :modified-at)) ; Modification time
   "Entity structure definitions."))
@@ -807,6 +796,10 @@ Returns:
   "Get all entities in database."
   (ht-items org-supertag-db--object))
 
+
+
+
+
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
 ;;---------------------------------------------------------------------------------
@@ -1316,6 +1309,12 @@ Returns total number of nodes updated."
     (message "Updated %d nodes in %d files" total (length files))
     total))
 
+(defun org-supertag-db-get-pos (node-id)
+  "Get buffer position for node with NODE-ID.
+Returns position number or marker if found, nil otherwise."
+  (condition-case nil
+      (org-id-find node-id t)
+    (error nil)))
 ;;------------------------------------------------------------------------------
 ;; Node Reference Parsing
 ;;------------------------------------------------------------------------------    
@@ -1839,8 +1838,6 @@ Steps:
 
 ;; Clear cache before loading
 (add-hook 'org-supertag-db-before-load-hook #'org-supertag-db--cache-clear)
-
-
 
 
 

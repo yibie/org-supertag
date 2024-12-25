@@ -3,6 +3,46 @@
 (require 'org-supertag-db)
 
 ;;----------------------------------------------------------------------------- 
+;; Behavior Register  
+;;-----------------------------------------------------------------------------
+
+(defvar org-supertag-behavior-registry (make-hash-table :test 'equal)
+  "Registry for behavior definitions.
+Key is behavior name, value is behavior definition plist.")
+
+(defun org-supertag-register-behavior (name definition)
+  "Register a behavior with NAME and DEFINITION.
+NAME should be a string.
+DEFINITION should be a plist containing behavior specification."
+  (unless (stringp name)
+    (error "Behavior name must be a string"))
+  (unless (listp definition)
+    (error "Behavior definition must be a plist"))
+  (puthash name definition org-supertag-behavior-registry)
+  (message "Registered behavior: %s" name))
+
+(defun org-supertag-get-behavior (name)
+  "Get behavior definition by NAME."
+  (gethash name org-supertag-behavior-registry))
+
+(defun org-supertag-get-defined-behaviors ()
+  "Get list of all defined behavior names."
+  (let (names)
+    (when (hash-table-p org-supertag-behavior-registry)
+      (maphash (lambda (k _v)
+                 (push k names))
+               org-supertag-behavior-registry)
+      (sort names #'string<))))
+
+(defface org-supertag-behavior-name
+  '((t :inherit font-lock-function-name-face))
+  "Face for behavior names.")
+
+(defface org-supertag-behavior-description
+  '((t :inherit font-lock-doc-face))
+  "Face for behavior descriptions.")
+
+;;----------------------------------------------------------------------------- 
 ;; Core Functions
 ;;-----------------------------------------------------------------------------
 
@@ -20,18 +60,19 @@ Example:
   (let ((when-spec (plist-get props :when))
         (what-spec (plist-get props :what))
         (how-spec (plist-get props :how)))
-    ;; validate required properties
+    
+    ;; 验证必要的属性
     (unless (and when-spec what-spec how-spec)
       (error "Behavior %s missing required properties" name))
-    ;; store behavior in database
-    (org-supertag-db-add (format "behavior:%s" name)
-                         (list :type :behavior
-                               :name name
-                               :when when-spec
-                               :what what-spec
-                               :how how-spec))
-    ;; setup event listeners based on timing
-    (org-supertag-behavior--setup-triggers name props)))
+    
+    ;; 直接注册行为到注册表
+    (org-supertag-register-behavior name props)
+    
+    ;; 设置触发器（如果需要）
+    (org-supertag-behavior--setup-triggers name props)
+    
+    ;; 返回行为定义
+    props))
 
 
 (defun org-supertag-behavior--setup-triggers (name props)
@@ -465,6 +506,71 @@ For :transact, adds undo information to transaction-log in CONTEXT."
 ;;     :how (:method :sync)))
 
 ;;----------------------------------------------------------------------------- 
+;; Appearance System
+;;-----------------------------------------------------------------------------
+
+
+(defun org-supertag--apply-appearance (node-info rules)
+  "Apply appearance RULES to node based on NODE-INFO."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((overlay (org-supertag--get-node-overlay)))
+      ;; 创建或获取 overlay
+      (unless overlay
+        (setq overlay (make-overlay (point) (line-end-position)))
+        (overlay-put overlay 'org-supertag t))
+      
+      ;; 应用匹配的规则
+      (let* ((rule-specs (plist-get rules :rules))
+             (matching-rule
+              (cl-find-if
+               (lambda (rule)
+                 (org-supertag--evaluate-appearance-predicate
+                  (plist-get rule :predicate)
+                  node-info))
+               rule-specs)))
+        (when matching-rule
+          (overlay-put overlay 'face
+                      (plist-get matching-rule :face)))))))
+
+(defun org-supertag--evaluate-appearance-predicate (pred-spec node-info)
+  "Evaluate appearance predicate PRED-SPEC against NODE-INFO."
+  (pcase (car (plist-get pred-spec :predicate))
+    (:todo
+     (string= (plist-get node-info :todo-state)
+              (plist-get pred-spec :value)))
+    (:priority
+     (= (plist-get node-info :priority)
+        (string-to-char (plist-get pred-spec :value))))
+    (:tag
+     (member (plist-get pred-spec :value)
+             (plist-get node-info :tags)))
+    (:any-change t)))
+
+(defun org-supertag--get-node-info ()
+  "Get current node information as a plist."
+  (list :id (org-id-get)
+        :tags (org-get-tags)
+        :todo-state (org-get-todo-state)
+        :priority (org-get-priority (point))
+        :properties (org-entry-properties)
+        :level (org-outline-level)
+        :title (org-get-heading t t t t)))
+
+(defun org-supertag--get-node-overlay ()
+  "Get the org-supertag overlay for the current node."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((overlays (overlays-at (point)))
+          found)
+      (while (and overlays (not found))
+        (let ((overlay (car overlays)))
+          (when (overlay-get overlay 'org-supertag)
+            (setq found overlay)))
+        (setq overlays (cdr overlays)))
+      found)))
+
+;;----------------------------------------------------------------------------- 
 ;; Component System
 ;;-----------------------------------------------------------------------------
 
@@ -609,22 +715,26 @@ CONTEXT is the execution context."
 
 ;;; User Interface
 
-(defun org-supertag-behavior-attach (tag-name behavior-spec)
-  "Attach behavior specified by BEHAVIOR-SPEC to TAG-NAME.
-TAG-NAME is the name of the tag to attach behavior to.
-BEHAVIOR-SPEC is the behavior specification to attach."
-  (message "\n=== Attaching Behavior ===")
-  (message "Tag name: %s" tag-name)
-  (message "Behavior spec: %S" behavior-spec)
-  (let* ((tag (org-supertag-db-get-tag tag-name))
-         (behaviors (plist-get tag :behaviors)))
+(defun org-supertag-behavior-attach (tag-name behavior-name)
+  "Attach BEHAVIOR-NAME to the tag specified by TAG-NAME."
+  (let* ((tag (org-supertag-tag-get tag-name))
+         (behavior (gethash behavior-name org-supertag-behavior-registry)))
+    
     (unless tag
       (error "Tag not found: %s" tag-name))
-    (org-supertag-db-update tag-name
-                           (plist-put tag :behaviors
-                                    (cons behavior-spec behaviors)))
-    (message "Behavior attached to tag '%s'" tag-name)
-    (message "=== Behavior Attachment Complete ===\n")))
+    
+    (unless behavior
+      (error "Behavior not found: %s" behavior-name))
+    
+    ;; 获取现有的行为列表
+    (let* ((behaviors (or (plist-get tag :behaviors) '()))
+           ;; 添加新行为
+           (new-behaviors (cons (cons behavior-name behavior) behaviors)))
+      
+      ;; 更新标签
+      (org-supertag-db-add 
+       tag-name
+       (plist-put tag :behaviors new-behaviors)))))
 
 ;;----------------------------------------------------------------------------- 
 ;; UI Integration
@@ -1022,20 +1132,19 @@ Cancels the scheduler timer if it exists."
 ;;-----------------------------------------------------------------------------
 
 (defun org-supertag-define-behavior (name &optional description)
-  "Interactive define a new behavior.
-NAME is the name of the behavior.
-DESCRIPTION is the optional description.
+  "Define a new behavior with NAME and optional DESCRIPTION.
+The behavior will be stored in the behavior registry for later use with tags.
 
 The function will prompt for:
-- Trigger timing (immediate or deferred)
+- Trigger timing (immediate, deferred, scheduled, periodic)
 - Trigger condition (optional)
 - Operation type (transform, create, delete, move, notify)
 - Operation-specific parameters"
   (interactive "sBehavior name: \nsDescription (optional): ")
+  
   (unless name
     (error "Behavior name is required"))
   
-  ;; 基本配置
   (let* ((timing (completing-read "Trigger timing: "
                                 '("immediate" "deferred" "scheduled" "periodic")
                                 nil t))
@@ -1048,12 +1157,13 @@ The function will prompt for:
          (operation (completing-read "Operation type: "
                                    '("transform" "create" "delete" "move" "notify" "custom")
                                    nil t))
+         ;; 根据操作类型收集具体参数
          (spec (pcase operation
                 ("transform"
-                 (let* ((transform-type (completing-read 
-                                       "Transform type: "
-                                       '("property" "field" "content")
-                                       nil t)))
+                 (let ((transform-type (completing-read 
+                                      "Transform type: "
+                                      '("property" "field" "content")
+                                      nil t)))
                    (pcase transform-type
                      ("property"
                       `(:transform :property
@@ -1066,6 +1176,17 @@ The function will prompt for:
                      ("content"
                       `(:transform :content
                         :function ,(read-string "Transform function: "))))))
+                
+                ("create"
+                 `(:template ,(read-string "Template: ")
+                   :location ,(completing-read "Location: "
+                                            '("same-file" "other-file")
+                                            nil t)))
+                
+                ("delete"
+                 `(:scope ,(completing-read "Delete scope: "
+                                         '("node" "subtree" "properties")
+                                         nil t)))
                 
                 ("move"
                  `(:target ,(read-file-name "Target file: ")
@@ -1081,17 +1202,6 @@ The function will prompt for:
                    :channel ,(completing-read "Channel: "
                                            '("echo" "buffer" "external")
                                            nil t)))
-                
-                ("create"
-                 `(:template ,(read-string "Template: ")
-                   :location ,(completing-read "Location: "
-                                            '("same-file" "other-file")
-                                            nil t)))
-                
-                ("delete"
-                 `(:scope ,(completing-read "Delete scope: "
-                                         '("node" "subtree" "properties")
-                                         nil t)))
                 
                 ("custom"
                  `(:function ,(read-string "Custom function name: ")))
@@ -1112,8 +1222,8 @@ The function will prompt for:
     (when (and description (not (string-empty-p description)))
       (setq behavior (plist-put behavior :description description)))
     
-    ;; 注册行为组件
-    (org-supertag-component-define name behavior)
+    ;; 将行为存储在注册表中（仅用于定义，不存入数据库）
+    (puthash name behavior org-supertag-behavior-registry)
     
     ;; 返回行为定义
     behavior))
@@ -1148,22 +1258,28 @@ The function will prompt for:
 (defun org-supertag-attach-behavior (tag-name)
   "Interactive attach behavior to TAG-NAME.
 TAG-NAME is the name of the tag to attach behavior to.
-Prompts for selecting a behavior from registered components."
+Prompts for selecting a behavior from custom commands file."
   (interactive
    (list (completing-read "Select tag: "
-                         (mapcar (lambda (tag-id)
-                                 (plist-get (org-supertag-tag-get tag-id) :name))
-                                (org-supertag-db-find-by-type :tag))
+                         (org-supertag-get-all-tags)
                          nil t)))
+  (org-supertag--init-custom-command) 
   (let ((tag (org-supertag-tag-get tag-name)))
     (unless tag
-      (error "Tag not found: %s" tag-name))
-    (let* ((components (org-supertag-component-list))
-           (behavior-name (completing-read "Select behavior: " components nil t)))
-      (unless behavior-name
-        (user-error "No behavior selected"))
-      (org-supertag-behavior-attach tag-name behavior-name)
-      (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name))))
+      (error "Tag not found: %s" tag-name))  
+    (let* ((command-file (expand-file-name "org-supertag-custom-command.el" 
+                                         org-supertag-data-directory))) 
+      (load command-file nil t)
+      (let ((behaviors (org-supertag-get-defined-behaviors)))
+        (unless behaviors
+          (error "No behaviors defined in %s. Please define some behaviors first." 
+                 command-file))
+        (let ((behavior-name (completing-read "Select behavior: " behaviors nil t)))
+          (unless behavior-name
+            (user-error "No behavior selected"))
+          (org-supertag-behavior-attach tag-name behavior-name)
+          (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name))))))
+
 
 (defun org-supertag-list-behaviors (tag-name)
   "List all behaviors defined for a tag.
@@ -1185,9 +1301,6 @@ TAG-NAME is the name of the tag to check."
         (insert "No behaviors attached.\n"))
       (special-mode)
       (pop-to-buffer (current-buffer)))))
-
-
-
 
 
 (provide 'org-supertag-command)
