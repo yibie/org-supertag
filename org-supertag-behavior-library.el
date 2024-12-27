@@ -150,13 +150,10 @@ Example:
                  (org-up-heading-safe))
         (let* ((tags (org-get-tags))
                (heading (org-get-heading t t t t)))
-          (message "Checking parent: %s, Tags: %S" heading tags)
           (when (member (concat "#" tag-id) tags)
-            (message "Found parent with tag %s: %s" tag-id heading)
             (when-let ((parent-id (org-id-get)))
               (when action-fn
                 (funcall action-fn parent-id))
-              (message "Processed parent: %s" parent-id)
               parent-id)))))))
 
 ;;------------------------------------------------------------------------------
@@ -172,11 +169,7 @@ Returns (total done progress) where progress is a float 0-100."
           (total 0)
           (done 0)
           (done-states (or org-done-keywords '("DONE"))))
-      
-      (message "\n=== Calculating Progress ===")
-      (message "Current heading: %s" (org-get-heading t t t t))
-      (message "Current level: %d" current-level)
-      
+
       ;; 保存当前位置
       (let ((start-pos (point)))
         ;; 移动到第一个子项
@@ -192,10 +185,8 @@ Returns (total done progress) where progress is a float 0-100."
             (when (member todo-state done-states)
               (setq done (1+ done))))
           (outline-next-heading))
-        
         ;; 恢复位置
         (goto-char start-pos))
-      
       (message "Final count: %d total, %d done" total done)
       (list total done 
             (if (> total 0)
@@ -250,39 +241,40 @@ FACE-PLIST is a property list of face attributes."
        (goto-char pos)
        (org-back-to-heading t)
        (let* ((beg (line-beginning-position))
-              (end (line-end-position)))
+              (end (line-end-position))
+              (tags (org-get-tags nil t)))
          (save-restriction
            (narrow-to-region beg end)
            ;; 清除现有样式
            (remove-overlays beg end 'org-supertag-face t)
            ;; 应用新样式
-           (let ((tags (org-get-tags nil t)))
-             (dolist (tag tags)
-               (when (string-prefix-p "#" tag)
-                 (let* ((tag-id (substring tag 1))
-                        (behavior (org-supertag-behavior--get-behavior tag-id))
-                        (style (plist-get behavior :style)))
-                   ;; 确保 face 是有效的
-                   (when-let ((face (plist-get style :face)))
-                     ;; 构建有效的 face 属性
-                     (let* ((face-attrs (if (facep face)
-                                        (face-all-attributes face nil)
-                                      face))
-                            (bg (plist-get face-attrs :background))
-                            (fg (plist-get face-attrs :foreground))
-                            ;; 只包含非空的属性
-                            (valid-attrs
-                             (append
-                              (when (and bg (color-defined-p bg))
-                                (list :background bg))
-                              (when (and fg (color-defined-p fg))
-                                (list :foreground fg)))))
-                       ;; 只在有有效属性时创建 overlay
-                       (when valid-attrs
-                         (let ((ov (make-overlay beg end)))
-                           (overlay-put ov 'face valid-attrs)
-                           (overlay-put ov 'org-supertag-face t)
-                           (overlay-put ov 'node-id node-id)))))))))))
+           (dolist (tag tags)
+             (when (string-prefix-p "#" tag)
+               (let* ((tag-id (substring tag 1))
+                      (behavior (org-supertag-behavior--get-behavior tag-id))
+                      (style (plist-get behavior :style)))
+                 ;; 确保 face 是有效的
+                 (when-let ((face (plist-get style :face)))
+                   ;; 构建有效的 face 属性
+                   (let* ((face-attrs (if (facep face)
+                                      (face-all-attributes face nil)
+                                    face))
+                          (bg (plist-get face-attrs :background))
+                          (fg (plist-get face-attrs :foreground))
+                          ;; 只包含非空的属性
+                          (valid-attrs
+                           (append
+                            (when (and bg (color-defined-p bg))
+                              (list :background bg))
+                            (when (and fg (color-defined-p fg))
+                              (list :foreground fg)))))
+                     ;; 只在有有效属性时创建 overlay
+                     (when valid-attrs
+                       (let ((ov (make-overlay beg end)))
+                         (overlay-put ov 'face valid-attrs)
+                         (overlay-put ov 'org-supertag-face t)
+                         (overlay-put ov 'node-id node-id)
+                         )))))))))
          ;; 更新前缀
          (org-supertag-behavior--update-prefix node-id)))))
 

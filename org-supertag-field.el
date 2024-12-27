@@ -469,23 +469,47 @@ VALUE should be a plist with :trigger and either :action or :style."
 
 (defun org-supertag-format-behavior (value &optional _field)
   "Format behavior field value for display.
-VALUE is the behavior plist.
-_FIELD is the field definition (ignored).
+VALUE can be either:
+- A string (behavior name)
+- A behavior plist
 
 Format example:
+- Behavior[@important]
 - Behavior[:on-add +action +style:📦]
-- Behavior[:always +action]
-- Behavior[:on-change +style:🔄]"
-  (let ((trigger (plist-get value :trigger))
-        (has-action (plist-get value :action))
-        (style (plist-get value :style)))
-    (format "Behavior[%s%s%s]"
-            (or trigger "nil")
-            (if has-action " +action" "")
-            (if style 
-                (format " +style:%s" 
-                        (or (plist-get style :prefix) ""))
-              ""))))
+- Behavior[:always +action]"
+  (cond
+   ;; 字符串：行为名
+   ((stringp value)
+    (if-let ((behavior (gethash value org-supertag-behavior-registry)))
+        ;; 如果能找到行为定义，使用完整格式
+        (let ((trigger (plist-get behavior :trigger))
+              (has-action (plist-get behavior :action))
+              (style (plist-get behavior :style)))
+          (format "Behavior[%s%s%s]"
+                  (or trigger "nil")
+                  (if has-action " +action" "")
+                  (if style 
+                      (format " +style:%s" 
+                              (or (plist-get style :prefix) ""))
+                    "")))
+      ;; 找不到行为定义，只显示行为名
+      (format "Behavior[%s]" value)))
+   
+   ;; plist：完整的行为定义
+   ((and (listp value) (keywordp (car value)))
+    (let ((trigger (plist-get value :trigger))
+          (has-action (plist-get value :action))
+          (style (plist-get value :style)))
+      (format "Behavior[%s%s%s]"
+              (or trigger "nil")
+              (if has-action " +action" "")
+              (if style 
+                  (format " +style:%s" 
+                          (or (plist-get style :prefix) ""))
+                ""))))
+   
+   ;; 其他情况
+   (t "Behavior[nil]")))
 
 (defun org-supertag-read-behavior-field (prompt &optional initial)
   "Read behavior field value.

@@ -38,26 +38,24 @@ PROPS is a plist with:
 :hooks    - Optional list of (hook-name . hook-function) to setup"
   
   (let* ((tag-id (org-supertag-sanitize-tag-name tag-name))
-         ;; 先创建基本行为定义
          (behavior (list :trigger (plist-get props :trigger)
-                        :action (plist-get props :action)  ; 保存原始 action
+                        :action (plist-get props :action)
                         :style (plist-get props :style)
                         :hooks (plist-get props :hooks))))
     
-    ;; 先注册到行为注册表
+    ;; 注册到行为注册表
     (puthash tag-name behavior org-supertag-behavior-registry)
 
     ;; 创建或更新标签
     (unless (org-supertag-tag-get tag-id)
-      (message "Creating new tag: %s" tag-id)
       (org-supertag-tag-create tag-id))
     
-    ;; 添加行为字段
+    ;; 添加行为字段 - 只存储行为名
     (let* ((tag (org-supertag-tag-get tag-id))
            (fields (or (plist-get tag :fields) '()))
            (behavior-field (list :name "_behavior"
                                :type 'behavior
-                               :value behavior)))
+                               :value tag-name)))  ; 存储行为名而不是行为定义
       
       ;; 更新标签
       (org-supertag-tag-create 
@@ -70,12 +68,9 @@ PROPS is a plist with:
     
     ;; 处理 hooks
     (when-let ((hooks (plist-get props :hooks)))
-      (message "Setting up hooks: %S" hooks)
       (dolist (hook-spec hooks)
-        (add-hook (car hook-spec) (cdr hook-spec))
-        (message "Added hook %S -> %S" (car hook-spec) (cdr hook-spec))))
+        (add-hook (car hook-spec) (cdr hook-spec))))
     
-    ;; 返回注册的行为
     behavior))
 
 ;;------------------------------------------------------------------------------
@@ -95,93 +90,78 @@ Returns t if valid, nil otherwise."
 (defun org-supertag-behavior--on-tag-change (node-id tag-id action)
   "Handle behavior when TAG-ID is applied to NODE-ID with ACTION."
   (when-let* ((behavior (org-supertag-behavior--get-behavior tag-id))
-              (trigger (plist-get behavior :trigger))
-              (behavior-action (plist-get behavior :action)))
-    
+              (trigger (plist-get behavior :trigger)))
     (when (or (eq trigger :always)
               (eq trigger :on-change)
               (and (eq trigger :on-add) (eq action :add))
               (and (eq trigger :on-remove) (eq action :remove)))
-      
-      (condition-case err
-          (org-supertag-behavior--execute-action node-id behavior-action)
-        (error 
-         (message "Action failed: %S" err))))))
+      (org-supertag-behavior-execute node-id behavior))))
 
-(defun org-supertag-behavior--execute-action (action)
-  "Execute ACTION at current heading.
-ACTION can be:
-- A string (behavior name to lookup)
-- A list of behavior names
-- A function to execute"
-  (message "\n=== Executing Action ===")
-  (save-excursion
-    (org-back-to-heading t)  ; 确保在标题位置
-    (let* ((props (org-supertag-db--parse-node-at-point))  ; 使用现成的解析函数
-           (node-id (plist-get props :id)))
-      (message "At node: %s" (plist-get props :title))
-      
-      (cond
-       ;; 字符串：引用其他行为
-       ((stringp action)
-        (message "Looking up behavior: %s" action)
-        (if-let ((behavior (gethash action org-supertag-behavior-registry)))
-            (progn
-              (message "Found behavior in registry: %S" behavior)
-              (org-supertag-behavior--execute-action 
-               (plist-get behavior :action)))
-          (error "Behavior not found in registry: %s" action)))
-       
-       ;; 列表：多个行为
-       ((and (listp action) (not (functionp action)))
-        (message "Executing behavior list: %S" action)
-        (dolist (behavior-name action)
-          (message "Processing behavior: %s" behavior-name)
-          (when-let ((behavior (gethash behavior-name org-supertag-behavior-registry)))
-            (message "Found registered behavior: %S" behavior)
-            (org-supertag-behavior--execute-action behavior-name))))
-       
-       ;; 函数：直接执行
-       ((functionp action)
-        (message "Executing function")
-        (condition-case err
-            (funcall action)
-          (error 
-           (message "Function execution failed: %S" err))))
-       
-       ;; 其他情况
-       (t (error "Invalid action type: %S" action)))
-      
-      ;; 行为执行后，更新数据库
-      (org-supertag-db-add node-id props))))
+(defun org-supertag-behavior--plist-p (object)
+  "Check if OBJECT is a property list."
+  (and (listp object)
+       (> (length object) 0)
+       (keywordp (car object))))
 
-(defun org-supertag-behavior--trigger-for-node (node-id trigger)
-  "Trigger behaviors for NODE-ID based on TRIGGER event."
-  (message "\n=== Triggering behaviors for node %s ===" node-id)
-  (let ((tag-relations (org-supertag-db-get-node-tags node-id)))
-    (message "Node tag relations: %S" tag-relations)
+(defun org-supertag-behavior-execute (node-id behavior-spec)
+  "Execute behavior specified by BEHAVIOR-SPEC on NODE-ID.
+BEHAVIOR-SPEC can be:
+- A string (behavior name)
+- A plist (behavior definition)
+- A function"
+  (pcase behavior-spec
+    ;; 字符串：从注册表查找行为
+    ((pred stringp)
+     (when-let ((behavior (gethash behavior-spec org-supertag-behavior-registry)))
+       (org-supertag-behavior-execute node-id behavior)))
     
-    (dolist (relation tag-relations)
-      (let* ((tag-id (plist-get relation :to))
-             (behavior (gethash tag-id org-supertag-behavior-registry)))
-        (message "Processing tag: %s" tag-id)
-        (when behavior
-          (message "Found behavior: %S" behavior)
-          (let ((behavior-trigger (plist-get behavior :trigger))
-                (action (plist-get behavior :action)))
-            (when (or (eq behavior-trigger trigger)
-                     (eq behavior-trigger :always))
-              (message "Executing action")
-              (condition-case err
-                  (org-supertag-behavior--execute-action action)
-                (error 
-                 (message "Action failed: %S" err))))))))))
+    ;; plist：完整的行为定义
+    ((pred org-supertag-behavior--plist-p)
+     (when-let* ((pos (org-supertag-db-get-pos node-id))
+                 (action (plist-get behavior-spec :action)))
+       (save-excursion
+         (org-with-point-at pos
+           (org-supertag-behavior--do-execute action)))))
+    
+    ;; 函数：直接执行
+    ((pred functionp)
+     (when-let ((pos (org-supertag-db-get-pos node-id)))
+       (save-excursion
+         (org-with-point-at pos
+           (funcall behavior-spec)))))
+    
+    (_ (error "Invalid behavior spec: %S" behavior-spec))))
 
+(defun org-supertag-behavior--do-execute (action)
+  "Execute ACTION at current point."
+  (pcase action
+    ((pred stringp)
+     (org-supertag-behavior-execute 
+      (org-id-get) action))
+    
+    ((pred listp)
+     (dolist (act action)
+       (org-supertag-behavior--do-execute act)))
+    
+    ((pred functionp)
+     (funcall action))
+    
+    (_ (error "Invalid action: %S" action))))
 
 (defun org-supertag-tag-get-field-by-name (tag field-name)
   "Get field with FIELD-NAME from TAG.
 Returns the field plist if found, nil otherwise."
   (when-let* ((fields (plist-get tag :fields)))
+    (cl-find-if (lambda (field)
+                  (equal (plist-get field :name) field-name))
+                fields)))
+
+(defun org-supertag-tag-get-field (tag field-name)
+  "Get field with FIELD-NAME from TAG.
+Returns the field plist if found, nil otherwise."
+  (message "Debug - Getting field %s from tag: %S" field-name tag)
+  (when-let ((fields (plist-get tag :fields)))
+    (message "Debug - Found fields: %S" fields)
     (cl-find-if (lambda (field)
                   (equal (plist-get field :name) field-name))
                 fields)))
@@ -264,9 +244,13 @@ Returns the field plist if found, nil otherwise."
                #'org-supertag-behavior--setup-scheduled-behaviors))
 
 (defun org-supertag-behavior--get-behavior (tag-name)
-  "Get behavior definition for TAG-NAME from registry."
-  (let ((behavior (gethash tag-name org-supertag-behavior-registry)))
-    behavior))
+  "Get behavior definition for tag with TAG-NAME.
+First gets behavior name from tag's _behavior field,
+then looks up behavior in registry."
+  (when-let* ((tag (org-supertag-tag-get tag-name))
+              (behavior-field (org-supertag-tag-get-field-by-name tag "_behavior"))
+              (behavior-name (plist-get behavior-field :value)))
+    (gethash behavior-name org-supertag-behavior-registry)))
 
 
 ;;------------------------------------------------------------------------------
@@ -330,21 +314,6 @@ Returns t if valid, signals error if invalid."
                 (list :invalid-style style))))
     t))
 
-;;------------------------------------------------------------------------------
-;; Safe Execution
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior--safe-execute (node-id tag-id action)
-  "Safely execute behavior.
-NODE-ID is target node
-TAG-ID is behavior tag
-ACTION is :add or :remove"
-  (condition-case err
-      (org-supertag-behavior--on-tag-change node-id tag-id action)
-    (org-supertag-behavior-error
-     (org-supertag-behavior--handle-error err node-id tag-id action))
-    (error 
-     (org-supertag-behavior--handle-error err node-id tag-id action))))
 
 ;;------------------------------------------------------------------------------
 ;; API Functions
@@ -454,6 +423,9 @@ PROPS should include:
                          (hash-table-keys org-supertag-behavior-registry))))
   (let* ((tag (org-supertag-tag-get tag-name))
          (behavior (gethash behavior-name org-supertag-behavior-registry)))
+    (message "Attaching behavior: %s to tag: %s" behavior-name tag-name)
+    (message "Behavior definition: %S" behavior)
+    
     (unless tag
       (error "Tag not found: %s" tag-name))
     (unless behavior
@@ -462,11 +434,10 @@ PROPS should include:
     ;; Get existing fields and behaviors
     (let* ((fields (or (plist-get tag :fields) '()))
            (behaviors (or (plist-get tag :behaviors) '()))
-           ;; Create new behavior field
            (behavior-field
             `(:name "_behavior"
               :type behavior
-              :value ,behavior)))
+              :value ,behavior-name)))
       
       ;; Update tag with new field and behavior
       (org-supertag-tag-create 
@@ -479,13 +450,16 @@ PROPS should include:
                      behaviors
                    (cons behavior-name behaviors)))
       
-      (let ((nodes (org-supertag-db-get-tag-nodes tag-name)))
-         (dolist (node-id nodes)
-            ;; 重新触发行为
-            (org-supertag-behavior--trigger-for-node node-id :on-add)
-            ;; 刷新视觉效果
-            (org-supertag-behavior--apply-styles node-id)))
-
+      ;; 直接使用当前节点的 ID
+      (when-let ((node-id (org-id-get)))
+        (message "Debug - Before execute: node-id=%s" node-id)
+        (message "Debug - Executing behavior %s on current node %s" 
+                behavior-name node-id)
+        (org-supertag-behavior-execute node-id behavior)
+        (message "Debug - Before apply-styles: node-id=%s" node-id)
+        (org-supertag-behavior--apply-styles node-id)
+        (message "Debug - After apply-styles: node-id=%s" node-id))
+      
       (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name))))
 
 
