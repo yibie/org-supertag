@@ -47,13 +47,8 @@ PROPS: Additional properties"
                           :name sanitized-name
                           :fields fields
                           :created-at (current-time))))
-    
-    (message "Debug create-tag: props=%S" props)
-    (message "Debug create-tag: fields=%S" fields)
-    (message "Debug create-tag: base-props=%S" base-props)
     (org-supertag-db-add sanitized-name base-props)
     (let ((saved-tag (org-supertag-db-get sanitized-name)))
-      (message "Debug create-tag: 保存后的标签=%S" saved-tag)
       (unless saved-tag
         (error "Failed to create tag: %s" sanitized-name)))
     sanitized-name))

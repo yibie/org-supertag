@@ -796,7 +796,17 @@ Returns:
   "Get all entities in database."
   (ht-items org-supertag-db--object))
 
-
+(defun org-supertag-db-get-tag-nodes (tag-id)
+  "Get all nodes that have TAG-ID.
+Returns a list of node IDs."
+  (let ((nodes nil))
+    ;; 遍历所有关系
+    (maphash (lambda (_key relation)
+               (when (and (eq (plist-get relation :type) :node-tag)
+                         (equal (plist-get relation :to) tag-id))
+                 (push (plist-get relation :from) nodes)))
+             org-supertag-db--link)
+    nodes))
 
 
 
@@ -1638,8 +1648,6 @@ This function:
 Returns t on success, nil on failure."
   (when (org-supertag-db--dirty-p)
     (message "Saving database...")
-    (message "Data before save: %S"
-            (ht-get org-supertag-db--object "21D8EB80-251B-416A-8AE4-4A3E774DF7CE"))
     (condition-case err
         (progn
           ;; Run pre-save hooks

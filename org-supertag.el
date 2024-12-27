@@ -6,7 +6,6 @@
 (require 'org-supertag-tag)
 (require 'org-supertag-query)
 (require 'org-supertag-behavior)
-(require 'org-supertag-face)
 
 
 (defgroup org-supertag nil
@@ -27,8 +26,6 @@
 (defun org-supertag--enable ()
   "Enable org-supertag."
   (message "\n=== Enabling org-supertag ===")
-  (message "DB state before enable: %S" (ht->alist org-supertag-db--object))
-  
   ;; 1. Ensure database directory exists
   (org-supertag-db-ensure-data-directory)
   ;; 2. Initialize database
@@ -36,9 +33,7 @@
   ;; 3. Setup auto-save
   (org-supertag-db--setup-auto-save)
   ;; 4. Add hooks
-  (add-hook 'kill-emacs-hook #'org-supertag-db-save)
-  
-  (message "DB state after enable: %S" (ht->alist org-supertag-db--object)))
+  (add-hook 'kill-emacs-hook #'org-supertag-db-save))
 
 (defun org-supertag--disable ()
   "Disable org-supertag."
@@ -73,40 +68,33 @@ Used for manual cleanup or system state reset."
 (defun org-supertag-setup ()
   "Setup org-supertag."
   (interactive)
-  (message "\n=== Setting up org-supertag ===")
-  (message "DB state before setup: %S" (ht->alist org-supertag-db--object))
-  
+  ;; 初始化数据库
   (org-supertag-db-init)
-  ;; Enable org-supertag-mode for all org-mode buffers
-  (add-hook 'org-mode-hook #'org-supertag-mode)
+  ;; 初始化自定义行为文件
+  (let ((custom-file (expand-file-name "org-supertag-custom-behavior.el"
+                                     org-supertag-data-directory)))
+    (unless (file-exists-p custom-file)
+      (unless (file-exists-p org-supertag-data-directory)
+        (make-directory org-supertag-data-directory t))
+      
+      (when-let ((template (locate-library "org-supertag-custom-behavior.el")))
+        (copy-file template custom-file)
+        (message "Created custom behaviors file at %s" custom-file)))
+    
+    ;; 加载自定义行为文件
+    (when (file-exists-p custom-file)
+      (load custom-file)))
   
-  (message "DB state after setup: %S" (ht->alist org-supertag-db--object)))
-
-
-;; (defun org-supertag--init-custom-command ()
-;;   "Initialize custom command file if not exists."
-;;   (let ((custom-file (expand-file-name "org-supertag-custom-command.el"
-;;                                      org-supertag-data-directory)))
-;;     (unless (file-exists-p custom-file)
-;;       ;; create data directory if not exists
-;;       (unless (file-exists-p org-supertag-data-directory)
-;;         (make-directory org-supertag-data-directory t))
-;;       ;; copy default config file
-;;       (copy-file (locate-library "org-supertag-custom-command.el")
-;;                  custom-file))))
-
-
+  ;; 启用 org-supertag-mode
+  (add-hook 'org-mode-hook #'org-supertag-mode))
 
 (defun org-supertag--initialize ()
   "Initialize org-supertag system."
-  (message "\n=== Initializing org-supertag system ===")
-  (message "DB state before initialize: %S" (ht->alist org-supertag-db--object))
-  
-  ;; 启用行为系统
-  (org-supertag-behavior-mode 1)
-  
-  (message "DB state after initialize: %S" (ht->alist org-supertag-db--object)))
+  (org-supertag-behavior-mode 1))
 
 (add-hook 'org-supertag-mode-hook #'org-supertag--initialize)
+
+
+
 
 (provide 'org-supertag)

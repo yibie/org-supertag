@@ -1,16 +1,30 @@
 ;;; org-supertag-behavior.el --- Tag-driven behavior system -*- lexical-binding: t; -*-
 
-;;; Commentary:
+;;; Commentary
+;;
+;; 一切都是行为，行为相互调用
+;;
 ;; 提供基于 tag 的节点行为系统
 ;; 1. 行为作为 tag 的属性存在
 ;; 2. 当 tag 被应用时触发行为
 ;; 3. 支持自动化执行
+;; 4. 支持定时任务
 
 (require 'org-supertag-tag)
+(require 'org-supertag-behavior-library)
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Registry
 ;;------------------------------------------------------------------------------
+
+(defgroup org-supertag-behavior nil
+  "Customization options for org-supertag behaviors."
+  :group 'org-supertag)
+
+(defcustom org-supertag-behavior-registry (make-hash-table :test 'equal)
+  "Registry of defined behaviors."
+  :type '(alist :key-type string :value-type sexp)
+  :group 'org-supertag-behavior)
 
 (defvar org-supertag-behavior--initialized nil
   "Flag indicating if behavior system is initialized.")
@@ -19,49 +33,47 @@
   "Register behavior for TAG-NAME.
 PROPS is a plist with:
 :trigger  - When to execute (:on-add :on-remove :on-change :on-schedule)
-:action   - Function to execute (node-id)
-:style    - Visual properties to apply"
-  (message "\n=== Registering Behavior for %s ===" tag-name)
-  (message "Current DB state: %S" (ht->alist org-supertag-db--object))
+:action   - Function, behavior name, or list of behavior names
+:style    - Visual properties to apply
+:hooks    - Optional list of (hook-name . hook-function) to setup"
   
   (let* ((tag-id (org-supertag-sanitize-tag-name tag-name))
+         ;; 先创建基本行为定义
          (behavior (list :trigger (plist-get props :trigger)
-                        :action (plist-get props :action)
-                        :style (plist-get props :style))))
+                        :action (plist-get props :action)  ; 保存原始 action
+                        :style (plist-get props :style)
+                        :hooks (plist-get props :hooks))))
     
-    (message "Sanitized tag ID: %s" tag-id)
-    (message "Behavior to register: %S" behavior)
-    
-    ;; 验证行为定义
-    (org-supertag-behavior--validate behavior)
-    
-    ;; 检查标签是否已存在
-    (let ((existing-tag (org-supertag-tag-get tag-id)))
-      (message "Existing tag: %S" existing-tag))
-    
+    ;; 先注册到行为注册表
+    (puthash tag-name behavior org-supertag-behavior-registry)
+
     ;; 创建或更新标签
     (unless (org-supertag-tag-get tag-id)
       (message "Creating new tag: %s" tag-id)
       (org-supertag-tag-create tag-id))
     
-    ;; 检查标签创建后的状态
-    (message "Tag state after creation: %S" 
-             (org-supertag-tag-get tag-id))
-    
     ;; 添加行为字段
-    (message "Adding behavior field to tag")
-    (org-supertag-tag-add-field 
-     tag-id
-     (list :name "_behavior"
-           :type 'behavior
-           :value behavior))
+    (let* ((tag (org-supertag-tag-get tag-id))
+           (fields (or (plist-get tag :fields) '()))
+           (behavior-field (list :name "_behavior"
+                               :type 'behavior
+                               :value behavior)))
+      
+      ;; 更新标签
+      (org-supertag-tag-create 
+       tag-id 
+       :fields (cons behavior-field 
+                     (cl-remove-if (lambda (f)
+                                   (equal (plist-get f :name) "_behavior"))
+                                 fields))
+       :behaviors (list tag-name)))
     
-    ;; 检查字段添加后的状态
-    (message "Tag state after adding field: %S" 
-             (org-supertag-tag-get tag-id))
-    
-    (message "DB state after registration: %S" 
-             (ht->alist org-supertag-db--object))
+    ;; 处理 hooks
+    (when-let ((hooks (plist-get props :hooks)))
+      (message "Setting up hooks: %S" hooks)
+      (dolist (hook-spec hooks)
+        (add-hook (car hook-spec) (cdr hook-spec))
+        (message "Added hook %S -> %S" (car hook-spec) (cdr hook-spec))))
     
     ;; 返回注册的行为
     behavior))
@@ -82,181 +94,137 @@ Returns t if valid, nil otherwise."
 
 (defun org-supertag-behavior--on-tag-change (node-id tag-id action)
   "Handle behavior when TAG-ID is applied to NODE-ID with ACTION."
-  (message "Processing behavior: node=%s tag=%s action=%s" 
-           node-id tag-id action)
-  
   (when-let* ((behavior (org-supertag-behavior--get-behavior tag-id))
               (trigger (plist-get behavior :trigger))
-              (action-fn (plist-get behavior :action)))
-    (message "Found behavior: trigger=%s action=%S" trigger action-fn)
+              (behavior-action (plist-get behavior :action)))
     
-    ;; 修改触发条件判断
     (when (or (eq trigger :always)
-              (eq trigger :on-change)  ; 对于 on-change，总是执行
+              (eq trigger :on-change)
               (and (eq trigger :on-add) (eq action :add))
               (and (eq trigger :on-remove) (eq action :remove)))
       
-      (message "Executing action for node %s" node-id)
       (condition-case err
-          (funcall action-fn node-id)
+          (org-supertag-behavior--execute-action node-id behavior-action)
         (error 
          (message "Action failed: %S" err))))))
 
-
-
-;;------------------------------------------------------------------------------
-;; Behavior Archive
-;;------------------------------------------------------------------------------
-
-(defgroup org-supertag-archive nil
-  "Archive settings for org-supertag."
-  :group 'org-supertag)
-
-(defcustom org-supertag-archive-file
-  (expand-file-name "archive.org" org-directory)
-  "File for archived nodes."
-  :type 'file
-  :group 'org-supertag-archive)
-
-(defun org-supertag-archive--ensure-year-heading (year)
-  "Ensure year heading exists in archive file.
-Returns position after year heading."
-  (with-current-buffer 
-      (or (find-buffer-visiting org-supertag-archive-file)
-          (find-file-noselect org-supertag-archive-file))
-    (goto-char (point-min))
-    (let ((year-title (format "* %d" year)))
-      (if (re-search-forward (format "^%s$" (regexp-quote year-title)) nil t)
-          (progn
-            (forward-line 1)
-            (point))
-        (goto-char (point-min))
-        (insert year-title "\n")
-        (point)))))
-
-(defun org-supertag-behavior--do-archive (node-id)
-  "Archive node with NODE-ID under current year heading."
-  (message "Archive action started for node: %s" node-id)
-  
-  ;; 1. 获取节点位置
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
-    (message "Found node position: %s" pos)
-    
-    ;; 2. 确保归档文件存在
-    (unless (file-exists-p org-supertag-archive-file)
-      (with-temp-file org-supertag-archive-file
-        (insert "#+TITLE: Archive\n\n")))
-    
-    ;; 3. 准备归档位置
-    (let* ((year (string-to-number (format-time-string "%Y")))
-           (archive-buffer (find-file-noselect org-supertag-archive-file))
-           (insert-pos nil))
+(defun org-supertag-behavior--execute-action (action)
+  "Execute ACTION at current heading.
+ACTION can be:
+- A string (behavior name to lookup)
+- A list of behavior names
+- A function to execute"
+  (message "\n=== Executing Action ===")
+  (save-excursion
+    (org-back-to-heading t)  ; 确保在标题位置
+    (let* ((props (org-supertag-db--parse-node-at-point))  ; 使用现成的解析函数
+           (node-id (plist-get props :id)))
+      (message "At node: %s" (plist-get props :title))
       
-      ;; 4. 在归档文件中查找或创建年份标题
-      (with-current-buffer archive-buffer
-        (org-with-wide-buffer
-         (goto-char (point-min))
-         (if (re-search-forward (format "^\\* %d$" year) nil t)
-             (setq insert-pos (point))
-           ;; 如果年份标题不存在，创建它
-           (goto-char (point-max))
-           (insert (format "\n* %d\n" year))
-           (setq insert-pos (point)))))
-      
-      ;; 5. 移动到源节点
-      (save-excursion
-        (cond
-         ((markerp pos) (set-buffer (marker-buffer pos)))
-         ((numberp pos) (goto-char pos)))
-        
-        ;; 6. 执行归档
-        (org-cut-subtree)
-        
-        ;; 7. 插入到归档文件
-        (with-current-buffer archive-buffer
-          (goto-char insert-pos)
-          (org-paste-subtree 2)
-          (save-buffer)))
-      
-      (message "Node archived successfully"))))
-
-;;------------------------------------------------------------------------------
-;; Style System
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior--apply-styles (node-id)
-  "Apply styles for all tags on NODE-ID."
-  (message "Applying styles for node: %s" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      ;; 移动到节点位置
       (cond
-       ((markerp pos) (set-buffer (marker-buffer pos)))
-       ((numberp pos) (goto-char pos)))
+       ;; 字符串：引用其他行为
+       ((stringp action)
+        (message "Looking up behavior: %s" action)
+        (if-let ((behavior (gethash action org-supertag-behavior-registry)))
+            (progn
+              (message "Found behavior in registry: %S" behavior)
+              (org-supertag-behavior--execute-action 
+               (plist-get behavior :action)))
+          (error "Behavior not found in registry: %s" action)))
+       
+       ;; 列表：多个行为
+       ((and (listp action) (not (functionp action)))
+        (message "Executing behavior list: %S" action)
+        (dolist (behavior-name action)
+          (message "Processing behavior: %s" behavior-name)
+          (when-let ((behavior (gethash behavior-name org-supertag-behavior-registry)))
+            (message "Found registered behavior: %S" behavior)
+            (org-supertag-behavior--execute-action behavior-name))))
+       
+       ;; 函数：直接执行
+       ((functionp action)
+        (message "Executing function")
+        (condition-case err
+            (funcall action)
+          (error 
+           (message "Function execution failed: %S" err))))
+       
+       ;; 其他情况
+       (t (error "Invalid action type: %S" action)))
       
-      ;; 获取节点的所有标签
-      (let ((tags (org-get-tags)))
-        (dolist (tag tags)
-          ;; 只处理 supertag
-          (when (string-prefix-p "#" tag)
-            (let* ((tag-id (substring tag 1))
-                   (behavior (org-supertag-behavior--get-behavior tag-id))
-                   (style (plist-get behavior :style)))
-              (when style
-                (message "Applying style for tag %s: %S" tag style)
-                ;; 应用到整个标题
-                (save-excursion
-                  (org-back-to-heading t)
-                  (let* ((beg (line-beginning-position))
-                         (end (line-end-position))
-                         ;; 创建叠加层
-                         (ov (make-overlay beg end)))
-                    ;; 设置叠加层属性
-                    (when-let ((face (plist-get style :face)))
-                      (overlay-put ov 'face face))
-                    ;; 存储叠加层以便后续管理
-                    (overlay-put ov 'org-supertag-behavior t)
-                    (overlay-put ov 'node-id node-id)
-                    ;; 添加前缀到标题开头
-                    (when-let ((prefix (plist-get style :prefix)))
-                      (save-excursion
-                        (goto-char beg)
-                        (skip-chars-forward "* ")
-                        (unless (looking-at-p (regexp-quote prefix))
-                          (insert prefix " "))))))))))))))
+      ;; 行为执行后，更新数据库
+      (org-supertag-db-add node-id props))))
 
+(defun org-supertag-behavior--trigger-for-node (node-id trigger)
+  "Trigger behaviors for NODE-ID based on TRIGGER event."
+  (message "\n=== Triggering behaviors for node %s ===" node-id)
+  (let ((tag-relations (org-supertag-db-get-node-tags node-id)))
+    (message "Node tag relations: %S" tag-relations)
+    
+    (dolist (relation tag-relations)
+      (let* ((tag-id (plist-get relation :to))
+             (behavior (gethash tag-id org-supertag-behavior-registry)))
+        (message "Processing tag: %s" tag-id)
+        (when behavior
+          (message "Found behavior: %S" behavior)
+          (let ((behavior-trigger (plist-get behavior :trigger))
+                (action (plist-get behavior :action)))
+            (when (or (eq behavior-trigger trigger)
+                     (eq behavior-trigger :always))
+              (message "Executing action")
+              (condition-case err
+                  (org-supertag-behavior--execute-action action)
+                (error 
+                 (message "Action failed: %S" err))))))))))
+
+
+(defun org-supertag-tag-get-field-by-name (tag field-name)
+  "Get field with FIELD-NAME from TAG.
+Returns the field plist if found, nil otherwise."
+  (when-let* ((fields (plist-get tag :fields)))
+    (cl-find-if (lambda (field)
+                  (equal (plist-get field :name) field-name))
+                fields)))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior System Hooks
 ;;------------------------------------------------------------------------------
 
+(defun org-supertag-behavior--add-overlays ()
+  "Add overlays for all tagged nodes in current buffer."
+  (org-supertag-behavior--face-refresh))
+
+(defun org-supertag-behavior--remove-overlays ()
+  "Remove all org-supertag overlays in current buffer."
+  (remove-overlays (point-min) (point-max) 'org-supertag-face t)
+  (remove-overlays (point-min) (point-max) 'org-supertag-prefix t))
+
 (defun org-supertag-behavior--init ()
   "Initialize behavior system."
   (message "\n=== Behavior System Init ===")
-  (message "DB state before init: %S" (ht->alist org-supertag-db--object))
   (unless org-supertag-behavior--initialized
-    ;; 样式相关钩子
+    ;; Style Hooks
     (add-hook 'org-supertag-after-tag-apply-hook
-              #'org-supertag-behavior--apply-styles)
-    
-    ;; 行为触发相关钩子 - 使用 node-tag-added-hook 替代
+              #'org-supertag-behavior--face-refresh)
+    ;; Buffer Change Hooks
+    (add-hook 'after-save-hook 
+              #'org-supertag-behavior--face-refresh)
+    (add-hook 'after-change-functions 
+              #'org-supertag-behavior--face-refresh)
+    ;; Behavior Trigger Hooks
     (add-hook 'org-supertag-node-tag-added-hook
               #'org-supertag-behavior--handle-tag-add)
-    
-    ;; 其他钩子保持不变
+    ;; Node Change Hooks
     (add-hook 'org-supertag-after-node-change-hook
               #'org-supertag-behavior--handle-node-change)
     (add-hook 'org-supertag-after-tag-remove-hook
               #'org-supertag-behavior--handle-tag-remove)
-    
-    ;; 定时任务相关
+    ;; Scheduled Behaviors
     (add-hook 'org-supertag-after-load-hook
               #'org-supertag-behavior--setup-scheduled-behaviors)
-    
-    ;; 确保在 Emacs 退出时清理
+    ;; Cleanup on Emacs Exit
     (add-hook 'kill-emacs-hook
               #'org-supertag-behavior--cleanup)
-    
     (setq org-supertag-behavior--initialized t)
     (message "Behavior system initialized")))
 
@@ -295,10 +263,10 @@ Returns position after year heading."
   (remove-hook 'org-supertag-after-load-hook
                #'org-supertag-behavior--setup-scheduled-behaviors))
 
-(defun org-supertag-behavior--get-behavior (tag-id)
-  "Get behavior configuration for TAG-ID."
-  (when-let* ((tag (org-supertag-tag-get tag-id)))
-    (org-supertag-tag-get-field-value tag "_behavior")))
+(defun org-supertag-behavior--get-behavior (tag-name)
+  "Get behavior definition for TAG-NAME from registry."
+  (let ((behavior (gethash tag-name org-supertag-behavior-registry)))
+    behavior))
 
 
 ;;------------------------------------------------------------------------------
@@ -313,6 +281,7 @@ Returns position after year heading."
 (add-hook 'org-supertag-tag-after-remove-hook
           (lambda (node-id tag-id)
             (org-supertag-behavior--on-tag-change node-id tag-id :remove)))
+
 
 ;;------------------------------------------------------------------------------
 ;; Error Handling
@@ -392,46 +361,64 @@ ACTION is :add or :remove"
     (org-supertag-behavior--safe-execute node-id tag-id :add)))
 
 ;;------------------------------------------------------------------------------
-;; Integration Hooks
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior--setup ()
-  "Setup behavior system hooks."
-  ;; Tag 变化时触发行为
-  (add-hook 'org-supertag-tag-after-add-hook
-            (lambda (node-id tag-id)
-              (org-supertag-behavior--safe-execute node-id tag-id :add)))
-  
-  (add-hook 'org-supertag-tag-after-remove-hook
-            (lambda (node-id tag-id)
-              (org-supertag-behavior--safe-execute node-id tag-id :remove)))
-  
-  ;; 节点创建时应用已有 tag 的行为
-  (add-hook 'org-supertag-db-after-node-create-hook
-            #'org-supertag-behavior-refresh-node))
-
-(defun org-supertag-behavior--cleanup ()
-  "Remove behavior system hooks."
-  (remove-hook 'org-supertag-tag-after-add-hook
-               #'org-supertag-behavior--safe-execute)
-  (remove-hook 'org-supertag-tag-after-remove-hook
-               #'org-supertag-behavior--safe-execute)
-  (remove-hook 'org-supertag-db-after-node-create-hook
-               #'org-supertag-behavior-refresh-node))
-
-;;------------------------------------------------------------------------------
 ;; Minor Mode
 ;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--face-refresh (&optional beg end _len)
+  "Refresh faces incrementally.
+If BEG and END are provided, only refresh that region."
+  (when (and org-supertag-behavior-mode
+             (derived-mode-p 'org-mode))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (if (and beg end)
+            ;; 增量更新：只处理变化的标题
+            (progn
+              (goto-char beg)
+              (when-let* ((element (org-element-context))
+                         ((eq (org-element-type element) 'headline))
+                         (node-id (org-id-get)))
+                (org-supertag-behavior--apply-styles node-id)))
+          ;; 全局刷新
+          (goto-char (point-min))
+          (while (re-search-forward "^\\*+ " nil t)
+            (when-let* ((element (org-element-context))
+                       ((eq (org-element-type element) 'headline))
+                       (node-id (org-id-get)))
+              (org-supertag-behavior--apply-styles node-id))))))))
+
+(defun org-supertag-behavior--setup-buffer ()
+  "Setup current buffer for org-supertag behaviors."
+  (when (derived-mode-p 'org-mode)
+    ;; 增量更新钩子
+    (add-hook 'after-save-hook #'org-supertag-behavior--face-refresh nil t)
+    (add-hook 'org-after-tags-change-hook #'org-supertag-behavior--face-refresh nil t)
+    ;; 初始刷新
+    (run-with-timer 0 nil #'org-supertag-behavior--face-refresh)))
 
 (define-minor-mode org-supertag-behavior-mode
   "Toggle org-supertag behavior system."
   :global t
   :group 'org-supertag
   (if org-supertag-behavior-mode
-      ;; Enable
-      (org-supertag-behavior--init)
+      (progn
+        ;; Enable
+        (org-supertag-behavior--init)
+        ;; 只设置当前 buffer
+        (when (derived-mode-p 'org-mode)
+          (org-supertag-behavior--setup-buffer))
+        ;; 为新打开/切换的 org buffers 设置
+        (add-hook 'org-mode-hook #'org-supertag-behavior--setup-buffer))
     ;; Disable
-    (org-supertag-behavior--cleanup)))
+    (progn
+      (org-supertag-behavior--cleanup)
+      (remove-hook 'org-mode-hook #'org-supertag-behavior--setup-buffer)
+      ;; 只清理当前 buffer
+      (when (derived-mode-p 'org-mode)
+        (remove-hook 'after-save-hook #'org-supertag-behavior--face-refresh t)
+        (remove-hook 'org-after-tags-change-hook 
+                    #'org-supertag-behavior--face-refresh t)))))
 
 ;; 确保在包加载时启用
 (defun org-supertag-behavior-setup ()
@@ -440,6 +427,8 @@ ACTION is :add or :remove"
 
 (add-hook 'org-supertag-after-load-hook
           #'org-supertag-behavior-setup)
+
+          
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Definition
@@ -454,9 +443,7 @@ PROPS should include:
   (let* ((behavior (list :trigger (plist-get props :trigger)
                         :action (plist-get props :action)
                         :style (plist-get props :style))))
-    ;; 验证行为定义
     (org-supertag-behavior--validate behavior)
-    ;; 注册行为
     (org-supertag-behavior-register name behavior)))
 
 (defun org-supertag-behavior-attach (tag-name behavior-name)
@@ -465,216 +452,42 @@ PROPS should include:
    (list (completing-read "Tag: " (org-supertag-get-all-tags))
          (completing-read "Behavior: " 
                          (hash-table-keys org-supertag-behavior-registry))))
-  
   (let* ((tag (org-supertag-tag-get tag-name))
          (behavior (gethash behavior-name org-supertag-behavior-registry)))
-    
     (unless tag
       (error "Tag not found: %s" tag-name))
-    
     (unless behavior
       (error "Behavior not found: %s" behavior-name))
     
-    ;; 获取现有的字段列表
+    ;; Get existing fields and behaviors
     (let* ((fields (or (plist-get tag :fields) '()))
-           ;; 创建新的行为字段
+           (behaviors (or (plist-get tag :behaviors) '()))
+           ;; Create new behavior field
            (behavior-field
             `(:name "_behavior"
               :type behavior
               :value ,behavior)))
       
-      ;; 更新标签
+      ;; Update tag with new field and behavior
       (org-supertag-tag-create 
        tag-name 
        :fields (cons behavior-field 
                     (cl-remove-if (lambda (f)
                                   (equal (plist-get f :name) "_behavior"))
-                                fields)))
+                                fields))
+       :behaviors (if (member behavior-name behaviors)
+                     behaviors
+                   (cons behavior-name behaviors)))
       
+      (let ((nodes (org-supertag-db-get-tag-nodes tag-name)))
+         (dolist (node-id nodes)
+            ;; 重新触发行为
+            (org-supertag-behavior--trigger-for-node node-id :on-add)
+            ;; 刷新视觉效果
+            (org-supertag-behavior--apply-styles node-id)))
+
       (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name))))
 
 
-;;------------------------------------------------------------------------------
-;; Behavior Registry
-;;------------------------------------------------------------------------------
-
-(defgroup org-supertag-behavior nil
-  "Customization options for org-supertag behaviors."
-  :group 'org-supertag)
-
-(defcustom org-supertag-behavior-registry (make-hash-table :test 'equal)
-  "Registry of defined behaviors."
-  :type '(alist :key-type string :value-type sexp)
-  :group 'org-supertag-behavior)
-
-(defcustom org-supertag-behavior-presets
-  '(("@archive" . (:trigger :on-add
-                   :action org-supertag-behavior--do-archive
-                   :style (:face (:foreground "gray50")
-                           :prefix "📦")))
-    ("@important" . (:trigger :always
-                    :style (:face (:foreground "red" :weight bold)
-                            :prefix "⚠")))
-    ("@project" . (:trigger :on-change
-                  :action org-supertag-project-update-progress
-                  :style (:face (:foreground "blue")
-                          :prefix "📋"))))
-  "Preset behaviors that will be registered on startup."
-  :type '(alist :key-type string :value-type sexp)
-  :group 'org-supertag-behavior)
-
-;;------------------------------------------------------------------------------
-;; Example Usage
-;;------------------------------------------------------------------------------
-(defun org-supertag-behavior-ensure-defaults ()
-  "Ensure default behaviors are registered."
-  (message "\n=== Ensuring Default Behaviors ===")
-  (message "DB state before defaults: %S" 
-           (ht->alist org-supertag-db--object))
-  
-  (dolist (preset org-supertag-behavior-presets)
-    (let ((tag-name (car preset))
-          (props (cdr preset)))
-      (unless (org-supertag-tag-get tag-name)
-        (message "Registering preset behavior for %s" tag-name)
-        (apply #'org-supertag-behavior-register tag-name
-               (append props nil)))))
-  
-  (message "DB state after defaults: %S" 
-           (ht->alist org-supertag-db--object)))
-           
-;; 只在初始化时执行一次
-(add-hook 'org-supertag-after-load-hook
-          #'org-supertag-behavior-ensure-defaults)
-
-
-(defun org-supertag-project-update-progress (node-id)
-  "更新项目节点的进度"
-  (message "\n=== Updating Project Progress for %s ===" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (cond
-       ((markerp pos) (set-buffer (marker-buffer pos)))
-       ((numberp pos) (goto-char pos)))
-      (org-back-to-heading t)
-      
-      (let* ((children (org-supertag-behavior--get-children node-id))
-             (total (length children))
-             (done (cl-count-if 
-                   (lambda (child)
-                     (string= (nth 1 child) "DONE"))
-                   children)))
-        
-        (message "Processing children - Total: %d, Done: %d" total done)
-        (dolist (child children)
-          (message "Child: Heading=%s, TODO=%s" 
-                  (nth 0 child) 
-                  (nth 1 child)))
-        
-        (let ((progress (if (> total 0)
-                          (* 100.0 (/ (float done) total))
-                        0.0)))
-          (message "Final stats - Total: %d, Done: %d, Progress: %.1f%%" 
-                  total done progress)
-          
-          ;; 更新进度属性
-          (message "Updating Progress property...")
-          (org-entry-put (point) "Progress" 
-                        (format "%.1f" progress))
-          
-          ;; 更新标题显示
-          (message "Updating heading...")
-          (let ((title (org-get-heading t t t t)))
-            (if (string-match "\\[\\([0-9.]+\\)%\\]" title)
-                (setq title (replace-match 
-                           (format "[%.1f%%]" progress)
-                           t nil title))
-              (setq title (concat title 
-                                (format " [%.1f%%]" progress))))
-            (org-edit-headline title)))))))
-
-;; 监听子节点状态变化
-(defun org-supertag-project-todo-state-change ()
-  "当 TODO 状态改变时更新父项目进度"
-  (message "\n=== TODO State Change Detected ===")
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((current-heading (org-get-heading t t t t)))
-      (message "Current heading: %s" current-heading)
-      ;; 向上查找带有 @project 标签的父节点
-      (let ((current (point)))
-        (while (and (> (org-outline-level) 1)
-                   (org-up-heading-safe))
-          (let* ((tags (org-get-tags))
-                 (heading (org-get-heading t t t t)))
-            (message "Checking parent: %s, Tags: %S" heading tags)
-            (when (member "#@project" tags)  ;; 修正标签名
-              (message "Found project parent: %s" heading)
-              (when-let ((parent-id (org-id-get)))
-                (message "Updating project with ID: %s" parent-id)
-                (org-supertag-project-update-progress parent-id)))))))))
-
-;; 添加到 org-after-todo-state-change-hook
-(add-hook 'org-after-todo-state-change-hook
-          #'org-supertag-project-todo-state-change)
-
-(defun org-supertag-behavior--debug-node (node-id)
-  "输出节点的详细调试信息"
-  (message "\n=== Node Debug Info ===")
-  (message "Node ID: %s" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (cond
-       ((markerp pos) 
-        (message "Buffer: %s" (marker-buffer pos))
-        (set-buffer (marker-buffer pos)))
-       ((numberp pos)
-        (message "Position: %d" pos)
-        (goto-char pos)))
-      (org-back-to-heading t)
-      (message "Heading: %s" (org-get-heading t t t t))
-      (message "TODO state: %s" (org-entry-get (point) "TODO"))
-      (message "Properties: %S" (org-entry-properties))
-      (let ((children (org-supertag-behavior--get-children node-id)))
-        (message "Children: %d" (length children))
-        (dolist (child children)
-          (message "  Child: %s" child)
-          (when-let ((child-pos (org-supertag-db-get-pos child)))
-            (message "    TODO: %s" (org-entry-get child-pos "TODO"))))))))
-
-(defun org-supertag-behavior--get-children (node-id)
-  "获取节点的子节点，包含详细的调试信息"
-  (message "\n=== Getting Children for Node %s ===" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (cond
-       ((markerp pos) (set-buffer (marker-buffer pos)))
-       ((numberp pos) (goto-char pos)))
-      (org-back-to-heading t)
-      
-      (let ((parent-level (org-outline-level))
-            children)
-        (message "Parent level: %d at heading: %s" 
-                parent-level 
-                (org-get-heading t t t t))
-        
-        ;; 使用 org-map-entries 收集直接子节点
-        (save-restriction
-          (org-narrow-to-subtree)
-          (let ((parent-pos (point)))  ;; 记住父节点位置
-            (goto-char (point-min))
-            (while (re-search-forward org-heading-regexp nil t)
-              (let* ((current-level (org-outline-level))
-                     (heading (org-get-heading t t t t))
-                     (todo (org-get-todo-state)))
-                (message "Found entry - Level: %d, Heading: %s, TODO: %s" 
-                        current-level heading todo)
-                ;; 只收集直接子节点，不需要 ID
-                (when (= current-level (1+ parent-level))
-                  (message "Adding child: %s" heading)
-                  (push (list heading todo) children))))))
-        
-        (message "Found children: %S" children)
-        (nreverse children)))))
 
 (provide 'org-supertag-behavior)
