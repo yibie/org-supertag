@@ -463,18 +463,7 @@ TARGET-LEVEL is the target heading level
 Returns:
 - t if move successful
 - nil if move failed"
-  (when-let* ((content (org-supertag-get-node-content node-id)))
-    ;; 1. Delete node from source
-    (when (org-supertag-delete-node-content node-id)
-      ;; 2. Insert to target and update database
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (let ((adjusted-content 
-                 (org-supertag-adjust-node-level content target-level)))
-            (insert adjusted-content "\n")
-            (forward-line -1)
-            (org-supertag-update-node-db node-id target-file)
-            t))))))
+  (org-supertag-node-move node-id target-file target-level))
 
 (defun org-supertag-insert-nodes (node-ids &optional level-adjust)
   "Insert nodes at current position.

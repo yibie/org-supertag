@@ -32,8 +32,11 @@
   (org-supertag-db-init)
   ;; 3. Setup auto-save
   (org-supertag-db--setup-auto-save)
-  ;; 4. Add hooks
-  (add-hook 'kill-emacs-hook #'org-supertag-db-save))
+  ;; 4. Setup ID tracking
+  (org-supertag-node--setup-id-tracking)
+  ;; 5. Add hooks
+  (add-hook 'kill-emacs-hook #'org-supertag-db-save)
+  (add-hook 'org-after-refile-insert-hook #'org-supertag-node--after-refile-update-ids))
 
 (defun org-supertag--disable ()
   "Disable org-supertag."
@@ -44,10 +47,13 @@
   (org-supertag-db-save)
   ;; 2. Clean up auto-save timer
   (org-supertag-db--cleanup-auto-save)
-  ;; 3. Clear cache
+  ;; 3. Clean up ID tracking
+  (org-supertag-node--cleanup-id-tracking)
+  ;; 4. Clear cache
   (org-supertag-db--cache-clear)
-  ;; 4. Remove hooks
+  ;; 5. Remove hooks
   (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
+  (remove-hook 'org-after-refile-insert-hook #'org-supertag-node--after-refile-update-ids)
   
   (message "DB state after disable: %S" (ht->alist org-supertag-db--object)))
 

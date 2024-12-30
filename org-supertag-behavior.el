@@ -59,10 +59,12 @@ PROPS is a plist with:
     (let* ((tag (or (org-supertag-tag-get tag-id)
                     (org-supertag-tag-create tag-id)))
            (behaviors (or (plist-get tag :behaviors) '())))
-      (org-supertag-tag-create 
-       tag-id 
-       :type :tag
-       :behaviors (cons tag-name behaviors)))
+      ;; 只在行为不存在时添加
+      (unless (member tag-name behaviors)
+        (org-supertag-tag-create 
+         tag-id 
+         :type :tag
+         :behaviors (cons tag-name behaviors))))
     
     ;; 处理 hooks
     (when-let ((hooks (plist-get props :hooks)))
@@ -84,6 +86,19 @@ If not found, check if tag has associated behaviors."
      ;; 如果有多个行为，返回第一个
      (when (car behaviors)
        (gethash (car behaviors) org-supertag-behavior-registry)))))
+
+(defun org-supertag-behavior--cleanup-duplicates ()
+  "Clean up duplicate behaviors in all tags."
+  (interactive)
+  (maphash
+   (lambda (key value)
+     (when (plist-get value :behaviors)
+       (let ((unique-behaviors (delete-dups (plist-get value :behaviors))))
+         (org-supertag-tag-create
+          key
+          :type :tag
+          :behaviors unique-behaviors))))
+   org-supertag-db--object))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Execution
@@ -610,5 +625,7 @@ If BEG and END are provided, only refresh that region."
 
 (add-hook 'org-supertag-after-load-hook
           #'org-supertag-behavior-setup)
+
+
 
 (provide 'org-supertag-behavior)

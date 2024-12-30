@@ -1021,11 +1021,18 @@ Example:
                (mark-done (plist-get params :mark-done))
                (save-context (plist-get params :save-context))
                (find-done (plist-get params :find-done))
-               (find-old (plist-get params :find-old))
-               ;; 临时设置归档选项
-               (org-archive-location (or location org-archive-location))
-               (org-archive-mark-done mark-done)
-               (org-archive-save-context-info save-context))
+               (find-old (plist-get params :find-old)))
+          ;; 设置归档位置（如果指定）
+          (when location
+            (setq-local org-archive-location location))
+          ;; 设置上下文保存（如果指定）
+          (when save-context
+            (setq-local org-archive-save-context-info save-context))
+          ;; 如果需要标记为完成，先设置状态
+          (when (and mark-done
+                     (not (equal (org-get-todo-state) mark-done)))
+            (org-todo mark-done))
+          ;; 执行归档
           (condition-case err
               (cond
                (find-done
