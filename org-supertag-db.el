@@ -124,7 +124,7 @@
                 :description ; Description of tag purpose
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
-     :behaviors  
+                :behaviors  ; Behaviors associated with the tag
                 :created-at  ; Creation time
                 :modified-at)) ; Modification time
   "Entity structure definitions."))

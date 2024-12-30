@@ -46,6 +46,7 @@ PROPS: Additional properties"
                           :id sanitized-name
                           :name sanitized-name
                           :fields fields
+                          :behaviors (plist-get props :behaviors)
                           :created-at (current-time))))
     (org-supertag-db-add sanitized-name base-props)
     (let ((saved-tag (org-supertag-db-get sanitized-name)))
