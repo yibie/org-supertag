@@ -239,13 +239,25 @@ Returns:
   ;; Load existing locations
   (condition-case err
       (progn
+        ;; Load locations using org-mode's function
+        (org-id-locations-load)
+        
+        ;; Initialize if needed
         (unless org-id-locations
-          (org-id-locations-load))
-        ;; Convert to hash table if needed
-        (unless (hash-table-p org-id-locations)
-          (setq org-id-locations (org-id-alist-to-hash (or org-id-locations nil)))))
+          (setq org-id-locations (make-hash-table :test 'equal)))
+        
+        ;; Update org-id-files
+        (setq org-id-files
+              (delete-dups
+               (mapcar (lambda (file)
+                        (if (file-name-absolute-p file)
+                            file
+                          (expand-file-name file)))
+                      (hash-table-values org-id-locations)))))
+    
     (error
-     (message "Failed to load org-id-locations: %s" (error-message-string err))
+     (message "Failed to load org-id-locations, initializing empty: %s" 
+              (error-message-string err))
      (setq org-id-locations (make-hash-table :test 'equal))
      (setq org-id-files nil)))
   
@@ -270,41 +282,107 @@ Returns:
   (remove-hook 'after-save-hook #'org-supertag-node--check-and-update-ids t))
 
 (defun org-supertag-node--check-and-update-ids ()
-  "Check and update ID locations in current file."
+  "Check and update ID locations in current file.
+The .org-id-locations file stores an alist where each element is
+\(file-path id1 id2 ...\), for example:
+\(\(\"~/org/file1.org\" \"ID1\" \"ID2\"\)
+ \(\"~/org/file2.org\" \"ID3\" \"ID4\"\)\)"
   (when (and org-id-track-globally
              (derived-mode-p 'org-mode))
-    (let ((file (buffer-file-name))
-          (changed nil)
-          (file-ids nil))
-      ;; Ensure org-id-locations exists
+    (let* ((file (buffer-file-name))
+           (file-ids nil))
+      ;; Initialize if needed
       (unless org-id-locations
-        (setq org-id-locations (make-hash-table :test 'equal)))
-      ;; Scan current file for IDs
+        (setq org-id-locations nil))
+      
+      ;; Scan all IDs in current file
       (org-with-wide-buffer
        (goto-char (point-min))
        (while (re-search-forward org-supertag-node--id-property-regexp nil t)
-         (let* ((id (match-string-no-properties 1))
-                (stored-file (gethash id org-id-locations)))
-           ;; Check if ID location has changed
-           (when (or (null stored-file)
-                    (not (equal stored-file file)))
-             (setq changed t)
-             (puthash id file org-id-locations)))))
-      ;; If changes found, save locations
-      (when changed
-        (let ((alist (org-id-hash-to-alist org-id-locations)))
-          (setq org-id-files (mapcar 'car alist))
+         (push (match-string-no-properties 1) file-ids)))
+      
+      ;; Update locations if IDs found
+      (when file-ids
+        ;; Get existing locations, ensuring it's an alist
+        (let ((locations (if (and org-id-locations (listp org-id-locations))
+                            ;; Keep only valid alist entries
+                            (cl-remove-if-not
+                             (lambda (entry)
+                               (and (listp entry)
+                                    (stringp (car entry))
+                                    (cl-every #'stringp (cdr entry))))
+                             org-id-locations)
+                          ;; Start fresh if invalid
+                          nil)))
+          
+          ;; Remove old entry for this file and add new one
+          (setq locations (delq (assoc file locations) locations))
+          (push (cons file (nreverse file-ids)) locations)
+          
+          ;; Update the global variables
+          (setq org-id-locations locations)
+          (setq org-id-files (mapcar #'car locations))
+          
+          ;; Save to file, ensuring only the alist is saved
           (with-temp-file org-id-locations-file
             (let ((print-length nil)
                   (print-level nil))
-              (print alist (current-buffer)))))))))
+              (prin1 locations (current-buffer))))
+          
+          (message "Updated ID locations for %s" file))))))
+
+(defun org-supertag-node--reset-id-locations ()
+  "Reset and rebuild the entire ID location database.
+This function will scan all org files in `org-id-files' and rebuild
+the locations database from scratch."
+  (interactive)
+  (when (yes-or-no-p "Reset and rebuild ID locations database? ")
+    ;; Clear existing locations
+    (setq org-id-locations nil)
+    (setq org-id-files nil)
+    
+    ;; Scan default org directories
+    (let ((files (append (org-id-files-in-directories org-directory)
+                        (org-id-files-in-directories org-id-extra-files))))
+      (message "Scanning files for IDs...")
+      (org-id-update-id-locations files t)
+      (message "ID locations database rebuilt with %d files" 
+               (length org-id-files)))))
 
 (defun org-supertag-node--update-id-locations ()
-  "Update ID locations for modified files."
-  (when (and org-id-track-globally org-supertag-node--modified-files)
-    (let ((files (copy-sequence org-supertag-node--modified-files)))
-      (setq org-supertag-node--modified-files nil)
-      (org-id-update-id-locations files))))
+  "Update ID locations for the current buffer."
+  (when (and (buffer-file-name)
+             (eq major-mode 'org-mode))
+    (let* ((file (buffer-file-name))
+           (ids (org-supertag-node--collect-ids)))
+      ;; Update the hash table
+      (if ids
+          (dolist (id ids)
+            (puthash id file org-id-locations))
+        (maphash (lambda (k v)
+                  (when (equal v file)
+                    (remhash k org-id-locations)))
+                org-id-locations))
+      
+      ;; Update org-id-files
+      (setq org-id-files
+            (delete-dups
+             (mapcar (lambda (file)
+                      (if (file-name-absolute-p file)
+                          file
+                        (expand-file-name file)))
+                    (hash-table-values org-id-locations))))
+      
+      ;; Save using org-mode's function
+      (org-id-locations-save))))
+
+(defun org-supertag-node--collect-ids ()
+  "Collect all org IDs in the current buffer."
+  (let ((ids nil))
+    (org-with-point-at 1
+      (while (re-search-forward "^[ \t]*:ID:[ \t]+\\(\\S-+\\)[ \t]*$" nil t)
+        (push (match-string-no-properties 1) ids)))
+    (nreverse ids)))
 
 (defun org-supertag-node--after-refile-update-ids ()
   "Update ID locations after refile operations."
@@ -353,30 +431,54 @@ TARGET-LEVEL is the target heading level
 Returns:
 - t if move successful
 - nil if move failed"
-  (when-let* ((content (org-supertag-get-node-content node-id))
-              (source-file (plist-get (org-supertag-db-get node-id) :file-path)))
-    ;; 1. Delete node from source
-    (when (org-supertag-delete-node-content node-id)
-      ;; 2. Insert to target and update database
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (let ((adjusted-content 
-                 (org-supertag-adjust-node-level content target-level)))
-            (insert adjusted-content "\n")
-            (forward-line -1)
-            ;; 3. Update node database entry
-            (org-supertag-update-node-db node-id target-file)
-            ;; 4. Update ID locations if cross-file move
-            (when (and org-id-track-globally
-                      (not (equal source-file target-file)))
-              (org-id-update-id-locations (list source-file target-file)))
-            ;; 5. Save both files
-            (save-buffer)
-            (when (and source-file
-                      (not (equal source-file target-file)))
-              (with-current-buffer (find-file-noselect source-file)
-                (save-buffer)))
-            t))))))
+  (condition-case err
+      (when-let* ((content (org-supertag-get-node-content node-id))
+                  (_ (message "Got node content for %s" node-id))
+                  (source-file (plist-get (org-supertag-db-get node-id) :file-path))
+                  (_ (message "Source file: %s" source-file)))
+        ;; 1. Ensure target file exists and is writable
+        (unless (file-writable-p target-file)
+          (error "Target file not writable: %s" target-file))
+        ;; 2. Delete node from source
+        (if (org-supertag-delete-node-content node-id)
+            (progn
+              (message "Deleted node from source file")
+              ;; 3. Insert to target and update database
+              (with-current-buffer (find-file-noselect target-file)
+                (save-excursion
+                  (let ((adjusted-content 
+                         (org-supertag-adjust-node-level content target-level)))
+                    ;; 3.1 Insert content
+                    (goto-char (point-max))
+                    (unless (bolp) (insert "\n"))
+                    (insert adjusted-content "\n")
+                    (forward-line -1)
+                    ;; 3.2 Update node database entry
+                    (condition-case update-err
+                        (progn
+                          (org-supertag-update-node-db node-id target-file)
+                          (message "Updated node database entry"))
+                      (error
+                       (message "Failed to update node database: %s" 
+                               (error-message-string update-err))
+                       (signal (car update-err) (cdr update-err))))
+                    ;; 3.3 Update ID locations if cross-file move
+                    (when (and org-id-track-globally
+                             (not (equal source-file target-file)))
+                      (org-id-update-id-locations (list source-file target-file))
+                      (message "Updated ID locations"))
+                    ;; 3.4 Save both files
+                    (save-buffer)
+                    (when (and source-file
+                             (not (equal source-file target-file)))
+                      (with-current-buffer (find-file-noselect source-file)
+                        (save-buffer)))
+                    (message "Saved all buffers")
+                    t))))
+          (error "Failed to delete node from source file")))
+    (error
+     (message "Node move failed: %s" (error-message-string err))
+     nil)))
 
 ;;------------------------------------------------------------------------------
 ;; Node Commands 

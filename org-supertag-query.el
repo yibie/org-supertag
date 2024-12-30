@@ -332,16 +332,18 @@ Returns:
     (org-mode)
     (insert content)
     (goto-char (point-min))
-    (when target-level
+    (when (and target-level
+               (org-at-heading-p))
       (let* ((source-level (org-current-level))
              (level-diff (- target-level source-level)))
         (unless (zerop level-diff)
           (org-map-entries
            (lambda ()
              (let* ((current-level (org-current-level))
-                    (new-level (+ current-level level-diff))
-                    (new-stars (make-string (max 1 new-level) ?*)))
-               (replace-match new-stars t t nil 1)))
+                    (new-level (max 1 (+ current-level level-diff)))
+                    (new-stars (make-string new-level ?*)))
+               (when (looking-at org-complex-heading-regexp)
+                 (replace-match new-stars t t nil 1))))
            t nil))))
     (buffer-string)))
 
@@ -475,15 +477,29 @@ LEVEL-ADJUST is level adjustment option"
     (unless target-file
       (error "Current buffer is not visiting a file"))
     
+    ;; 添加目标位置信息
+    (message "Target file: %s, level: %s, point: %s" 
+             target-file target-level (point))
+    
     (dolist (node-id node-ids)
-      (message "Processing node: %s" node-id)
-      (condition-case err
-          (when (org-supertag-move-node node-id target-file target-level)
-            (cl-incf success-count))
-        (error
-         (message "Failed processing node %s: %s" 
-                  node-id 
-                  (error-message-string err)))))
+      (message "\n=== Processing node: %s ===" node-id)
+      ;; 获取源文件信息
+      (when-let ((source-pos (org-supertag-db-get-pos node-id)))
+        (message "Source position: %s" source-pos)
+        (condition-case err
+            (progn
+              ;; 验证节点
+              (unless (org-supertag-behavior--validate-node node-id)
+                (error "Invalid node: %s" node-id))
+              ;; 尝试移动
+              (when (org-supertag-move-node node-id target-file target-level)
+                (cl-incf success-count)
+                (message "Successfully moved node %s" node-id)))
+          (error
+           (message "Failed processing node %s: %s" 
+                    node-id 
+                    (error-message-string err))))))
+    
     (message "Processing complete: %d/%d nodes moved successfully" 
              success-count 
              (length node-ids))))

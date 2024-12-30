@@ -770,10 +770,9 @@ Example:
   (message "Debug clock-report - node=%s params=%S" node-id params)
   (when-let* ((pos (org-supertag-db-get-pos node-id))
               (scope (or (plist-get params :scope) :subtree))
-              (range (or (plist-get params :range) :today)))
     (save-excursion
       (org-with-point-at pos
-        (let ((rangeval (pcase range
+        (let ((rangeval (pcase (or (plist-get params :range) :today)
                          (:today '(:today))
                          (:week '(:week))
                          (:month '(:month))
@@ -785,7 +784,7 @@ Example:
           (condition-case err
               (org-clock-report `(:scope ,scope ,@rangeval))
             (error
-             (message "Error generating clock report: %S" err))))))))
+             (message "Error generating clock report: %S" err)))))))))
 
 ;;------------------------------------------------------------------------------
 ;; Timer Management
@@ -983,7 +982,7 @@ Example:
     (let ((current-heading (org-get-heading t t t t)))
       (message "Current heading: %s" current-heading)
       (while (and (> (org-outline-level) 1)
-                 (org-up-heading-safe))
+        (org-up-heading-safe))
         (let* ((tags (org-get-tags))
                (heading (org-get-heading t t t t)))
           (when (member (concat "#" tag-id) tags)
@@ -996,53 +995,87 @@ Example:
 ;; Archive Management
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-behavior--archive-subtree (node-id params)
-  "Archive subtree for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :location : Archive location (file::headline)
-- :mark-done : State to set before archiving
-- :save-context : List of context info to save
-- :find-done : Find and archive done trees
-- :find-old : Find and archive old trees
-
-Example:
-  ;; Simple archive
-  (org-supertag-behavior--archive-subtree node-id nil)
-  ;; Archive with custom location and context
-  (org-supertag-behavior--archive-subtree node-id 
-    '(:location \"archive.org::* Archive\"
-      :mark-done \"DONE\"
-      :save-context (time file todo category)))"
-  (message "Debug archive-subtree - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
+(defun org-supertag-behavior--cleanup-tags (node-id)
+  "Clean up supertags for NODE-ID after archiving.
+Removes all tags starting with # from both the heading text and internal org state."
+  (message "\n=== Cleaning up tags for node %s ===" node-id)
+  (when-let ((pos (org-supertag-db-get-pos node-id)))
+    (message "Found position: %s" pos)
     (save-excursion
       (org-with-point-at pos
-        (let* ((location (plist-get params :location))
-               (mark-done (plist-get params :mark-done))
-               (save-context (plist-get params :save-context))
-               (find-done (plist-get params :find-done))
-               (find-old (plist-get params :find-old)))
-          ;; 设置归档位置（如果指定）
-          (when location
-            (setq-local org-archive-location location))
-          ;; 设置上下文保存（如果指定）
-          (when save-context
-            (setq-local org-archive-save-context-info save-context))
-          ;; 如果需要标记为完成，先设置状态
-          (when (and mark-done
-                     (not (equal (org-get-todo-state) mark-done)))
-            (org-todo mark-done))
+        (org-back-to-heading t)
+        ;; 1. Get current tags and heading
+        (let* ((current-tags (org-get-tags))
+              (line (buffer-substring (line-beginning-position) (line-end-position)))
+              (_ (message "Original heading: %s" line))
+              (_ (message "Original tags: %S" current-tags))
+              ;; 2. Filter out supertags (starting with #)
+              (new-tags (seq-remove (lambda (tag)
+                                    (string-prefix-p "#" tag))
+                                  current-tags))
+              ;; 3. Clean up heading text
+              (new-line (replace-regexp-in-string ":[#@][^:]+:" "" line))
+              (_ (message "New heading: %s" new-line))
+              (_ (message "New tags: %S" new-tags)))
+          ;; 4. Update heading text
+          (let ((inhibit-read-only t))
+            (delete-region (line-beginning-position) (line-end-position))
+            (insert new-line))
+          ;; 5. Update org tags
+          (org-set-tags new-tags)
+          ;; 6. Clean up database associations
+          (dolist (tag current-tags)
+            (when (string-prefix-p "#" tag)
+              (let ((tag-id (substring tag 1)))
+                (org-supertag-tag--remove tag-id node-id)))))))))
+
+(defun org-supertag-behavior--archive-subtree (node-id &optional params)
+  "Archive subtree at NODE-ID.
+PARAMS is a plist with optional keys:
+- :file : Archive file path (default: org-archive-location)
+- :headline : Archive headline (default: \"* Archive\")
+- :inherit-tags : Whether to inherit tags (default: nil)"
+  (message "\n=== Archiving subtree for node %s ===" node-id)
+  (when-let ((pos (org-supertag-db-get-pos node-id)))
+    (message "Found node at position: %s" pos)
+    (save-excursion
+      (org-with-point-at pos
+        (let* ((file (or (plist-get params :file)
+                        (if (string-match "::\\(.*\\)\\'" org-archive-location)
+                            (substring org-archive-location 0 (match-beginning 0))
+                          "archive.org")))
+               (headline (or (plist-get params :headline)
+                           (if (string-match "::\\(.*\\)\\'" org-archive-location)
+                               (match-string 1 org-archive-location)
+                             "* Archive")))
+               (inherit-tags (plist-get params :inherit-tags))
+               (archive-location (concat file "::" headline)))
+          
+          (message "Archive location: %s" archive-location)
+          (message "Current heading: %s" (org-get-heading t t t t))
+          
+          ;; 确保归档文件存在
+          (unless (file-exists-p file)
+            (message "Creating archive file: %s" file)
+            (with-temp-buffer
+              (insert "#+TITLE: Archive\n\n* Archive\n")
+              (write-file file)))
+          
           ;; 执行归档
-          (condition-case err
-              (cond
-               (find-done
-                (org-archive-subtree '(4)))
-               (find-old
-                (org-archive-subtree '(16)))
-               (t
-                (org-archive-subtree)))
-            (error
-             (message "Error archiving subtree: %S" err))))))))
+          (let ((org-archive-location archive-location)
+                (org-archive-subtree-add-inherited-tags inherit-tags))
+            (condition-case err
+                (progn
+                  (org-back-to-heading t)
+                  ;; 使用 org-archive-subtree-default-with-confirmation 避免变量作用域问题
+                  (org-archive-subtree-default-with-confirmation)
+                  ;; 更新节点位置信息
+                  (org-supertag-node-update)
+                  (message "Successfully archived subtree"))
+              (error
+               (message "Error archiving subtree: %S" err)
+               (signal 'org-supertag-behavior-error
+                       (list :archive-failed node-id err))))))))))
 
 (defun org-supertag-behavior--archive-to-sibling (node-id params)
   "Archive to sibling for NODE-ID based on PARAMS.
@@ -1072,6 +1105,8 @@ Example:
           (when tags
             (dolist (tag tags)
               (org-toggle-tag tag 'on)))
+          ;; 先清理标签
+          (org-supertag-behavior--cleanup-tags node-id)
           ;; 执行归档
           (condition-case err
               (org-archive-to-archive-sibling)
@@ -1081,37 +1116,68 @@ Example:
 (defun org-supertag-behavior--toggle-archive-tag (node-id params)
   "Toggle archive tag for NODE-ID based on PARAMS.
 PARAMS is a plist with keys:
-- :check-children : Whether to check children
+- :check-children : Whether to check children before archiving
 - :force : :on or :off to force tag state
-- :recursive : Whether to apply recursively
+- :recursive : Whether to apply recursively to subtree
 
 Example:
   ;; Simple toggle
   (org-supertag-behavior--toggle-archive-tag node-id nil)
   ;; Check children and force on
   (org-supertag-behavior--toggle-archive-tag node-id 
-    '(:check-children t :force :on))"
-  (message "Debug toggle-archive - node=%s params=%S" node-id params)
+    '(:check-children t :force :on))
+  ;; Apply recursively
+  (org-supertag-behavior--toggle-archive-tag node-id 
+    '(:recursive t))"
+  (message "\n=== Toggling archive tag for node %s ===" node-id)
   (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        (let ((check-children (plist-get params :check-children))
-              (force (plist-get params :force))
-              (recursive (plist-get params :recursive)))
-          (condition-case err
-              (cond
-               (check-children
-                (org-toggle-archive-tag '(4)))
-               (force
-                (if (eq force :on)
-                    (org-archive-set-tag)
-                  (org-toggle-tag org-archive-tag 'off)))
-               (recursive
-                (org-map-tree
-                 (lambda ()
-                   (org-toggle-archive-tag))))
-               (t
-                (org-toggle-archive-tag)))
+        (let* ((check-children (plist-get params :check-children))
+               (force (plist-get params :force))
+               (recursive (plist-get params :recursive))
+               (current-tags (org-get-tags))
+               (_ (message "Current tags: %S" current-tags)))
+          
+          ;; 1. 处理强制设置
+          (when force
+            (message "Force setting archive tag to: %s" force)
+            (if (eq force :on)
+                (unless (member org-archive-tag current-tags)
+                  (org-toggle-tag org-archive-tag 'on))
+              (when (member org-archive-tag current-tags)
+                (org-toggle-tag org-archive-tag 'off))))
+          
+          ;; 2. 处理子节点检查
+          (when check-children
+            (message "Checking children before toggle")
+            (save-excursion
+              (org-back-to-heading t)
+              (let* ((result (org-supertag-behavior--calculate-progress))
+                     (total (nth 0 result))
+                     (done (nth 1 result)))
+                (message "Children status: %d/%d done" done total)
+                (when (= done total)
+                  (org-toggle-tag org-archive-tag 'on)))))
+          
+          ;; 3. 处理递归应用
+          (when recursive
+            (message "Applying archive tag recursively")
+            (save-restriction
+              (org-narrow-to-subtree)
+              (let ((current-level (org-outline-level)))
+                (save-excursion
+                  (while (outline-next-heading)
+                    (when (> (org-outline-level) current-level)
+                      (message "Processing child at: %s" (org-get-heading t t t t))
+                      (org-toggle-tag org-archive-tag
+                                    (if (member org-archive-tag current-tags)
+                                        'on 'off))))))))
+          
+          ;; 4. 默认切换行为
+          (unless (or force check-children)
+            (message "Performing default toggle")
+            (org-toggle-tag org-archive-tag)
             (error
              (message "Error toggling archive tag: %S" err))))))))
 
@@ -1141,6 +1207,7 @@ Example:
               (headline (plist-get params :headline))
               (scope (plist-get params :scope))
               (inherit-tags (plist-get params :inherit-tags)))
+              (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
         (let ((location (concat file "::" headline)))
@@ -1158,7 +1225,7 @@ Example:
                  (org-entry-put nil "ARCHIVE" location))
                 (_ (error "Invalid scope: %s" scope)))
             (error
-             (message "Error setting archive location: %S" err))))))))
+             (message "Error setting archive location: %S" err)))))))
             
 
 ;;------------------------------------------------------------------------------
@@ -1182,9 +1249,10 @@ Returns (total done progress) where progress is a float 0-100."
         
         ;; 遍历所有子项
         (while (and (not (eobp))
-                   (> (org-outline-level) current-level))
+                  (> (org-outline-level) current-level))
           (let ((todo-state (org-get-todo-state))
                 (heading (org-get-heading t t t t)))
+                (todo (org-get-todo-state)))
             (setq total (1+ total))
             (message "Found child: %s (TODO=%s)" heading todo-state)
             (when (member todo-state done-states)
@@ -1196,7 +1264,7 @@ Returns (total done progress) where progress is a float 0-100."
       (list total done 
             (if (> total 0)
                 (* 100.0 (/ (float done) total))
-              0.0)))))
+              0.0))))
 
 (defun org-supertag-behavior--update-progress-display (title progress)
   "Update progress display in TITLE with PROGRESS percentage.

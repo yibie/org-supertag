@@ -129,7 +129,6 @@
 (org-supertag-behavior-register "@archive"
   :trigger :on-add
   :action #'org-supertag-behavior--archive-subtree
-  :params '(location mark-done save-context)
   :style '(:face (:foreground "gray50")
           :prefix "📦"))
 
@@ -225,11 +224,11 @@
 ;;------------------------------------------------------------------------------
 
 ;; 1. 完成并归档
-(org-supertag-behavior-register "@done+archive"
+(org-supertag-behavior-register "@done_archive"
   :trigger :on-add
-  :list '("@todo=DONE"                        ; 设置状态为 DONE
-          "@property=ARCHIVE_TIME=now"         ; 设置归档时间
-          "@archive")                          ; 执行归档
+  :list '("@todo=DONE"
+          "@property=ARCHIVE_TIME,now"
+          "@archive")
   :style '(:face (:foreground "gray50" :strike-through t)
           :prefix "📦"))
 
