@@ -207,7 +207,6 @@ NODES is the list of matched nodes to display."
       (insert "Shortcuts:\n")
       (insert "- C-c C-c     : Toggle checkbox state\n")
       (insert "- C-c C-x f   : Export to file\n") 
-      (insert "- C-c C-x h   : Export to current location\n")
       (insert "- C-c C-x n   : Export to new file\n")
       (insert "- C-c C-x C-r : Toggle checkbox region\n")
       (insert "- C-c C-x C-u : Untoggle checkbox region\n")
@@ -464,18 +463,7 @@ TARGET-LEVEL is the target heading level
 Returns:
 - t if move successful
 - nil if move failed"
-  (when-let* ((content (org-supertag-get-node-content node-id)))
-    ;; 1. Delete node from source
-    (when (org-supertag-delete-node-content node-id)
-      ;; 2. Insert to target and update database
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (let ((adjusted-content 
-                 (org-supertag-adjust-node-level content target-level)))
-            (insert adjusted-content "\n")
-            (forward-line -1)
-            (org-supertag-update-node-db node-id target-file)
-            t))))))
+  (org-supertag-node-move node-id target-file target-level))
 
 (defun org-supertag-insert-nodes (node-ids &optional level-adjust)
   "Insert nodes at current position.
@@ -854,19 +842,16 @@ Shows results in a dedicated buffer with selection and export options."
   ;; Save current position
   (setq org-supertag-query--original-buffer (current-buffer)
         org-supertag-query--original-point (point))
-  
   ;; Ensure database is initialized
   (unless (and (boundp 'org-supertag-db--object)
                org-supertag-db--object)
     (error "Database not initialized"))
-  
   ;; Select files
   (when-let* ((files (org-supertag-query--select-files)))
     ;; Get search keywords
     (let* ((input (read-string "Enter search keywords (space separated): "))
            (keywords (split-string input " " t))
            (nodes (org-supertag-query--find-nodes-in-files keywords files)))
-      
       ;; Display results
       (org-supertag-query-show-results keywords nodes))))
 

@@ -87,7 +87,8 @@
     :time      ; Time using org-mode time-stamp format
     :list      ; List of values
     :options   ; Selection from predefined options
-    :ref)      ; Reference to fields and values from other tags
+    :ref       ; Reference to fields and values from other tags
+    :behavior) ; Behavior definition
   "Supported field value types.")
 
 (defconst org-supertag-db-object-structure
@@ -123,17 +124,7 @@
                 :description ; Description of tag purpose
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
-                :command    ; ((cmd-name . cmd-props) ...)
-                            ; Examples:
-                            ; (("summarize" . (:type :ai
-                            ;                 :backend "gptel"
-                            ;                 :prompt "..."
-                            ;                 :input (:content :fields ("status" "priority"))
-                            ;                 :output (:field "summary")))
-                            ;  ("archive" . (:type :elisp
-                            ;              :function org-archive-subtree
-                            ;              :confirm t)))
-                ;; Event Information
+                :behaviors  ; Behaviors associated with the tag
                 :created-at  ; Creation time
                 :modified-at)) ; Modification time
   "Entity structure definitions."))
@@ -163,109 +154,47 @@
      :optional (:ref-type))   ; Reference type
     ))
 
-;; Command Type Definitions
-;; Commands are tag properties that enable operations on nodes
-;; Command type examples:
-;; 1. Elisp Command
-;; (("archive" . (:type :elisp
-;;                :function org-archive-subtree
-;;                :confirm t)))
-;;
-;; 2. Shell Command  
-;; (("open-in-vscode" . (:type :shell
-;;                      :command "code"
-;;                      :args ("%f")
-;;                      :confirm nil)))
-;;
-;; 3. AI Command
-;; (("summarize" . (:type :ai
-;;                 :backend "gptel"
-;;                 :prompt "Please summarize the following content:"
-;;                 :input (:content :fields ("status" "priority"))
-;;                 :output (:field "summary")
-;;                 :confirm nil)))
-;;
-;; 4. Workflow Command
-;; (("publish" . (:type :workflow
-;;               :steps (("format" . (:type :elisp
-;;                                  :function org-indent-region))
-;;                      ("export" . (:type :elisp
-;;                                 :function org-export-dispatch))
-;;                      ("git-push" . (:type :shell
-;;                                   :command "git"
-;;                                   :args ("add" "%f" "&&" "git" "commit" "-m" "update" "&&" "git" "push"))))
-;;               :confirm t)))
-(defconst org-supertag-db-command-type
-  '(:elisp     ; Emacs Lisp functions
-    :shell     ; Shell commands  
-    :ai        ; AI commands
-    :workflow) ; Workflow (combined commands)
-  "Supported command types.")
+;; Behavior System Definitions
+(defconst org-supertag-behavior-timing
+  '(:immediate    ; Execute immediately when condition met
+    :deferred     ; Execute at next suitable time
+    :scheduled    ; Execute at specific time
+    :periodic)    ; Execute periodically
+  "When the behavior should execute.")
 
-;; Command Structure Definitions
-(defconst org-supertag-db-command-structure
-  '((:type :elisp
-     :required (:function)        ; Function to execute
-     :optional (:args             ; Function arguments
-                :confirm))        ; Whether confirmation is needed
+(defconst org-supertag-behavior-condition
+  '(:node        ; Node state conditions
+    :time        ; Time-based conditions
+    :field       ; Field value conditions
+    :reference   ; Reference relation conditions
+    :custom)     ; Custom predicate conditions
+  "What conditions trigger the behavior.")
 
-    (:type :shell
-     :required (:command)         ; Shell command
-     :optional (:args             ; Command arguments
-                :confirm))        ; Whether confirmation is needed
+(defconst org-supertag-behavior-operation
+  '(:transform   ; Transform node content/properties
+    :create      ; Create new nodes/content
+    :delete      ; Delete nodes/content
+    :move        ; Move nodes/content
+    :export      ; Export to external formats
+    :notify      ; Send notifications
+    :custom)     ; Custom operations
+  "What operations the behavior can perform.")
 
-    (:type :ai
-     :required (:backend          ; AI backend type
-                :prompt)          ; Prompt template
-     :optional (:backend-config   ; Backend specific config
-                :input            ; Input configuration
-                :output           ; Output configuration
-                :confirm))        ; Whether confirmation is needed
+(defconst org-supertag-behavior-method
+  '(:sync       ; Synchronous execution
+    :async      ; Asynchronous execution
+    :batch      ; Batch processing
+    :transact)  ; Transactional execution
+  "How the behavior should execute.")
 
-    (:type :workflow
-     :required (:steps)           ; List of steps
-     :optional (:confirm))        ; Whether confirmation is needed
-  "Command structure definitions."))
-
-;; AI Backend Types
-;; Example:
-;; Using gptel backend
-;; (:type :ai
-;;  :backend :gptel
-;;  :prompt "Please summarize this text:"
-;;  :input (:content "This is the text to summarize")
-;;  :output (:field "summary"))
-
-;; ;; Using ellama backend
-;; (:type :ai
-;;  :backend :ellama
-;;  :prompt "Translate to English:"
-;;  :input (:content "Hello World")
-;;  :output (:field "translation"))
-(defconst org-supertag-db-ai-backend
-  '(:gptel    ; gptel.el
-    :ellama)  ; ellama.el
-  "Supported AI backend packages.")
-
-(defconst org-supertag-db-ai-output-structure
-  '((:type :field
-     :required (:name)          ; Field name (required)
-     :optional (:transform))    ; Transform function (optional)
-    
-    (:type :property
-     :required (:name)          ; Property name (required)
-     :optional (:transform))    ; Transform function (optional)
-    
-    (:type :content
-     :required (:mode)          ; Content processing mode (required)
-     :optional (:transform      ; Transform function (optional)
-                :position))     ; Insert position (optional)
-    )
-  "AI command output configuration structure.
-Each output type defines required and optional properties:
-- :field    Store output in specified field
-- :property Store output in node property
-- :content  Directly modify node content")
+(defconst org-supertag-db-behavior-structure
+  '(:required (:when         ; Timing and conditions
+              :what         ; Operation to perform
+              :how)         ; Execution method
+    :optional (:description ; Behavior description
+              :error       ; Error handling
+              :compose))   ; Composition rules
+  "Behavior structure definition.")
 
 ;; Event Types
 (defconst org-supertag-db-events
@@ -493,7 +422,6 @@ Returns:
                           (append
                            clean-props
                            (list :created-at (current-time)))))))
-        
         ;; 1. Validation
         ;; 1.1 Validate type
         (unless (org-supertag-db-valid-object-type-p type)
@@ -501,7 +429,6 @@ Returns:
         ;; 1.2 Validate properties
         (unless (org-supertag-db-valid-object-p type new-props)
           (error "Invalid object properties"))
-        
         ;; 2. Pre-storage processing
         (when is-update
           ;; 2.1 Handle type changes
@@ -509,10 +436,8 @@ Returns:
             (unless (eq old-type type)
               ;; Clear all related caches on type change
               (org-supertag-db--cache-clear-for-type old-type id))))
-        
         ;; 3. Store entity
         (ht-set! org-supertag-db--object id new-props)
-        
         ;; 4. Cache management
         ;; 4.1 Clear entity cache
         (org-supertag-db--cache-remove 'entity id)
@@ -529,7 +454,6 @@ Returns:
            ;; Clear tag-related caches
            (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
            (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
-        
         ;; 5. Trigger events
         (if is-update
             (progn
@@ -538,13 +462,11 @@ Returns:
           (progn
             (org-supertag-db-emit 'entity:before-create type id new-props)
             (org-supertag-db-emit 'entity:created type id new-props)))
-        
         ;; 6. Database state management
         ;; 6.1 Mark database as dirty
         (org-supertag-db--mark-dirty)
         ;; 6.2 Schedule delayed save
         (org-supertag-db-save)
-        
         ;; 7. Return ID
         id)
     ;; Error handling
@@ -666,7 +588,6 @@ Returns:
   "Remove all links or links of specific type from an entity.
 FROM: Source entity ID
 TYPE: Optional link type filter
-
 Returns:
 - Number of removed links"
   (let ((count 0)
@@ -825,11 +746,11 @@ Returns list in format ((from props) ...)"
   (let (results)
     (ht-map (lambda (k v)
               (when (and (equal type (car v))
-                        (equal to (nth 2 v)))
+                        (equal to (nth 2 v))
                         (equal (plist-get v :from) (plist-get v :to)))
                 (push (list (cadr v) (nth 3 v)) results)))
             org-supertag-db--link)
-    (nreverse results))
+    (nreverse results)))
 
 (defun org-supertag-db-get-all-link ()
   "Get all links.
@@ -851,7 +772,9 @@ Returns:
   (when-let* ((props (org-supertag-db-get-link ref-id))
               (context (plist-get props :ref-context))
               (ref-node (org-supertag-db-get ref-id))
-              (ref-from (plist-get ref-node :ref-from)))
+              (ref-from (plist-get ref-node :ref-from))
+              (ref-to (plist-get ref-node :ref-to))
+              (ref-count (plist-get ref-node :ref-count)))
     context))
 
 (defun org-supertag-db-get-ref-pos (ref-id)
@@ -872,6 +795,20 @@ Returns:
 (defun org-supertag-db-get-all ()
   "Get all entities in database."
   (ht-items org-supertag-db--object))
+
+(defun org-supertag-db-get-tag-nodes (tag-id)
+  "Get all nodes that have TAG-ID.
+Returns a list of node IDs."
+  (let ((nodes nil))
+    ;; 遍历所有关系
+    (maphash (lambda (_key relation)
+               (when (and (eq (plist-get relation :type) :node-tag)
+                         (equal (plist-get relation :to) tag-id))
+                 (push (plist-get relation :from) nodes)))
+             org-supertag-db--link)
+    nodes))
+
+
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
@@ -968,12 +905,12 @@ Returns:
 - List of matching nodes
 - nil if no matches found"
   (let ((links (org-supertag-db-find-links :type :node-field)))
-    (cl-remove-if-not
-     (lambda (link)
-       (and (equal (plist-get (nth 3 link) :value) value)
-            (or (null tag-id)
-                (equal (plist-get (nth 3 link) :tag-id) tag-id))))
-     links)))
+        (cl-remove-if-not
+         (lambda (link)
+           (and (equal (plist-get (nth 3 link) :value) value)
+                (or (null tag-id)
+                    (equal (plist-get (nth 3 link) :tag-id) tag-id))))
+         links)))
 
 (defun org-supertag-db-find-tags-by-field (field-name)
   "Find tags that contain the specified field.
@@ -1021,22 +958,22 @@ A cons cell in the form (entity . links) where:
 Returns nil if entity does not exist"
   (condition-case err
       (when-let* ((entity (org-supertag-db-get id))
-                  (type (plist-get entity :type)))
+                  (type (plist-get entity :type))
+                  (outgoing-links (org-supertag-db-get-link nil id))
+                  (incoming-links (org-supertag-db-get-link-reverse nil id))
+                  (removed-data (list :entity entity
+                                    :outgoing-links outgoing-links
+                                    :incoming-links incoming-links)))
         ;; 1. Trigger pre-removal event
         (org-supertag-db-emit 'entity:before-remove type id entity)
-        ;; 2. Collect data to be removed
-        (let ((removed-data
-               (list :entity entity
-                     :outgoing-links (org-supertag-db-get-link nil id)
-                     :incoming-links (org-supertag-db-get-link-reverse nil id))))
-          ;; 3. Execute actual deletion if not dry-run
-          (unless dry-run
-            ;; 3.1 Remove associated relationships
-            (let ((link-count (org-supertag-db-unlink-all id)))
-              ;; 3.2 Remove reverse relationships
-              (dolist (rev-link (plist-get removed-data :incoming-links))
-                (org-supertag-db-unlink nil (car rev-link) id)))
-            ;; 3.3 Perform type-specific cleanup
+        ;; 2. Execute actual deletion if not dry-run
+        (unless dry-run
+          ;; 2.1 Remove associated relationships
+          (let ((link-count (org-supertag-db-unlink-all id)))
+            ;; 2.2 Remove reverse relationships
+            (dolist (rev-link incoming-links)
+              (org-supertag-db-unlink nil (car rev-link) id))
+            ;; 2.3 Perform type-specific cleanup
             (pcase type
               (:node
                ;; Clean node-related data
@@ -1048,24 +985,23 @@ Returns nil if entity does not exist"
                (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
                (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
             
-            ;; 3.4 Remove entity itself
+            ;; 2.4 Remove entity itself
             (ht-remove! org-supertag-db--object id)
             
-            ;; 3.5 Clear entity cache
+            ;; 2.5 Clear entity cache
             (org-supertag-db--cache-remove 'entity id)
             (org-supertag-db--cache-remove 'query (format "type:%s" type))
             
-            ;; 3.6 Trigger completion event
+            ;; 2.6 Trigger completion event
             (org-supertag-db-emit 'entity:removed type id entity removed-data)
             
-            ;; 3.7 Mark database as dirty and schedule save
+            ;; 2.7 Mark database as dirty and schedule save
             (org-supertag-db--mark-dirty)
             (org-supertag-db--schedule-save))
           
-          ;; 4. Return removed data
+          ;; 3. Return removed data
           (cons entity 
-                (append (plist-get removed-data :outgoing-links)
-                       (plist-get removed-data :incoming-links)))))
+                (append outgoing-links incoming-links))))
     
     ;; Error handling
     (error
@@ -1112,10 +1048,10 @@ Returns:
               (:node-tag
                ;; Clear node tag cache
                (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
-              (:tag-ref
-               ;; Clear tag reference cache
-               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
-               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
+               (:tag-ref
+                ;; Clear tag reference cache
+                (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
+                (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
             ;; 3.4 Trigger completion event
             (org-supertag-db-emit 'link:removed type from to link)
             ;; 3.5 Mark database as dirty and schedule save
@@ -1128,7 +1064,31 @@ Returns:
      (message "Error removing link %s:%s->%s: %s"
               type from to (error-message-string err))
      (signal (car err) (cdr err)))))
-     
+
+;;------------------------------------------------------------------------------  
+;; Property Operation
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-db-set-property (id property value)
+  "Set PROPERTY of entity with ID to VALUE.
+Returns t if successful, nil if entity not found."
+  (let ((entity (org-supertag-db-get id)))
+    (when entity
+      ;; update property  
+      (let ((new-props (plist-put (copy-sequence entity) 
+                                 (intern (concat ":" property))
+                                 value)))
+        ;; save updated entity
+        (org-supertag-db-add id new-props)
+        t))))
+
+(defun org-supertag-db-get-property (id property)
+  "Get PROPERTY value of entity with ID.
+Returns property value if found, nil otherwise."
+  (let ((entity (org-supertag-db-get id)))
+    (when entity
+      (plist-get entity (intern (concat ":" property))))))
+
 ;;------------------------------------------------------------------------------
 ;; Org Element 解析
 ;;------------------------------------------------------------------------------    
@@ -1155,7 +1115,7 @@ Returns:
           (unless (memq key seen-keys)  ; Avoid duplicates
             (push key seen-keys)
             (setq result (append result (list key value)))))
-        (setq rest-props (cddr rest-props))))
+          (setq rest-props (cddr rest-props))))
     ;; 3. Validate result
     (let ((final-type (plist-get result :type)))
       (unless (memq final-type '(:node :tag))
@@ -1193,7 +1153,6 @@ Returns:
                  ;; Other properties
                  (tags (org-element-property :tags element))
                  (properties (org-element-property :PROPERTIES element)))
-            
             (message "Parsed headline: id=%s title=%s level=%s" id title level)
             (list :type :node
                   :id id
@@ -1360,6 +1319,12 @@ Returns total number of nodes updated."
     (message "Updated %d nodes in %d files" total (length files))
     total))
 
+(defun org-supertag-db-get-pos (node-id)
+  "Get buffer position for node with NODE-ID.
+Returns position number or marker if found, nil otherwise."
+  (condition-case nil
+      (org-id-find node-id t)
+    (error nil)))
 ;;------------------------------------------------------------------------------
 ;; Node Reference Parsing
 ;;------------------------------------------------------------------------------    
@@ -1387,7 +1352,6 @@ References are parsed from org links in node content."
         (let ((ref-to (delete-dups (nreverse ref-to))))
           (org-supertag-db--update-node-all-ref node-id ref-to)
           ref-to)))))
-
 
 (defun org-supertag-db--update-node-all-ref (node-id ref-to)
   "Update all reference relationships for a node.
@@ -1684,8 +1648,6 @@ This function:
 Returns t on success, nil on failure."
   (when (org-supertag-db--dirty-p)
     (message "Saving database...")
-    (message "Data before save: %S"
-            (ht-get org-supertag-db--object "21D8EB80-251B-416A-8AE4-4A3E774DF7CE"))
     (condition-case err
         (progn
           ;; Run pre-save hooks
@@ -1884,5 +1846,7 @@ Steps:
 
 ;; Clear cache before loading
 (add-hook 'org-supertag-db-before-load-hook #'org-supertag-db--cache-clear)
+
+
 
 (provide 'org-supertag-db)
