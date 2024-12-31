@@ -229,7 +229,7 @@ org-supertag 提供三种类型的行为：
 
 
 * Changelog
-- 2025-12-31 :: 1.0.0 release
+- 2024-12-31 :: 1.0.0 release
   - feat behavior-system :: 完整的行为系统实现，形成自动工作流
     - 三层行为架构（基础/派生/组合）
     - 完整的触发器系统

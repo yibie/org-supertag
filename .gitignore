@@ -20,5 +20,5 @@ tramp
 # etc
 .DS_Store 
 
-# vscode
+# Visual Studio Code
 .vscode/
