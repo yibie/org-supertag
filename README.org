@@ -280,7 +280,7 @@ Behaviors can be triggered at different times:
 - :always - Triggered on all events
 
 * Changelog
-- 2025-12-31 :: 1.0.0 release
+- 2024-12-31 :: 1.0.0 release
   - feat behavior-system :: Complete behavior system implementation, forming automated workflows
     - Three-layer behavior architecture (Basic/Derived/Combined)
     - Complete trigger system
