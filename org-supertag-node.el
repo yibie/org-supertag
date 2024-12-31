@@ -17,6 +17,10 @@
 (require 'org-supertag-db)
 (require 'org-supertag-query)
 
+(defconst org-supertag-node--id-property-regexp
+  (rx ":ID:" (1+ " ") (group (1+ (not (any " \t\n")))))
+  "Regular expression matching ID property.")
+
 ;;------------------------------------------------------------------------------
 ;; Database Operations
 ;;------------------------------------------------------------------------------    
@@ -145,39 +149,46 @@ NODE-ID is the node identifier"
          (push (plist-get props :to) result)))
      org-supertag-db--link)
     (nreverse result)))
+
+(defun org-supertag-node-get-tag (node-id)
+  "Get tag ID for NODE-ID.
+Returns the first tag ID found for the node."
+  (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
+    (car node-tags)))
+
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-node-db-set-field (node-id field-id value)
-  "设置节点的字段值.
-NODE-ID 是节点ID
-FIELD-ID 是字段ID
-VALUE 是字段值
+  "Set field value for a node.
+NODE-ID is the node identifier
+FIELD-ID is the field identifier
+VALUE is the field value
 
-说明：
-1. 创建/更新字段关系
-2. 存储字段值
-3. 触发字段更新事件"
-    ;; 添加/更新字段关系
+Notes:
+1. Creates/updates field relationship
+2. Stores field value
+3. Triggers field update event"
+    ;; Add/update field relationship
     (org-supertag-db-link
      :type :node-field
      :from node-id
      :to field-id
      :value value)
-    ;; 清除缓存
+    ;; Clear cache
     (org-supertag-db--cache-remove 'query 
                                   (format "node-fields:%s" node-id))
-    ;; 触发事件
+    ;; Trigger event
     (run-hook-with-args 'org-supertag-node-field-updated-hook
                         node-id field-id value))
 
- (defun org-supertag-node-db-get-fields (node-id)
-  "获取节点的所有字段值.
-NODE-ID 是节点ID
+(defun org-supertag-node-db-get-fields (node-id)
+  "Get all field values for a node.
+NODE-ID is the node identifier
 
-返回值：
-字段值的列表，每个元素是 (field-id . value)"
+Returns:
+List of field values, each element is (field-id . value)"
   (or (org-supertag-db--cache-get 'query 
                                  (format "node-fields:%s" node-id))
       (when (org-supertag-node-db-exists-p node-id)
@@ -186,7 +197,7 @@ NODE-ID 是节点ID
           (org-supertag-db--cache-set 'query 
                                      (format "node-fields:%s" node-id)
                                      fields)
-          fields))))                       
+          fields))))
 
 ;;------------------------------------------------------------------------------
 ;; Operation Functions
@@ -207,6 +218,102 @@ Returns:
       (let ((new-id (org-id-get-create)))
         (org-supertag-db-add-node-at-point)
         new-id))))
+
+;; ID Location Tracking
+(defvar org-supertag-node--id-locations-timer nil
+  "Timer for periodic ID location updates.")
+
+(defvar org-supertag-node--modified-files nil
+  "List of files with potentially modified ID locations.")
+
+(defun org-supertag-node--track-file-modification ()
+  "Track current file for ID location updates."
+  (when-let ((file (buffer-file-name)))
+    (add-to-list 'org-supertag-node--modified-files file)))
+
+(defun org-supertag-node--setup-id-tracking ()
+  "Setup enhanced ID location tracking."
+  ;; Initialize org-id system
+  (require 'org-id)
+  
+  ;; Load existing locations
+  (condition-case err
+      (progn
+        (unless org-id-locations
+          (org-id-locations-load))
+        ;; Convert to hash table if needed
+        (unless (hash-table-p org-id-locations)
+          (setq org-id-locations (org-id-alist-to-hash (or org-id-locations nil)))))
+    (error
+     (message "Failed to load org-id-locations: %s" (error-message-string err))
+     (setq org-id-locations (make-hash-table :test 'equal))
+     (setq org-id-files nil)))
+  
+  ;; Track file modifications
+  (add-hook 'before-save-hook #'org-supertag-node--track-file-modification nil t)
+  
+  ;; Setup periodic updates
+  (unless org-supertag-node--id-locations-timer
+    (setq org-supertag-node--id-locations-timer
+          (run-with-idle-timer 300 t #'org-supertag-node--update-id-locations)))
+  
+  ;; Update on save
+  (add-hook 'after-save-hook #'org-supertag-node--check-and-update-ids nil t))
+
+(defun org-supertag-node--cleanup-id-tracking ()
+  "Cleanup ID tracking resources."
+  (when org-supertag-node--id-locations-timer
+    (cancel-timer org-supertag-node--id-locations-timer)
+    (setq org-supertag-node--id-locations-timer nil))
+  (setq org-supertag-node--modified-files nil)
+  (remove-hook 'before-save-hook #'org-supertag-node--track-file-modification t)
+  (remove-hook 'after-save-hook #'org-supertag-node--check-and-update-ids t))
+
+(defun org-supertag-node--check-and-update-ids ()
+  "Check and update ID locations in current file."
+  (when (and org-id-track-globally
+             (derived-mode-p 'org-mode))
+    (let ((file (buffer-file-name))
+          (changed nil)
+          (file-ids nil))
+      ;; Ensure org-id-locations exists
+      (unless org-id-locations
+        (setq org-id-locations (make-hash-table :test 'equal)))
+      ;; Scan current file for IDs
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (while (re-search-forward org-supertag-node--id-property-regexp nil t)
+         (let* ((id (match-string-no-properties 1))
+                (stored-file (gethash id org-id-locations)))
+           ;; Check if ID location has changed
+           (when (or (null stored-file)
+                    (not (equal stored-file file)))
+             (setq changed t)
+             (puthash id file org-id-locations)))))
+      ;; If changes found, save locations
+      (when changed
+        (let ((alist (org-id-hash-to-alist org-id-locations)))
+          (setq org-id-files (mapcar 'car alist))
+          (with-temp-file org-id-locations-file
+            (let ((print-length nil)
+                  (print-level nil))
+              (print alist (current-buffer)))))))))
+
+(defun org-supertag-node--update-id-locations ()
+  "Update ID locations for modified files."
+  (when (and org-id-track-globally org-supertag-node--modified-files)
+    (let ((files (copy-sequence org-supertag-node--modified-files)))
+      (setq org-supertag-node--modified-files nil)
+      (org-id-update-id-locations files))))
+
+(defun org-supertag-node--after-refile-update-ids ()
+  "Update ID locations after refile operations."
+  (when org-id-track-globally
+    (let* ((current-file (buffer-file-name))
+           (target-file (buffer-file-name (marker-buffer org-refile-target-location))))
+      (when (and current-file target-file
+                 (not (equal current-file target-file)))
+        (org-id-update-id-locations (list current-file target-file))))))
 
 (defun org-supertag-node-get-props ()
   "Get properties of current node."
@@ -236,6 +343,40 @@ Notes:
           (org-set-tags tags))
         (when todo
           (org-todo todo))))))
+
+(defun org-supertag-node-move (node-id target-file &optional target-level)
+  "Move node to target file.
+NODE-ID is the node identifier
+TARGET-FILE is the target file path
+TARGET-LEVEL is the target heading level
+
+Returns:
+- t if move successful
+- nil if move failed"
+  (when-let* ((content (org-supertag-get-node-content node-id))
+              (source-file (plist-get (org-supertag-db-get node-id) :file-path)))
+    ;; 1. Delete node from source
+    (when (org-supertag-delete-node-content node-id)
+      ;; 2. Insert to target and update database
+      (with-current-buffer (find-file-noselect target-file)
+        (save-excursion
+          (let ((adjusted-content 
+                 (org-supertag-adjust-node-level content target-level)))
+            (insert adjusted-content "\n")
+            (forward-line -1)
+            ;; 3. Update node database entry
+            (org-supertag-update-node-db node-id target-file)
+            ;; 4. Update ID locations if cross-file move
+            (when (and org-id-track-globally
+                      (not (equal source-file target-file)))
+              (org-id-update-id-locations (list source-file target-file)))
+            ;; 5. Save both files
+            (save-buffer)
+            (when (and source-file
+                      (not (equal source-file target-file)))
+              (with-current-buffer (find-file-noselect source-file)
+                (save-buffer)))
+            t))))))
 
 ;;------------------------------------------------------------------------------
 ;; Node Commands 
@@ -598,5 +739,7 @@ Arguments: (from-id to-id)")
 (defvar org-supertag-node-reference-removed-hook nil
   "Hook run after node reference is removed.
 Arguments: (from-id to-id)")
+
+
 
 (provide 'org-supertag-node)

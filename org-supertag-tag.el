@@ -41,19 +41,17 @@ TAG-NAME is the name of the tag to check"
 TAG-NAME: Name of the tag
 PROPS: Additional properties"
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (fields (or (plist-get props :fields) '()))  ; 先获取字段
+         (fields (or (plist-get props :fields) '()))
          (base-props (list :type :tag
                           :id sanitized-name
                           :name sanitized-name
-                          :fields fields      ; 使用获取的字段
+                          :fields fields
+                          :behaviors (plist-get props :behaviors)
                           :created-at (current-time))))
-    
-    (message "Debug create-tag: props=%S" props)
-    (message "Debug create-tag: fields=%S" fields)
-    (message "Debug create-tag: base-props=%S" base-props)
     (org-supertag-db-add sanitized-name base-props)
-    (message "Debug create-tag: 保存后的标签=%S" 
-             (org-supertag-db-get sanitized-name))
+    (let ((saved-tag (org-supertag-db-get sanitized-name)))
+      (unless saved-tag
+        (error "Failed to create tag: %s" sanitized-name)))
     sanitized-name))
 
 (defun org-supertag-tag-get (tag-name)
@@ -66,6 +64,15 @@ otherwise returns nil."
                (eq (plist-get entity :type) :tag))
       entity)))
 
+(defun org-supertag-get-all-tags ()
+  "Get a list of all defined tags."
+  (let ((tags '()))
+    (maphash
+     (lambda (id entity)
+       (when (eq (plist-get entity :type) :tag)
+         (push (plist-get entity :name) tags)))
+     org-supertag-db--object)
+    (delete-dups tags)))
 ;;----------------------------------------------------------------------
 ;; Tag-Node Relation Operation
 ;;----------------------------------------------------------------------
@@ -82,49 +89,43 @@ This function will:
 5. Add tag to org tags"
   (let* ((tag (org-supertag-db-get tag-id))
          (node-id (org-id-get-create)))
-    (message "Debug apply: tag=%S" tag)  ;; 调试信息
-    ;; Ensure tag exists
+    (message "Debug tag-apply: tag=%S node=%s" tag node-id)
+    
+    ;; Validation
     (unless tag
       (error "Tag %s not found" tag-id))
-    ;; Ensure it's a valid tag
     (unless (eq (plist-get tag :type) :tag)
       (error "Invalid tag type for %s" tag-id))
-    ;; Create node if needed
     (unless (org-supertag-db-get node-id)
       (org-supertag--create-node node-id))
-    ;; Create tag association
-    (org-supertag-db-link 
-     :node-tag 
-     node-id 
-     tag-id 
-     (list :created-at (current-time)))
-    ;; Initialize fields
+    
+    ;; Link node and tag using node-db-add-tag
+    (message "Debug tag-apply: Adding tag relationship")
+    (org-supertag-node-db-add-tag node-id tag-id)
+    
+    ;; Apply fields
     (when-let ((fields (plist-get tag :fields)))
-      (message "Debug apply: fields=%S" fields)  ;; 调试信息
+      (message "Debug tag-apply: fields=%S" fields)
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
                (field-type (plist-get field :type))
-               ;; Set initial value based on field type
-               (initial-value 
-                (pcase field-type
-                  ('options 
-                   (car (plist-get field :options)))  ; Use first option as default
-                  ('date 
-                   (format-time-string "%Y-%m-%d"))   ; Use current date
-                  ('string 
-                   nil)                               ; Use nil instead of empty string
-                  (_ nil))))                          ; Default to nil
-          (message "Debug apply: field=%S value=%S" field-name initial-value)  ;; 调试信息
-          ;; Set property only if initial value exists
-          (when initial-value
-            (org-set-property field-name initial-value))
-          ;; Initialize field value in database
+               (initial-value (org-supertag-field-get-initial-value field))
+               (type-def (org-supertag-get-field-type field-type))
+               (formatted-value (when (and initial-value type-def)
+                                (let ((formatter (plist-get type-def :formatter)))
+                                  (if formatter
+                                      (funcall formatter initial-value field)
+                                    (format "%s" initial-value))))))
+          (message "Debug tag-apply: field=%S value=%S formatted=%S"
+                  field-name initial-value formatted-value)
+          (when formatted-value
+            (org-set-property field-name formatted-value))
           (org-supertag-tag--set-field-value 
            tag-id node-id field-name initial-value))))
-    ;; Add tag to org tags
+    ;; Add tag to node tags
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
-    ;; Return node ID
+    (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
     node-id))
 
 (defun org-supertag-tag--remove (tag-id node-id)
@@ -189,22 +190,34 @@ FIELD-DEF: The field definition plist"
          (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
     (org-supertag-db-add tag-id new-tag)))
 
+(defun org-supertag-tag-get-field-value (tag field-name)
+  "Get field value from TAG with FIELD-NAME.
+TAG is the tag entity
+FIELD-NAME is the name of the field to get"
+  (when-let* ((fields (plist-get tag :fields))
+              (field (cl-find field-name fields
+                             :key (lambda (f) (plist-get f :name))
+                             :test #'equal)))
+    (plist-get field :value)))
+
 (defun org-supertag-tag--set-field-value (tag-id node-id field-name value)
-  "Internal function to set a value for a tag field.
-TAG-ID: The tag identifier
-NODE-ID: The node identifier 
-FIELD-NAME: Name of the field
-VALUE: Value to set for the field"
-  (message "DEBUG: Setting field value - Tag: %s, Node: %s, Field: %s, Value: %s"
-           tag-id node-id field-name value)
-  (let* ((tag (org-supertag-db-get tag-id))
-         (fields (plist-get tag :fields))
-         (field-def (cl-find field-name fields 
+  "Set field value for TAG-ID on NODE-ID.
+FIELD-NAME is the name of the field
+VALUE is the value to set"
+  (let ((tag (org-supertag-tag-get tag-id)))
+    (when tag
+      ;; Update field value in tag definition
+      (let* ((fields (plist-get tag :fields))
+             (field (cl-find field-name fields
                             :key (lambda (f) (plist-get f :name))
                             :test #'equal)))
-    (if (not field-def)
-        (error "Field %s not found in tag %s" field-name tag-id)
-      (org-supertag-field-set-value field-def value node-id tag-id))))
+        (when field
+          (setf (plist-get field :value) value)
+          ;; Update tag in database
+          (org-supertag-db-add tag-id tag)
+          ;; Run hook
+          (run-hook-with-args 'org-supertag-node-field-updated-hook
+                             node-id field-name value))))))
 
 ;;----------------------------------------------------------------------
 ;; Tag User Command
@@ -288,7 +301,6 @@ current values and lets the user select and modify them one by one."
                     (format "[%s] %s (current: %s)" tag-id field-name 
                            (or current-value "unset"))
                     (cons tag-id field)))))
-    
     ;; Let user select fields to edit
     (while (when-let* ((choice (completing-read "Select field to edit (C-g to finish): "
                                               (mapcar #'car field-values)
@@ -340,9 +352,9 @@ It provides options to:
                              (cons (format "[%s] %s (current: %s)"
                                          tag-id field-name 
                                          (or current-value "unset"))
-                                   (list :type :existing
-                                        :tag-id tag-id
-                                        :field field)))
+                                       (list :type :existing
+                                            :tag-id tag-id
+                                            :field field)))
                      ;; New field option
                      collect (cons (format "[%s] + Add new field" tag-id)
                                  (list :type :new
@@ -405,7 +417,7 @@ It provides options to:
   "Batch add tags to selected headlines.
 TAG-NAME is the name of the tag to add"
   (interactive
-   (list (completing-read "选择或输入标签: "
+   (list (completing-read "Select tag: "
                          (append 
                           (org-supertag-get-all-tags)
                           (mapcar #'car org-supertag-preset-tags)))))  ; Only get preset tag names
@@ -608,7 +620,6 @@ This function allows:
                                 (mapcar #'car choices)
                                 nil t))
          (action (cdr (assoc choice choices))))
-    
     (pcase action
       ;; View definitions
       (:view
@@ -659,7 +670,6 @@ This function allows:
           'org-supertag-preset-tags
           (cons (cons tag-name (nreverse fields))
                 org-supertag-preset-tags))))
-      
       ;; Edit existing preset
       ((pred stringp)
        (let* ((tag-name action)
@@ -679,7 +689,6 @@ This function allows:
                 (mapcar #'car field-choices)
                 nil t))
               (field-action (cdr (assoc field-choice field-choices))))
-         
          (pcase field-action
            ;; Add new field
            (:new
@@ -711,7 +720,6 @@ This function allows:
                           (append current-fields (list field-def)))
                      (assoc-delete-all 
                       tag-name org-supertag-preset-tags)))))
-           
            ;; Remove tag
            (:remove
             (when (yes-or-no-p 
@@ -782,5 +790,7 @@ This function allows:
                                (remove field current-fields))
                           (assoc-delete-all 
                            tag-name org-supertag-preset-tags))))))))))))))
+
+
 
 (provide 'org-supertag-tag)
