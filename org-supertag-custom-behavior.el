@@ -2,31 +2,124 @@
 
 ;;; Commentary:
 
-;; 基础行为是系统的"原语"
+;; Basic behaviors serve as the system's "primitives"
 ;; 
-;; 这个文件用于定义你的自定义行为
+;; This file is for defining your custom behaviors
 ;; 
-;; 在 org-supertag 配置好之后，该文件将自动复制到你的 .emacs.d 目录对应的 org-supertag 目录下
+;; After org-supertag is configured, this file will be automatically copied
+;; to your org-supertag directory under .emacs.d
+
+;; 
+;; Trigger Types:
+;; -------------
+;; :on-add      - Execute when tag is added to a node
+;; :on-remove   - Execute when tag is removed from a node
+;; :on-change   - Execute when node with tag is modified
+;; :on-schedule - Execute at scheduled times
+;; :always      - Execute on all events
 ;;
-;; 行为定义示例:
+;; Hook Points:
+;; -----------
+;; 1. Org Mode Standard Hooks:
+;;    - org-after-todo-state-change-hook
+;;    - org-property-changed-functions
+;;    - org-after-tags-change-hook
+;;    - org-timestamp-change-hook
+;;    - org-cycle-hook
 ;;
-;; (org-supertag-behavior-register "@my-behavior"
+;; 2. Supertag Specific Hooks:
+;;    - org-supertag-after-tag-apply-hook
+;;    - org-supertag-after-node-change-hook
+;;    - org-supertag-after-tag-add-hook
+;;    - org-supertag-after-tag-remove-hook
+;;    - org-supertag-after-load-hook
+;;
+;; Example Behavior Definitions:
+;;
+;; 1. Basic behavior with direct action:
+;; (org-supertag-behavior-register "@custom-todo"
+;;   :trigger :on-add
+;;   :action #'org-supertag-behavior--set-todo
+;;   :params '(state)
+;;   :style '(:face (:foreground "blue" :weight bold)
+;;           :prefix "☐"))
+;;
+;; 2. Behavior with parameter handling:
+;; (org-supertag-behavior-register "@custom-priority"
 ;;   :trigger :on-change
-;;   :action (lambda ()
-;;            ;; 你的行为逻辑
-;;            )
-;;   :style '(:face (:foreground "blue")))
+;;   :action #'org-supertag-behavior--set-priority
+;;   :params '(priority)
+;;   :style '(:face (:foreground "red")
+;;           :prefix "★"))
 ;;
-;; 行为组合示例:
+;; 3. Combined behavior using behavior list:
+;; (org-supertag-behavior-register "@custom-done"
+;;   :trigger :on-add
+;;   :list '("@todo=DONE"
+;;           "@property=COMPLETED_TIME=now")
+;;   :style '(:face (:foreground "green")
+;;           :prefix "✓"))
 ;;
-;; (org-supertag-behavior-register "@combined"
+;; 4. Behavior with hooks:
+;; (org-supertag-behavior-register "@custom-track"
 ;;   :trigger :on-change
-;;   :action (list "@behavior1" "@behavior2"))
-;; 
-;; 设计原则：
-;; 1. 基础行为：实现单一、原子的功能，并接受参数
-;; 2. 组合行为：通过参数化和组合基础行为实现复杂功能
-;; 3. 清晰文档：每个行为都有清晰的文档说明其用途和参数
+;;   :action #'org-supertag-behavior--set-property
+;;   :params '(name value)
+;;   :hooks '((org-after-todo-state-change-hook . my-track-function)
+;;           (org-after-tags-change-hook . my-tag-function))
+;;   :style '(:face (:foreground "purple")
+;;           :prefix "◉"))
+;;
+;; Hook Function Example:
+;; (defun my-track-function ()
+;;   "Example hook function for tracking changes.
+;; This function will be called when TODO state changes."
+;;   (when-let* ((node-id (org-id-get))
+;;               (new-state (org-get-todo-state)))
+;;     (message "Node %s changed to state: %s" node-id new-state)))
+;;
+;; Behavior System Architecture:
+;; -------------------------
+;; The behavior system is organized in three layers:
+;;
+;; 1. Basic Behaviors (Foundation Layer)
+;;    - Atomic, single-purpose functions
+;;    - Direct interface with org-mode operations
+;;    - Highly parameterized for flexibility
+;;    - Examples: @todo, @priority, @property
+;;    - Used as building blocks for higher layers
+;;
+;; 2. Derived Behaviors (Specialization Layer)
+;;    - Built on top of basic behaviors
+;;    - Pre-configured parameter sets
+;;    - Specialized for specific use cases
+;;    - Examples: @done (@todo=DONE), @urgent (@priority=A)
+;;    - Simplify common operations
+;;
+;; 3. Combined Behaviors (Integration Layer)
+;;    - Compose multiple behaviors together
+;;    - Create complex workflows
+;;    - Chain actions in meaningful sequences
+;;    - Examples: @done+archive (@todo=DONE + @archive)
+;;    - Implement higher-level functionality
+;;
+;; Design Guidelines:
+;; ----------------
+;; 1. When creating new behaviors:
+;;    - Start with basic behaviors for new primitive operations
+;;    - Create derived behaviors for common parameter combinations
+;;    - Use combined behaviors for workflow automation
+;;
+;; 2. Behavior Properties:
+;;    - Each behavior should have a clear, single responsibility
+;;    - Parameters should be meaningful and well-documented
+;;    - Visual styling should indicate behavior type
+;;    - Hooks and triggers should be appropriate for the use case
+;;
+;; 3. Development Flow:
+;;    - First develop and test basic behaviors
+;;    - Then create derived behaviors for common use cases
+;;    - Finally compose combined behaviors for workflows
 
 ;;; Code:
 
@@ -34,148 +127,114 @@
 (require 'org-supertag-behavior-library)
 
 ;;------------------------------------------------------------------------------
-;; Basic Behaviors - 基础行为
+;; Basic Behaviors - Core functionality
 ;;------------------------------------------------------------------------------
 
-;; 1. 任务状态 - 最基础的行为，其他状态通过参数实现
+;; 1. Task State - Basic behavior, other states through parameters
 (org-supertag-behavior-register "@todo"
   :trigger :on-add
   :action #'org-supertag-behavior--set-todo
-  :params '(state)
-  :style '(:face (:foreground "blue" :weight bold)
-          :prefix "☐"))
+  :params '(state))
 
-;; 2. 优先级 - 通过参数设置具体级别
+;; 2. Priority - Set specific levels through parameters
 (org-supertag-behavior-register "@priority"
   :trigger :on-add
   :action #'org-supertag-behavior--set-priority
-  :params '(priority)
-  :style '(:face (:foreground "orange")
-          :prefix "★"))
+  :params '(priority))
 
-;; 3. 时间戳 - 通过参数设置不同类型
+;; 3. Timestamp - Different types through parameters
 (org-supertag-behavior-register "@timestamp"
   :trigger :on-add
   :action #'org-supertag-behavior--set-property
-  :params '(name value)
-  :style '(:face (:foreground "gray50")
-          :prefix "⏰"))
+  :params '(name value))
 
-;; 4. 属性设置 - 通过参数设置任意属性
+;; 4. Property Setting - Set any property through parameters
 (org-supertag-behavior-register "@property"
   :trigger :on-add
   :action #'org-supertag-behavior--set-property
-  :params '(name value)
-  :style '(:face (:foreground "purple")
-          :prefix "⚑"))
+  :params '(name value))
 
-;; 5. 时钟管理 - 通过参数控制行为
+;; 5. Clock Management - Control through parameters
 (org-supertag-behavior-register "@clock"
   :trigger :on-add
   :action #'org-supertag-behavior--clock-in
-  :params '(switch-state)
-  :style '(:face (:foreground "green")
-          :prefix "⏱"))
+  :params '(switch-state))
 
-;; 状态切换基础行为
+;; State Toggle Basic Behavior
 (org-supertag-behavior-register "@state"
   :trigger :on-add
   :action #'org-supertag-behavior--toggle-state
-  :params '(states)
-  :style '(:face (:foreground "purple")
-          :prefix "↺"))
+  :params '(states))
 
-;; 状态传播基础行为
+;; State Propagation Basic Behavior
 (org-supertag-behavior-register "@propagate"
   :trigger :on-add
   :action #'org-supertag-behavior--propagate-state
-  :params '(state recursive)
-  :style '(:face (:foreground "blue")
-          :prefix "⇊"))
+  :params '(state recursive))
 
-;; 抽屉管理基础行为
+;; Drawer Management Basic Behavior
 (org-supertag-behavior-register "@drawer"
   :trigger :on-add
   :action #'org-supertag-behavior--insert-drawer
-  :params '(name content region)
-  :style '(:face (:foreground "gray50")
-          :prefix "▤"))
+  :params '(name content region))
 
-;; 日志抽屉基础行为
+;; Log Drawer Basic Behavior
 (org-supertag-behavior-register "@log"
   :trigger :on-add
   :action #'org-supertag-behavior--log-into-drawer
-  :params '(enabled name note)
-  :style '(:face (:foreground "gray70")
-          :prefix "📝"))
+  :params '(enabled name note))
 
-;; 时钟报告基础行为
+;; Clock Report Basic Behavior
 (org-supertag-behavior-register "@report"
   :trigger :on-add
   :action #'org-supertag-behavior--clock-report
-  :params '(scope range)
-  :style '(:face (:foreground "blue")
-          :prefix "📊"))
+  :params '(scope range))
 
-;; 时钟控制基础行为（补充 clock-out 和 cancel）
+;; Clock Control Basic Behavior (clock-out and cancel)
 (org-supertag-behavior-register "@clock-out"
   :trigger :on-add
   :action #'org-supertag-behavior--clock-out
-  :params '(switch-state note)
-  :style '(:face (:foreground "red")
-          :prefix "⏹"))
+  :params '(switch-state note))
 
-;; 归档基础行为
+;; Archive Basic Behavior
 (org-supertag-behavior-register "@archive"
   :trigger :on-add
   :action #'org-supertag-behavior--archive-subtree
-  :params '(location mark-done save-context)
-  :style '(:face (:foreground "gray50")
-          :prefix "📦"))
+  :params '(location mark-done save-context))
 
-;; 归档位置基础行为
+;; Archive Location Basic Behavior
 (org-supertag-behavior-register "@archive-to"
   :trigger :on-add
   :action #'org-supertag-behavior--set-archive-location
-  :params '(file headline scope inherit-tags)
-  :style '(:face (:foreground "gray70")
-          :prefix "📍"))
+  :params '(file headline scope inherit-tags))
 
-;; 7. 节点操作 - 获取子节点信息
+;; 7. Node Operations - Get Child Node Information
 (org-supertag-behavior-register "@children"
   :trigger :on-change
-  :action #'org-supertag-behavior--get-children
-  :style '(:face (:foreground "blue")
-          :prefix "⚏"))
+  :action #'org-supertag-behavior--get-children)
 
-;; 8. 父节点查找 - 查找特定标签的父节点
+;; 8. Parent Node Search - Find Parent with Specific Tag
 (org-supertag-behavior-register "@parent"
   :trigger :on-add
   :action #'org-supertag-behavior--find-parent-with-tag
-  :params '(tag-id)
-  :style '(:face (:foreground "purple")
-          :prefix "⤴"))
+  :params '(tag-id))
 
-;; 6. 标题管理 - 修改标题文本
+;; 6. Heading Management - Modify Heading Text
 (org-supertag-behavior-register "@heading"
   :trigger :on-add
   :action #'org-supertag-behavior--set-heading
-  :params '(title)
-  :style '(:face (:foreground "cyan")
-          :prefix "✎"))
+  :params '(title))
 
-;; 9. 进度计算 - 基于子任务状态
+;; 9. Progress Calculation - Based on Child Task States
 (org-supertag-behavior-register "@progress"
   :trigger :on-change
-  :action #'org-supertag-behavior--calculate-progress
-  :style '(:face (:foreground "green")
-          :prefix "📊"))
+  :action #'org-supertag-behavior--calculate-progress)
 
 ;;------------------------------------------------------------------------------
-;; Derived Behaviors - 派生行为（基于基础行为）
+;; Derived Behaviors - Based on Basic Behaviors
 ;;------------------------------------------------------------------------------
 
-;; 1. 任务状态派生
+;; 1. Task State Derivatives
 (org-supertag-behavior-register "@done"
   :trigger :on-add
   :list '("@todo=DONE")
@@ -194,7 +253,7 @@
   :style '(:face (:foreground "gray" :strike-through t)
           :prefix "✗"))
 
-;; 2. 优先级派生
+;; 2. Priority Derivatives
 (org-supertag-behavior-register "@urgent"
   :trigger :on-add
   :list '("@priority=A")
@@ -207,7 +266,7 @@
   :style '(:face (:foreground "gray")
           :prefix "▽"))
 
-;; 3. 时间相关派生
+;; 3. Time-Related Derivatives
 (org-supertag-behavior-register "@deadline"
   :trigger :on-add
   :list '("@timestamp=DEADLINE")
@@ -221,33 +280,33 @@
           :prefix "📅"))
 
 ;;------------------------------------------------------------------------------
-;; Combined Behaviors - 组合行为
+;; Combined Behaviors - Complex Functionality
 ;;------------------------------------------------------------------------------
 
-;; 1. 完成并归档
+;; 1. Complete and Archive
 (org-supertag-behavior-register "@done+archive"
   :trigger :on-add
-  :list '("@todo=DONE"                        ; 设置状态为 DONE
-          "@property=ARCHIVE_TIME=now"         ; 设置归档时间
-          "@archive")                          ; 执行归档
+  :list '("@todo=DONE"                        ; Set state to DONE
+          "@property=ARCHIVE_TIME=now"         ; Set archive timestamp
+          "@archive")                          ; Execute archive
   :style '(:face (:foreground "gray50" :strike-through t)
           :prefix "📦"))
 
-;; 2. 开始任务并计时
+;; 2. Start Task and Clock In
 (org-supertag-behavior-register "@start+clock"
   :trigger :on-add
   :list '("@todo=STARTED" "@clock=start")
   :style '(:face (:foreground "orange" :weight bold)
           :prefix "⏱"))
 
-;; 3. 紧急任务（高优先级+截止时间）
+;; 3. Urgent Task (High Priority + Deadline)
 (org-supertag-behavior-register "@urgent+deadline"
   :trigger :on-add
   :list '("@priority=A" "@deadline")
   :style '(:face (:foreground "red" :weight bold)
           :prefix "🚨"))
 
-;; 4. 项目节点
+;; 4. Project Node
 (org-supertag-behavior-register "@project"
   :trigger :on-add
   :list '("@property=CATEGORY=PROJECT" "@property=PROJECT_ID=auto")

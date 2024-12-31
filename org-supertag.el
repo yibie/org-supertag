@@ -74,24 +74,17 @@ Used for manual cleanup or system state reset."
 (defun org-supertag-setup ()
   "Setup org-supertag."
   (interactive)
-  ;; 初始化数据库
   (org-supertag-db-init)
-  ;; 初始化自定义行为文件
   (let ((custom-file (expand-file-name "org-supertag-custom-behavior.el"
                                      org-supertag-data-directory)))
     (unless (file-exists-p custom-file)
       (unless (file-exists-p org-supertag-data-directory)
-        (make-directory org-supertag-data-directory t))
-      
+        (make-directory org-supertag-data-directory t)) 
       (when-let ((template (locate-library "org-supertag-custom-behavior.el")))
         (copy-file template custom-file)
         (message "Created custom behaviors file at %s" custom-file)))
-    
-    ;; 加载自定义行为文件
     (when (file-exists-p custom-file)
       (load custom-file)))
-  
-  ;; 启用 org-supertag-mode
   (add-hook 'org-mode-hook #'org-supertag-mode))
 
 (defun org-supertag--initialize ()

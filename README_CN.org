@@ -1,111 +1,47 @@
 * 介绍
 
-Org-supertag 是一个旨在增强 org-mode 的标签功能的 Package，它的主要灵感来自一款名为 Tana 的双链笔记软件。和它一样，org-supertag 的标签既能为节点赋予属性，也能够直接操作节点。
+Org-supertag 是一个增强 org-mode 标签功能的 Package。它让标签不仅能为节点赋予属性，更能直接操作节点，从而实现更灵活的知识管理。
 
-Org-supertag 秉持非破坏更新的原则，使用它不会破坏 org-mode 原有的特性，原有的标签系统依然有效（只不过不能被 org-supertag 识别），我相信两者的组合会创造更多有趣的可能性。
+Org-supertag 采用非侵入式设计，与 org-mode 原有功能和谐共存，为用户提供更多可能性。
 
 * 为什么需要标签？
 
-在这里我简单分享我的经验，大部分我们平时制作的笔记是线性的，它按照某种顺序排列。然而，当我们需要切换角度对这些笔记进行重新整理时，就会遇到一定的困难。
+传统的线性笔记系统存在局限性:
 
-比如，很多笔记是关于概念的， 很多笔记是关于方法的，但在线性记录笔记时，这些属性很难被展现。因为在记录笔记的过程中，我们更关注对知识本身的理解，在当时也无法马上抽身在一个更高的层次去看待。当我们回顾时，通过标签标记原来记录的知识，这样子就对自己的知识进行了再结构化。这样子，无论是查询��是整理都是相当方便的。
+1. 单一视角 :: 知识被限制在固定的层级结构中
+2. 难以重组 :: 缺乏灵活的关联机制
+3. 碎片化 :: 知识点之间缺乏有机联系
 
-最重要的，是增加知识的重复使用率，形成知识的复利效应。——鉴于标签是非常灵活的组织方式，因此这种复利效应远远不止在知识层面。
+标签系统则提供了一种更高维的组织方式:
+
+1. 多维度分类 :: 一个知识点可以同时具有多个属性
+2. 动态重组 :: 随时可以从不同角度重新组织内容
+3. 关系网络 :: 通过标签将零散知识点编织成网络
+
+这种组织方式不仅让知识更容易被检索和重用，更重要的是能够激发知识间的关联，形成知识的复利效应。标签作为一种元数据管理工具，其应用远不止于知识管理领域。
 
 以下是我制作的概念示意图：
 
 [[file:picture/figure2.png]]
 
-* 实际案例
-假设你的 inbox.org 中有这样的内容：
-#+begin_example
-* 阅读了一篇关于 Emacs 性能优化的好文章
-https://example.com/emacs-performance
-
-* 需要联系张三讨论项目进度
-电话：123-456-7890
-
-* 改进项目文档的想法
-1. 添加更多示例
-2. 优化格式
-#+end_example
-
-处理步骤：
-1. 转换为节点并添加标签
-   #+begin_example
-   * 阅读了一篇关于 Emacs 性能优化的好文章  :#article:
-   https://example.com/emacs-performance
-
-   * 需要联系张三讨论项目进度  :#contact: :#task:
-   电话：123-456-7890
-
-   * 改进项目文档的想法  :#idea:
-   1. 添加更多示例
-   2. 优化格式
-   #+end_example
-
-2. 使用查询功能批量处理
-   - ~M-x org-supertag-query~ 输入 "article" 找到所有文章
-   - 选中后导出到 articles.org
-   - 重复上述步骤处理其他类型的内容
-
-3. 处理完成后的结果
-   - articles.org 中有了文章收藏
-   - tasks.org 中有了新任务
-   - contacts.org 中有了联系人信息
-   - ideas.org 中有了新想法
-
-这种工作流程的优势：
-1. 快速收集：不用担心放在哪里，统统先放进 inbox
-2. 延迟整理：可以在方便的时候再统一处理
-3. 批量处理：通过标签和查询快速归类整理
-
 * 主要概念
 
 ** 节点 (Node)
-节点是 org-supertag 的基本单位，它对应 org-mode 中的标题。每个节点都有唯一的 ID，可以被引用和检索。
-
-节点包括了 org-mode 的 headline 和属性抽屉，以及标题之下所包含的所有内容（包括特殊区块，子标题等等）。
+节点是一个抽象的信息单元，它包含了（org-mode 的）标题、属性和内容。每个节点都有唯一标识，可以被引用和检索。
 
 ** 超级标签 (Super Tag)
-超级标签与 org-mode 的标签不同，它不仅仅是一个简单的标记，它还定义了一组字段模板。当一个节点被赋予超级标签时，这些字段模板会被应用到节点上。比如:
+超级标签是一种元数据模板，它定义了节点的结构和行为。标签不仅描述节点的属性，还能够触发自动化操作。
 
-- 一个标记为 "任务" 的标签可能包含 "优先级"、"状态"、"截止日期" 等字段
-- 一个标记为 "联系人" 的标签可能包含 "邮箱"、"电话"、"地址" 等字段
-
-Org-supertag 的标签将节点视为对象，因此未来标签还会引入更多功能，比如：自动命令触发，与 AI 结合等等。
-
-Org-supertag 的标签长这样： ~:#tag-name:~ ，仅仅在表现形式上与 org-mode 的标签有所不同。
-
-如果你点击它，同样可以看到 org-agenda 的菜单（当然我不推荐你这么做）。
-
-⚠️注意：org-supertag 不会记录你通过 org-mode 设置的标签，它只会记录通过 org-supertag 设置的标签。
+标签格式为 ~:#tag-name:~ 。
 
 ** 字段 (Field)
-字段是节点的属性（一旦创建，将同步到 org-mode 中的属性抽屉中去），它们由标签定义。每个字段都有:
+字段是节点的结构化属性，它们由标签定义并强制执行。字段系统支持多种数据类型。
 
-- 类型：如字符串、数字、日期、选项、引用等
-- 名称：字段的标识符
-- 值：字段的具体内容
-- 验证规则：确保字段值符合预期格式
+** 行为 (Behavior)
+行为是标签的自动化操作，它们由标签定义并强制执行。行为系统支持多种自动化操作。
 
-支持的字段类型包括:
-- string: 文本
-- options: 预定义选项
-- number: 数字
-- date: 日期
-- timestamp: 时间戳
-- reference: 节点引用
-- tags: 标签列表
-- list: 列表
-- range: 数值范围
-
-** 查询
-org-supertag 提供了强大的查询功能:
-
-- 同时查询：输入关键字，可以同时查询节点，标签和字段
-- 可以输入多个关键字，将以 AND 的逻辑进行查询
-- 导出查询结果：可以选中一个或多个查询结果，将它们移动到一个新建的文件，或另外一个文件中去。也可以直接在光标处插入查询结果。
+** 查询（Query）
+查询系统支持节点、标签、字段统一检索，支持多条件复合查询，查询结果可导出和重组。
 
 * 常用命令
 
@@ -122,7 +58,39 @@ org-supertag 提供了强大的查询功能:
 - ~M-x org-supertag-tag-set-field-value~ :: 设置字段值
 - ~M-x org-supertag-tag-set-field-and-value~ :: 同时设置标签字段和值
 
-** 预设标签
+** 查询命令
+- ~M-x org-supertag-query~ :: 启动查询界面
+  1. 输入关键字（多个关键字用空格分隔）
+  2. 选择查询结果（在查询结果页中，用 C-c C-c 选择）
+  3. 选择导出方式:
+     - 导出到新文件
+     - 导出到已有文件
+     - 在当前位置插入链接
+
+查询结果会以 org-mode 的链接形式呈现，点击链接可以直接跳转到对应节点。
+
+- ~M-x org-supertag-query-in-buffer~ :: 在当前 buffer 中查询
+- ~M-x org-supertag-query-in-files~ :: 在指定文件中查询，可以指定多个文件
+
+** 行为命令
+- ~M-x org-supertag-behavior-attach~ :: 为标签附加行为
+- ~M-x org-supertag-behavior-execute-at-point~ :: 在当前节点执行行为，会提示选择行为名称
+- ~M-x org-supertag-behavior-execute-batch~ :: 在当前节点批量执行多个行为，可以选择多个行为依次执行
+
+
+* 安装
+
+#+begin_src emacs-lisp
+(use-package org-supertag
+  :straight (:host github :repo "yibie/org-supertag")
+  :after org
+  :config
+  (org-supertag-setup))
+#+end_src
+
+* 高级功能
+
+** 预设标签的修改
 org-supertag 提供了一些预设的标签类型，以下仅为举例:
 
 - project :: 项目管理
@@ -159,74 +127,119 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
                    :description "作者")))))
 #+end_src
 
-字段定义支持以下属性:
-- :name :: 字段名称
-- :type :: 字段类型 (string/options/date/number 等)
-- :options :: 选项列表 (仅用于 options 类型)
-- :description :: 字段描述
-- :min/:max :: 数值范围 (仅用于 number 类型)
-
-** 查询命令
-- ~M-x org-supertag-query~ :: 启动查询界面
-  1. 输入关键字（多个关键字用空格分隔）
-  2. 选择查询结果（可多选，用逗号分隔）
-  3. 选择导出方式:
-     - 导出到新文件
-     - 导出到已有文件
-     - 在当前位置插入链接
-
-查询结果会以 org-mode 的链接形式呈现，点击链接可以直接跳转到对应节点。
-
-- ~M-x org-supertag-query-in-buffer~ :: 在当前 buffer 中查询
-- ~M-x org-supertag-query-in-files~ :: 在指定文件中查询，可以指定多个文件
-
 ** 查询结果导出
-查询结果的导出有三种方式，可以通过以下命令或快捷键触发：
+提供三种导出方式，支持命令和快捷键操作：
 
 *** 导出到新文件
 - 命令: ~M-x org-supertag-query-export-results-to-new-file~
 - 快捷键: ~C-c C-x n~
-1. 选择查询结果后，选择 "Export to New File"
-2. 输入新文件名
-3. 选择插入位置:
-   - File End :: 插入到文件末尾
-   - Under Heading :: 作为选定标题的子标题插入
-   - Same Level :: 作为选定标题的同级标题插入
+- 功能: 将查询结果导出到新建文件，支持选择插入位置:
+  - 文件末尾
+  - 作为子标题
+  - 作为同级标题
 
-*** 导出到已有文件
+*** 导出到已有文件  
 - 命令: ~M-x org-supertag-query-export-results-to-file~
 - 快捷键: ~C-c C-x f~
-1. 选择查询结果后，选择 "Export to Existing File"
-2. 选择目标文件
-3. 选择插入位置（同上）
+- 功能: 将查询结果导出到指定文件的选定位置
 
 *** 在当前位置插入
 - 命令: ~M-x org-supertag-query-export-results-here~
-- 快捷键: 未定义
-1. 选择查询结果后，选择 "Insert at Point"
-2. 结果将以 org-mode 特殊区块的形式插入，例如：
-   #+begin_query
-   - [[id:node-id][节点标题]]
-   #+end_query
+- 功能: 在光标处以 org-mode 区块形式插入结果
+#+begin_query
+- [[id:node-id][节点标题]]
+#+end_query
 
-⚠️注意: ~org-supertag-query-export-results-here~ 可以直接在搜索结果页之外使用，不可以在搜索结果页里使用
+⚠️注意: 该命令仅可在搜索结果页外使用
 
 *** 其他相关命令
 - ~C-c C-c~ :: 切换当前行的选择状态
 - ~C-c C-x C-r~ :: 选中区域内的所有结果
 - ~C-c C-x C-u~ :: 取消选中区域内的所有结果
 
-* 安装
+** 行为系统
+行为系统是 org-supertag 的核心特性之一，它让标签具有了自动化操作的能力。
+
+*** 行为类型
+org-supertag 提供三种类型的行为：
+
+**** 基础行为
+最基本的行为单元：
+- 单一功能，通过参数实现灵活性
+- 直接操作节点属性或内容
+- 示例：
+  - @todo - 设置任务状态
+  - @priority - 设置优先级
+  - @timestamp - 添加时间戳
+  - @property - 设置属性
+  - @clock - 管理时间记录
+
+**** 派生行为
+在基础行为上的扩展：
+- 预设参数组合
+- 针对特定场景优化
+- 示例：
+  - @done - 完成任务并记录时间
+  - @start - 开始任务并记录时间
+  - @cancel - 取消任务并添加说明
+
+**** 组合行为
+多个行为的工作流：
+- 将多个行为串联成工作流
+- 实现复杂的自动化场景
+- 示例：
+  - @meeting - 添加模板 + 设置日程 + 标记待办
+  - @archive - 标记完成 + 移动到归档文件
+
+*** 行为定义
+行为定义存放在 ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el 中：
 
 #+begin_src emacs-lisp
-(use-package org-supertag
-  :straight (:host github :repo "yibie/org-supertag")
-  :after org
-  :config
-  (org-supertag-setup))
+;; 基础行为示例
+(org-supertag-behavior-register "@todo"
+  :trigger :on-add                                  ; 触发时机
+  :action #'org-supertag-behavior--set-todo         ; 行为函数
+  :params '(state)                                  ; 参数类型
+  :style '(:face (:foreground "blue" :weight bold)  ; 样式定义
+          :prefix "☐"))
+
+;; 派生行为示例
+(org-supertag-behavior-register "@done"
+  :trigger :on-add
+  :list '("@todo=DONE")                            ; 预设参数
+  :style '(:face (:foreground "green" :weight bold)
+          :prefix "✓"))
+
+;; 组合行为示例
+(org-supertag-behavior-register "@done+archive"
+  :trigger :on-add
+  :list '("@todo=DONE"                             ; 行为链
+         "@property=ARCHIVE_TIME=now"
+         "@archive")
+  :style '(:face (:foreground "gray50" :strike-through t)
+          :prefix "📦"))
 #+end_src
 
+*** 触发器类型
+行为可以在不同时机触发：
+- :on-add - 添加标签时触发
+- :on-remove - 移除标签时触发
+- :on-change - 节点内容变化时触发
+- :always - 所有事件都触发
+
+
 * Changelog
+- 2025-12-31 :: 1.0.0 release
+  - feat behavior-system :: 完整的行为系统实现，形成自动工作流
+    - 三层行为架构（基础/派生/组合）
+    - 完整的触发器系统
+    - 丰富的行为库函数
+    - 样式系统支持
+  - docs :: 提供交互式演示文档 DEMO.org 
+  - refactor :: 核心重构
+    - 优化数据结构
+    - 改进错误处理
+    - 提升性能表现
 
 - 2024-12-20 :: 0.0.2 release
   - fix org-supertag-remove :: 修复移除标签不生效的问题
@@ -238,8 +251,8 @@ org-supertag 提供了一些预设的标签类型，以下仅为举例:
 
 * 未来计划
 
-- 能够提供更多查询的范围，比如针对一个文件或多个文件的查询
-- 初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
+- ✅能够提供更多查询的范围，比如针对一个文件或多个文件的查询
+- ✅初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
 - 初步与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
 - 实现一个任务调度系统，让多个节点组合起来，完成一系列的任务，比如自动设置晚上 9 点进行每日回顾，并自动将回顾结果插入到回顾节点中（实验性功能，未必会实现）
 - 像 Tana 那样，提供更多视图（实验性功能，未必会实现）

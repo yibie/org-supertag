@@ -301,7 +301,6 @@ current values and lets the user select and modify them one by one."
                     (format "[%s] %s (current: %s)" tag-id field-name 
                            (or current-value "unset"))
                     (cons tag-id field)))))
-    
     ;; Let user select fields to edit
     (while (when-let* ((choice (completing-read "Select field to edit (C-g to finish): "
                                               (mapcar #'car field-values)
@@ -418,7 +417,7 @@ It provides options to:
   "Batch add tags to selected headlines.
 TAG-NAME is the name of the tag to add"
   (interactive
-   (list (completing-read "选择或输入标签: "
+   (list (completing-read "Select tag: "
                          (append 
                           (org-supertag-get-all-tags)
                           (mapcar #'car org-supertag-preset-tags)))))  ; Only get preset tag names

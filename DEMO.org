@@ -1,0 +1,219 @@
+#+TITLE: Org Supertag Interactive Demo
+#+AUTHOR: Your Name
+#+DATE: [2024-01-10]
+
+* Welcome to Org Supertag! 
+This is an interactive demonstration of org-supertag's features.
+Follow along to learn how to use this powerful tool for your Org workflow.
+
+** Getting Started
+1. Make sure org-supertag is installed and loaded
+2. Open this file in Emacs
+3. Follow the demonstrations step by step
+
+** Key Concepts
+org-supertag introduces several powerful concepts:
+
+*** Nodes
+- Every heading can become a node
+- Nodes are uniquely identified
+- Nodes can have tags and behaviors
+
+*** Tags
+- More than just org-mode tags
+- Can have fields and behaviors
+- Support hierarchical relationships
+
+*** Behaviors
+- Automatic actions triggered by tags
+- Can respond to various events
+- Highly customizable
+
+*** Queries
+- Powerful node search capabilities
+- Support for complex filters
+- Export and reuse results
+
+* Interactive Demonstrations
+Let's start with some hands-on examples.
+
+** Demo 1: Creating Your First Node
+1. Position cursor on heading
+2. Run ~M-x org-supertag-node-create~
+3. Notice how the heading gets an ID property
+
+Try it now! ⬇️
+
+** Demo 2: Working with Tags
+Here we'll explore tag operations.
+
+1. Position cursor on heading
+2. Add a tag with ~M-x org-supertag-tag-add-tag~
+3. Try adding these preset tags:
+   - book
+   - project
+   - contact
+
+** Demo 3: Behavior in Action
+Let's see how behaviors work with tags:
+
+1. First, add a tag to heading:
+   - Position cursor on heading
+   - Run ~M-x org-supertag-tag-add-tag~
+   - Choose a tag (e.g. "meeting")
+
+2. Then attach a behavior:
+   - Run ~M-x org-supertag-behavior-attach~
+   - Select the tag you just added
+   - Choose from available behaviors
+
+3. Try it out:
+   - The behavior will trigger automatically based on its type
+   - Use ~M-x org-supertag-behavior-execute-at-point~ to run manually
+   - Try different behaviors like changing TODO state
+   
+4. Try ~M-x org-supertag-behavior-execute-at-point~
+   - Position cursor on this heading
+   - Run ~M-x org-supertag-behavior-execute-at-point~
+   - It is different from the behavior triggered by the tag
+     - Execute behavior without parameters
+     - And execute behavior without styles
+   - But it can execute behavior immediately, so sometimes it is very useful, especially you don't want to add tag to the node
+
+** Understanding Behaviors
+Let's understand different types of behaviors and how to use them:
+
+*** Basic Behaviors
+Basic behaviors are the foundation:
+- Simple, single-purpose actions
+- Usually modify node properties or content
+- Provide parameter types for customization
+- Examples:
+
+#+begin_src emacs-lisp
+(org-supertag-behavior-register "@todo"
+  :trigger :on-add
+  :action #'org-supertag-behavior--set-todo         ; <= This is the action library function, which is defined in org-supertag-behavior-library.el
+  :params '(state)                                  ; <= This is the parameter type
+  :style '(:face (:foreground "blue" :weight bold)  ; <= This is the style, contains face and prefix
+          :prefix "☐"))
+#+end_src
+
+*** Derived Behaviors
+Built upon basic behaviors:
+- Specialized for specific use cases
+- Pre-configured parameter sets
+- Examples:
+
+#+begin_src emacs-lisp
+(org-supertag-behavior-register "@done"
+  :trigger :on-add
+  :list '("@todo=DONE")                              ; <= This is the parameter set, is the basic behavior "@todo" with parameter "DONE"
+  :style '(:face (:foreground "green" :weight bold) 
+          :prefix "✓"))
+#+end_src
+
+*** Combined Behaviors
+Chain multiple behaviors for workflows:
+- Compose multiple behaviors
+- Create task-specific workflows
+- Examples:
+
+#+begin_src emacs-lisp
+(org-supertag-behavior-register "@done+archive"
+  :trigger :on-add
+  :list '("@todo=DONE"                                ; <= :list can be a list of behaviors
+          "@property=ARCHIVE_TIME=now"                ; <= Format is "@property=NAME=VALUE", where = separates the behavior name, property name and property value
+          "@archive")                                 ; <= This is the behavior "@archive" with no parameters 
+  :style '(:face (:foreground "gray50" :strike-through t)  
+          :prefix "📦"))
+#+end_src
+
+
+*** Key components:
+   - :trigger - When to run (:on-add, :on-remove, :on-change, etc.)
+   - :action - Function from behavior library
+   - :params - Parameters the behavior accepts
+   - :style - Visual appearance with face and prefix
+
+*** Available triggers:
+   - :on-add - When tag is added
+   - :on-remove - When tag is removed
+   - :on-change - When node is modified
+   - :always - On all events
+
+Try these behaviors in the Exercise Area below!
+
+** Demo 4: Query Power
+Time to explore the query system:
+
+1. Create several nodes with different tags
+2. Use ~M-x org-supertag-query~ to find them
+3. Export results to a new buffer
+
+* Practical Examples
+
+** Knowledge Management
+Here's how to use org-supertag for knowledge management:
+
+*** Reading Notes
+Create new tag "book" to track your reading:
+1. Position cursor to this heading
+2. Run ~M-x org-supertag-tag-add-tag~
+3. Insert "book" as tag name
+4. Run ~org-supertag-tag-set-field-and-value~
+5. Fill in the fields and values:
+   - Title: "The Art of Computer Programming"   
+   - Author: "Donald Knuth"
+   - Status: "Reading"
+6. Attach behavior to this tag:
+   - Run ~M-x org-supertag-behavior-attach~
+   - Select "book" as tag
+   - Choose "todo" behavior
+
+Now you can use ~M-x org-supertag-query~ to find all books:
+1. Run ~M-x org-supertag-query~
+2. Insert "book" as keyword
+3. Try to export the result
+
+*** Research Topics
+Use @research tag for research notes:
+1. Add some research notes
+2. Tag them appropriately
+3. Use queries to find related notes
+
+** Project Management
+Example of using org-supertag for projects:
+
+*** Current Project
+1. Add "project" tag
+2. Add some tasks with "task" tag
+
+* Tips and Tricks
+
+** Quick Operations
+- Use ~M-x org-supertag-node-create~ for quick node creation
+- Try tag completion with TAB
+- Use query history for frequent searches
+
+** Advanced Features
+- Combine multiple tags
+- Create custom behaviors
+- Export query results
+
+* Conclusion
+Now you've seen the main features of org-supertag in action!
+
+For more information:
+- Check the documentation with ~M-x describe-package RET org-supertag~
+- Visit the GitHub repository
+- Try creating your own workflows
+
+* Exercise Area
+Use this area to practice what you've learned:
+
+** Practice Node 1
+
+** Practice Node 2
+
+** Practice Node 3 

@@ -842,19 +842,16 @@ Shows results in a dedicated buffer with selection and export options."
   ;; Save current position
   (setq org-supertag-query--original-buffer (current-buffer)
         org-supertag-query--original-point (point))
-  
   ;; Ensure database is initialized
   (unless (and (boundp 'org-supertag-db--object)
                org-supertag-db--object)
     (error "Database not initialized"))
-  
   ;; Select files
   (when-let* ((files (org-supertag-query--select-files)))
     ;; Get search keywords
     (let* ((input (read-string "Enter search keywords (space separated): "))
            (keywords (split-string input " " t))
            (nodes (org-supertag-query--find-nodes-in-files keywords files)))
-      
       ;; Display results
       (org-supertag-query-show-results keywords nodes))))
 

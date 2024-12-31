@@ -161,34 +161,34 @@ Returns the first tag ID found for the node."
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-node-db-set-field (node-id field-id value)
-  "设置节点的字段值.
-NODE-ID 是节点ID
-FIELD-ID 是字段ID
-VALUE 是字段值
+  "Set field value for a node.
+NODE-ID is the node identifier
+FIELD-ID is the field identifier
+VALUE is the field value
 
-说明：
-1. 创建/更新字段关系
-2. 存储字段值
-3. 触发字段更新事件"
-    ;; 添加/更新字段关系
+Notes:
+1. Creates/updates field relationship
+2. Stores field value
+3. Triggers field update event"
+    ;; Add/update field relationship
     (org-supertag-db-link
      :type :node-field
      :from node-id
      :to field-id
      :value value)
-    ;; 清除缓存
+    ;; Clear cache
     (org-supertag-db--cache-remove 'query 
                                   (format "node-fields:%s" node-id))
-    ;; 触发事件
+    ;; Trigger event
     (run-hook-with-args 'org-supertag-node-field-updated-hook
                         node-id field-id value))
 
- (defun org-supertag-node-db-get-fields (node-id)
-  "获取节点的所有字段值.
-NODE-ID 是节点ID
+(defun org-supertag-node-db-get-fields (node-id)
+  "Get all field values for a node.
+NODE-ID is the node identifier
 
-返回值：
-字段值的列表，每个元素是 (field-id . value)"
+Returns:
+List of field values, each element is (field-id . value)"
   (or (org-supertag-db--cache-get 'query 
                                  (format "node-fields:%s" node-id))
       (when (org-supertag-node-db-exists-p node-id)
@@ -197,7 +197,7 @@ NODE-ID 是节点ID
           (org-supertag-db--cache-set 'query 
                                      (format "node-fields:%s" node-id)
                                      fields)
-          fields))))                       
+          fields))))
 
 ;;------------------------------------------------------------------------------
 ;; Operation Functions

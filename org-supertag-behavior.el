@@ -2,13 +2,13 @@
 
 ;;; Commentary
 ;;
-;; 一切都是行为，行为相互调用
+;; Everything is behavior, behaviors call each other
 ;;
-;; 提供基于 tag 的节点行为系统
-;; 1. 行为作为 tag 的属性存在
-;; 2. 当 tag 被应用时触发行为
-;; 3. 支持自动化执行
-;; 4. 支持定时任务
+;; Provides a tag-based node behavior system
+;; 1. Behaviors exist as tag properties
+;; 2. Behaviors are triggered when tags are applied
+;; 3. Supports automated execution
+;; 4. Supports scheduled tasks
 
 (require 'org-supertag-tag)
 (require 'org-supertag-behavior-library)
@@ -289,6 +289,110 @@ Returns plist like (:fg \"red\" :bg \"yellow\" :weight \"bold\")"
     
     (message "Behavior '%s' attached to tag '%s'" behavior-name tag-name)))
 
+;;------------------------------------------------------------------------------
+;; Behavior Execute at Point
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--execute-behavior (node-id behavior-name &optional param-str)
+  "Execute a single behavior BEHAVIOR-NAME on NODE-ID with optional PARAM-STR.
+
+This function serves as a middle layer between high-level commands and
+the core behavior execution system. It handles:
+1. Behavior resolution and validation
+2. Parameter parsing and normalization
+3. Position management
+4. Error handling and logging
+
+Arguments:
+- NODE-ID: The ID of the node to execute behavior on
+- BEHAVIOR-NAME: Name of the behavior to execute
+- PARAM-STR: Optional parameter string (e.g. \"DONE\" or \"red,bold\")
+
+The execution follows these steps:
+1. Resolve and validate behavior
+2. Parse parameters if provided
+3. Execute behavior with proper error handling
+4. Log execution results
+
+Example:
+  ;; Execute simple behavior
+  (org-supertag-behavior--execute-behavior node-id \"@todo\")
+  
+  ;; Execute with parameters
+  (org-supertag-behavior--execute-behavior node-id \"@todo\" \"DONE\")
+  
+  ;; Execute composite behavior
+  (org-supertag-behavior--execute-behavior node-id \"@done+archive\")"
+  (condition-case err
+      (progn
+        ;; 1. Resolve and validate behavior
+        (let* ((behavior (or (gethash behavior-name org-supertag-behavior-registry)
+                            (signal 'org-supertag-behavior-error
+                                    (list :unknown-behavior behavior-name))))
+               (action (plist-get behavior :action))
+               (behavior-list (plist-get behavior :list)))
+          
+          (message "Debug execute-behavior - node=%s behavior=%s action=%S list=%S"
+                  node-id behavior-name action behavior-list)
+          ;; 2. Execute based on behavior type
+          (when-let ((pos (org-supertag-db-get-pos node-id)))
+            (save-excursion
+              (org-with-point-at pos
+                (cond
+                 ;; Direct action
+                 (action
+                  (message "Debug execute-behavior - Executing direct action")
+                  (if param-str
+                      (org-supertag-behavior-execute 
+                       node-id behavior-name param-str)
+                    (org-supertag-behavior-execute 
+                     node-id behavior-name)))
+                 ;; Behavior list
+                 (behavior-list
+                  (message "Debug execute-behavior - Executing behavior list")
+                  (dolist (spec behavior-list)
+                    (let* ((parts (split-string spec "="))
+                           (name (car parts))
+                           (args (cadr parts)))
+                      (message "Debug execute-behavior - Running: %s with args: %s"
+                              name args)
+                      (if args
+                          (org-supertag-behavior-execute node-id name args)
+                        (org-supertag-behavior-execute node-id name)))))
+                 ;; Invalid behavior type
+                 (t (signal 'org-supertag-behavior-error
+                           (list :invalid-behavior-type behavior-name)))))
+              ;; 3. Log success
+              (message "Successfully executed behavior %s on node %s"
+                      behavior-name node-id)))))
+    ;; Error handling
+    (error
+     (org-supertag-behavior--handle-error 
+      err node-id behavior-name 'execute-behavior)
+     (signal (car err) (cdr err)))))
+
+(defun org-supertag-behavior-execute-at-point ()
+  "Execute a behavior on the current node.
+Prompts for behavior name and parameters if needed."
+  (interactive)
+  (when-let* ((node-id (org-id-get-create))
+              (behavior-name (completing-read "Behavior: " 
+                                           (ht-keys org-supertag-behavior-registry))))
+    (message "Debug execute-at-point - node=%s behavior=%s" node-id behavior-name)
+    (org-supertag-behavior--execute-behavior node-id behavior-name)
+    ;; Refresh styles after execution
+    (org-supertag-behavior--apply-styles node-id)))
+
+(defun org-supertag-behavior-execute-batch ()
+  "Execute multiple behaviors on the current node in sequence.
+Prompts for a list of behaviors to execute."
+  (interactive)
+  (when-let* ((node-id (org-id-get-create))
+              (behaviors (completing-read-multiple "Behaviors: " 
+                                                (ht-keys org-supertag-behavior-registry))))
+    (message "Debug execute-batch - node=%s behaviors=%S" node-id behaviors)
+    (dolist (behavior-name behaviors)
+      (org-supertag-behavior--execute-behavior node-id behavior-name))))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior System Hooks
@@ -627,5 +731,6 @@ If BEG and END are provided, only refresh that region."
           #'org-supertag-behavior-setup)
 
 
+ 
 
 (provide 'org-supertag-behavior)

@@ -1,23 +1,23 @@
 ;;; org-supertag-behavior-library.el --- Library functions for org-supertag behaviors -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; 提供各种功能库支持 org-supertag 的行为系统
-;; 每个库专注于特定领域的功能，支持行为的实现和组合
+;; Provides various library functions to support org-supertag behavior system
+;; Each library focuses on functionality in specific domains, supporting behavior implementation and composition
 ;;
-;; 行为库函数开发指南
-;; ==================
+;; Behavior Library Function Development Guide
+;; =========================================
 ;;
-;; 1. 函数命名和文档
-;; ----------------
-;; - 使用 org-supertag-behavior-- 前缀
-;; - 函数名应反映具体动作
-;; - 详细的文档字符串，包括：
-;;   * 功能描述
-;;   * 参数说明
-;;   * 返回值说明
-;;   * 使用示例
+;; 1. Function Naming and Documentation
+;; ----------------------------------
+;; - Use org-supertag-behavior-- prefix
+;; - Function names should reflect specific actions
+;; - Detailed docstrings including:
+;;   * Functionality description
+;;   * Parameter descriptions
+;;   * Return value descriptions
+;;   * Usage examples
 ;;
-;; 示例:
+;; Example:
 ;; (defun org-supertag-behavior--set-todo (node-id params)
 ;;   "Set TODO state for NODE-ID based on PARAMS.
 ;; PARAMS is a plist with :state key.
@@ -25,34 +25,33 @@
 ;; Example:
 ;;   (org-supertag-behavior--set-todo node-id '(:state \"DONE\"))")
 ;;
-;; 2. 参数处理
-;; ----------
-;; - 必需参数：
-;;   * node-id: 节点标识符
-;;   * params: 参数 plist
-;; - 使用 plist-get 提取参数
-;; - 使用 when-let* 进行参数验证
+;; 2. Parameter Handling
+;; -------------------
+;; - Required parameters:
+;;   * node-id: Node identifier
+;;   * params: Parameter plist
+;; - Use plist-get to extract parameters
+;; - Use when-let* for parameter validation
 ;;
-;; 3. 位置管理
-;; ----------
-;; - 获取节点位置：(org-supertag-db-get-pos node-id)
-;; - 保护当前位置：(save-excursion ...)
-;; - 确保正确位置：(org-with-point-at pos ...)
+;; 3. Position Management
+;; --------------------
+;; - Get node position: (org-supertag-db-get-pos node-id)
+;; - Protect current position: (save-excursion ...)
+;; - Ensure correct position: (org-with-point-at pos ...)
 ;;
-;; 4. 错误处理
-;; ----------
-;; - 使用 when-let* 处理可能的空值
-;; - 添加调试信息：(message "Debug ...")
-;; - 必要时使用 condition-case 捕获错误
+;; 4. Error Handling
+;; ---------------
+;; - Use when-let* to handle potential nil values
+;; - Add debug info: (message "Debug ...")
+;; - Use condition-case to catch errors when needed
 ;;
-
-;; 5. 最佳实践
-;; ----------
-;; - 保持函数功能单一
-;; - 优先使用现有 org-mode 函数
-;; - 通过组合实现复杂功能
-;; - 确保位置安全性
-;; - 添加充分的调试信息
+;; 5. Best Practices
+;; ---------------
+;; - Keep functions focused on single responsibility
+;; - Prefer existing org-mode functions
+;; - Implement complex functionality through composition
+;; - Ensure position safety
+;; - Add sufficient debug information
 ;;
 
 ;;; Code:
@@ -80,10 +79,10 @@ Example:
     (message "Debug state-change - Changing state from %s to %s" from to)
     (save-excursion
       (org-with-point-at pos
-        ;; 记录状态变更
+        ;; record state change
         (when note
           (org-add-log-note))
-        ;; 触发 org-trigger-hook
+        ;; trigger org-trigger-hook
         (run-hook-with-args 'org-trigger-hook
                            (list :type 'state-change
                                  :position pos
@@ -101,9 +100,7 @@ Example:
   (when-let ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 更新统计信息
         (org-update-statistics-cookies nil)
-        ;; 触发统计更新后的钩子
         (run-hooks 'org-after-todo-statistics-hook)))))
 
 (defun org-supertag-behavior--toggle-state (node-id params)
@@ -633,11 +630,11 @@ Example:
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 临时设置优先级范围
+        ;; temporarily set priority range
         (let ((org-highest-priority (string-to-char highest))
               (org-lowest-priority (string-to-char lowest))
               (org-default-priority (string-to-char default)))
-          ;; 设置当前优先级为默认值
+          ;; set current priority to default
           (org-priority (string-to-char default)))))))
 
 (defun org-supertag-behavior--priority-with-hook (node-id params)
@@ -659,13 +656,13 @@ Example:
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 添加临时钩子
+        ;; add temporary hook
         (add-hook 'org-after-todo-state-change-hook
                  (lambda ()
                    (apply hook-fn hook-args)))
-        ;; 设置优先级
+        ;; set priority
         (org-priority (string-to-char priority))
-        ;; 移除临时钩子
+        ;; remove temporary hook
         (remove-hook 'org-after-todo-state-change-hook
                     (lambda ()
                       (apply hook-fn hook-args)))))))
@@ -695,14 +692,14 @@ Example:
         (let* ((switch-state (plist-get params :switch-state))
                (resume (plist-get params :resume))
                (use-last-clock (plist-get params :use-last-clock)))
-          ;; 设置临时状态切换值
+          ;; set temporary state switch value
           (when switch-state
             (setq-local org-clock-in-switch-to-state switch-state))
-          ;; 设置是否恢复
+          ;; set whether to resume
           (setq-local org-clock-in-resume resume)
-          ;; 设置是否使用上次时间
+          ;; set whether to use last clock
           (setq-local org-clock-continuously use-last-clock)
-          ;; 启动时钟
+          ;; start clock
           (condition-case err
               (org-clock-in)
             (error
@@ -726,15 +723,15 @@ Example:
       (org-with-point-at pos
         (let* ((switch-state (plist-get params :switch-state))
                (note (plist-get params :note)))
-          ;; 设置临时状态切换值
+          ;; set temporary state switch value
           (when switch-state
             (setq-local org-clock-out-switch-to-state switch-state))
-          ;; 停止时钟
+          ;; stop clock
           (condition-case err
               (org-clock-out nil nil)
             (error
              (message "Error stopping clock: %S" err)))
-          ;; 添加注释
+          ;; add note
           (when note
             (org-add-note note)))))))
 
@@ -781,7 +778,7 @@ Example:
                                          ,(- (org-time-today) 
                                              (* range 86400))))
                          (_ '(:today)))))
-          ;; 插入或更新时钟报告
+          ;; insert or update clock report
           (condition-case err
               (org-clock-report `(:scope ,scope ,@rangeval))
             (error
@@ -812,9 +809,9 @@ Example:
         (let* ((offset (plist-get params :offset))
                (format (or (plist-get params :format)
                           org-timer-format)))
-          ;; 设置临时格式
+          ;; set temporary format
           (setq-local org-timer-format format)
-          ;; 启动计时器
+          ;; start timer
           (condition-case err
               (if offset
                   (org-timer-start offset)
@@ -845,10 +842,10 @@ Example:
                (use-default (plist-get params :default))
                (use-effort (plist-get params :effort))
                (hook-fn (plist-get params :hook-fn)))
-          ;; 设置临时钩子
+          ;; set temporary hook
           (when hook-fn
             (add-hook 'org-timer-done-hook hook-fn))
-          ;; 设置计时器
+          ;; set timer
           (condition-case err
               (cond
                (duration
@@ -862,7 +859,7 @@ Example:
                 (org-timer-set-timer)))
             (error
              (message "Error setting timer: %S" err)))
-          ;; 移除临时钩子
+          ;; remove temporary hook
           (when hook-fn
             (remove-hook 'org-timer-done-hook hook-fn)))))))
 
@@ -942,17 +939,15 @@ Example:
        ((markerp pos) (set-buffer (marker-buffer pos)))
        ((numberp pos) (goto-char pos)))
       (org-back-to-heading t)
-      
       (let ((parent-level (org-outline-level))
             children)
         (message "Parent level: %d at heading: %s" 
                 parent-level 
                 (org-get-heading t t t t))
-        
-        ;; 使用 org-map-entries 收集直接子节点
+        ;; collect direct children using org-map-entries
         (save-restriction
           (org-narrow-to-subtree)
-          (let ((parent-pos (point)))  ;; 记住父节点位置
+          (let ((parent-pos (point)))  ;; remember parent node position
             (goto-char (point-min))
             (while (re-search-forward org-heading-regexp nil t)
               (let* ((current-level (org-outline-level))
@@ -960,7 +955,7 @@ Example:
                      (todo (org-get-todo-state)))
                 (message "Found entry - Level: %d, Heading: %s, TODO: %s" 
                         current-level heading todo)
-                ;; 只收集直接子节点，不需要 ID
+                ;; collect direct children, no need for ID
                 (when (= current-level (1+ parent-level))
                   (message "Adding child: %s" heading)
                   (push (list heading todo) children))))))
@@ -1022,17 +1017,17 @@ Example:
                (save-context (plist-get params :save-context))
                (find-done (plist-get params :find-done))
                (find-old (plist-get params :find-old)))
-          ;; 设置归档位置（如果指定）
+          ;; set archive location (if specified)
           (when location
             (setq-local org-archive-location location))
-          ;; 设置上下文保存（如果指定）
+          ;; set context save (if specified)
           (when save-context
             (setq-local org-archive-save-context-info save-context))
-          ;; 如果需要标记为完成，先设置状态
+          ;; if need to mark as done, set state first
           (when (and mark-done
                      (not (equal (org-get-todo-state) mark-done)))
             (org-todo mark-done))
-          ;; 执行归档
+          ;; execute archive
           (condition-case err
               (cond
                (find-done
@@ -1065,14 +1060,14 @@ Example:
         (let* ((heading (plist-get params :sibling-heading))
                (tags (plist-get params :add-tags))
                (time-format (plist-get params :time-format))
-               ;; 临时设置归档选项
+               ;; set temporary archive options
                (org-archive-sibling-heading 
                 (or heading org-archive-sibling-heading)))
-          ;; 添加额外标签
+          ;; add extra tags
           (when tags
             (dolist (tag tags)
               (org-toggle-tag tag 'on)))
-          ;; 执行归档
+          ;; execute archive
           (condition-case err
               (org-archive-to-archive-sibling)
             (error
@@ -1144,10 +1139,10 @@ Example:
     (save-excursion
       (org-with-point-at pos
         (let ((location (concat file "::" headline)))
-          ;; 设置继承标签选项
+          ;; set inherited tags option
           (setq-local org-archive-subtree-add-inherited-tags 
                       inherit-tags)
-          ;; 设置归档位置
+          ;; set archive location
           (condition-case err
               (pcase scope
                 (:buffer
@@ -1175,12 +1170,12 @@ Returns (total done progress) where progress is a float 0-100."
           (done 0)
           (done-states (or org-done-keywords '("DONE"))))
 
-      ;; 保存当前位置
+      ;; save current position
       (let ((start-pos (point)))
-        ;; 移动到第一个子项
+        ;; move to first child
         (outline-next-heading)
         
-        ;; 遍历所有子项
+        ;; traverse all children
         (while (and (not (eobp))
                    (> (org-outline-level) current-level))
           (let ((todo-state (org-get-todo-state))
@@ -1190,7 +1185,7 @@ Returns (total done progress) where progress is a float 0-100."
             (when (member todo-state done-states)
               (setq done (1+ done))))
           (outline-next-heading))
-        ;; 恢复位置
+        ;; restore position
         (goto-char start-pos))
       (message "Final count: %d total, %d done" total done)
       (list total done 
@@ -1281,15 +1276,7 @@ FACE-PLIST is a property list of face attributes."
                               (new-title (if (string-prefix-p prefix current-title)
                                            current-title
                                          (concat prefix " " current-title))))
-                         ;; 使用 replace-match 而不是直接删除和插入
+                         ;; use replace-match instead of deleting and inserting directly
                          (replace-match new-title t t nil 4))))))))))))))
-
-
-
-
-
-
-
-
 
 (provide 'org-supertag-behavior-library) 
