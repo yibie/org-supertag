@@ -1,59 +1,103 @@
 ;;; org-supertag-behavior-library.el --- Library functions for org-supertag behaviors -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; 提供各种功能库支持 org-supertag 的行为系统
-;; 每个库专注于特定领域的功能，支持行为的实现和组合
+
+;; Provide various library functions to support org-supertag's behavior system
+;; Each library focuses on functionality in specific domains, supporting behavior implementation and composition
+
+;; Behavior Library Development Guide
+;; ================================
 ;;
-;; 行为库函数开发指南
-;; ==================
-;;
-;; 1. 函数命名和文档
-;; ----------------
-;; - 使用 org-supertag-behavior-- 前缀
-;; - 函数名应反映具体动作
-;; - 详细的文档字符串，包括：
-;;   * 功能描述
-;;   * 参数说明
-;;   * 返回值说明
-;;   * 使用示例
-;;
-;; 示例:
-;; (defun org-supertag-behavior--set-todo (node-id params)
-;;   "Set TODO state for NODE-ID based on PARAMS.
-;; PARAMS is a plist with :state key.
+;; 1. Function Naming and Documentation
+;; ----------------------------------
+;; - Use 'org-supertag-behavior--' prefix for all functions
+;; - Function names should reflect specific actions
+;; - Comprehensive docstrings must include:
+;;   * Purpose and functionality
+;;   * Parameter descriptions
+;;   * Return value details
+;;   * Usage examples
+;;   * Side effects (if any)
 ;;
 ;; Example:
-;;   (org-supertag-behavior--set-todo node-id '(:state \"DONE\"))")
+;; ```elisp
+;; (defun org-supertag-behavior--set-todo (node-id params)
+;;   "Set TODO state for NODE-ID based on PARAMS.
+;; 
+;; NODE-ID is the unique identifier of the org node.
+;; PARAMS is a plist with following keys:
+;;   :state    - The target TODO state (e.g., \"TODO\", \"DONE\")
+;;   :log      - Whether to log the state change (optional)
+;;   :note     - Note to add with state change (optional)
 ;;
-;; 2. 参数处理
-;; ----------
-;; - 必需参数：
-;;   * node-id: 节点标识符
-;;   * params: 参数 plist
-;; - 使用 plist-get 提取参数
-;; - 使用 when-let* 进行参数验证
+;; Returns t on success, nil on failure.
 ;;
-;; 3. 位置管理
-;; ----------
-;; - 获取节点位置：(org-supertag-db-get-pos node-id)
-;; - 保护当前位置：(save-excursion ...)
-;; - 确保正确位置：(org-with-point-at pos ...)
+;; Side effects:
+;; - Modifies the TODO state of the target node
+;; - May create a log entry if logging is enabled
 ;;
-;; 4. 错误处理
-;; ----------
-;; - 使用 when-let* 处理可能的空值
-;; - 添加调试信息：(message "Debug ...")
-;; - 必要时使用 condition-case 捕获错误
+;; Examples:
+;;   ;; Simple state change
+;;   (org-supertag-behavior--set-todo node-id '(:state \"DONE\"))
 ;;
+;;   ;; State change with logging
+;;   (org-supertag-behavior--set-todo 
+;;     node-id 
+;;     '(:state \"DONE\" :log t :note \"Completed on time\"))")
+;;
+;; 2. Parameter Handling
+;; -------------------
+;; - Required parameters:
+;;   * node-id: Node identifier (string)
+;;   * params: Parameter plist
+;; - Use plist-get for parameter extraction
+;; - Validate parameters with when-let*
+;; - Provide meaningful defaults when appropriate
+;;
+;; Example:
+;; ```elisp
+;; (defun org-supertag-behavior--example (node-id params)
+;;   (when-let* ((required-param (plist-get params :required))
+;;               (optional-param (or (plist-get params :optional) "default"))
+;;               (pos (org-supertag-db-get-pos node-id)))
+;;     ;; Function body here
+;;     ))
+;;
+;; 3. Position Management
+;; --------------------
+;; - Get node position: (org-supertag-db-get-pos node-id)
+;; - Protect current position: (save-excursion ...)
+;; - Ensure correct position: (org-with-point-at pos ...)
+;; - Handle buffer switching safely
+;;
+;; Example:
+;; ```elisp
+;; (defun org-supertag-behavior--safe-edit (node-id)
+;;   (when-let ((pos (org-supertag-db-get-pos node-id)))
+;;     (save-excursion
+;;       (org-with-point-at pos
+;;         ;; Safe editing here
+;;         ))))
+;;
+;; 4. Error Handling
+;; ---------------
+;; - Use when-let* for nil value handling
+;; - Add debug messages: (message "Debug ...")
+;; - Use condition-case for error catching
+;; - Provide meaningful error messages
+;;
+;; Example:
+;; ```elisp
+;; (defun org-supertag-behavior--safe-operation (node-id)
+;;   (condition-case err
+;;       (when-let* ((pos (org-supertag-db-get-pos node-id)))
+;;         (message "Debug: Processing node at %s" pos)
+;;         ;; Operation here
+;;         )
+;;     (error
+;;      (message "Error in safe-operation: %S" err)
+;;      nil)))
 
-;; 5. 最佳实践
-;; ----------
-;; - 保持函数功能单一
-;; - 优先使用现有 org-mode 函数
-;; - 通过组合实现复杂功能
-;; - 确保位置安全性
-;; - 添加充分的调试信息
-;;
 
 ;;; Code:
 
@@ -101,11 +145,7 @@ Example:
   (when-let ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 更新统计信息
         (org-update-statistics-cookies nil)
-        ;; 触发统计更新后的钩子
-        (run-hooks 'org-after-todo-statistics-hook)))))
-
 (defun org-supertag-behavior--toggle-state (node-id params)
   "Toggle between two states for NODE-ID based on PARAMS.
 PARAMS is a plist with :states (a list of two states) key.
@@ -1062,17 +1102,23 @@ PARAMS is a plist with optional keys:
               (write-file file)))
           
           ;; 执行归档
-          (let ((org-archive-location archive-location)
-                (org-archive-subtree-add-inherited-tags inherit-tags))
+          (let ((org-archive-location archive-location))
+            ;; 设置继承标签选项（不使用 let 绑定）
+            (setq-default org-archive-subtree-add-inherited-tags inherit-tags)
             (condition-case err
                 (progn
                   (org-back-to-heading t)
-                  ;; 使用 org-archive-subtree-default-with-confirmation 避免变量作用域问题
-                  (org-archive-subtree-default-with-confirmation)
+                  ;; 使用基础的 org-archive-subtree 函数
+                  (org-archive-subtree)
+                  ;; 恢复默认值
+                  (setq-default org-archive-subtree-add-inherited-tags nil)
+                  
                   ;; 更新节点位置信息
                   (org-supertag-node-update)
                   (message "Successfully archived subtree"))
               (error
+               ;; 确保恢复默认值
+               (setq-default org-archive-subtree-add-inherited-tags nil)
                (message "Error archiving subtree: %S" err)
                (signal 'org-supertag-behavior-error
                        (list :archive-failed node-id err))))))))))
@@ -1156,6 +1202,7 @@ Example:
               (let* ((result (org-supertag-behavior--calculate-progress))
                      (total (nth 0 result))
                      (done (nth 1 result)))
+                     (done-states (or org-done-keywords '("DONE"))))
                 (message "Children status: %d/%d done" done total)
                 (when (= done total)
                   (org-toggle-tag org-archive-tag 'on)))))
@@ -1179,7 +1226,7 @@ Example:
             (message "Performing default toggle")
             (org-toggle-tag org-archive-tag)
             (error
-             (message "Error toggling archive tag: %S" err))))))))
+             (message "Error toggling archive tag: %S" err)))))))
 
 (defun org-supertag-behavior--set-archive-location (node-id params)
   "Set archive location for NODE-ID based on PARAMS.

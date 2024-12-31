@@ -467,6 +467,66 @@ Returns:
 - nil if move failed"
   (org-supertag-node-move node-id target-file target-level))
 
+(defun org-supertag-node-move (node-id target-file &optional target-level)
+  "Move node to target file.
+NODE-ID is the node identifier
+TARGET-FILE is the target file path
+TARGET-LEVEL is the target heading level
+
+Returns:
+- t if move successful
+- nil if move failed"
+  (condition-case err
+      (when-let* ((content (org-supertag-get-node-content node-id))
+                  (_ (message "Got node content for %s" node-id))
+                  (source-file (plist-get (org-supertag-db-get node-id) :file-path))
+                  (_ (message "Source file: %s" source-file)))
+        ;; 1. Ensure target file exists and is writable
+        (unless (file-writable-p target-file)
+          (error "Target file not writable: %s" target-file))
+        ;; 2. Delete node from source
+        (if (org-supertag-delete-node-content node-id)
+            (progn
+              (message "Deleted node from source file")
+              ;; 3. Insert to target and update database
+              (with-current-buffer (find-file-noselect target-file)
+                (save-excursion
+                  (let ((adjusted-content 
+                         (org-supertag-adjust-node-level content target-level)))
+                    ;; 3.1 Insert content
+                    (goto-char (point-max))
+                    (unless (bolp) (insert "\n"))
+                    (insert adjusted-content "\n")
+                    (forward-line -1)
+                    ;; 3.2 Update node database entry
+                    (condition-case update-err
+                        (progn
+                          (org-supertag-update-node-db node-id target-file)
+                          (message "Updated node database entry"))
+                      (error
+                       (message "Failed to update node database: %s" 
+                               (error-message-string update-err))
+                       (signal (car update-err) (cdr update-err))))
+                    ;; 3.3 Update ID locations if cross-file move
+                    (when (and org-id-track-globally
+                             (not (equal source-file target-file)))
+                      (org-id-update-id-locations (list source-file target-file))
+                      (message "Updated ID locations"))
+                    ;; 3.4 Save both files
+                    (save-buffer)
+                    (when (and source-file
+                             (not (equal source-file target-file)))
+                      (with-current-buffer (find-file-noselect source-file)
+                        (save-buffer)))
+                    (message "Saved all buffers")
+                    t))))
+          (error "Failed to delete node from source file")))
+    (error
+     (message "Node move failed: %s" (error-message-string err))
+     nil)))
+
+
+
 (defun org-supertag-insert-nodes (node-ids &optional level-adjust)
   "Insert nodes at current position.
 NODE-IDS is list of node identifiers

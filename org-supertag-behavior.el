@@ -55,9 +55,8 @@ Key is the behavior name (string), value is a plist containing:
 This function is the core of the behavior registration system. It handles:
 1. Behavior validation and normalization
 2. Registry management
-3. Tag association
-4. Hook setup
-5. Error handling
+3. Hook setup
+4. Error handling
 
 Arguments:
 - TAG-NAME: Name of the behavior (e.g. \"@todo\")
@@ -68,13 +67,6 @@ Arguments:
   * :hooks - List of (hook-name . hook-function) pairs (optional)
   * :params - List of parameter names (optional)
   * :list - List of behaviors to execute (optional)
-
-The registration process:
-1. Sanitize tag name and validate properties
-2. Create or update behavior in registry
-3. Create or update associated tag
-4. Setup any specified hooks
-5. Apply any immediate effects
 
 Example:
   ;; Register simple behavior
@@ -107,25 +99,13 @@ Example:
         (message "Debug register - Registering behavior: %s" tag-name)
         (puthash tag-name behavior org-supertag-behavior-registry)
         
-        ;; 3. Create or update associated tag
-        (let* ((tag (or (org-supertag-tag-get tag-id)
-                       (org-supertag-tag-create tag-id)))
-               (behaviors (or (plist-get tag :behaviors) '())))
-          (unless (member tag-name behaviors)
-            (message "Debug register - Updating tag: %s with behavior: %s"
-                    tag-id tag-name)
-            (org-supertag-tag-create 
-             tag-id 
-             :type :tag
-             :behaviors (cons tag-name behaviors))))
-        
-        ;; 4. Setup hooks
+        ;; 3. Setup hooks
         (when-let ((hooks (plist-get props :hooks)))
           (message "Debug register - Setting up hooks: %S" hooks)
           (dolist (hook-spec hooks)
             (add-hook (car hook-spec) (cdr hook-spec))))
         
-        ;; 5. Return registered behavior
+        ;; 4. Return registered behavior
         (message "Successfully registered behavior: %s" tag-name)
         behavior)
     
@@ -549,7 +529,7 @@ Returns plist like (:fg \"red\" :bg \"yellow\" :weight \"bold\")"
 (defun org-supertag-behavior--cleanup ()
   "Cleanup behavior system."
   (remove-hook 'org-supertag-after-tag-apply-hook
-               #'org-supertag-behavior--apply-styles)
+               #'org-supertag-behavior--face-refresh)
   (remove-hook 'org-supertag-after-node-change-hook
                #'org-supertag-behavior--handle-node-change)
   (remove-hook 'org-supertag-after-tag-add-hook
@@ -844,7 +824,6 @@ Example:
           
           (message "Debug execute-behavior - node=%s behavior=%s action=%S list=%S"
                   node-id behavior-name action behavior-list)
-          
           ;; 2. Execute based on behavior type
           (when-let ((pos (org-supertag-db-get-pos node-id)))
             (save-excursion
@@ -858,7 +837,6 @@ Example:
                        node-id behavior-name param-str)
                     (org-supertag-behavior-execute 
                      node-id behavior-name)))
-                 
                  ;; Behavior list
                  (behavior-list
                   (message "Debug execute-behavior - Executing behavior list")
@@ -871,15 +849,12 @@ Example:
                       (if args
                           (org-supertag-behavior-execute node-id name args)
                         (org-supertag-behavior-execute node-id name)))))
-                 
                  ;; Invalid behavior type
                  (t (signal 'org-supertag-behavior-error
                            (list :invalid-behavior-type behavior-name)))))
-              
               ;; 3. Log success
               (message "Successfully executed behavior %s on node %s"
                       behavior-name node-id)))))
-    
     ;; Error handling
     (error
      (org-supertag-behavior--handle-error 
@@ -894,7 +869,9 @@ Prompts for behavior name and parameters if needed."
               (behavior-name (completing-read "Behavior: " 
                                            (ht-keys org-supertag-behavior-registry))))
     (message "Debug execute-at-point - node=%s behavior=%s" node-id behavior-name)
-    (org-supertag-behavior--execute-behavior node-id behavior-name)))
+    (org-supertag-behavior--execute-behavior node-id behavior-name)
+    ;; Refresh styles after execution
+    (org-supertag-behavior--apply-styles node-id)))
 
 (defun org-supertag-behavior-execute-batch ()
   "Execute multiple behaviors on the current node in sequence.
@@ -907,70 +884,6 @@ Prompts for a list of behaviors to execute."
     (dolist (behavior-name behaviors)
       (org-supertag-behavior--execute-behavior node-id behavior-name))))
 
-;; 监听归档事件
-(defun org-supertag-behavior--handle-archive (old-file new-file old-pos new-pos)
-  "Handle org archive events.
-Update database when a node is archived.
-OLD-FILE and NEW-FILE are the source and target files.
-OLD-POS and NEW-POS are the positions in those files."
-  (message "\n=== Handling Archive Event ===")
-  (message "Source: %s:%s" old-file old-pos)
-  (message "Target: %s:%s" new-file new-pos)
-  
-  ;; 1. 在新位置获取节点信息
-  (with-current-buffer (find-file-noselect new-file)
-    (save-excursion
-      (goto-char new-pos)
-      (when-let ((node-id (org-id-get)))
-        (message "Found node ID: %s" node-id)
-        ;; 2. 清理标签
-        (org-supertag-behavior--cleanup-tags node-id)
-        ;; 3. 更新节点信息
-        (condition-case err
-            (progn
-              (org-supertag-node-update)
-              (message "Successfully updated node: %s" node-id))
-          (error
-           (message "Error updating node: %S" err)
-           (signal 'org-supertag-behavior-error
-                   (list :archive-update-failed node-id err))))))))
 
-(defun org-supertag-behavior--setup-archive-hooks ()
-  "Setup hooks for handling org archive events."
-  ;; 在归档完成后更新数据库
-  (advice-add 'org-archive-subtree :after
-              (lambda (&rest _)
-                (when-let* ((old-file (buffer-file-name))
-                           (old-pos (point))
-                           ;; 获取归档位置
-                           (loc (org-archive--compute-location org-archive-location))
-                           (new-file (car loc))
-                           (new-pos (with-current-buffer (find-file-noselect new-file)
-                                    (goto-char (point-max))
-                                    (point))))
-                  (org-supertag-behavior--handle-archive 
-                   old-file new-file old-pos new-pos))))
-  
-  ;; 在归档到同级节点后更新数据库
-  (advice-add 'org-archive-to-archive-sibling :after
-              (lambda (&rest _)
-                (when-let* ((file (buffer-file-name))
-                           (old-pos (point))
-                           (new-pos (save-excursion
-                                    (org-archive-goto-sibling)
-                                    (point))))
-                  (org-supertag-behavior--handle-archive 
-                   file file old-pos new-pos)))))
-
-;; 在行为系统设置时启用归档钩子
-(add-hook 'org-supertag-behavior-mode-hook
-          (lambda ()
-            (if org-supertag-behavior-mode
-                (org-supertag-behavior--setup-archive-hooks)
-              ;; 移除建议
-              (advice-remove 'org-archive-subtree
-                           #'org-supertag-behavior--handle-archive)
-              (advice-remove 'org-archive-to-archive-sibling
-                           #'org-supertag-behavior--handle-archive))))
 
 (provide 'org-supertag-behavior)
