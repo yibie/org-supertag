@@ -48,8 +48,10 @@ PROPS: Additional properties"
                           :fields fields
                           :behaviors (plist-get props :behaviors)
                           :created-at (current-time))))
+    (message "Creating tag with fields: %S" fields)
     (org-supertag-db-add sanitized-name base-props)
     (let ((saved-tag (org-supertag-db-get sanitized-name)))
+      (message "Saved tag: %S" saved-tag)
       (unless saved-tag
         (error "Failed to create tag: %s" sanitized-name)))
     sanitized-name))
@@ -78,19 +80,10 @@ otherwise returns nil."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-tag-apply (tag-id)
-  "Apply tag to the node at current position.
-TAG-ID is the tag identifier.
-
-This function will:
-1. Validate the tag exists and is valid
-2. Create node ID if needed 
-3. Link the tag to the node
-4. Initialize tag fields with default values
-5. Add tag to org tags"
+  "Apply tag to the node at current position."
   (let* ((tag (org-supertag-db-get tag-id))
          (node-id (org-id-get-create)))
-    (message "Debug tag-apply: tag=%S node=%s" tag node-id)
-    
+    (message "Applying tag: %s to node: %s" tag-id node-id)
     ;; Validation
     (unless tag
       (error "Tag %s not found" tag-id))
@@ -99,29 +92,30 @@ This function will:
     (unless (org-supertag-db-get node-id)
       (org-supertag--create-node node-id))
     
-    ;; Link node and tag using node-db-add-tag
-    (message "Debug tag-apply: Adding tag relationship")
+    ;; Link node and tag
     (org-supertag-node-db-add-tag node-id tag-id)
-    
     ;; Apply fields
     (when-let ((fields (plist-get tag :fields)))
-      (message "Debug tag-apply: fields=%S" fields)
+      (message "Processing fields for tag %s: %S" tag-id fields)
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
                (field-type (plist-get field :type))
-               (initial-value (org-supertag-field-get-initial-value field))
                (type-def (org-supertag-get-field-type field-type))
-               (formatted-value (when (and initial-value type-def)
-                                (let ((formatter (plist-get type-def :formatter)))
-                                  (if formatter
-                                      (funcall formatter initial-value field)
-                                    (format "%s" initial-value))))))
-          (message "Debug tag-apply: field=%S value=%S formatted=%S"
-                  field-name initial-value formatted-value)
-          (when formatted-value
-            (org-set-property field-name formatted-value))
-          (org-supertag-tag--set-field-value 
-           tag-id node-id field-name initial-value))))
+               (initial-value (org-supertag-field-get-initial-value field)))
+          (message "Processing field: name=%s type=%s initial=%S" 
+                   field-name field-type initial-value)
+          (unless type-def
+            (error "Invalid field type: %s" field-type))
+
+          (when-let* ((formatter (plist-get type-def :formatter))
+                      (formatted-value (if formatter
+                                         (funcall formatter initial-value field)
+                                       (format "%s" initial-value))))
+            (message "Setting field %s = %s" field-name formatted-value)
+            (org-set-property field-name formatted-value)
+            (org-supertag-tag--set-field-value 
+             tag-id node-id field-name initial-value)))))
+    
     ;; Add tag to node tags
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
@@ -228,40 +222,48 @@ VALUE is the value to set"
 TAG-NAME can be an existing tag or a new tag name.
 Will prevent duplicate tag application."
   (interactive
-   (let* ((existing-tags (org-supertag-db-find-by-type :tag))  ; Get all existing tags
-          (tag-choices
-           (delete-dups
-            (append
-             ;; 1. Existing tags
-             (mapcar (lambda (tag-id)
-                      (let ((tag (org-supertag-db-get tag-id)))
-                        (plist-get tag :name)))
-                    existing-tags)
-             ;; 2. Preset tags (unused)
-             (cl-remove-if
-              (lambda (preset-name)
-                (member preset-name
-                        (mapcar (lambda (tag-id)
-                                (plist-get (org-supertag-db-get tag-id) :name))
-                              existing-tags)))
-              (mapcar #'car org-supertag-preset-tags))))))  ; 只获取预设标签的名称
+   (let* ((existing-tags (org-supertag-db-find-by-type :tag))
+          (existing-names (mapcar (lambda (tag-id)
+                                  (plist-get (org-supertag-db-get tag-id) :name))
+                                existing-tags))
+          (preset-names (mapcar #'car org-supertag-preset-tags))
+          (tag-choices (delete-dups
+                       (append existing-names
+                              (mapcar (lambda (name) 
+                                      (concat "Preset: " name))
+                                    preset-names)
+                              '("New tag...")))))
      (list
-      (completing-read "Select or enter new tag name: " tag-choices nil nil))))
+      (let ((choice (completing-read "Select or enter new tag name: " 
+                                   tag-choices nil nil)))
+        (cond
+         ((string= choice "New tag...")
+          (read-string "Enter new tag name: "))
+         ((string-prefix-p "Preset: " choice)
+          (substring choice (length "Preset: ")))
+         (t choice))))))
   
   (let* ((node-id (org-id-get))
          (sanitized-name (org-supertag-sanitize-tag-name tag-name))
          (current-tags (org-supertag-node-get-tags node-id)))
+    (message "Adding tag: %s" sanitized-name)
     ;; Check for duplicate tag
     (when (member sanitized-name current-tags)
       (user-error "Tag '%s' is already applied to this node" sanitized-name))
-    (let* ((preset-fields (org-supertag-get-preset-fields sanitized-name))
+    
+    (let* ((existing-tag (org-supertag-tag-get sanitized-name))
+           (preset-fields (org-supertag-get-preset-fields sanitized-name))
            ;; Get or create the tag
            (tag-id
-            (if (org-supertag-tag-get sanitized-name)
-                sanitized-name  ; If tag exists, use name as ID
-              ;; If new tag, create it
-              (org-supertag-tag-create sanitized-name 
-                                     :fields preset-fields))))
+            (cond
+             (existing-tag
+              sanitized-name)
+             (preset-fields
+              (progn
+                (message "Creating new tag from preset with fields: %S" preset-fields)
+                (org-supertag-tag-create sanitized-name :fields preset-fields)))
+             (t
+              (org-supertag-tag-create sanitized-name)))))
       ;; Apply the tag
       (org-supertag-tag-apply tag-id))))
 
@@ -595,7 +597,11 @@ Example user configuration:
 (defun org-supertag-get-preset-fields (tag-name)
   "Get predefined fields for a tag.
 TAG-NAME is the name of the tag."
-  (cdr (assoc tag-name org-supertag-preset-tags)))
+  (message "Getting preset fields for tag: %s" tag-name)
+  (when-let ((preset (assoc tag-name org-supertag-preset-tags)))
+    (let ((fields (cdr preset)))
+      (message "Found preset fields: %S" fields)
+      fields)))
 
 (defun org-supertag-tag-edit-preset ()
   "Edit preset tag definitions interactively.
@@ -790,6 +796,30 @@ This function allows:
                                (remove field current-fields))
                           (assoc-delete-all 
                            tag-name org-supertag-preset-tags))))))))))))))
+
+(defun org-supertag--parse-preset-field (field-def)
+  "Parse preset field definition.
+FIELD-DEF is the preset field definition"
+  (let* ((name (car field-def))
+         (props (cdr field-def)))
+    (message "Parsing preset field: %s with props: %S" name props)
+    (let ((parsed-field
+           (append 
+            (list :name name
+                  :type (plist-get props :type))
+            ;; 可选属性
+            (when-let ((desc (plist-get props :description)))
+              (list :description desc))
+            (when-let ((values (plist-get props :values)))
+              (list :options values))
+            (when-let ((min (plist-get props :min)))
+              (list :min min))
+            (when-let ((max (plist-get props :max)))
+              (list :max max))
+            (when-let ((sep (plist-get props :separator)))
+              (list :separator sep)))))
+      (message "Parsed field result: %S" parsed-field)
+      parsed-field)))
 
 
 

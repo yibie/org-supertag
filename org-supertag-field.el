@@ -61,12 +61,11 @@ FIELD-DEF is the field definition
 VALUE is the field value
 NODE-ID is the target node ID
 TAG-ID is the tag ID"
-  (message "Setting field value: %S = %S" field-def value)  ; Debug
   (condition-case err
       (let* ((field-name (plist-get field-def :name))
              (field-type (plist-get field-def :type))
              (type-def (org-supertag-get-field-type field-type))
-             ;; 确保值不为 nil
+             ;; Ensure value is not nil
              (processed-value (if type-def
                                 (progn
                                   (org-supertag-field-validate field-def value)
@@ -75,9 +74,9 @@ TAG-ID is the tag ID"
                                         (funcall formatter value field-def)
                                       value)))
                               value)))
-        ;; 存储值
+        ;; Store value
         (org-supertag-field-db-set-value node-id field-name processed-value tag-id)
-        ;; 同步到 org buffer
+        ;; Sync to org buffer
         (when-let ((pos (condition-case nil
                            (org-id-find node-id t)
                          (error nil))))
@@ -771,17 +770,25 @@ PRESET is the preset field definition"
 (defun org-supertag-field-get-initial-value (field)
   "Get initial value for FIELD."
   (let ((field-type (plist-get field :type))
-        (field-value (plist-get field :value)))
-    (cond
-     ;; 对于 behavior 类型，保持原始值
-     ((eq field-type 'behavior)
-      field-value)
-     ;; 对于其他类型，使用原有的逻辑
-     ((eq field-type 'options)
-      (car (plist-get field :options)))
-     ((eq field-type 'date)
-      (format-time-string "%Y-%m-%d"))
-     (t nil))))
+        (field-value (plist-get field :value))
+        (field-options (plist-get field :options)))
+    (message "Getting initial value for field: %S" field)
+    (let ((initial-value
+           (cond
+            ((eq field-type 'behavior)
+             field-value)
+            ((and (eq field-type 'options) field-options)
+             (car field-options))
+            ((eq field-type 'date)
+             (format-time-string "%Y-%m-%d"))
+            ((eq field-type 'string)
+             "")  ; 为字符串类型提供空字符串作为初始值
+            (t nil))))
+      (message "Initial value for field %s (%s): %S" 
+               (plist-get field :name)
+               field-type
+               initial-value)
+      initial-value)))
 
 
 (provide 'org-supertag-field)

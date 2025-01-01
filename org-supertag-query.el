@@ -767,14 +767,11 @@ Shows results in a dedicated buffer with selection and export options."
   "Get list of org files in database.
 Returns a list of absolute file paths."
   (let* ((node-ids (org-supertag-db-find-by-type :node))
-         (nodes (mapcar #'org-supertag-db-get node-ids)))  ; 获取完整的节点数据
-    (message "Debug: Found nodes: %S" nodes)  ; 调试信息
-    (let ((files (delete-dups
-                  (mapcar (lambda (props)
-                           (plist-get props :file-path))
-                         nodes))))
-      (message "Debug: Extracted files: %S" files)  ; 调试信息
-      files)))
+         (nodes (mapcar #'org-supertag-db-get node-ids)))
+    (delete-dups
+     (mapcar (lambda (props)
+              (plist-get props :file-path))
+            nodes))))
 
 (defun org-supertag-query--select-files ()
   "Select files for search scope.
