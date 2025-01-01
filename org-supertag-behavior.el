@@ -35,8 +35,8 @@ Key is the behavior name (string), value is a plist containing:
 (defvar org-supertag-behavior--initialized nil
   "Flag indicating if behavior system is initialized.")
 
-(defun org-supertag-behavior-register (tag-name &rest props)
-  "Register behavior for TAG-NAME.
+(defun org-supertag-behavior-register (behavior-name &rest props)
+  "Register behavior with BEHAVIOR-NAME.
 PROPS is a plist with:
 :trigger  - When to execute
 :action   - Function or behavior list
@@ -44,27 +44,15 @@ PROPS is a plist with:
 :hooks    - Optional hooks
 :params   - Parameter names list
 :list     - List of behaviors to execute"
-  (let* ((tag-id (org-supertag-sanitize-tag-name tag-name))
-         (behavior (list :trigger (plist-get props :trigger)
-                        :action (plist-get props :action)
-                        :style (plist-get props :style)
-                        :hooks (plist-get props :hooks)
-                        :params (plist-get props :params)
-                        :list (plist-get props :list))))
+  (let ((behavior (list :trigger (plist-get props :trigger)
+                       :action (plist-get props :action)
+                       :style (plist-get props :style)
+                       :hooks (plist-get props :hooks)
+                       :params (plist-get props :params)
+                       :list (plist-get props :list))))
     
     ;; 注册到行为注册表（内存缓存）
-    (puthash tag-name behavior org-supertag-behavior-registry)
-
-    ;; 创建或更新标签
-    (let* ((tag (or (org-supertag-tag-get tag-id)
-                    (org-supertag-tag-create tag-id)))
-           (behaviors (or (plist-get tag :behaviors) '())))
-      ;; 只在行为不存在时添加
-      (unless (member tag-name behaviors)
-        (org-supertag-tag-create 
-         tag-id 
-         :type :tag
-         :behaviors (cons tag-name behaviors))))
+    (puthash behavior-name behavior org-supertag-behavior-registry)
     
     ;; 处理 hooks
     (when-let ((hooks (plist-get props :hooks)))
@@ -72,6 +60,7 @@ PROPS is a plist with:
         (add-hook (car hook-spec) (cdr hook-spec))))
     
     behavior))
+
 
 (defun org-supertag-behavior--get-behavior (tag-name)
   "Get behavior definition for tag with TAG-NAME.
@@ -136,7 +125,6 @@ Returns t if valid, nil otherwise."
 
 (defun org-supertag-behavior-execute (node-id behavior-spec &rest params)
   "Execute behavior specified by BEHAVIOR-SPEC on NODE-ID with PARAMS."
-  (message "Debug execute - node=%s spec=%S params=%S" node-id behavior-spec params)
   (pcase behavior-spec
     ((pred stringp)
      (when-let* ((behavior (gethash behavior-spec org-supertag-behavior-registry))
@@ -144,42 +132,34 @@ Returns t if valid, nil otherwise."
                  (param-values (when (and param-names params)
                                (org-supertag-behavior--parse-param-string 
                                 (car params) param-names))))
-       (message "Debug execute - Found behavior: %S" behavior)
-       
        (if (plist-get behavior :list)
-           ;; 执行行为列表
+           ;; Execute behavior list
            (dolist (sub-behavior (plist-get behavior :list))
-             (message "Debug execute - Running sub-behavior: %s" sub-behavior)
              (let* ((parts (split-string sub-behavior "="))
                     (name (car parts))
                     (args (cadr parts)))
-               (message "Debug execute - Sub parts: name=%s args=%s" name args)
                (org-supertag-behavior-execute node-id name args)))
-         ;; 执行单个行为
+         ;; Execute single behavior
          (org-supertag-behavior-execute node-id behavior param-values))))
     
-    ;; plist：完整的行为定义
+    ;; plist: complete behavior definition
     ((pred org-supertag-behavior--plist-p)
      (when-let ((pos (org-supertag-db-get-pos node-id)))
        (save-excursion
          (org-with-point-at pos
-           ;; 检查是否有行为列表
+           ;; Check for behavior list
            (if-let ((behavior-list (plist-get behavior-spec :list)))
-               ;; 执行行为列表
+               ;; Execute behavior list
                (dolist (sub-behavior behavior-list)
-                 (message "Debug execute - Running sub-behavior from plist: %s" sub-behavior)
                  (let* ((parts (split-string sub-behavior "="))
                         (name (car parts))
                         (args (cadr parts)))
-                   (message "Debug execute - Sub parts from plist: name=%s args=%s" name args)
                    (org-supertag-behavior-execute node-id name args)))
-             ;; 执行单个行为
+             ;; Execute single behavior
              (when-let ((action (plist-get behavior-spec :action)))
                (if params
                    (let ((param-names (plist-get behavior-spec :params))
                          (param-values (car params)))
-                     (message "Debug execute - Executing action with params: names=%S values=%S" 
-                             param-names param-values)
                      (save-excursion
                        (org-with-point-at pos
                          (funcall action node-id param-values))))
@@ -187,7 +167,7 @@ Returns t if valid, nil otherwise."
                    (org-with-point-at pos
                      (funcall action node-id))))))))))
     
-    ;; 函数：直接执行
+    ;; function: direct execution
     ((pred functionp)
      (when-let ((pos (org-supertag-db-get-pos node-id)))
        (save-excursion
@@ -371,17 +351,46 @@ Example:
       err node-id behavior-name 'execute-behavior)
      (signal (car err) (cdr err)))))
 
+
+(defun org-supertag--validate-position ()
+  "Ensure current position is valid for node operations."
+  ;; 1. 首先尝试展开可见性
+  (org-fold-show-all '(headings))
+  
+  ;; 2. 确保文件有标题
+  (save-excursion
+    (goto-char (point-min))
+    (unless (re-search-forward org-heading-regexp nil t)
+      (user-error "No headlines found in buffer")))
+  
+  ;; 3. 如果不在标题上，安全地移动到标题
+  (unless (org-at-heading-p)
+    (condition-case nil
+        (progn
+          (outline-previous-heading)
+          (unless (org-at-heading-p)
+            (outline-next-heading)))
+      (error
+       (condition-case nil
+           (outline-next-heading)
+         (error
+          (user-error "Cannot find a valid heading position"))))))
+  
+  ;; 4. 最后确认位置有效
+  (unless (org-at-heading-p)
+    (user-error "Please move cursor to a headline")))
+
 (defun org-supertag-behavior-execute-at-point ()
-  "Execute a behavior on the current node.
-Prompts for behavior name and parameters if needed."
+  "Execute a behavior on the current node."
   (interactive)
+  ;; 添加位置验证
+  (org-supertag--validate-position)
   (when-let* ((node-id (org-id-get-create))
               (behavior-name (completing-read "Behavior: " 
                                            (ht-keys org-supertag-behavior-registry))))
-    (message "Debug execute-at-point - node=%s behavior=%s" node-id behavior-name)
-    (org-supertag-behavior--execute-behavior node-id behavior-name)
-    ;; Refresh styles after execution
-    (org-supertag-behavior--apply-styles node-id)))
+    (message "Debug execute-at-point - node=%s behavior=%s" 
+             node-id behavior-name)
+    (org-supertag-behavior--execute-behavior node-id behavior-name)))
 
 (defun org-supertag-behavior-execute-batch ()
   "Execute multiple behaviors on the current node in sequence.
@@ -409,46 +418,43 @@ Prompts for a list of behaviors to execute."
 
 (defun org-supertag-behavior--init ()
   "Initialize behavior system."
-  (message "\n=== Behavior System Init ===")
   (unless org-supertag-behavior--initialized
-    ;; Style Hooks
-    (add-hook 'org-supertag-after-tag-apply-hook
-              #'org-supertag-behavior--face-refresh)
-    ;; Buffer Change Hooks
-    (add-hook 'after-save-hook 
-              #'org-supertag-behavior--face-refresh)
-    (add-hook 'after-change-functions 
-              #'org-supertag-behavior--face-refresh)
-    ;; Behavior Trigger Hooks
-    (add-hook 'org-supertag-node-tag-added-hook
-              #'org-supertag-behavior--handle-tag-add)
-    ;; Node Change Hooks
+    ;; 确保 org-id 系统正确初始化
+    (require 'org-id)
+    
+    ;; 基本钩子
     (add-hook 'org-supertag-after-node-change-hook
               #'org-supertag-behavior--handle-node-change)
+    (add-hook 'org-supertag-after-tag-add-hook
+              #'org-supertag-behavior--handle-tag-add)
     (add-hook 'org-supertag-after-tag-remove-hook
               #'org-supertag-behavior--handle-tag-remove)
-    ;; Scheduled Behaviors
     (add-hook 'org-supertag-after-load-hook
               #'org-supertag-behavior--setup-scheduled-behaviors)
-    ;; Cleanup on Emacs Exit
-    (add-hook 'kill-emacs-hook
-              #'org-supertag-behavior--cleanup)
-    ;; 添加 TODO 状态变化监听
-    (add-hook 'org-after-todo-state-change-hook
-              #'org-supertag-behavior--handle-todo-change)
-    ;; 添加标准 org hooks
-    (add-hook 'org-after-todo-state-change-hook
-              #'org-supertag-behavior--handle-todo-change)
-    (add-hook 'org-property-changed-functions
-              #'org-supertag-behavior--handle-property-change)
-    (add-hook 'org-after-tags-change-hook
-              #'org-supertag-behavior--handle-tags-change)
-    (add-hook 'org-timestamp-change-hook
-              #'org-supertag-behavior--handle-timestamp-change)
-    (add-hook 'org-cycle-hook
-              #'org-supertag-behavior--handle-cycle)
-    (setq org-supertag-behavior--initialized t)
-    (message "Behavior system initialized")))
+    
+    ;; 添加 ID 位置保护
+    (advice-add 'org-supertag-behavior--handle-node-change 
+                :around #'org-supertag-behavior--protect-id-locations)
+    
+    (setq org-supertag-behavior--initialized t))
+  (message "=== Behavior System Init Success ==="))
+
+(defun org-supertag-behavior--protect-id-locations (orig-fun &rest args)
+  "确保在行为执行前后 org-id-locations 保持正确状态."
+  ;; 保存当前状态
+  (let ((old-locations (when (boundp 'org-id-locations) 
+                        org-id-locations)))
+    (unwind-protect
+        (progn
+          ;; 确保是 hash table
+          (unless (and (boundp 'org-id-locations)
+                      (hash-table-p org-id-locations))
+            (setq org-id-locations (make-hash-table :test 'equal)))
+          ;; 执行原函数
+          (apply orig-fun args))
+      ;; 恢复状态
+      (when old-locations
+        (setq org-id-locations old-locations)))))
 
 (defun org-supertag-behavior--handle-node-change (node-id)
   "Handle node change event for NODE-ID."
@@ -473,9 +479,7 @@ Prompts for a list of behaviors to execute."
 
 (defun org-supertag-behavior--cleanup ()
   "Cleanup behavior system."
-  ;; 移除所有钩子
-  (remove-hook 'org-supertag-after-tag-apply-hook
-               #'org-supertag-behavior--apply-styles)
+  ;; 移除钩子
   (remove-hook 'org-supertag-after-node-change-hook
                #'org-supertag-behavior--handle-node-change)
   (remove-hook 'org-supertag-after-tag-add-hook
@@ -484,19 +488,10 @@ Prompts for a list of behaviors to execute."
                #'org-supertag-behavior--handle-tag-remove)
   (remove-hook 'org-supertag-after-load-hook
                #'org-supertag-behavior--setup-scheduled-behaviors)
-  (remove-hook 'org-after-todo-state-change-hook
-               #'org-supertag-behavior--handle-todo-change)
-  ;; 清理标准 org hooks
-  (remove-hook 'org-after-todo-state-change-hook
-               #'org-supertag-behavior--handle-todo-change)
-  (remove-hook 'org-property-changed-functions
-               #'org-supertag-behavior--handle-property-change)
-  (remove-hook 'org-after-tags-change-hook
-               #'org-supertag-behavior--handle-tags-change)
-  (remove-hook 'org-timestamp-change-hook
-               #'org-supertag-behavior--handle-timestamp-change)
-  (remove-hook 'org-cycle-hook
-               #'org-supertag-behavior--handle-cycle))
+  
+  ;; 移除建议
+  (advice-remove 'org-supertag-behavior--handle-node-change 
+                #'org-supertag-behavior--protect-id-locations))
 
 (defun org-supertag-behavior--handle-todo-change ()
   "Handle TODO state changes.
@@ -734,3 +729,4 @@ If BEG and END are provided, only refresh that region."
  
 
 (provide 'org-supertag-behavior)
+

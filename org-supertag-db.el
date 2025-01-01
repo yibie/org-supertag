@@ -1103,10 +1103,14 @@ Returns:
 - Normalized property list"
   (let ((result nil)
         (seen-keys nil))
-    ;; 1. Ensure :type is first
-    (when-let ((type-value (plist-get props :type)))
-      (push :type seen-keys)
-      (setq result (list :type type-value)))
+    ;; 1. Ensure we have a type
+    (let ((type-value (or (plist-get props :type)
+                         ;; If no type but has file-path, assume it's a node
+                         (when (plist-get props :file-path) :node))))
+      (when type-value
+        (push :type seen-keys)
+        (setq result (list :type type-value))))
+    
     ;; 2. Process other properties
     (let ((rest-props props))
       (while rest-props
@@ -1115,12 +1119,13 @@ Returns:
           (unless (memq key seen-keys)  ; Avoid duplicates
             (push key seen-keys)
             (setq result (append result (list key value)))))
-          (setq rest-props (cddr rest-props))))
+        (setq rest-props (cddr rest-props))))
+    
     ;; 3. Validate result
     (let ((final-type (plist-get result :type)))
       (unless (memq final-type '(:node :tag))
-        (error "Invalid type after normalization: %S in props: %S" 
-               final-type result)))
+        (error "Invalid or missing type in props: %S" props)))
+    
     result))
 
 (defun org-supertag-db--get-node-title ()
@@ -1193,13 +1198,12 @@ Returns node ID if successful, nil if failed."
         ;; 1. Check if current position is valid
         (unless (org-at-heading-p)
           (error "Current position is not a valid node heading"))
-        
         ;; 2. Parse node data (call once)
         (let* ((props (org-supertag-db--parse-node-at-point))
-               (id (plist-get props :id))
+               (id (or (plist-get props :id)
+                      (org-id-get-create)))
                (title (plist-get props :title))
                (file (plist-get props :file-path)))
-          (message "Parsed node properties: %S" props)  ; Debug info
           ;; 3. Validate required properties
           (unless (and id title file)
             (error "Missing required node properties: id=%s, title=%s, file=%s" 
@@ -1208,45 +1212,39 @@ Returns node ID if successful, nil if failed."
           (let* ((old-node (org-supertag-db-get id))
                  (is-update (not (null old-node)))
                  (ref-to (org-supertag-db--parse-node-all-ref))
-                 ;; 5. Build complete properties (using normalize function)
+                 ;; 5. Build complete properties
                  (full-props
-                  (org-supertag-db--normalize-props
-                   (append
-                    ;; Basic properties (from parsed props)
-                    `(:type :node
-                      :id ,id
-                      :title ,title
-                      :file-path ,file
-                      :pos ,(plist-get props :pos)
-                      :olp ,(plist-get props :olp)
-                      :level ,(plist-get props :level))
-                    ;; Task properties (from parsed props)
-                    `(:scheduled ,(plist-get props :scheduled)
-                      :deadline ,(plist-get props :deadline)
-                      :priority ,(plist-get props :priority)
-                      :todo ,(plist-get props :todo))
-                    ;; References
-                    `(:ref-to ,ref-to
-                      :ref-from ,(when is-update (plist-get old-node :ref-from))
-                      :ref-count ,(length ref-to))
-                    ;; Timestamps
-                    (if is-update
-                        `(:created-at ,(plist-get old-node :created-at)
-                          :modified-at ,(current-time))
-                      `(:created-at ,(current-time)))
-                    ;; Other properties (from parsed props)
-                    `(:properties ,(plist-get props :properties)
-                      :tags ,(plist-get props :tags))))))
-            ;; 6. Store node (final data modification)
-            (ht-set! org-supertag-db--object id full-props)
-            ;; 7. Trigger event
-            (org-supertag-db-emit (if is-update
-                                    'node:updated
-                                  'node:created)
-                                id full-props)
-            ;; 8. Save
-            (org-supertag-db-save)
-            ;; 9. Return ID
+                  (append
+                   ;; 
+                   (list :type :node
+                         :id id
+                         :title title
+                         :file-path file
+                         :pos (point)
+                         :level (org-outline-level)
+                         :olp (org-get-outline-path))
+                   (when-let ((scheduled (org-entry-get nil "SCHEDULED")))
+                     (list :scheduled scheduled))
+                   (when-let ((deadline (org-entry-get nil "DEADLINE")))
+                     (list :deadline deadline))
+                   (when-let ((priority (org-entry-get nil "PRIORITY")))
+                     (list :priority priority))
+                   (when-let ((todo (org-entry-get nil "TODO")))
+                     (list :todo todo))
+                   (list :ref-to ref-to
+                         :ref-from (when is-update 
+                                    (plist-get old-node :ref-from))
+                         :ref-count (length ref-to))
+                   (list :created-at (or (and is-update 
+                                            (plist-get old-node :created-at))
+                                       (current-time))
+                         :modified-at (current-time))
+                   (let ((properties (org-entry-properties nil 'standard)))
+                     (list :properties properties))
+                   (list :tags (org-get-tags)))))
+            ;; 6. Store node
+            (org-supertag-db-add id full-props)
+            ;; 7. Return ID
             id)))
     ;; Error handling
     (error
