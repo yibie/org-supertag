@@ -208,24 +208,26 @@ List of field values, each element is (field-id . value)"
            (file-path (buffer-file-name))
            (pos (point))
            (level (org-outline-level))
-           (olp (org-get-outline-path))
-           (ref-to (org-supertag-db--parse-node-all-ref)))
+           (olp (org-get-outline-path)))
       
-      ;; Build complete node properties
-      (let ((props (list :type :node  ; Explicitly set type
+      ;; 只更新基本属性
+      (let ((props (list :type :node
                         :id node-id
                         :title title
                         :file-path file-path
                         :pos pos
                         :level level
                         :olp olp
-                        :ref-to ref-to
+                        ;; 保持现有的引用关系不变
+                        :ref-to (when old-node 
+                                (plist-get old-node :ref-to))
                         :ref-from (when old-node 
-                                   (plist-get old-node :ref-from))
-                        :ref-count (length ref-to)
+                                  (plist-get old-node :ref-from))
+                        :ref-count (when old-node
+                                   (plist-get old-node :ref-count))
                         :created-at (or (and old-node 
-                                           (plist-get old-node :created-at))
-                                      (current-time)))))
+                                          (plist-get old-node :created-at))
+                                     (current-time)))))
         
         ;; Update database
         (org-supertag-db-add node-id props)))))
@@ -540,13 +542,39 @@ TO-ID is the target node"
 
 
 (defun org-supertag-node--insert-reference (node-id)
-  "Insert node reference at current position.
+  "Insert node reference at current position and update relationships.
 NODE-ID is the referenced node's identifier"
   (let* ((target-node (org-supertag-db-get node-id))
          (target-title (plist-get target-node :title))
          (link-text (format "[[id:%s][%s]]" node-id target-title)))
-    ;; Insert link at current position
-    (insert link-text)))
+    ;; 1. 插入链接
+    (insert link-text)
+    ;; 2. 更新引用关系
+    (let* ((current-node-id (org-id-get))
+           (current-node (org-supertag-db-get current-node-id)))
+      
+      ;; 2.1 更新当前节点的 ref-to
+      (let* ((current-refs (or (plist-get current-node :ref-to) nil))
+             (new-refs (delete-dups (cons node-id current-refs))))
+        (org-supertag-db-add 
+         current-node-id
+         (append
+          (list :type :node)
+          (plist-put 
+           (plist-put current-node :ref-to new-refs)
+           :ref-count (length new-refs)))))
+      
+      ;; 2.2 更新目标节点的 ref-from
+      (let* ((target-refs (or (plist-get target-node :ref-from) nil))
+             (new-target-refs (delete-dups 
+                             (cons current-node-id target-refs))))
+        (org-supertag-db-add 
+         node-id
+         (append
+          (list :type :node)
+          (plist-put 
+           (plist-put target-node :ref-from new-target-refs)
+           :ref-count (length new-target-refs))))))))
 
 
 (defun org-supertag-node-add-reference ()
@@ -571,8 +599,7 @@ Insert reference to selected node at current position and update relationships."
 
 (defun org-supertag-node-remove-reference (node-id)
   "Remove reference to specified node.
-NODE-ID is the referenced node identifier.
-Uses org-element to parse and locate links for accurate removal."
+NODE-ID is the referenced node identifier."
   (interactive 
    (let* ((refs (org-supertag-node--collect-reference-id-title))
           (selected (completing-read 
@@ -584,8 +611,8 @@ Uses org-element to parse and locate links for accurate removal."
   (let ((start (org-entry-beginning-position))
         (end (org-entry-end-position))
         (removed 0))
+    ;; 1. delete link
     (save-excursion
-      ;; 1. Use org-element to parse and remove links
       (goto-char start)
       (while (< (point) end)
         (let ((element (org-element-context)))
@@ -596,8 +623,31 @@ Uses org-element to parse and locate links for accurate removal."
                           (org-element-property :end element))
             (cl-incf removed)))
         (forward-char)))
-
-    (org-supertag-db--parse-node-all-ref)
+    ;; 2. update reference
+    (when (> removed 0)
+      (let* ((current-node-id (org-id-get))
+             (current-node (org-supertag-db-get current-node-id))
+             (target-node (org-supertag-db-get node-id)))
+        ;; 2.1 update current node ref-to
+        (let* ((current-refs (plist-get current-node :ref-to))
+               (new-refs (delete node-id current-refs)))
+          (org-supertag-db-add 
+           current-node-id
+           (append
+            (list :type :node)
+            (plist-put 
+             (plist-put current-node :ref-to new-refs)
+             :ref-count (length new-refs)))))        
+        ;; 2.2 update target node ref-from
+        (let* ((target-refs (plist-get target-node :ref-from))
+               (new-target-refs (delete current-node-id target-refs)))
+          (org-supertag-db-add 
+           node-id
+           (append
+            (list :type :node)
+            (plist-put 
+             (plist-put target-node :ref-from new-target-refs)
+             :ref-count (length new-target-refs)))))))
     
     (message "Removed %d references" removed)))
 
