@@ -26,14 +26,14 @@
 (defun org-supertag--initialize-id-system ()
   "Initialize org-id system properly."
   (require 'org-id)
-  ;; 让 org-id 系统自己处理初始化
+  ;; Let the org-id system handle its own initialization
   (unless (and (boundp 'org-id-locations)
                (or (hash-table-p org-id-locations)
                    (null org-id-locations)))
-    ;; 确保是 nil，让 org-id-locations-load 自己处理转换
+    ;; Ensure it is nil, allowing org-id-locations-load to handle the conversion
     (setq org-id-locations nil))
   
-  ;; 如果文件存在且变量为 nil，加载它
+  ;; If the file exists and the variable is nil, load it
   (when (and (null org-id-locations)
              (file-exists-p org-id-locations-file))
     (condition-case err
@@ -43,16 +43,16 @@
                 (error-message-string err))
        (setq org-id-locations (make-hash-table :test 'equal)))))
   
-  ;; 确保最终有一个有效的 hash table
+  ;; Ensure there is a valid hash table in the end
   (unless (hash-table-p org-id-locations)
     (setq org-id-locations (make-hash-table :test 'equal))))
 
 (defun org-supertag--enable ()
   "Enable org-supertag."
-  ;; 1. 初始化 ID 系统
+  ;; 1. Initialize the ID system
   (org-supertag--initialize-id-system)
   
-  ;; 2. 确保数据目录存在
+  ;; 2. Ensure the data directory exists
   (org-supertag-db-ensure-data-directory)
   ;; 3. Initialize database
   (org-supertag-db-init)
@@ -109,7 +109,7 @@ Used for manual cleanup or system state reset."
 
 (defun org-supertag--initialize ()
   "Initialize org-supertag system."
-  ;; 启用行为系统
+  ;; Enable the behavior system
   (org-supertag-behavior-mode 1))
 
 (add-hook 'org-supertag-mode-hook #'org-supertag--initialize)
