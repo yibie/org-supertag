@@ -362,7 +362,9 @@ VALUE is the value to validate.
 FIELD is the field definition containing :options."
   (let ((options (plist-get field :options)))
     (message "Debug - Validating options: value=%S, options=%S" value options)
-    (and (stringp value) (member value options))))
+    (and options                         ; Must have predefined options
+         (stringp value)                 ; Value must be string
+         (member value options))))       ; Value must be one of the options
 
 (defun org-supertag-format-options (value field)
   "Format options value.
@@ -406,7 +408,10 @@ FIELD is the field definition."
   (message "Debug - Formatting list value: %S" value)
   (cond
    ((listp value)
-    (format "%S" value))
+    (format "[%s]" 
+            (mapconcat (lambda (item) 
+                        (format "\"%s\"" item))
+                      value ",")))
    ((stringp value)
     (if (string-match-p "^\\[.*\\]$" value)
         value
@@ -549,7 +554,13 @@ FIELD is the field definition."
     ;; 1. Ensure reader exists
     (unless reader
       (error "Field type %s has no reader function" type))
-    ;; 2. Read value
+    ;; 2. For options type, ensure options exist
+    (when (and (eq type 'options) (not options))
+      (let* ((options-input (read-string (format "%s options (comma separated): " name)))
+             (options-values (split-string options-input "," t "[ \t\n\r]+")))
+        (setq options options-values)
+        (setq field (plist-put field :options options-values))))
+    ;; 3. Read value
     (catch 'done
       (while t
         (condition-case err
@@ -558,7 +569,7 @@ FIELD is the field definition."
                         (funcall reader name options)
                       (funcall reader name)))
                    (typed-value (org-supertag-field--convert-value type input-value)))
-              ;; 3. Validate and format
+              ;; 4. Validate and format
               (if (org-supertag-field-validate field typed-value)
                   (throw 'done 
                          (if formatter
@@ -664,7 +675,9 @@ PROMPT is the prompt message"
 (defun org-supertag-read-options-field (prompt options)
   "Read options field value.
 PROMPT is the prompt message
-OPTIONS is the list of available options"
+OPTIONS is the list of available options."
+  (unless options
+    (error "Options type field requires predefined options"))
   (let ((input (completing-read (format "%s (%s): " 
                                       prompt 
                                       (mapconcat #'identity options "/"))
@@ -736,15 +749,22 @@ Each preset field is a (name . props) pair, where:
   "Parse preset field definition.
 FIELD-DEF is the preset field definition"
   (let* ((name (car field-def))
-         (props (cdr field-def)))
+         (props (cdr field-def))
+         (field-type (plist-get props :type)))
     (append 
      (list :name name
-           :type (plist-get props :type))
+           :type field-type)
      ;; 可选属性
      (when-let ((desc (plist-get props :description)))
        (list :description desc))
-     (when-let ((values (plist-get props :values)))
-       (list :options values))
+     ;; 对于 options 类型，:values 属性会转换为 :options
+     (when (eq field-type 'options)
+       (when-let ((values (plist-get props :values)))
+         (list :options values)))
+     ;; 对于其他类型，保持原有属性
+     (unless (eq field-type 'options)
+       (when-let ((values (plist-get props :values)))
+         (list :values values)))
      (when-let ((min (plist-get props :min)))
        (list :min min))
      (when-let ((max (plist-get props :max)))
