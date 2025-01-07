@@ -119,7 +119,12 @@ otherwise returns nil."
     ;; Add tag to node tags
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
+    
+    ;; Behavior Active
     (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
+    (org-supertag-behavior--on-tag-change node-id tag-id :add)
+    (org-supertag-behavior--apply-styles node-id)
+    
     node-id))
 
 (defun org-supertag-tag--remove (tag-id node-id)
@@ -222,47 +227,64 @@ VALUE is the value to set"
 TAG-NAME can be an existing tag or a new tag name.
 Will prevent duplicate tag application."
   (interactive
-   (let* ((all-tags (org-supertag-get-all-tags))  ; 使用 get-all-tags 获取所有标签
+   (let* ((all-tags (org-supertag-get-all-tags))
           (preset-names (mapcar #'car org-supertag-preset-tags))
-          (tag-choices (delete-dups
-                       (append all-tags
-                              (mapcar (lambda (name) 
-                                      (concat "Preset: " name))
-                                    preset-names)
-                              '("New tag...")))))
+          (candidates (delete-dups
+                      (append all-tags
+                             (mapcar (lambda (name) 
+                                     (concat "Preset: " name))
+                                   preset-names))))
+          (input (completing-read-default
+                 "Enter tag name (TAB: complete): "
+                 ;; Custom Compeleting function
+                 (lambda (string pred action)
+                   (if (eq action 'metadata)
+                       '(metadata (category . org-supertag-tag))
+                     (let ((exact-match (member string candidates)))
+                       (cond
+                        ((eq action 'lambda) ; exact match test
+                         (member string candidates))
+                        ((eq action t)       ; all matches
+                         (cl-remove-if-not
+                          (lambda (candidate)
+                            (string-prefix-p string candidate t))
+                          candidates))
+                        (t string)))))       ; return input string
+                 nil nil)))
      (list
-      (let ((choice (completing-read "Select or enter new tag name: " 
-                                   tag-choices nil nil)))
-        (cond
-         ((string= choice "New tag...")
-          (read-string "Enter new tag name: "))
-         ((string-prefix-p "Preset: " choice)
-          (substring choice (length "Preset: ")))
-         (t choice))))))
+      (cond
+       ((member input candidates) input)
+       ((string-prefix-p "Preset: " input)
+        (substring input (length "Preset: ")))
+       (t
+        (if (y-or-n-p (format "Create new tag '%s'? " input))
+            input
+          (user-error "Tag creation cancelled")))))))
   
-  (let* ((node-id (org-id-get))
-         (sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (current-tags (org-supertag-node-get-tags node-id)))
-    (message "Adding tag: %s" sanitized-name)
-    ;; Check for duplicate tag
-    (when (member sanitized-name current-tags)
-      (user-error "Tag '%s' is already applied to this node" sanitized-name))
-    
-    (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-           (preset-fields (org-supertag-get-preset-fields sanitized-name))
-           ;; Get or create the tag
-           (tag-id
-            (cond
-             (existing-tag
-              sanitized-name)
-             (preset-fields
-              (progn
-                (message "Creating new tag from preset with fields: %S" preset-fields)
-                (org-supertag-tag-create sanitized-name :fields preset-fields)))
-             (t
-              (org-supertag-tag-create sanitized-name)))))
-      ;; Apply the tag
-      (org-supertag-tag-apply tag-id))))
+  (when tag-name  
+    (let* ((node-id (org-id-get))
+           (sanitized-name (org-supertag-sanitize-tag-name tag-name))
+           (current-tags (org-supertag-node-get-tags node-id)))
+      (message "Adding tag: %s" sanitized-name)
+      ;; Check for duplicate tag
+      (when (member sanitized-name current-tags)
+        (user-error "Tag '%s' is already applied to this node" sanitized-name))
+      
+      (let* ((existing-tag (org-supertag-tag-get sanitized-name))
+             (preset-fields (org-supertag-get-preset-fields sanitized-name))
+             ;; Get or create the tag
+             (tag-id
+              (cond
+               (existing-tag
+                sanitized-name)
+               (preset-fields
+                (progn
+                  (message "Creating new tag from preset with fields: %S" preset-fields)
+                  (org-supertag-tag-create sanitized-name :fields preset-fields)))
+               (t
+                (org-supertag-tag-create sanitized-name)))))
+        ;; Apply the tag
+        (org-supertag-tag-apply tag-id)))))
 
 (defun org-supertag-tag-set-field-value ()
   "Set field value for tags on current node.
