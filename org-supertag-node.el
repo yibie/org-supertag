@@ -291,6 +291,55 @@ Returns:
                 (save-buffer)))
             t))))))
 
+
+(defun org-supertag-move-node-and-link (node-id target-file &optional target-level)
+  "Move node to target file and leave a reference link at original location.
+NODE-ID is the node identifier
+TARGET-FILE is the target file path
+TARGET-LEVEL is the target heading level
+
+Returns:
+- t if move successful
+- nil if move failed"
+  (interactive
+   (let* ((node-id (org-id-get)))
+     (unless node-id
+       (user-error "Current position is not in a node"))
+     (unless (org-supertag-db-get node-id)
+       (user-error "Current node is not registered in database"))
+     (list node-id 
+           (read-file-name "Move to file: "))))
+  
+  (when-let* ((node (org-supertag-db-get node-id))
+              (title (plist-get node :title))
+              (source-file (plist-get node :file-path))
+              (source-pos (point)))
+    
+    ;; 1. Get target position and level adjustment
+    (let* ((insert-pos (org-supertag-query--get-insert-position target-file))
+           (target-pos (car insert-pos))
+           (level-adj (or target-level (cdr insert-pos))))
+      
+      ;; 2. Store the reference link content
+      (let ((reference-content (format "[[id:%s][%s]]\n" node-id title)))
+        
+        ;; 3. Move the node
+        (with-current-buffer (find-file-noselect target-file)
+          (save-excursion
+            (goto-char target-pos)
+            (when (org-supertag-node-move node-id target-file level-adj)
+              ;; 4. Insert reference at original position
+              (with-current-buffer (find-file-noselect source-file)
+                (save-excursion
+                  (goto-char source-pos)
+                  (insert reference-content)
+                  (save-buffer)))
+              
+              ;; 5. Save target file
+              (save-buffer)
+              (message "Node moved and reference link created")
+              t)))))))
+
 ;;------------------------------------------------------------------------------
 ;; Node Commands 
 ;;------------------------------------------------------------------------------    
@@ -311,6 +360,69 @@ Prerequisites:
   (when (org-id-get)
     (user-error "Heading already has a node"))
   (org-supertag-node-sync-at-point))
+
+(defun org-supertag-node-delete ()
+  "Delete current node and all its associated data.
+This includes:
+1. Delete the org headline
+2. Remove associated tags
+3. Remove associated fields (properties)
+4. Clean up database entries
+5. Remove all references to this node"
+  (interactive)
+  (let ((node-id (org-id-get)))
+    (unless node-id
+      (user-error "Current position is not in a node"))
+    (unless (org-supertag-db-get node-id)
+      (user-error "Current node is not registered in database"))
+    
+    (when (yes-or-no-p "Really delete this node and all its data? ")
+      ;; 1. Get node info before deletion
+      (let* ((node (org-supertag-db-get node-id))
+             (tags (org-supertag-node-get-tags node-id))
+             (ref-from (plist-get node :ref-from)))
+        
+        ;; 2. Remove all tags
+        (dolist (tag-id tags)
+          (org-supertag-tag--remove tag-id node-id))
+        
+        ;; 3. Remove all references to this node
+        (dolist (ref-node-id ref-from)
+          (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
+            (with-current-buffer (find-file-noselect ref-file)
+              (save-excursion
+                (goto-char (point-min))
+                (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
+                  (delete-region (match-beginning 0) (match-end 0)))
+                (save-buffer)))))
+        
+        ;; 4. Delete the headline content including properties
+        (org-back-to-heading t)
+        (let* ((element (org-element-at-point))
+               (begin (org-element-property :begin element))
+               (end (org-element-property :end element)))
+          ;; Delete the entire heading including properties
+          (delete-region begin end)
+          (when (looking-at "\n") (delete-char 1)))
+        
+        ;; 5. Remove from database
+        (remhash node-id org-supertag-db--object)
+        
+        ;; 6. Clear database caches
+        (org-supertag-db--cache-remove 'entity node-id)
+        (org-supertag-db--cache-remove 'query (format "type:%s" :node))
+        (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
+        (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
+        (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
+        
+        ;; 7. Save changes
+        (save-buffer)
+        (org-supertag-db-save)
+        
+        ;; 8. Run hooks
+        (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
+        
+        (message "Node deleted: %s" node-id)))))
 
 (defun org-supertag-node--ensure-id-system ()
   "Ensure org-id system is properly initialized."
@@ -704,3 +816,4 @@ Arguments: (from-id to-id)")
 
 
 (provide 'org-supertag-node)
+

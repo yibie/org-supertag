@@ -621,11 +621,7 @@ Available insertion positions:
       ;; Select target file
       (condition-case err
           (let* ((target-file (read-file-name "Export to file: "))
-                 (insert-type (completing-read 
-                             "Insert at: "
-                             '("File End" 
-                               "Under Heading"
-                               "Same Level"))))
+                 (insert-pos (org-supertag-query--get-insert-position target-file)))
             
             ;; Validate file type
             (unless (org-supertag-ensure-org-file target-file)
@@ -634,50 +630,55 @@ Available insertion positions:
             ;; Process target file
             (with-current-buffer (find-file-noselect target-file)
               (org-mode)
-              (let (target-point level-adjust)
-                ;; Determine insertion point and level adjustment based on option
-                (pcase insert-type
-                  ("File End"
-                   (setq target-point (point-max)
-                         level-adjust nil))
-                  ("Under Heading"
-                   (let* ((headlines (org-map-entries 
-                                    (lambda () 
-                                      (cons (org-get-heading t t t t)
-                                           (point)))))
-                          (selected (if headlines
-                                      (completing-read 
-                                       "Select parent heading: "
-                                       headlines)
-                                    (error "No headlines found in target file"))))
-                     (setq target-point (cdr (assoc selected headlines))
-                           level-adjust :child)))
-                  
-                  ("Same Level"
-                   (let* ((headlines (org-map-entries 
-                                    (lambda () 
-                                      (cons (org-get-heading t t t t)
-                                           (point)))))
-                          (selected (if headlines
-                                      (completing-read 
-                                       "Select sibling heading: "
-                                       headlines)
-                                    (error "No headlines found in target file"))))
-                     (setq target-point (cdr (assoc selected headlines))
-                           level-adjust :same-level))))
-                
-                ;; Insert content
-                (goto-char (or target-point (point-max)))
-                (org-supertag-insert-nodes selected-nodes level-adjust)
-                (save-buffer)
-                
-                ;; Display target file
-                (find-file target-file)
-                (message "Export completed successfully"))))
+              ;; Insert content
+              (goto-char (car insert-pos))
+              (org-supertag-insert-nodes selected-nodes (cdr insert-pos))
+              (save-buffer)
+              
+              ;; Display target file
+              (find-file target-file)
+              (message "Export completed successfully")))
         ;; Error handling
         (error
          (message "Export failed: %s" (error-message-string err))
          (signal (car err) (cdr err)))))))
+
+(defun org-supertag-query--get-insert-position (target-file)
+  "Get insertion position and level adjustment for target file.
+Returns cons cell (point . level-adjust)."
+  (let ((insert-type (completing-read 
+                     "Insert at: "
+                     '("File End" 
+                       "Under Heading"
+                       "Same Level"))))
+    (with-current-buffer (find-file-noselect target-file)
+      (pcase insert-type
+        ("File End"
+         (cons (point-max) nil))
+        
+        ("Under Heading"
+         (let* ((headlines (org-map-entries 
+                          (lambda () 
+                            (cons (org-get-heading t t t t)
+                                 (point)))))
+                (selected (if headlines
+                            (completing-read 
+                             "Select parent heading: "
+                             headlines)
+                          (error "No headlines found in target file"))))
+           (cons (cdr (assoc selected headlines)) :child)))
+        
+        ("Same Level"
+         (let* ((headlines (org-map-entries 
+                          (lambda () 
+                            (cons (org-get-heading t t t t)
+                                 (point)))))
+                (selected (if headlines
+                            (completing-read 
+                             "Select sibling heading: "
+                             headlines)
+                          (error "No headlines found in target file"))))
+           (cons (cdr (assoc selected headlines)) :same-level)))))))
 
 ;;; Save org-supertag-query result at cursor place
 (defvar org-supertag-query--original-buffer nil
