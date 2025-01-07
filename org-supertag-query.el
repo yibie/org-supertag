@@ -171,18 +171,20 @@ TAG-NAME is the tag to search for."
 NODE is the node property list."
   (let* ((id (plist-get node :id))
          (title (plist-get node :title))
-         (file (plist-get node :file-path))  ; Get from node, not props
+         (file (plist-get node :file-path))
          (has-children (org-supertag-node-has-children-p id))
          (tags (org-supertag-query--get-node-tags id))
-         (formatted-tags (when tags
-                          (concat " :" (mapconcat #'identity tags ":") ":")))
-         (children-indicator (if has-children " [+]" ""))
-         (file-info (format " (%s)" (file-name-nondirectory file))))
-    (format "- [ ] %s%s%s%s [[id:%s]]"
-            title
-            children-indicator
-            (or formatted-tags "")
-            file-info
+         (children-indicator (if has-children "[+]" "   "))
+         (title-part (format "%-60s" (concat title " " children-indicator)))
+         (tags-part (if tags 
+                       (format ":%s:" (mapconcat #'identity tags ":"))
+                     ""))
+         (tags-formatted (format "%-20s" tags-part))
+         (file-part (format "%-12s" (file-name-nondirectory file))))
+    (format "- [ ] %-60s | %-20s | %-12s | [[id:%s][link]]"
+            title-part
+            tags-formatted
+            file-part
             id)))
 
 ;;---------------------------------------------------------------
@@ -265,20 +267,27 @@ NODES is the list of matched nodes to display."
       (insert "- [+] indicates node has children\n\n")
       (insert "Shortcuts:\n")
       (insert "- C-c C-c     : Toggle checkbox state\n")
-      (insert "- C-c C-x f   : Export to file\n") 
+      (insert "- C-c C-x f   : Export to file\n")
       (insert "- C-c C-x n   : Export to new file\n")
       (insert "- C-c C-x C-r : Toggle checkbox region\n")
-      (insert "- C-c C-x C-u : Untoggle checkbox region\n")
-      (insert "\n")
-      ;; Display search results
+      (insert "- C-c C-x C-u : Untoggle checkbox region\n\n")
+      
+      ;; 显示搜索结果
       (insert "* Search Results\n")
       (if nodes
           (progn
             (insert (format "Found %d matching nodes:\n\n" (length nodes)))
+            ;; 添加表头
+            (insert (format "- [ ] %-60s | %-20s | %-12s | %s\n"
+                           "Title" "Tags" "File" "Link"))
+            ;; 添加分隔线
+            (insert (make-string 60 ?-) "-" 
+                    (make-string 22 ?-) "-" 
+                    (make-string 14 ?-) "-" 
+                    (make-string 12 ?-) "\n")
             (dolist (node nodes)
               (insert (org-supertag-query-format-node node) "\n")))
-        (insert "No matching results found\n"))
-      (goto-char (point-min))))
+        (insert "No matching results found\n"))))
   (switch-to-buffer "*Org SuperTag Search*"))
 
 ;;---------------------------------------------------------------------
@@ -338,17 +347,13 @@ START and END define the region boundaries."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-get-selected-nodes ()
-  "Get IDs of all selected nodes from search results.
-
-Returns:
-- List of selected node IDs
-- nil if no nodes are selected"
+  "Get IDs of all selected nodes from search results."
   (let (selected-nodes)
     (save-excursion
       (goto-char (point-min))
       ;; Search for all checked items
       (while (re-search-forward 
-              "^-[ \t]+\\[X\\].*?\\[\\[id:\\([^]]+\\)\\]\\]" 
+              "^-[ \t]+\\[X\\].*?|.*?|.*?|.*?\\[\\[id:\\([^]]+\\)\\]"
               nil t)
         (when-let ((node-id (match-string-no-properties 1)))
           ;; Verify node exists
