@@ -5,6 +5,65 @@
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
 
+(defcustom org-supertag-query-history-max-items 50
+  "Maximum number of keywords to keep in history.
+When the limit is reached, least frequently used items will be removed."
+  :type 'integer
+  :group 'org-supertag)
+
+(defcustom org-supertag-query-history-keywords nil
+  "History of search keywords with their frequencies.
+Each element is a cons cell (keyword . frequency)."
+  :type '(alist :key-type string :value-type integer)
+  :group 'org-supertag)
+
+(defvar org-supertag-query--last-keyword nil
+  "Store the last used search keyword.")
+
+(defun org-supertag-query--update-keyword-frequency (keyword)
+  "Update frequency count for KEYWORD in history."
+  (let* ((current (assoc keyword org-supertag-query-history-keywords))
+         (new-freq (1+ (or (cdr current) 0)))
+         (new-history (assoc-delete-all keyword org-supertag-query-history-keywords)))
+    ;; Add new keyword-frequency pair
+    (setq new-history (cons (cons keyword new-freq) new-history))
+    ;; Sort by frequency (descending)
+    (setq new-history (sort new-history (lambda (a b) (> (cdr a) (cdr b)))))
+    ;; Store current keyword as last used
+    (setq org-supertag-query--last-keyword keyword)
+    ;; Trim to max items if needed, but preserve last used keyword
+    (when (and org-supertag-query-history-max-items
+               (> (length new-history) org-supertag-query-history-max-items))
+      (let* ((last-item (car (last new-history)))
+             (last-keyword (car last-item))
+             (trimmed (seq-take new-history (1- org-supertag-query-history-max-items))))
+        ;; If last used keyword would be trimmed (freq=1), keep it
+        (when (and (string= last-keyword org-supertag-query--last-keyword)
+                  (= (cdr last-item) 1))
+          ;; Remove the last item of trimmed list to make room
+          (setq trimmed (butlast trimmed))
+          ;; Add the last used keyword back
+          (setq trimmed (append trimmed (list last-item))))
+        (setq new-history trimmed)))
+    ;; Update and save
+    (setq org-supertag-query-history-keywords new-history)
+    (customize-save-variable 'org-supertag-query-history-keywords new-history)))
+
+;;---------------------------------------------------------------
+;; Org-supertag-query ineral function
+;;---------------------------------------------------------------
+
+(defun org-supertag-query--get-keywords ()
+  "Get keywords from user input with history support.
+Returns a list of keywords."
+  (let* ((history (mapcar #'car org-supertag-query-history-keywords))
+         (input (completing-read "Enter search keywords (space separated): " 
+                               history nil nil nil nil))
+         (keywords (split-string input " " t)))
+    (when keywords
+      (org-supertag-query--update-keyword-frequency input))
+    keywords))
+
 (defun org-supertag-find-matching-tags (keywords)
   "Find tags matching the given keywords.
 KEYWORDS is a list of keywords to match against tag names."
@@ -705,41 +764,9 @@ Available insertion positions:
                org-supertag-db--object)
     (error "Database not initialized"))
   
-  (let* ((input (read-string "Enter search keywords (space separated): "))
-         (keywords (split-string input " " t))
+  (let* ((keywords (org-supertag-query--get-keywords))
          (nodes (org-supertag-query-find-nodes keywords)))
     (org-supertag-query-show-results keywords nodes)))
-
-(defun org-supertag-query--find-nodes-in-buffer (keywords)
-  "Find nodes matching KEYWORDS in current buffer.
-KEYWORDS is a list of keywords to match against node content."
-  (let (results)
-    (save-excursion
-      (goto-char (point-min))
-      (while (outline-next-heading)
-        (when-let* ((node-id (org-id-get))
-                    (props (org-supertag-db-get node-id)))
-          ;; Get all searchable content
-          (let* ((title (org-get-heading t t t t))
-                 (tags (org-get-tags))
-                 (fields (org-entry-properties nil 'standard))
-                 (field-values (mapcar #'cdr fields))
-                 ;; Combine all searchable text
-                 (searchable-text (concat 
-                                 title " "
-                                 (mapconcat #'identity (or tags '()) " ")
-                                 " "
-                                 (mapconcat #'identity field-values " "))))
-            ;; Check if all keywords match
-            (when (cl-every 
-                   (lambda (keyword)
-                     (string-match-p 
-                      (regexp-quote keyword) 
-                      searchable-text))
-                   keywords)
-              (push props results))))))
-    ;; Return results
-    (nreverse results)))
 
 (defun org-supertag-query-buffer ()
   "Search for nodes in current buffer.
@@ -754,8 +781,7 @@ Shows results in a dedicated buffer with selection and export options."
                org-supertag-db--object)
     (error "Database not initialized"))
   
-  (let* ((input (read-string "Enter search keywords (space separated): "))
-         (keywords (split-string input " " t))
+  (let* ((keywords (org-supertag-query--get-keywords))
          (nodes (org-supertag-query--find-nodes-in-buffer keywords)))
     (org-supertag-query-show-results keywords nodes)))
 
@@ -846,10 +872,40 @@ Shows results in a dedicated buffer with selection and export options."
   ;; Select files
   (when-let* ((files (org-supertag-query--select-files)))
     ;; Get search keywords
-    (let* ((input (read-string "Enter search keywords (space separated): "))
-           (keywords (split-string input " " t))
+    (let* ((keywords (org-supertag-query--get-keywords))
            (nodes (org-supertag-query--find-nodes-in-files keywords files)))
       ;; Display results
       (org-supertag-query-show-results keywords nodes))))
+
+(defun org-supertag-query--find-nodes-in-buffer (keywords)
+  "Find nodes matching KEYWORDS in current buffer.
+KEYWORDS is a list of keywords to match against node content."
+  (let (results)
+    (save-excursion
+      (goto-char (point-min))
+      (while (outline-next-heading)
+        (when-let* ((node-id (org-id-get))
+                    (props (org-supertag-db-get node-id)))
+          ;; Get all searchable content
+          (let* ((title (org-get-heading t t t t))
+                 (tags (org-get-tags))
+                 (fields (org-entry-properties nil 'standard))
+                 (field-values (mapcar #'cdr fields))
+                 ;; Combine all searchable text
+                 (searchable-text (concat 
+                                 title " "
+                                 (mapconcat #'identity (or tags '()) " ")
+                                 " "
+                                 (mapconcat #'identity field-values " "))))
+            ;; Check if all keywords match
+            (when (cl-every 
+                   (lambda (keyword)
+                     (string-match-p 
+                      (regexp-quote keyword) 
+                      searchable-text))
+                   keywords)
+              (push props results))))))
+    ;; Return results
+    (nreverse results)))
 
 (provide 'org-supertag-query)
