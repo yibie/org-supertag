@@ -222,13 +222,10 @@ VALUE is the value to set"
 TAG-NAME can be an existing tag or a new tag name.
 Will prevent duplicate tag application."
   (interactive
-   (let* ((existing-tags (org-supertag-db-find-by-type :tag))
-          (existing-names (mapcar (lambda (tag-id)
-                                  (plist-get (org-supertag-db-get tag-id) :name))
-                                existing-tags))
+   (let* ((all-tags (org-supertag-get-all-tags))  ; 使用 get-all-tags 获取所有标签
           (preset-names (mapcar #'car org-supertag-preset-tags))
           (tag-choices (delete-dups
-                       (append existing-names
+                       (append all-tags
                               (mapcar (lambda (name) 
                                       (concat "Preset: " name))
                                     preset-names)
