@@ -198,10 +198,6 @@ Returns a list of nodes that match the criteria."
                   :formatter org-supertag-format-reference
                   :reader org-supertag-read-reference-field
                   :description "Reference"))
-    (tags . (:validator org-supertag-validate-tags
-             :formatter org-supertag-format-tags
-             :reader org-supertag-read-tags-field
-             :description "Tags"))
     (list . (:validator org-supertag-validate-list
              :formatter org-supertag-format-list
              :reader org-supertag-read-list-field
@@ -401,12 +397,13 @@ VALUE is the value to validate."
       (and (stringp value)
            (string-match-p "^\\[.*\\]$" value))))
 
-(defun org-supertag-format-list (value field)
+(defun org-supertag-format-list (value &optional _field)
   "Format list value.
 VALUE is the value to format.
 FIELD is the field definition."
   (message "Debug - Formatting list value: %S" value)
   (cond
+   ((null value) "[]")
    ((listp value)
     (format "[%s]" 
             (mapconcat (lambda (item) 
@@ -414,7 +411,12 @@ FIELD is the field definition."
                       value ",")))
    ((stringp value)
     (if (string-match-p "^\\[.*\\]$" value)
-        value
+        (let ((json-array-type 'list)
+              (json-false nil))
+          (condition-case err
+              (let ((parsed (json-read-from-string value)))
+                (org-supertag-format-list parsed))
+            (error value)))  ; If parsing fails, return original
       (format "[%s]" value)))
    (t (format "[%s]" value))))
 
@@ -810,6 +812,81 @@ PRESET is the preset field definition"
                initial-value)
       initial-value)))
 
+;;----------------------------------------------------------------------
+;; Field Modification
+;;----------------------------------------------------------------------
+
+(defun org-supertag-tag-modify-field (tag-id field-name)
+  "Modify field definition for TAG-ID's FIELD-NAME.
+This will clear all existing values of this field across all nodes."
+  (interactive
+   (let* ((node-id (org-id-get))
+          (tags (org-supertag-node-get-tags node-id))
+          (tag-id (completing-read "Select tag: " tags nil t))
+          (tag (org-supertag-tag-get tag-id))
+          (fields (plist-get tag :fields))
+          (field-name (completing-read 
+                      "Select field to modify: "
+                      (mapcar (lambda (field)
+                              (plist-get field :name))
+                             fields)
+                      nil t)))
+     (list tag-id field-name)))
+  
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (fields (plist-get tag :fields))
+         (field (cl-find field-name fields
+                        :key (lambda (f) (plist-get f :name))
+                        :test #'equal))
+         (current-type (plist-get field :type))
+         ;; Get new type with completion
+         (type-choices
+          (mapcar (lambda (type-def)
+                   (let ((type-name (car type-def))
+                         (type-spec (cdr type-def)))
+                     (format "%s - %s"
+                             (symbol-name type-name)
+                             (plist-get type-spec :description))))
+                 org-supertag-field-types))
+         (new-type-choice
+          (completing-read 
+           (format "Current type is %s. Select new type: " current-type)
+           type-choices
+           nil t nil nil
+           (symbol-name current-type)))
+         (new-type (intern (car (split-string new-type-choice " - "))))
+         ;; Get new name with completion and current as default
+         (new-name (read-string 
+                   (format "Field name (current: %s): " field-name)
+                   field-name)))
+    
+    ;; Confirm with user about value clearing
+    (when (yes-or-no-p 
+           (format "Modifying field will clear all existing values. Continue? "))
+      ;; Create new field definition
+      (let* ((new-field (list :name new-name
+                             :type new-type))
+             ;; Update fields list
+             (new-fields (mapcar 
+                         (lambda (f)
+                           (if (equal (plist-get f :name) field-name)
+                               new-field
+                             f))
+                         fields))
+             ;; Update tag
+             (new-tag (plist-put (copy-sequence tag) 
+                                :fields new-fields)))
+        
+        ;; Update tag in database
+        (org-supertag-db-add tag-id new-tag)
+        
+        ;; Clear field values from all nodes
+        (let ((nodes (org-supertag-tag-get-nodes tag-id)))
+          (dolist (node-id nodes)
+            (org-supertag-field-remove-value field node-id tag-id)))
+        
+        (message "Field '%s' modified. You may now set new values." 
+                 new-name)))))
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

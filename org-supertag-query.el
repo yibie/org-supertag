@@ -697,7 +697,6 @@ Returns cons cell (point . level-adjust)."
   (interactive)
   (let* ((input (read-string "Enter search keywords (space separated): "))
          (keywords (split-string input " " t))
-         (block-name (string-join keywords "_"))  ; Use keywords as block name
          (matched-nodes nil))
     ;; 1. Find matching nodes
     (setq matched-nodes (org-supertag-query-find-nodes keywords))
@@ -733,7 +732,6 @@ Returns cons cell (point . level-adjust)."
           ;; 3. Generate link content
           (let ((content
                  (with-temp-buffer
-                   (insert (format "#+begin_%s\n" block-name))
                    (dolist (selection selected-nodes)
                      (let* ((node-id (cdr (assoc selection node-choices)))
                             (node (org-supertag-db-get node-id))
@@ -746,7 +744,6 @@ Returns cons cell (point . level-adjust)."
                        (insert (format "- [[id:%s][%s]]\n"
                                      node-id
                                      clean-title))))
-                   (insert (format "#+end_%s\n" block-name))
                    (buffer-string))))
             (save-excursion
               (insert content)

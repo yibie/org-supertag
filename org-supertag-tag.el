@@ -328,10 +328,10 @@ current values and lets the user select and modify them one by one."
                                               nil t))
                        (field-info (cdr (assoc choice field-values)))
                        (tag-id (car field-info))
-                       (field-def (cdr field-info)))
+                       (field (cdr field-info)))
              ;; Set the field value
-             (org-supertag-field-set-value field-def
-                                          (org-supertag-field-read-value field-def)
+             (org-supertag-field-set-value field
+                                          (org-supertag-field-read-value field)
                                           node-id
                                           tag-id)
              t))))
@@ -341,7 +341,7 @@ current values and lets the user select and modify them one by one."
 This function allows setting field values for tags attached to the current node.
 It provides options to:
 1. Edit existing fields
-2. Add new fields 
+2. Add new fields (create new or copy existing)
 3. Add preset fields from templates"
   (interactive)
   (let* ((node-id (org-id-get))
@@ -359,26 +359,45 @@ It provides options to:
     (unless tags
       (user-error "At least one tag is required to set fields"))
     
-    ;; Build choices list
-    (let* ((choices
+    ;; Collect all existing fields for reuse
+    (let* ((existing-fields
+            (cl-loop for tag-id in tags
+                     for tag = (org-supertag-tag-get tag-id)
+                     append
+                     (cl-loop for field in (plist-get tag :fields)
+                             for field-name = (plist-get field :name)
+                             for field-type = (plist-get field :type)
+                             collect (cons (format "[%s] %s (type: %s)"
+                                                 tag-id
+                                                 field-name
+                                                 field-type)
+                                         (list :name field-name
+                                               :type field-type)))))
+           (_ (message "Collected existing fields: %S" existing-fields))
+           ;; Build choices list
+           (choices
             (cl-loop for tag-id in tags
                      for tag = (org-supertag-tag-get tag-id)
                      append
                      ;; Existing fields
                      (cl-loop for field in (plist-get tag :fields)
                              for field-name = (plist-get field :name)
+                             for field-type = (plist-get field :type)
                              for current-value = (org-supertag-field-get-value 
                                                 field node-id tag-id)
                              collect
-                             (cons (format "[%s] %s (current: %s)"
-                                         tag-id field-name 
+                             (cons (format "[%s] %s (type: %s, current: %s)"
+                                         tag-id field-name field-type
                                          (or current-value "unset"))
                                        (list :type :existing
                                             :tag-id tag-id
                                             :field field)))
-                     ;; New field option
-                     collect (cons (format "[%s] + Add new field" tag-id)
-                                 (list :type :new
+                     ;; New field options
+                     collect (cons (format "[%s] + Create new field" tag-id)
+                                 (list :type :new-create
+                                      :tag-id tag-id))
+                     collect (cons (format "[%s] + Copy existing field" tag-id)
+                                 (list :type :new-copy
                                       :tag-id tag-id))
                      ;; Preset fields
                      append
@@ -401,21 +420,65 @@ It provides options to:
             (:existing
              (let ((field (plist-get choice-data :field))
                    (tag-id (plist-get choice-data :tag-id)))
+               (message "Setting value for field '%s' (type: %s) in tag '%s'"
+                        (plist-get field :name)
+                        (plist-get field :type)
+                        tag-id)
                (org-supertag-field-set-value 
                 field
                 (org-supertag-field-read-value field)
                 node-id
                 tag-id)))
-            ;; New field
-            (:new
+            ;; Create new field
+            (:new-create
              (let* ((tag-id (plist-get choice-data :tag-id))
                     (field-name (read-string "Field name: "))
-                    (field-type (completing-read 
-                               "Field type: "
-                               org-supertag-field-types
-                               nil t))
+                    (type-choices
+                     (mapcar (lambda (type-def)
+                              (let ((type-name (car type-def))
+                                    (type-spec (cdr type-def)))
+                                (format "%s - %s"
+                                        (symbol-name type-name)
+                                        (plist-get type-spec :description))))
+                            org-supertag-field-types))
+                    (field-type-choice
+                     (completing-read 
+                      (format "Field type for '%s': " field-name)
+                      type-choices
+                      nil t))
+                    (field-type (intern (car (split-string field-type-choice " - "))))
                     (field-def (list :name field-name
-                                    :type (intern field-type))))
+                                   :type field-type)))
+               (message "Adding new field '%s' (type: %s) to tag '%s'"
+                        field-name field-type tag-id)
+               (org-supertag-tag-add-field tag-id field-def)
+               (org-supertag-field-set-value 
+                field-def
+                (org-supertag-field-read-value field-def)
+                node-id
+                tag-id)))
+            ;; Copy existing field
+            (:new-copy
+             (let* ((tag-id (plist-get choice-data :tag-id))
+                    (field-choice
+                     (completing-read 
+                      "Select field to copy: "
+                      (mapcar #'car existing-fields)
+                      nil t))
+                    (field-template (cdr (assoc field-choice existing-fields)))
+                    ;; 只使用名称和类型创建新字段
+                    (field-def (list :name (read-string 
+                                          "Field name (press Enter to keep original): "
+                                          (plist-get field-template :name))
+                                   :type (plist-get field-template :type)))
+                    ;; 验证字段定义
+                    (_ (unless (and (plist-get field-def :name)
+                                  (plist-get field-def :type))
+                         (error "Invalid field definition: missing name or type"))))
+               (message "Copying field definition '%s' (type: %s) to tag '%s'"
+                        (plist-get field-def :name)
+                        (plist-get field-def :type)
+                        tag-id)
                (org-supertag-tag-add-field tag-id field-def)
                (org-supertag-field-set-value 
                 field-def
@@ -427,6 +490,10 @@ It provides options to:
              (let* ((tag-id (plist-get choice-data :tag-id))
                     (preset-name (plist-get choice-data :preset-name))
                     (field-def (org-supertag-get-preset-field preset-name)))
+               (message "Adding preset field '%s' (type: %s) to tag '%s'"
+                        preset-name
+                        (plist-get field-def :type)
+                        tag-id)
                (org-supertag-tag-add-field tag-id field-def)
                (org-supertag-field-set-value 
                 field-def
