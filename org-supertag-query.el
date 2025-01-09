@@ -697,6 +697,7 @@ Returns cons cell (point . level-adjust)."
   (interactive)
   (let* ((input (read-string "Enter search keywords (space separated): "))
          (keywords (split-string input " " t))
+         (block-name (string-join keywords "_"))  ; Use keywords as block name
          (matched-nodes nil))
     ;; 1. Find matching nodes
     (setq matched-nodes (org-supertag-query-find-nodes keywords))

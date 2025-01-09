@@ -142,6 +142,53 @@ This function:
     (dolist (field-def (plist-get tag :fields))
       (org-supertag-field-remove-value field-def node-id tag-id))))
 
+
+(defun org-supertag-tag-change-tag ()
+  "Change an existing tag to another existing tag on current node.
+This function:
+1. Lists current node's tags for selection
+2. Lists available existing tags (excluding current node's tags) as target
+3. Removes old tag and applies new tag"
+  (interactive)
+  (let* ((node-id (org-id-get))
+         (current-tags (org-supertag-node-get-tags node-id)))
+    
+    ;; Validation
+    (unless node-id
+      (error "Not on a valid node"))
+    (unless current-tags
+      (error "No tags on current node"))
+    
+    ;; Select source tag to change
+    (let* ((source-tag (completing-read "Select tag to change: " 
+                                      current-tags nil t))
+           ;; Get all existing tags except current node's tags
+           (all-tags (cl-set-difference 
+                     (org-supertag-get-all-tags)
+                     current-tags
+                     :test #'string=))
+           ;; Ensure we have available tags to change to
+           (_ (unless all-tags
+                (error "No other existing tags available")))
+           ;; Select target tag
+           (target-tag (completing-read 
+                       (format "Change '%s' to: " source-tag)
+                       all-tags nil t)))
+      
+      ;; Execute tag change
+      (save-excursion
+        ;; 1. Remove old tag
+        (org-supertag-tag--remove source-tag node-id)
+        ;; Remove from org tags
+        (let* ((current-org-tags (org-get-tags))
+               (new-org-tags (delete (concat "#" source-tag) 
+                                   current-org-tags)))
+          (org-set-tags new-org-tags))
+        
+        ;; 2. Apply new tag
+        (org-supertag-tag-apply target-tag))
+      
+      (message "Changed tag '%s' to '%s'" source-tag target-tag))))
 ;;----------------------------------------------------------------------
 ;; Tag Field Operation
 ;;----------------------------------------------------------------------
@@ -250,16 +297,13 @@ Will prevent duplicate tag application."
                             (string-prefix-p string candidate t))
                           candidates))
                         (t string)))))       ; return input string
-                 nil nil)))
+                 nil nil)))  ; 允许输入新标签
      (list
       (cond
        ((member input candidates) input)
        ((string-prefix-p "Preset: " input)
         (substring input (length "Preset: ")))
-       (t
-        (if (y-or-n-p (format "Create new tag '%s'? " input))
-            input
-          (user-error "Tag creation cancelled")))))))
+       (t input)))))
   
   (when tag-name  
     (let* ((node-id (org-id-get))
@@ -282,7 +326,9 @@ Will prevent duplicate tag application."
                   (message "Creating new tag from preset with fields: %S" preset-fields)
                   (org-supertag-tag-create sanitized-name :fields preset-fields)))
                (t
-                (org-supertag-tag-create sanitized-name)))))
+                (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
+                    (org-supertag-tag-create sanitized-name)
+                  (user-error "Tag creation cancelled"))))))
         ;; Apply the tag
         (org-supertag-tag-apply tag-id)))))
 
