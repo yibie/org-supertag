@@ -130,6 +130,12 @@
 ;; Basic Behaviors - Core functionality
 ;;------------------------------------------------------------------------------
 
+;; Node Movement - Basic move operation
+(org-supertag-behavior-register "@move"
+  :trigger :on-add
+  :action #'org-supertag-behavior--move-node
+  :params '(target-file target-level mode keep-tags add-tags))
+
 ;; 1. Task State - Basic behavior, other states through parameters
 (org-supertag-behavior-register "@todo"
   :trigger :on-add
@@ -229,6 +235,8 @@
 (org-supertag-behavior-register "@progress"
   :trigger :on-change
   :action #'org-supertag-behavior--calculate-progress)
+
+
 
 ;;------------------------------------------------------------------------------
 ;; Derived Behaviors - Based on Basic Behaviors

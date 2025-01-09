@@ -688,10 +688,9 @@ Example:
   (message "Debug clock-in - node=%s params=%S" node-id params)
   (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
-      (org-with-point-at pos
-        (let* ((switch-state (plist-get params :switch-state))
-               (resume (plist-get params :resume))
-               (use-last-clock (plist-get params :use-last-clock)))
+      (let* ((switch-state (plist-get params :switch-state))
+             (resume (plist-get params :resume))
+             (use-last-clock (plist-get params :use-last-clock)))
           ;; set temporary state switch value
           (when switch-state
             (setq-local org-clock-in-switch-to-state switch-state))
@@ -703,7 +702,7 @@ Example:
           (condition-case err
               (org-clock-in)
             (error
-             (message "Error starting clock: %S" err))))))))
+             (message "Error starting clock: %S" err)))))))
 
 (defun org-supertag-behavior--clock-out (node-id params)
   "Stop clock on NODE-ID based on PARAMS.
@@ -720,9 +719,8 @@ Example:
   (message "Debug clock-out - node=%s params=%S" node-id params)
   (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
-      (org-with-point-at pos
-        (let* ((switch-state (plist-get params :switch-state))
-               (note (plist-get params :note)))
+      (let* ((switch-state (plist-get params :switch-state))
+             (note (plist-get params :note)))
           ;; set temporary state switch value
           (when switch-state
             (setq-local org-clock-out-switch-to-state switch-state))
@@ -733,7 +731,7 @@ Example:
              (message "Error stopping clock: %S" err)))
           ;; add note
           (when note
-            (org-add-note note)))))))
+            (org-add-note note))))))
 
 (defun org-supertag-behavior--clock-cancel (node-id _params)
   "Cancel clock on NODE-ID.
@@ -875,12 +873,11 @@ Example:
   (message "Debug timer-pause - node=%s params=%S" node-id params)
   (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
-      (org-with-point-at pos
-        (let ((stop (plist-get params :stop)))
-          (condition-case err
-              (org-timer-pause-or-continue stop)
-            (error
-             (message "Error pausing timer: %S" err))))))))
+      (let ((stop (plist-get params :stop)))
+        (condition-case err
+            (org-timer-pause-or-continue stop)
+          (error
+           (message "Error pausing timer: %S" err)))))))
 
 (defun org-supertag-behavior--timer-item (node-id params)
   "Insert timer item for NODE-ID based on PARAMS.
@@ -978,14 +975,244 @@ Example:
     (let ((current-heading (org-get-heading t t t t)))
       (message "Current heading: %s" current-heading)
       (while (and (> (org-outline-level) 1)
-                 (org-up-heading-safe))
+        (org-up-heading-safe))
         (let* ((tags (org-get-tags))
                (heading (org-get-heading t t t t)))
+               (todo (org-get-todo-state)))
           (when (member (concat "#" tag-id) tags)
             (when-let ((parent-id (org-id-get)))
               (when action-fn
                 (funcall action-fn parent-id))
-              parent-id)))))))
+              parent-id))))))
+
+(defun org-supertag-behavior--move-node (node-id params)
+  "Move node to target location based on PARAMS.
+NODE-ID is the node identifier.
+PARAMS is a plist with keys:
+- :target-file : Target file path (required)
+- :target-level : Level adjustment (:child, :same-level, or number)
+- :mode : Move mode (:move, :copy, or :link)
+- :keep-tags : Whether to keep original tags (t or nil)
+- :add-tags : List of additional tags to add after move
+- :link-type : When mode is :link, type of link to leave (:id, :file, :custom)
+- :link-text : When mode is :link, custom text for the link
+- :link-props : When mode is :link, properties to add to link heading
+- :copy-props : When mode is :copy, whether to copy properties (t or nil)
+
+The function follows these steps:
+1. Validate parameters and node existence
+2. Prepare target location
+3. Execute move operation based on mode
+4. Update tags if specified
+5. Update database entries
+
+Example:
+  ;; Simple move to file
+  (org-supertag-behavior--move-node node-id 
+    '(:target-file \"~/org/target.org\"
+      :mode :move))
+  
+  ;; Move as child with tags
+  (org-supertag-behavior--move-node node-id 
+    '(:target-file \"~/org/target.org\"
+      :mode :move
+      :target-level :child
+      :keep-tags t
+      :add-tags (\"moved\")))
+  
+  ;; Move and leave link
+  (org-supertag-behavior--move-node node-id 
+    '(:target-file \"~/org/target.org\"
+      :mode :link
+      :link-type :id
+      :link-text \"See details here\"
+      :link-props (:ORIGINAL_MOVE \"true\")))
+  
+  ;; Copy with properties
+  (org-supertag-behavior--move-node node-id 
+    '(:target-file \"~/org/target.org\"
+      :mode :copy
+      :copy-props t
+      :add-tags (\"copied\")))"
+  (message "Debug move-node - node=%s params=%S" node-id params)
+  
+  ;; 1. Parameter validation
+  (unless (and node-id (org-supertag-node-db-exists-p node-id))
+    (message "Debug move-node - Invalid node: %s" node-id)
+    (user-error "Invalid node ID"))
+  
+  (let* ((target-file (plist-get params :target-file))
+         (target-level (plist-get params :target-level))
+         (mode (or (plist-get params :mode) :move))
+         (keep-tags (plist-get params :keep-tags))
+         (add-tags (plist-get params :add-tags))
+         ;; Link related params
+         (link-type (plist-get params :link-type))
+         (link-text (plist-get params :link-text))
+         (link-props (plist-get params :link-props))
+         ;; Copy related params
+         (copy-props (plist-get params :copy-props)))
+         new-id)
+    
+    ;; Validate target file
+    (unless (and target-file 
+                 (org-supertag-ensure-org-file target-file))
+      (message "Debug move-node - Invalid target file: %s" target-file)
+      (user-error "Invalid target file"))
+    
+    (condition-case err
+        (progn
+          ;; 2. Prepare move
+          (when-let* ((pos (org-supertag-db-get-pos node-id))
+                      (source-buffer (current-buffer))
+                      (source-point pos)
+                      (title (org-get-heading t t t t)))
+                      (source-level (org-outline-level)))
+            
+            (save-excursion
+              (org-with-point-at pos
+                (pcase mode
+                  (:move
+                   ;; 3a. Simple move
+                   (when (org-supertag-node-move node-id target-file target-level)
+                     ;; 4. Process tags
+                     (when keep-tags
+                       (let ((original-tags (org-get-tags)))
+                         (dolist (tag original-tags)
+                           (org-toggle-tag tag 'on))))
+                     (when add-tags
+                       (dolist (tag add-tags)
+                         (org-toggle-tag tag 'on)))
+                     ;; 5. Update database
+                     (org-supertag-update-node-db node-id target-file)
+                     (message "Successfully moved node %s to %s" 
+                              node-id target-file)))
+                  
+                  (:link
+                   ;; 3b. Move and leave link
+                   (when (org-supertag-node-move node-id target-file target-level)
+                     ;; Process tags at target
+                     (when keep-tags
+                       (let ((original-tags (org-get-tags)))
+                         (dolist (tag original-tags)
+                           (org-toggle-tag tag 'on))))
+                     (when add-tags
+                       (dolist (tag add-tags)
+                         (org-toggle-tag tag 'on)))
+                     
+                     ;; Update database
+                     (org-supertag-update-node-db node-id target-file)
+                     
+                     ;; Create link at source
+                     (with-current-buffer source-buffer
+                       (goto-char source-point)
+                       (let* ((link-type (or link-type :id))
+                              (link-text (or link-text title))
+                              (stars (make-string (org-outline-level) ?*)))
+                              (add-props (plist-get params :link-props)))
+                              
+                              ;; Delete original content
+                              (delete-region (line-beginning-position) 
+                                           (line-end-position))
+                              
+                              ;; Insert new heading with link
+                              (insert (format "%s " stars))
+                              (pcase link-type
+                                (:id
+                                 (insert (format "[[id:%s][%s]]" 
+                                               node-id link-text)))
+                                (:file
+                                 (insert (format "[[file:%s][%s]]" 
+                                               target-file link-text)))
+                                (:custom
+                                 (insert link-text)))
+                                )
+                              
+                              ;; Add properties
+                              (when add-props
+                                (org-entry-put nil "ORIGINAL_ID" node-id)
+                                (dolist (prop add-props)
+                                  (org-entry-put nil 
+                                               (symbol-name (car prop)) 
+                                               (cdr prop))))))
+                              
+                              (message "Created link at original position"))))
+                  
+                  (:copy
+                   ;; 3c. Copy implementation
+                   (let ((subtree-content
+                          (save-restriction
+                            ;; Get complete subtree content
+                            (org-narrow-to-subtree)
+                            (buffer-substring-no-properties
+                             (point-min) (point-max))))
+                         new-id)
+                     
+                     ;; Find or create target file
+                     (with-current-buffer (find-file-noselect target-file)
+                       ;; Move to target position
+                       (goto-char (point-max))
+                       
+                       ;; Insert content
+                       (unless (bolp) (insert "\n"))
+                         (insert subtree-content)
+                         
+                         ;; Adjust level if needed
+                         (org-back-to-heading t)
+                         (when target-level
+                           (let* ((current-level (org-outline-level))
+                                  (target-level-num
+                                   (pcase target-level
+                                     (:child (1+ current-level))
+                                     (:same-level current-level)
+                                     ((pred numberp) target-level)
+                                     (_ current-level)))
+                                  (level-diff (- target-level-num current-level)))
+                                    (unless (zerop level-diff)
+                                      (org-map-tree
+                                       (lambda ()
+                                         (let* ((cur-level (org-current-level))
+                                                (new-level (+ cur-level level-diff))
+                                                (new-stars (make-string new-level ?*)))
+                                                (new-title (if (string-prefix-p "#" (org-get-heading t t t t))
+                                                     (org-get-heading t t t t)
+                                                   (concat "#" (org-get-heading t t t t)))))
+                                                  (when (looking-at org-complex-heading-regexp)
+                                                    (replace-match new-stars t t nil 1))))))))
+                       
+                       ;; Generate new ID
+                       (setq new-id (org-id-get-create))
+                       
+                       ;; Copy properties if requested
+                       (when copy-props
+                         (org-entry-put nil "COPIED_FROM" node-id)
+                         (let ((props (org-entry-properties nil 'standard)))
+                           (dolist (prop props)
+                             (unless (member (car prop) 
+                                           '("ID" "COPIED_FROM"))
+                               (org-entry-put nil 
+                                            (car prop) 
+                                            (cdr prop))))))
+                       
+                       ;; Process tags
+                       (when keep-tags
+                         (let ((original-tags (org-get-tags)))
+                           (dolist (tag original-tags)
+                             (org-toggle-tag tag 'on))))
+                       (when add-tags
+                         (dolist (tag add-tags)
+                           (org-toggle-tag tag 'on)))
+                       
+                       ;; Update database
+                       (org-supertag-update-node-db new-id target-file)
+                       
+                       (message "Successfully copied node %s to %s with new ID %s" 
+                                node-id target-file new-id))))
+                  
+                  (_ 
+                   (message "Debug move-node - Invalid mode: %s" mode)
+                   (user-error "Invalid move mode"))))
+      
 
 ;;------------------------------------------------------------------------------
 ;; Archive Management
@@ -1093,6 +1320,7 @@ Example:
         (let ((check-children (plist-get params :check-children))
               (force (plist-get params :force))
               (recursive (plist-get params :recursive)))
+              (org-archive-tag (or org-archive-tag "ARCHIVE")))
           (condition-case err
               (cond
                (check-children
@@ -1108,7 +1336,7 @@ Example:
                (t
                 (org-toggle-archive-tag)))
             (error
-             (message "Error toggling archive tag: %S" err))))))))
+             (message "Error toggling archive tag: %S" err)))))))
 
 (defun org-supertag-behavior--set-archive-location (node-id params)
   "Set archive location for NODE-ID based on PARAMS.
@@ -1136,24 +1364,24 @@ Example:
               (headline (plist-get params :headline))
               (scope (plist-get params :scope))
               (inherit-tags (plist-get params :inherit-tags)))
+              (location (concat file "::" headline)))
     (save-excursion
-      (org-with-point-at pos
-        (let ((location (concat file "::" headline)))
-          ;; set inherited tags option
-          (setq-local org-archive-subtree-add-inherited-tags 
-                      inherit-tags)
-          ;; set archive location
-          (condition-case err
-              (pcase scope
-                (:buffer
-                 (save-excursion
-                   (goto-char (point-min))
-                   (insert "#+ARCHIVE: " location "\n")))
-                (:subtree
-                 (org-entry-put nil "ARCHIVE" location))
-                (_ (error "Invalid scope: %s" scope)))
+      (let ((location (concat file "::" headline)))
+        ;; set inherited tags option
+        (setq-local org-archive-subtree-add-inherited-tags 
+                    inherit-tags)
+        ;; set archive location
+        (condition-case err
+            (pcase scope
+              (:buffer
+               (save-excursion
+                 (goto-char (point-min))
+                 (insert "#+ARCHIVE: " location "\n")))
+              (:subtree
+               (org-entry-put nil "ARCHIVE" location))
+              (_ (error "Invalid scope: %s" scope)))
             (error
-             (message "Error setting archive location: %S" err))))))))
+             (message "Error setting archive location: %S" err))))))
             
 
 ;;------------------------------------------------------------------------------
@@ -1180,18 +1408,19 @@ Returns (total done progress) where progress is a float 0-100."
                    (> (org-outline-level) current-level))
           (let ((todo-state (org-get-todo-state))
                 (heading (org-get-heading t t t t)))
-            (setq total (1+ total))
-            (message "Found child: %s (TODO=%s)" heading todo-state)
-            (when (member todo-state done-states)
-              (setq done (1+ done))))
-          (outline-next-heading))
+                (todo (org-get-todo-state)))
+                (setq total (1+ total))
+                (message "Found child: %s (TODO=%s)" heading todo-state)
+                (when (member todo-state done-states)
+                  (setq done (1+ done))))
+              (outline-next-heading))
         ;; restore position
         (goto-char start-pos))
       (message "Final count: %d total, %d done" total done)
       (list total done 
             (if (> total 0)
                 (* 100.0 (/ (float done) total))
-              0.0)))))
+              0.0))))
 
 (defun org-supertag-behavior--update-progress-display (title progress)
   "Update progress display in TITLE with PROGRESS percentage.
@@ -1235,18 +1464,50 @@ FACE-PLIST is a property list of face attributes."
 
 (defun org-supertag-behavior--apply-styles (node-id)
   "Apply visual styles for NODE-ID based on its behaviors."
-  (when-let* ((pos (org-supertag-db-get-pos node-id))
-              (tags (org-supertag-node-get-tags node-id)))
-    ;; 1. apply overlay style
-    (dolist (tag-id tags)
-      (when-let* ((behavior (org-supertag-behavior--get-behavior tag-id))
-                  (style (plist-get behavior :style)))
-        ;; apply overlay directly on the position
-        (let ((ov (make-overlay pos (line-end-position))))
-          (overlay-put ov 'org-supertag-face t)
-          (overlay-put ov 'face (plist-get style :face)))))
-    ;; 2. update prefix
-    (org-supertag-behavior--update-prefix node-id)))
+  (org-with-wide-buffer
+   (when-let ((pos (org-supertag-db-get-pos node-id)))
+     (save-excursion
+       (goto-char pos)
+       (org-back-to-heading t)
+       (let* ((beg (line-beginning-position))
+              (end (line-end-position))
+              (tags (org-get-tags nil t)))
+         ;; 1. Clear existing styles
+         (remove-overlays beg end 'org-supertag-face t)
+         
+         ;; 2. Apply styles for each tag
+         (dolist (tag tags)
+           (when (string-prefix-p "#" tag)
+             (let* ((tag-id (substring tag 1))
+                    (behavior (org-supertag-behavior--get-behavior tag-id))
+                    (style (plist-get behavior :style)))
+               ;; Apply face/color
+               (when-let ((face (plist-get style :face)))
+                 (let* ((face-attrs (if (facep face)
+                                      (face-all-attributes face nil)
+                                    face))
+                        (bg (plist-get face-attrs :background))
+                        (fg (plist-get face-attrs :foreground))
+                        (valid-attrs
+                         (append
+                          (when (and bg (color-defined-p bg))
+                            (list :background bg))
+                          (when (and fg (color-defined-p fg))
+                            (list :foreground fg)))))
+                   (when valid-attrs
+                     (let ((ov (make-overlay beg end)))
+                       (overlay-put ov 'face valid-attrs)
+                       (overlay-put ov 'org-supertag-face t)
+                       (overlay-put ov 'node-id node-id)))))
+               
+               ;; Apply prefix
+               (when-let ((prefix (plist-get style :prefix)))
+                 (when (looking-at org-complex-heading-regexp)
+                   (let* ((current-title (match-string 4))
+                          (new-title (if (string-prefix-p prefix current-title)
+                                       current-title
+                                     (concat prefix " " current-title))))
+                     (replace-match new-title t t nil 4))))))))))))
 
 (defun org-supertag-behavior--update-prefix (node-id)
   "Update prefix for NODE-ID based on its tags."
@@ -1255,28 +1516,19 @@ FACE-PLIST is a property list of face attributes."
      (save-excursion
        (goto-char pos)
        (org-back-to-heading t)
-       (let ((has-prefix nil)
-             (inhibit-read-only t)
-             (inhibit-modification-hooks t))
-         (save-match-data
-           (let ((tags (org-get-tags nil t)))
-             (dolist (tag tags)
-               (when (and (not has-prefix)
-                         (string-prefix-p "#" tag))
-                 (let* ((tag-id (substring tag 1))
-                        (behavior (org-supertag-behavior--get-behavior tag-id))
-                        (style (plist-get behavior :style))
-                        (prefix (plist-get style :prefix)))
-                   (when prefix
-                     (setq has-prefix t)
-                     (when (looking-at org-complex-heading-regexp)
-                       (let* ((stars-end (match-end 1))
-                              (todo-end (or (match-end 2) stars-end))
-                              (current-title (match-string 4))
-                              (new-title (if (string-prefix-p prefix current-title)
-                                           current-title
-                                         (concat prefix " " current-title))))
-                         ;; use replace-match instead of deleting and inserting directly
-                         (replace-match new-title t t nil 4))))))))))))))
+       (let ((tags (org-get-tags nil t)))
+         (dolist (tag tags)
+           (when (string-prefix-p "#" tag)
+             (let* ((tag-id (substring tag 1))
+                    (behavior (org-supertag-behavior--get-behavior tag-id))
+                    (style (plist-get behavior :style))
+                    (prefix (plist-get style :prefix)))
+               (when prefix
+                 (when (looking-at org-complex-heading-regexp)
+                   (let* ((current-title (match-string 4))
+                          (new-title (if (string-prefix-p prefix current-title)
+                                       current-title
+                                     (concat prefix " " current-title))))
+                     (replace-match new-title t t nil 4))))))))))))
 
 (provide 'org-supertag-behavior-library) 
