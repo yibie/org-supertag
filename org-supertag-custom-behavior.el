@@ -134,7 +134,17 @@
 (org-supertag-behavior-register "@move"
   :trigger :on-add
   :action #'org-supertag-behavior--move-node
-  :params '(target-file target-level mode keep-tags add-tags))
+  :params '(target-file level target-point interactive keep-link))
+
+;; Node Movement with Link - Move and keep link at original location
+(org-supertag-behavior-register "@move-and-link"
+  :trigger :on-add
+  :list '("@move keep-link=t"))
+
+;; Interactive Node Movement - Let user choose target position
+(org-supertag-behavior-register "@move-to"
+  :trigger :on-add
+  :list '("@move interactive=t"))
 
 ;; 1. Task State - Basic behavior, other states through parameters
 (org-supertag-behavior-register "@todo"
@@ -287,6 +297,21 @@
   :style '(:face (:foreground "blue")
           :prefix "📅"))
 
+;; 4. Move-Relate Derivatives
+
+(org-supertag-behavior-register "@move-to-archive"
+  :trigger :on-add
+  :list '("@move target-file=~/org/archive.org interactive=t"))
+
+(org-supertag-behavior-register "@move-to-project"
+  :trigger :on-add
+  :list '("@move target-file=~/org/projects.org interactive=t"))
+
+;; Move as child with link
+(org-supertag-behavior-register "@move-as-child-with-link"
+  :trigger :on-add
+  :list '("@move level=child keep-link=t"))
+
 ;;------------------------------------------------------------------------------
 ;; Combined Behaviors - Complex Functionality
 ;;------------------------------------------------------------------------------
@@ -320,6 +345,8 @@
   :list '("@property=CATEGORY=PROJECT" "@property=PROJECT_ID=auto")
   :style '(:face (:foreground "blue" :weight bold)
           :prefix "📂"))
+
+
 
 (provide 'org-supertag-custom-behavior)
 ;;; org-supertag-custom-behavior.el ends here 

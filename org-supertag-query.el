@@ -534,20 +534,26 @@ Returns:
 NODE-IDS is list of node identifiers
 LEVEL-ADJUST is level adjustment option"
   (let ((target-file (buffer-file-name))
+        (target-point (point))
         (target-level (org-supertag-get-target-level level-adjust))
         (success-count 0))
+    
     (unless target-file
       (error "Current buffer is not visiting a file"))
     
     (dolist (node-id node-ids)
       (message "Processing node: %s" node-id)
       (condition-case err
-          (when (org-supertag-move-node node-id target-file target-level)
+          (when (org-supertag-node--insert-at node-id 
+                                             target-file 
+                                             target-point 
+                                             target-level)
             (cl-incf success-count))
         (error
          (message "Failed processing node %s: %s" 
                   node-id 
                   (error-message-string err)))))
+    
     (message "Processing complete: %d/%d nodes moved successfully" 
              success-count 
              (length node-ids))))

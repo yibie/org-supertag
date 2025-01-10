@@ -484,10 +484,10 @@ Format example:
 - Behavior[:on-add +action +style:📦]
 - Behavior[:always +action]"
   (cond
-   ;; 字符串：行为名
+   ;; String: behavior name
    ((stringp value)
     (if-let ((behavior (gethash value org-supertag-behavior-registry)))
-        ;; 如果能找到行为定义，使用完整格式
+        ;; If behavior definition found, use complete format
         (let ((trigger (plist-get behavior :trigger))
               (has-action (plist-get behavior :action))
               (style (plist-get behavior :style)))
@@ -498,10 +498,10 @@ Format example:
                       (format " +style:%s" 
                               (or (plist-get style :prefix) ""))
                     "")))
-      ;; 找不到行为定义，只显示行为名
+      ;; If behavior definition not found, only show behavior name
       (format "Behavior[%s]" value)))
    
-   ;; plist：完整的行为定义
+   ;; plist: complete behavior definition
    ((and (listp value) (keywordp (car value)))
     (let ((trigger (plist-get value :trigger))
           (has-action (plist-get value :action))
@@ -514,7 +514,7 @@ Format example:
                           (or (plist-get style :prefix) ""))
                 ""))))
    
-   ;; 其他情况
+   ;; Other cases
    (t "Behavior[nil]")))
 
 (defun org-supertag-read-behavior-field (prompt &optional initial)
