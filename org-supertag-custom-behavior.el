@@ -136,41 +136,31 @@
   :action #'org-supertag-behavior--move-node
   :params '(target-file level target-point interactive keep-link))
 
-;; Node Movement with Link - Move and keep link at original location
-(org-supertag-behavior-register "@move-and-link"
-  :trigger :on-add
-  :list '("@move keep-link=t"))
-
-;; Interactive Node Movement - Let user choose target position
-(org-supertag-behavior-register "@move-to"
-  :trigger :on-add
-  :list '("@move interactive=t"))
-
-;; 1. Task State - Basic behavior, other states through parameters
+;; Task State - Basic behavior, other states through parameters
 (org-supertag-behavior-register "@todo"
   :trigger :on-add
   :action #'org-supertag-behavior--set-todo
   :params '(state))
 
-;; 2. Priority - Set specific levels through parameters
+;; Priority - Set specific levels through parameters
 (org-supertag-behavior-register "@priority"
   :trigger :on-add
   :action #'org-supertag-behavior--set-priority
   :params '(priority))
 
-;; 3. Timestamp - Different types through parameters
+;; Timestamp - Different types through parameters
 (org-supertag-behavior-register "@timestamp"
   :trigger :on-add
   :action #'org-supertag-behavior--set-property
   :params '(name value))
 
-;; 4. Property Setting - Set any property through parameters
+;; Property Setting - Set any property through parameters
 (org-supertag-behavior-register "@property"
   :trigger :on-add
   :action #'org-supertag-behavior--set-property
   :params '(name value))
 
-;; 5. Clock Management - Control through parameters
+;; Clock Management - Control through parameters
 (org-supertag-behavior-register "@clock"
   :trigger :on-add
   :action #'org-supertag-behavior--clock-in
@@ -181,6 +171,13 @@
   :trigger :on-add
   :action #'org-supertag-behavior--toggle-state
   :params '(states))
+
+;; Deadline Check - Basic deadline checking operation
+(org-supertag-behavior-register "@deadline-check"
+  :trigger :on-add
+  :action #'org-supertag-behavior--check-deadline
+  :params '(scope days action))
+
 
 ;; State Propagation Basic Behavior
 (org-supertag-behavior-register "@propagate"
@@ -224,24 +221,24 @@
   :action #'org-supertag-behavior--set-archive-location
   :params '(file headline scope inherit-tags))
 
-;; 7. Node Operations - Get Child Node Information
+;; Node Operations - Get Child Node Information
 (org-supertag-behavior-register "@children"
   :trigger :on-change
   :action #'org-supertag-behavior--get-children)
 
-;; 8. Parent Node Search - Find Parent with Specific Tag
+;; Parent Node Search - Find Parent with Specific Tag
 (org-supertag-behavior-register "@parent"
   :trigger :on-add
   :action #'org-supertag-behavior--find-parent-with-tag
   :params '(tag-id))
 
-;; 6. Heading Management - Modify Heading Text
+;; Heading Management - Modify Heading Text
 (org-supertag-behavior-register "@heading"
   :trigger :on-add
   :action #'org-supertag-behavior--set-heading
   :params '(title))
 
-;; 9. Progress Calculation - Based on Child Task States
+;; Progress Calculation - Based on Child Task States
 (org-supertag-behavior-register "@progress"
   :trigger :on-change
   :action #'org-supertag-behavior--calculate-progress)
@@ -298,7 +295,6 @@
           :prefix "📅"))
 
 ;; 4. Move-Relate Derivatives
-
 (org-supertag-behavior-register "@move-to-archive"
   :trigger :on-add
   :list '("@move target-file=~/org/archive.org interactive=t"))
@@ -311,6 +307,24 @@
 (org-supertag-behavior-register "@move-as-child-with-link"
   :trigger :on-add
   :list '("@move level=child keep-link=t"))
+
+;; 5. Deadline Check Derivatives
+(org-supertag-behavior-register "@overdue-urgent"
+  :trigger :on-add
+  :list '("@deadline-check scope=agenda days=0"
+          "@priority priority=A"))
+
+;; 检查即将到期的任务
+(org-supertag-behavior-register "@upcoming-deadline"
+  :trigger :on-add
+  :list '("@deadline-check scope=agenda days=3"
+          "@todo state=NEXT"))
+
+;; 检查并归档过期的已完成任务
+(org-supertag-behavior-register "@overdue-archive"
+  :trigger :on-add
+  :list '("@deadline-check scope=agenda days=0"
+          "@archive"))
 
 ;;------------------------------------------------------------------------------
 ;; Combined Behaviors - Complex Functionality

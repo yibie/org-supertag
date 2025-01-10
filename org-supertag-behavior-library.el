@@ -919,6 +919,60 @@ Example:
            (message "Error showing remaining time: %S" err)))))))
 
 ;;------------------------------------------------------------------------------
+;; Deadline Management Library
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--check-deadline (node-id params)
+  "Check deadline status for NODE-ID based on PARAMS.
+PARAMS is a plist with:
+scope   - Where to check (subtree, file, or agenda)
+days    - Days to look ahead (default 0 for only overdue)
+action  - Function to call for each matching task
+         Function receives (heading deadline) as arguments
+
+Example:
+  (org-supertag-behavior--check-deadline node-id 
+    '(scope agenda 
+      days 0
+      action my-handler-fn))"
+  (message "Debug check-deadline - node=%s params=%S" node-id params)
+  (when-let* ((pos (org-supertag-db-get-pos node-id))
+              (action-fn (plist-get params 'action))
+              (scope (or (plist-get params 'scope) 'subtree))
+              (days (or (plist-get params 'days) 0))
+              (deadline-check
+               (format "DEADLINE<=\"<%+%dd>\"" days)))
+    (save-excursion
+      (org-with-point-at pos
+        (cl-case scope
+          (subtree
+           (org-map-entries
+            (lambda ()
+              (when-let ((deadline (org-get-deadline-time nil)))
+                (funcall action-fn 
+                        (org-get-heading t t t t)
+                        deadline)))
+            deadline-check
+            'tree))
+          (file
+           (org-map-entries
+            (lambda ()
+              (when-let ((deadline (org-get-deadline-time nil)))
+                (funcall action-fn 
+                        (org-get-heading t t t t)
+                        deadline)))
+            deadline-check))
+          (agenda
+           (org-map-entries
+            (lambda ()
+              (when-let ((deadline (org-get-deadline-time nil)))
+                (funcall action-fn 
+                        (org-get-heading t t t t)
+                        deadline)))
+            deadline-check
+            'agenda)))))))
+
+;;------------------------------------------------------------------------------
 ;; Node Operations Library
 ;;------------------------------------------------------------------------------
 
