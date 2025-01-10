@@ -261,6 +261,42 @@ Notes:
         (when todo
           (org-todo todo))))))
 
+(defun org-supertag-node--insert-at (node-id target-file &optional target-point target-level)
+  "Insert node at specific location.
+NODE-ID is the node identifier
+TARGET-FILE is the target file path
+TARGET-POINT is buffer position to insert (nil means end of file)
+TARGET-LEVEL is the target heading level
+
+Returns:
+- t if insertion successful
+- nil if failed"
+  (when-let* ((content (org-supertag-get-node-content node-id))
+              (source-file (plist-get (org-supertag-db-get node-id) :file-path)))
+    (with-current-buffer (find-file-noselect target-file)
+      (save-excursion
+        ;; 1. Move to target position
+        (if target-point
+            (goto-char target-point)
+          (goto-char (point-max)))
+        
+        ;; 2. Insert adjusted content
+        (let ((adjusted-content 
+               (org-supertag-adjust-node-level content target-level)))
+          (insert adjusted-content "\n")
+          (forward-line -1)
+          
+          ;; 3. Update node database entry
+          (org-supertag-update-node-db node-id target-file)
+          
+          ;; 4. Save files
+          (save-buffer)
+          (when (and source-file
+                     (not (equal source-file target-file)))
+            (with-current-buffer (find-file-noselect source-file)
+              (save-buffer)))
+          t)))))
+
 (defun org-supertag-node-move (node-id target-file &optional target-level)
   "Move node to target file.
 NODE-ID is the node identifier
@@ -270,26 +306,10 @@ TARGET-LEVEL is the target heading level
 Returns:
 - t if move successful
 - nil if move failed"
-  (when-let* ((content (org-supertag-get-node-content node-id))
-              (source-file (plist-get (org-supertag-db-get node-id) :file-path)))
-    ;; 1. Delete node from source
-    (when (org-supertag-delete-node-content node-id)
-      ;; 2. Insert to target and update database
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (let ((adjusted-content 
-                 (org-supertag-adjust-node-level content target-level)))
-            (insert adjusted-content "\n")
-            (forward-line -1)
-            ;; 3. Update node database entry
-            (org-supertag-update-node-db node-id target-file)
-            ;; 5. Save both files
-            (save-buffer)
-            (when (and source-file
-                      (not (equal source-file target-file)))
-              (with-current-buffer (find-file-noselect source-file)
-                (save-buffer)))
-            t))))))
+  ;; 1. Delete node from source
+  (when (org-supertag-delete-node-content node-id)
+    ;; 2. Insert at target location
+    (org-supertag-node--insert-at node-id target-file nil target-level)))
 
 
 (defun org-supertag-move-node-and-link (node-id target-file &optional target-level)

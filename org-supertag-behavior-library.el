@@ -922,9 +922,21 @@ Example:
 ;; Node Operations Library
 ;;------------------------------------------------------------------------------
 
+
+;;; Node Tree Navigation Library
+;;; This library provides functions for navigating and manipulating the node tree
+;;; structure in org-mode documents. It includes operations for:
+;;; - Finding parent/child relationships
+;;; - Traversing node hierarchies
+;;; - Collecting node information at different tree levels
+
 (defun org-supertag-behavior--get-children (node-id)
   "Get direct children of node with NODE-ID.
-Returns a list of (heading todo-state) for each child node.
+This function:
+1. Finds the node position using NODE-ID
+2. Gets all direct child nodes (one level below)
+3. For each child, collects its heading and todo state
+4. Returns list of (heading todo-state) pairs
 
 Example:
   (org-supertag-behavior--get-children \"20240101T123456\")
@@ -962,6 +974,12 @@ Example:
 
 (defun org-supertag-behavior--find-parent-with-tag (tag-id &optional action-fn)
   "Find nearest parent node with TAG-ID and optionally apply ACTION-FN.
+This function:
+1. Traverses up the org tree from current position
+2. Looks for a parent node that has the specified TAG-ID
+3. If found, gets its node-id and optionally calls ACTION-FN
+4. Returns the parent node-id if found
+
 TAG-ID should be the tag identifier (e.g. \"task\").
 ACTION-FN is called with parent node-id if found.
 
@@ -985,234 +1003,43 @@ Example:
                 (funcall action-fn parent-id))
               parent-id))))))
 
+;;; Node Operation - Move Node 
 (defun org-supertag-behavior--move-node (node-id params)
-  "Move node to target location based on PARAMS.
-NODE-ID is the node identifier.
-PARAMS is a plist with keys:
-- :target-file : Target file path (required)
-- :target-level : Level adjustment (:child, :same-level, or number)
-- :mode : Move mode (:move, :copy, or :link)
-- :keep-tags : Whether to keep original tags (t or nil)
-- :add-tags : List of additional tags to add after move
-- :link-type : When mode is :link, type of link to leave (:id, :file, :custom)
-- :link-text : When mode is :link, custom text for the link
-- :link-props : When mode is :link, properties to add to link heading
-- :copy-props : When mode is :copy, whether to copy properties (t or nil)
-
-The function follows these steps:
-1. Validate parameters and node existence
-2. Prepare target location
-3. Execute move operation based on mode
-4. Update tags if specified
-5. Update database entries
-
-Example:
-  ;; Simple move to file
-  (org-supertag-behavior--move-node node-id 
-    '(:target-file \"~/org/target.org\"
-      :mode :move))
-  
-  ;; Move as child with tags
-  (org-supertag-behavior--move-node node-id 
-    '(:target-file \"~/org/target.org\"
-      :mode :move
-      :target-level :child
-      :keep-tags t
-      :add-tags (\"moved\")))
-  
-  ;; Move and leave link
-  (org-supertag-behavior--move-node node-id 
-    '(:target-file \"~/org/target.org\"
-      :mode :link
-      :link-type :id
-      :link-text \"See details here\"
-      :link-props (:ORIGINAL_MOVE \"true\")))
-  
-  ;; Copy with properties
-  (org-supertag-behavior--move-node node-id 
-    '(:target-file \"~/org/target.org\"
-      :mode :copy
-      :copy-props t
-      :add-tags (\"copied\")))"
-  (message "Debug move-node - node=%s params=%S" node-id params)
-  
-  ;; 1. Parameter validation
-  (unless (and node-id (org-supertag-node-db-exists-p node-id))
-    (message "Debug move-node - Invalid node: %s" node-id)
-    (user-error "Invalid node ID"))
-  
-  (let* ((target-file (plist-get params :target-file))
-         (target-level (plist-get params :target-level))
-         (mode (or (plist-get params :mode) :move))
-         (keep-tags (plist-get params :keep-tags))
-         (add-tags (plist-get params :add-tags))
-         ;; Link related params
-         (link-type (plist-get params :link-type))
-         (link-text (plist-get params :link-text))
-         (link-props (plist-get params :link-props))
-         ;; Copy related params
-         (copy-props (plist-get params :copy-props)))
-         new-id)
+  "Move node with NODE-ID based on PARAMS.
+Essential PARAMS:
+- target-file : Target file path
+- keep-link : Whether to keep a link at original location (t or nil)
+- level : Level adjustment (child, same-level, or number)
+- target-point : Buffer position to insert (nil means end of file)
+- interactive : Whether to interactively select target position"
+  (let ((target-file (plist-get params 'target-file))
+        (keep-link (plist-get params 'keep-link))
+        (level (plist-get params 'level))
+        (target-point (plist-get params 'target-point))
+        (interactive (plist-get params 'interactive)))
     
-    ;; Validate target file
-    (unless (and target-file 
-                 (org-supertag-ensure-org-file target-file))
-      (message "Debug move-node - Invalid target file: %s" target-file)
-      (user-error "Invalid target file"))
+    ;; 如果是交互式，让用户选择插入位置
+    (when interactive
+      (with-current-buffer (find-file-noselect target-file)
+        (setq target-point (org-supertag-query--get-insert-position target-file))
+        (setq level (or level (cdr target-point)))
+        (setq target-point (car target-point))))
     
-    (condition-case err
-        (progn
-          ;; 2. Prepare move
-          (when-let* ((pos (org-supertag-db-get-pos node-id))
-                      (source-buffer (current-buffer))
-                      (source-point pos)
-                      (title (org-get-heading t t t t)))
-                      (source-level (org-outline-level)))
-            
-            (save-excursion
-              (org-with-point-at pos
-                (pcase mode
-                  (:move
-                   ;; 3a. Simple move
-                   (when (org-supertag-node-move node-id target-file target-level)
-                     ;; 4. Process tags
-                     (when keep-tags
-                       (let ((original-tags (org-get-tags)))
-                         (dolist (tag original-tags)
-                           (org-toggle-tag tag 'on))))
-                     (when add-tags
-                       (dolist (tag add-tags)
-                         (org-toggle-tag tag 'on)))
-                     ;; 5. Update database
-                     (org-supertag-update-node-db node-id target-file)
-                     (message "Successfully moved node %s to %s" 
-                              node-id target-file)))
-                  
-                  (:link
-                   ;; 3b. Move and leave link
-                   (when (org-supertag-node-move node-id target-file target-level)
-                     ;; Process tags at target
-                     (when keep-tags
-                       (let ((original-tags (org-get-tags)))
-                         (dolist (tag original-tags)
-                           (org-toggle-tag tag 'on))))
-                     (when add-tags
-                       (dolist (tag add-tags)
-                         (org-toggle-tag tag 'on)))
-                     
-                     ;; Update database
-                     (org-supertag-update-node-db node-id target-file)
-                     
-                     ;; Create link at source
-                     (with-current-buffer source-buffer
-                       (goto-char source-point)
-                       (let* ((link-type (or link-type :id))
-                              (link-text (or link-text title))
-                              (stars (make-string (org-outline-level) ?*)))
-                              (add-props (plist-get params :link-props)))
-                              
-                              ;; Delete original content
-                              (delete-region (line-beginning-position) 
-                                           (line-end-position))
-                              
-                              ;; Insert new heading with link
-                              (insert (format "%s " stars))
-                              (pcase link-type
-                                (:id
-                                 (insert (format "[[id:%s][%s]]" 
-                                               node-id link-text)))
-                                (:file
-                                 (insert (format "[[file:%s][%s]]" 
-                                               target-file link-text)))
-                                (:custom
-                                 (insert link-text)))
-                                )
-                              
-                              ;; Add properties
-                              (when add-props
-                                (org-entry-put nil "ORIGINAL_ID" node-id)
-                                (dolist (prop add-props)
-                                  (org-entry-put nil 
-                                               (symbol-name (car prop)) 
-                                               (cdr prop))))))
-                              
-                              (message "Created link at original position"))))
-                  
-                  (:copy
-                   ;; 3c. Copy implementation
-                   (let ((subtree-content
-                          (save-restriction
-                            ;; Get complete subtree content
-                            (org-narrow-to-subtree)
-                            (buffer-substring-no-properties
-                             (point-min) (point-max))))
-                         new-id)
-                     
-                     ;; Find or create target file
-                     (with-current-buffer (find-file-noselect target-file)
-                       ;; Move to target position
-                       (goto-char (point-max))
-                       
-                       ;; Insert content
-                       (unless (bolp) (insert "\n"))
-                         (insert subtree-content)
-                         
-                         ;; Adjust level if needed
-                         (org-back-to-heading t)
-                         (when target-level
-                           (let* ((current-level (org-outline-level))
-                                  (target-level-num
-                                   (pcase target-level
-                                     (:child (1+ current-level))
-                                     (:same-level current-level)
-                                     ((pred numberp) target-level)
-                                     (_ current-level)))
-                                  (level-diff (- target-level-num current-level)))
-                                    (unless (zerop level-diff)
-                                      (org-map-tree
-                                       (lambda ()
-                                         (let* ((cur-level (org-current-level))
-                                                (new-level (+ cur-level level-diff))
-                                                (new-stars (make-string new-level ?*)))
-                                                (new-title (if (string-prefix-p "#" (org-get-heading t t t t))
-                                                     (org-get-heading t t t t)
-                                                   (concat "#" (org-get-heading t t t t)))))
-                                                  (when (looking-at org-complex-heading-regexp)
-                                                    (replace-match new-stars t t nil 1))))))))
-                       
-                       ;; Generate new ID
-                       (setq new-id (org-id-get-create))
-                       
-                       ;; Copy properties if requested
-                       (when copy-props
-                         (org-entry-put nil "COPIED_FROM" node-id)
-                         (let ((props (org-entry-properties nil 'standard)))
-                           (dolist (prop props)
-                             (unless (member (car prop) 
-                                           '("ID" "COPIED_FROM"))
-                               (org-entry-put nil 
-                                            (car prop) 
-                                            (cdr prop))))))
-                       
-                       ;; Process tags
-                       (when keep-tags
-                         (let ((original-tags (org-get-tags)))
-                           (dolist (tag original-tags)
-                             (org-toggle-tag tag 'on))))
-                       (when add-tags
-                         (dolist (tag add-tags)
-                           (org-toggle-tag tag 'on)))
-                       
-                       ;; Update database
-                       (org-supertag-update-node-db new-id target-file)
-                       
-                       (message "Successfully copied node %s to %s with new ID %s" 
-                                node-id target-file new-id))))
-                  
-                  (_ 
-                   (message "Debug move-node - Invalid mode: %s" mode)
-                   (user-error "Invalid move mode"))))
+    (if keep-link
+        ;; 保留链接的移动
+        (when-let* ((node (org-supertag-db-get node-id))
+                    (title (plist-get node :title))
+                    (source-pos (point)))
+          (let ((reference-content (format "[[id:%s][%s]]\n" node-id title)))
+            (when (org-supertag-delete-node-content node-id)
+              (org-supertag-node--insert-at node-id target-file target-point level)
+              (save-excursion
+                (goto-char source-pos)
+                (insert reference-content)))))
       
+      ;; 普通移动
+      (when (org-supertag-delete-node-content node-id)
+        (org-supertag-node--insert-at node-id target-file target-point level)))))
 
 ;;------------------------------------------------------------------------------
 ;; Archive Management
