@@ -25,6 +25,7 @@
   "Registry of defined behaviors.
 Key is the behavior name (string), value is a plist containing:
 :trigger  - When to execute (:on-add :on-remove :on-change :on-schedule :always)
+:schedule - Cron format string (\"minute hour day month weekday\") for :schedule trigger
 :action   - Function to execute or list of behavior names
 :style    - Visual properties (optional)
 :hooks    - List of (hook-name . hook-function) pairs (optional)
@@ -45,11 +46,12 @@ PROPS is a plist with:
 :params   - Parameter names list
 :list     - List of behaviors to execute"
   (let ((behavior (list :trigger (plist-get props :trigger)
-                       :action (plist-get props :action)
-                       :style (plist-get props :style)
-                       :hooks (plist-get props :hooks)
-                       :params (plist-get props :params)
-                       :list (plist-get props :list))))
+                        :schedule (plist-get props :schedule)
+                        :action (plist-get props :action)
+                        :style (plist-get props :style)
+                        :hooks (plist-get props :hooks)
+                        :params (plist-get props :params)
+                        :list (plist-get props :list))))
     
     ;; Register to behavior registry (memory cache)
     (puthash behavior-name behavior org-supertag-behavior-registry)
@@ -88,6 +90,150 @@ If not found, check if tag has associated behaviors."
           :type :tag
           :behaviors unique-behaviors))))
    org-supertag-db--object))
+
+;;------------------------------------------------------------------------------
+;; Secheduler System
+;;------------------------------------------------------------------------------
+
+(defvar org-supertag-scheduled-tasks (make-hash-table :test 'equal)
+  "Store scheduled tasks. Key is task ID, value is task property list.")
+
+(defvar org-supertag-scheduler-timer nil
+  "Main timer for the scheduler.")
+
+;; Cron format parsing and validation
+(defun org-supertag-parse-cron (cron-string)
+  "Parse cron expression.
+CRON-STRING format: \"minute hour day month weekday\""
+  (let ((fields (split-string cron-string " ")))
+    (when (= (length fields) 5)
+      (cl-destructuring-bind (minute hour day month weekday) fields
+        (list :minute minute
+              :hour hour
+              :day day
+              :month month
+              :weekday weekday)))))
+
+(defun org-supertag-validate-cron-field (value pattern)
+  "Validate cron field.
+VALUE is the field value
+PATTERN is the validation pattern"
+  (string-match-p pattern value))
+
+(defun org-supertag-cron-valid-p (cron-string)
+  "Check if cron expression is valid.
+CRON-STRING is the complete cron expression"
+  (when-let ((fields (org-supertag-parse-cron cron-string)))
+    (and
+     ;; Minutes (0-59)
+     (org-supertag-validate-cron-field 
+      (plist-get fields :minute)
+      "^\\(?:\\*\\|[0-5]?[0-9]\\)$")
+     ;; Hours (0-23)
+     (org-supertag-validate-cron-field 
+      (plist-get fields :hour)
+      "^\\(?:\\*\\|\\(?:[0-1]?[0-9]\\|2[0-3]\\)\\)$")
+     ;; Days (1-31)
+     (org-supertag-validate-cron-field 
+      (plist-get fields :day)
+      "^\\(?:\\*\\|\\(?:[1-2]?[0-9]\\|3[0-1]\\)\\)$")
+     ;; Months (1-12)
+     (org-supertag-validate-cron-field 
+      (plist-get fields :month)
+      "^\\(?:\\*\\|\\(?:[1-9]\\|1[0-2]\\)\\)$")
+     ;; Weekdays (0-6)
+     (org-supertag-validate-cron-field 
+      (plist-get fields :weekday)
+      "^\\(?:\\*\\|[0-6]\\)$"))))
+
+(defun org-supertag-cron-match-field (field-value current-value)
+  "Check if cron field matches.
+FIELD-VALUE is the cron field value
+CURRENT-VALUE is the current time value"
+  (or (string= field-value "*")
+      (string= field-value (number-to-string current-value))))
+
+(defun org-supertag-cron-matches-p (cron-expr time)
+  "Check if given time matches cron expression.
+CRON-EXPR is the cron expression
+TIME is the time to check"
+  (let* ((fields (org-supertag-parse-cron cron-expr))
+         (time-fields (decode-time time))
+         ;; Extract time fields
+         (current-minute (nth 1 time-fields))
+         (current-hour (nth 2 time-fields))
+         (current-day (nth 3 time-fields))
+         (current-month (nth 4 time-fields))
+         (current-weekday (nth 6 time-fields)))
+    ;; All fields must match
+    (and (org-supertag-cron-match-field (plist-get fields :minute) current-minute)
+         (org-supertag-cron-match-field (plist-get fields :hour) current-hour)
+         (org-supertag-cron-match-field (plist-get fields :day) current-day)
+         (org-supertag-cron-match-field (plist-get fields :month) current-month)
+         (org-supertag-cron-match-field (plist-get fields :weekday) current-weekday))))
+
+;; Task management
+(defun org-supertag-schedule-add-task (behavior)
+  "Add scheduled task.
+BEHAVIOR is the behavior definition"
+  (let* ((id (plist-get behavior :id))
+         (schedule (plist-get behavior :schedule))
+         (action (plist-get behavior :action)))
+    
+    ;; Validate cron format
+    (unless (org-supertag-cron-valid-p schedule)
+      (error "Invalid cron format: %s" schedule))
+    
+    ;; Add task
+    (puthash id
+             (list :schedule schedule
+                   :action action
+                   :last-run nil)
+             org-supertag-scheduled-tasks)))
+
+(defun org-supertag-scheduler-check-tasks ()
+  "Check and execute tasks matching current time."
+  (let ((now (current-time)))
+    (maphash
+     (lambda (id task)
+       (when (org-supertag-cron-matches-p 
+              (plist-get task :schedule) 
+              now)
+         ;; Avoid repeated execution in same minute
+         (unless (equal (plist-get task :last-run)
+                       (format-time-string "%Y-%m-%d %H:%M" now))
+           ;; Execute task
+           (condition-case err
+               (progn
+                 (message "Executing scheduled task %s" id)
+                 (funcall (plist-get task :action))
+                 ;; Update last execution time
+                 (puthash id
+                          (list :schedule (plist-get task :schedule)
+                                :action (plist-get task :action)
+                                :last-run (format-time-string 
+                                         "%Y-%m-%d %H:%M" 
+                                         now))
+                          org-supertag-scheduled-tasks))
+             (error
+              (message "Error in scheduled task %s: %s" 
+                       id (error-message-string err)))))))
+     org-supertag-scheduled-tasks)))
+
+;; Scheduler control functions remain unchanged
+(defun org-supertag-scheduler-start ()
+  "Start the scheduler."
+  (unless org-supertag-scheduler-timer
+    (setq org-supertag-scheduler-timer
+          (run-at-time t 60 #'org-supertag-scheduler-check-tasks))
+    (message "Scheduler started")))
+
+(defun org-supertag-scheduler-stop ()
+  "Stop the scheduler."
+  (when org-supertag-scheduler-timer
+    (cancel-timer org-supertag-scheduler-timer)
+    (setq org-supertag-scheduler-timer nil)
+    (message "Scheduler stopped")))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Execution
@@ -429,13 +575,14 @@ Prompts for a list of behaviors to execute."
               #'org-supertag-behavior--handle-tag-add)
     (add-hook 'org-supertag-after-tag-remove-hook
               #'org-supertag-behavior--handle-tag-remove)
-    (add-hook 'org-supertag-after-load-hook
-              #'org-supertag-behavior--setup-scheduled-behaviors)
     
     ;; Add ID location protection
     (advice-add 'org-supertag-behavior--handle-node-change 
                 :around #'org-supertag-behavior--protect-id-locations)
-    
+
+    ;; Setup scheduled behaviors directly
+    (org-supertag-behavior--setup-scheduled-behaviors)
+
     (setq org-supertag-behavior--initialized t))
   (message "=== Behavior System Init Success ==="))
 
@@ -474,12 +621,26 @@ Prompts for a list of behaviors to execute."
 
 (defun org-supertag-behavior--setup-scheduled-behaviors ()
   "Setup scheduled behaviors."
-  ;; TODO: 实现定时任务支持
-  )
+  ;; Initialize scheduled tasks storage
+  (setq org-supertag-scheduled-tasks (make-hash-table :test 'equal))
+  ;; Iterate through all behaviors and register scheduled tasks
+  (maphash
+   (lambda (name behavior)
+     (when (and (eq (plist-get behavior :trigger) :schedule)
+                (plist-get behavior :schedule))
+       ;; Build complete task definition
+       (org-supertag-schedule-add-task
+        (list :id name
+              :schedule (plist-get behavior :schedule)
+              :action (plist-get behavior :action)))))
+   org-supertag-behavior-registry)
+  
+  ;; Start the scheduler
+  (org-supertag-scheduler-start))
 
 (defun org-supertag-behavior--cleanup ()
   "Cleanup behavior system."
-  ;; 移除钩子
+  ;; Remove hooks
   (remove-hook 'org-supertag-after-node-change-hook
                #'org-supertag-behavior--handle-node-change)
   (remove-hook 'org-supertag-after-tag-add-hook
@@ -489,7 +650,10 @@ Prompts for a list of behaviors to execute."
   (remove-hook 'org-supertag-after-load-hook
                #'org-supertag-behavior--setup-scheduled-behaviors)
   
-  ;; 移除建议
+  ;; Stop scheduler
+  (org-supertag-scheduler-stop)
+
+  ;; Remove advice
   (advice-remove 'org-supertag-behavior--handle-node-change 
                 #'org-supertag-behavior--protect-id-locations))
 
