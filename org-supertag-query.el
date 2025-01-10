@@ -4,6 +4,7 @@
 (require 'org-element)
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
+(require 'cl-lib)
 
 (defcustom org-supertag-query-history-max-items 50
   "Maximum number of keywords to keep in history.
@@ -57,7 +58,7 @@ Each element is a cons cell (keyword . frequency)."
   "Get keywords from user input with history support.
 Returns a list of keywords."
   (let* ((history (mapcar #'car org-supertag-query-history-keywords))
-         (input (completing-read "Enter search keywords (space separated): " 
+         (input (completing-read "Enter query keywords (space separated): " 
                                history nil nil nil nil))
          (keywords (split-string input " " t)))
     (when keywords
@@ -129,6 +130,8 @@ Returns:
         (insert-file-contents file)
         (org-mode)  ; Enable org-mode
         (goto-char pos)
+        (unless (org-at-heading-p)
+          (org-back-to-heading t))
         (org-get-tags)))))
 
 (defun org-supertag-node-has-children-p (node-id)
@@ -142,6 +145,8 @@ NODE-ID is the node identifier."
         (insert-file-contents file)
         (org-mode)  ; Enable org-mode
         (goto-char pos)
+        (unless (org-at-heading-p)
+          (org-back-to-heading t))
         (let ((level (org-current-level)))
           (forward-line)
           (and (re-search-forward org-heading-regexp nil t)
@@ -191,6 +196,132 @@ NODE is the node property list."
 ;; Query Results Page
 ;;---------------------------------------------------------------
 
+(defgroup org-supertag-query nil
+  "Customization for org-supertag query."
+  :group 'org-supertag)
+
+(defcustom org-supertag-query-preview-length 300
+  "Preview content maximum length."
+  :type 'integer
+  :group 'org-supertag-query)
+
+(defface org-supertag-query-current
+  '((t :inherit region))
+  "Face for current selected item."
+  :group 'org-supertag-query)
+
+(defface org-supertag-query-title
+  '((t :weight bold))
+  "Face for titles in query results."
+  :group 'org-supertag-query)
+
+(defface org-supertag-query-tag
+  '((t :box t))
+  "Face for tags in query results."
+  :group 'org-supertag-query)
+
+(defface org-supertag-query-file
+  '((t :inherit fixed-pitch))
+  "Face for file names in query results."
+  :group 'org-supertag-query)
+
+;; Data structure
+(cl-defstruct org-supertag-query-item
+  id          ; Node ID
+  title       ; Title
+  tags        ; Tags list
+  file        ; File name
+  content     ; Preview content
+  marked)     ; Marked status
+
+;; Buffer-local 变量
+(defvar-local org-supertag-query-ewoc nil
+  "Ewoc object for displaying query results.")
+
+;; Formatting display function
+(defun org-supertag-query-pp-item (item)
+  "Format display for a single query item."
+  (let* ((title (org-supertag-query-item-title item))
+         (tags (org-supertag-query-item-tags item))
+         (file (org-supertag-query-item-file item))
+         (content (org-supertag-query-item-content item))
+         (marked (org-supertag-query-item-marked item))
+         (id (org-supertag-query-item-id item)))
+    
+    ;; Title line with checkbox and tags
+    (insert (propertize (if marked "☑ " "☐ ")
+                       'face (if marked 'org-checkbox-statistics-done
+                              'org-checkbox))
+            (propertize title 'face 'bold)
+            " "
+            (format "[[id:%s][🔗]]" id))  ; Add ID link
+    
+    ;; Tags
+    (when tags
+      (insert " ")
+      (dolist (tag tags)
+        (insert (propertize (concat "[" tag "]")
+                           'face 'org-supertag-query-tag)
+                " ")))
+    ;; File name
+    (when file
+      (insert " " (propertize (file-name-nondirectory file)
+                             'face 'org-supertag-query-file)))
+    (insert "\n")
+    
+    ;; Content
+    (when content
+      (let ((truncated-content
+             (if (> (length content) org-supertag-query-preview-length)
+                 (concat (substring content 0 org-supertag-query-preview-length)
+                        "...")
+               content)))
+        (dolist (line (split-string truncated-content "\n"))
+          (unless (string-empty-p line)
+            (insert "    " line "\n")))))))
+
+(defun org-supertag-query-highlight-current ()
+  "Highlight current item."
+  (let* ((node (ewoc-locate org-supertag-query-ewoc))
+         (inhibit-read-only t)
+         (beg (ewoc-location node))
+         (next (ewoc-next org-supertag-query-ewoc node))
+         (end (if next
+                  (ewoc-location next)
+                (point-max))))
+    (remove-overlays (point-min) (point-max) 'org-supertag-query t)
+    (let ((ov (make-overlay beg end)))
+      (overlay-put ov 'face 'org-supertag-query-current)
+      (overlay-put ov 'org-supertag-query t))))
+
+(defun org-supertag-query-next ()
+  "Move to next result."
+  (interactive)
+  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+             (next (ewoc-next org-supertag-query-ewoc current)))
+    (goto-char (ewoc-location next))
+    (beginning-of-line)
+    (org-supertag-query-highlight-current)))
+
+(defun org-supertag-query-prev ()
+  "Move to previous result."
+  (interactive)
+  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+             (prev (ewoc-prev org-supertag-query-ewoc current)))
+    (goto-char (ewoc-location prev))
+    (beginning-of-line)
+    (org-supertag-query-highlight-current)))
+
+(defun org-supertag-query-toggle-mark ()
+  "Toggle mark for current item."
+  (interactive)
+  (when-let* ((node (ewoc-locate org-supertag-query-ewoc))
+              (data (ewoc-data node)))
+    (setf (org-supertag-query-item-marked data)
+          (not (org-supertag-query-item-marked data)))
+    (ewoc-invalidate org-supertag-query-ewoc node)
+    (org-supertag-query-next)))
+
 (defun org-supertag-query-find-nodes (keywords)
   "Find nodes matching keywords."
   (let (results)
@@ -229,66 +360,168 @@ NODE is the node property list."
 
 (defvar org-supertag-query-mode-map
   (let ((map (make-sparse-keymap)))
+    ;; Navigation and Marking
+    (define-key map (kbd "n") #'org-supertag-query-next)
+    (define-key map (kbd "p") #'org-supertag-query-prev)
+    (define-key map (kbd "m") #'org-supertag-query-toggle-mark)
+    (define-key map (kbd "RET") #'org-supertag-query-visit-node)
+    (define-key map (kbd "q") #'org-supertag-query-quit)  ; Add quit key
+    
+    ;; Export Results
     (define-key map (kbd "C-c C-x f") #'org-supertag-query-export-results-to-file)
     (define-key map (kbd "C-c C-x h") #'org-supertag-query-export-results-here)
     (define-key map (kbd "C-c C-x n") #'org-supertag-query-export-results-to-new-file)
+    
+    ;; Region Operations
     (define-key map (kbd "C-c C-x C-r") #'org-supertag-query-toggle-checkbox-region)
     (define-key map (kbd "C-c C-x C-u") #'org-supertag-query-untoggle-checkbox-region)
-    (define-key map (kbd "C-c C-c") #'org-supertag-query-toggle-checkbox)  ; Add checkbox toggle shortcut
     map)
   "Keymap for `org-supertag-query-mode'.")
 
 ;; User Query Command
 (define-minor-mode org-supertag-query-mode
-  "Minor mode for org-supertag search results buffer."
+  "Minor mode for org-supertag query results buffer."
   :lighter " OrgST"
-  :keymap org-supertag-query-mode-map)
+  :keymap org-supertag-query-mode-map
+  (when org-supertag-query-mode
+    ;; Setup when mode is enabled
+    (setq buffer-read-only t)
+    ;; Ensure we can use 'q' to quit
+    (local-set-key (kbd "q") #'org-supertag-query-quit)))
+
+(defun org-supertag-query-insert-header (keyword-list nodes)
+  "Insert query results header information."
+  (insert "#+TITLE: SuperTag Query Results\n")
+    ;; Search scope
+  (insert "- Search scope: titles, tags, properties and field values\n")
+  (insert "- Multiple keywords use AND logic (all must match)\n\n")
+  ;; Search information
+  (insert "* Search Terms: "
+          (propertize (string-join keyword-list " ")
+                     'face 'bold)
+                     "\n")
+  (insert (format "Found %d matching nodes\n" (length nodes)))
+
+  ;; Shortcuts explanation
+  (insert "* Shortcuts:\n")
+  (insert "- n/p         : Navigate results\n")
+  (insert "- m           : Toggle mark\n")
+  (insert "- RET         : Visit node\n")
+  (insert "- C-c C-x f   : Export to file\n")
+  (insert "- C-c C-x h   : Export here\n")
+  (insert "- C-c C-x n   : Export to new file\n")
+  (insert "- C-c C-x C-r : Toggle checkbox region\n")
+  (insert "- C-c C-x C-u : Untoggle checkbox region\n")
+  (insert "- q           : Quit query results\n")
+  (insert (make-string 18 ?━))
+  (insert "\n")
+  )
+
+(defun org-supertag-query-get-node-content (node-id)
+  "Get node preview content using org-element API."
+  (when-let* ((props (org-supertag-db-get node-id))
+              (file (plist-get props :file-path))
+              (pos (plist-get props :pos)))
+    (when (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (org-mode)
+        (goto-char pos)
+        (let* ((element (org-element-at-point))
+               (node-id-at-point (org-id-get))
+               (found-pos (org-element-property :begin element)))
+          (when (and (= found-pos pos)
+                    (equal node-id-at-point node-id))
+            ;; Get content, skipping properties
+            (save-excursion
+              (let* ((begin (progn
+                            (org-end-of-meta-data t) ;
+                            (point)))
+                     (end (org-element-property :contents-end element))
+                     (contents (when (and begin end)
+                               (buffer-substring-no-properties begin end))))
+                (when contents
+                  (string-trim contents))))))))))
+                
+(defun org-supertag-query-create-item (node)
+  "Create display item from node properties."
+  (let ((id (plist-get node :id)))
+    (make-org-supertag-query-item
+     :id id
+     :title (plist-get node :title)
+     :tags (org-supertag-query--get-node-tags id)
+     :file (plist-get node :file-path)
+     :content (org-supertag-query-get-node-content id)
+     :marked nil)))
 
 (defun org-supertag-query-show-results (keyword-list nodes)
   "Display search results.
 KEYWORD-LIST is the list of keywords to search for.
 NODES is the list of matched nodes to display."
-  (with-current-buffer (get-buffer-create "*Org SuperTag Search*")
-    (let ((inhibit-read-only t))
-      (erase-buffer)
-      (org-mode)
-      (org-supertag-query-mode)
-      
-      ;; Display search info
-      (insert "#+TITLE: SuperTag Search Results\n\n")
-      (insert (format "* Search Terms: %s\n" 
-                     (mapconcat #'identity keyword-list " ")))
-      (org-show-all)
-      
-      ;; Display instructions
-      (insert "* Instructions\n")
-      (insert "- Search scope: titles, tags, properties and field values\n")
-      (insert "- Multiple keywords use AND logic (all must match)\n")
-      (insert "- [+] indicates node has children\n\n")
-      (insert "Shortcuts:\n")
-      (insert "- C-c C-c     : Toggle checkbox state\n")
-      (insert "- C-c C-x f   : Export to file\n")
-      (insert "- C-c C-x n   : Export to new file\n")
-      (insert "- C-c C-x C-r : Toggle checkbox region\n")
-      (insert "- C-c C-x C-u : Untoggle checkbox region\n\n")
-      
-      ;; 显示搜索结果
-      (insert "* Search Results\n")
-      (if nodes
-          (progn
-            (insert (format "Found %d matching nodes:\n\n" (length nodes)))
-            ;; 添加表头
-            (insert (format "- [ ] %-60s | %-20s | %-12s | %s\n"
-                           "Title" "Tags" "File" "Link"))
-            ;; 添加分隔线
-            (insert (make-string 60 ?-) "-" 
-                    (make-string 22 ?-) "-" 
-                    (make-string 14 ?-) "-" 
-                    (make-string 12 ?-) "\n")
-            (dolist (node nodes)
-              (insert (org-supertag-query-format-node node) "\n")))
-        (insert "No matching results found\n"))))
-  (switch-to-buffer "*Org SuperTag Search*"))
+  (let ((buf (get-buffer-create "*Org SuperTag Query*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-mode)
+        ;; Ensure our minor mode is enabled
+        (org-supertag-query-mode 1)
+        ;; Insert header information
+        (org-supertag-query-insert-header keyword-list nodes)
+        ;; Create ewoc and add results
+        (setq-local org-supertag-query-ewoc 
+                    (ewoc-create #'org-supertag-query-pp-item))
+        ;; Add all results
+        (dolist (node nodes)
+          (ewoc-enter-last org-supertag-query-ewoc
+                          (org-supertag-query-create-item node)))
+        ;; Highlight first item if there are results
+        (when nodes
+          (goto-char (point-min))
+          (re-search-forward "^\\[" nil t)
+          (beginning-of-line)
+          (org-supertag-query-highlight-current))))
+    
+    (switch-to-buffer buf)))
+
+(defun org-supertag-query--find-node (node-id)
+  "Visit node with specified ID."
+  (when-let* ((props (org-supertag-db-get node-id))
+              (file (plist-get props :file-path)))
+    (when (file-exists-p file)
+      ;; Open file
+      (find-file file)
+      (widen)
+      (when-let ((marker (org-id-find-id-in-file node-id file)))
+        (goto-char (cdr marker)) 
+        (org-show-entry)
+        (org-show-children)
+        (recenter)))))
+
+(defun org-supertag-query-visit-node ()
+  "Visit current selected node."
+  (interactive)
+  (when-let* ((node (ewoc-locate org-supertag-query-ewoc))
+              (data (ewoc-data node))
+              (id (org-supertag-query-item-id data)))
+    (org-supertag-query--find-node id)))
+    
+
+(defun org-supertag-query-quit ()
+  "Quit the query results buffer and return to previous buffer."
+  (interactive)
+  (let ((results-buffer (get-buffer "*Org SuperTag Query*")))
+    (when (and org-supertag-query--original-buffer
+               (buffer-live-p org-supertag-query--original-buffer))
+      (message "Switching back to original buffer: %s" 
+               (buffer-name org-supertag-query--original-buffer))
+      (switch-to-buffer org-supertag-query--original-buffer)
+      (when org-supertag-query--original-point
+        (message "Restoring cursor position to: %d" org-supertag-query--original-point)
+        (goto-char org-supertag-query--original-point)))
+    ;; Kill the results buffer
+    (when results-buffer
+      (kill-buffer results-buffer))))
+
 
 ;;---------------------------------------------------------------------
 ;; Select Serached Item 
@@ -329,7 +562,7 @@ START and END define the region boundaries."
         (replace-match "- [ ]")))))
 
 (defun org-supertag-toggle-all-boxes ()
-  "Toggle all checkboxes in search results."
+  "Toggle all checkboxes in query results."
   (interactive)
   (let* ((inhibit-read-only t)
          (current-state (save-excursion
@@ -347,13 +580,16 @@ START and END define the region boundaries."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-get-selected-nodes ()
-  "Get IDs of all selected nodes from search results."
+  "Get IDs of all selected nodes from query results."
   (let (selected-nodes)
     (save-excursion
       (goto-char (point-min))
+      ;; Skip header section
+      (when (re-search-forward "^\\* Shortcuts:" nil t)
+        (forward-line))
       ;; Search for all checked items
       (while (re-search-forward 
-              "^-[ \t]+\\[X\\].*?|.*?|.*?|.*?\\[\\[id:\\([^]]+\\)\\]"
+              "^☑.*\\[\\[id:\\([^]]+\\)\\]"
               nil t)
         (when-let ((node-id (match-string-no-properties 1)))
           ;; Verify node exists
@@ -917,5 +1153,6 @@ KEYWORDS is a list of keywords to match against node content."
               (push props results))))))
     ;; Return results
     (nreverse results)))
+
 
 (provide 'org-supertag-query)
