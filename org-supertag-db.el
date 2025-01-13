@@ -803,7 +803,7 @@ Returns:
   "Get all nodes that have TAG-ID.
 Returns a list of node IDs."
   (let ((nodes nil))
-    ;; 遍历所有关系
+    ;; Iterate over all relationships
     (maphash (lambda (_key relation)
                (when (and (eq (plist-get relation :type) :node-tag)
                          (equal (plist-get relation :to) tag-id))
@@ -1180,7 +1180,7 @@ Returns:
                ;; Other properties
                (tags (org-element-property :tags element))
                (properties (org-element-property :PROPERTIES element))
-               ;; 直接获取节点内容
+               ;; Get node content directly
                (content (save-excursion
                          (org-end-of-meta-data t)  
                          (let ((begin (point))
@@ -1228,9 +1228,9 @@ Returns a list of parsed nodes."
       (org-map-entries
        (lambda ()
          (let ((element (org-element-at-point)))
-           ;; 只在当前是标题节点时处理
+           ;; Only process heading nodes
            (when (and (eq (org-element-type element) 'headline)
-                     (org-at-heading-p))
+                      (org-at-heading-p))
              (when-let ((node (org-supertag-db--parse-node-at-point)))
                (push node nodes)))))
        t nil))

@@ -291,21 +291,16 @@ TAG-NAME is the tag to search for."
           (not (org-supertag-query-item-marked data)))
     (ewoc-invalidate org-supertag-query-ewoc node)
     (org-supertag-query-next)))
-
+    
 (defun org-supertag-query-find-nodes (keywords)
   "Find nodes matching KEYWORDS."
-  (let ((results nil)
-        (debug-buf (get-buffer-create "*Org SuperTag Query Debug*")))
-    ;; Clear debug buffer
-    (with-current-buffer debug-buf
-      (erase-buffer))
-    
+  (let (results)
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
          (let* ((title (plist-get props :title))
                 (content (plist-get props :content))
-                ;; 获取标签和标签的字段定义
+                ;; Get tags and tag fields
                 (tag-fields
                  (let ((fields-map (make-hash-table :test 'equal)))
                    (maphash 
@@ -319,7 +314,7 @@ TAG-NAME is the tag to search for."
                             (puthash (plist-get field :name) field fields-map)))))
                     org-supertag-db--link)
                    fields-map))
-                ;; 获取标签
+                ;; Get tags
                 (tags (let (node-tags)
                        (maphash 
                         (lambda (link-id link-props)
@@ -328,7 +323,7 @@ TAG-NAME is the tag to search for."
                             (push (plist-get link-props :to) node-tags)))
                         org-supertag-db--link)
                        node-tags))
-                ;; 获取字段值
+                ;;  Get field values
                 (fields (let (node-fields)
                          (maphash
                           (lambda (link-id link-props)
@@ -343,15 +338,15 @@ TAG-NAME is the tag to search for."
                                       node-fields))))
                           org-supertag-db--link)
                          node-fields))
-                ;; 构建可搜索文本
+                ;; Build searchable text
                 (searchable-text (concat 
-                                ;; 标题
+                                ;; Title
                                 (or title "")
                                 " "
-                                ;; 标签
+                                ;; Tags
                                 (mapconcat #'identity tags " ")
                                 " "
-                                ;; 字段值
+                                ;; Field values
                                 (mapconcat
                                  (lambda (field)
                                    (format "%s:%s"
@@ -359,68 +354,54 @@ TAG-NAME is the tag to search for."
                                           (plist-get field :value)))
                                  fields " ")
                                 " "
-                                ;; 内容
+                                ;; Content
                                 (or content ""))))
            
-           ;; Debug output
-           (with-current-buffer debug-buf
-             (insert "\nNode: " id "\n")
-             (insert "Title: " (or title "nil") "\n")
-             (insert "Tags: " (prin1-to-string tags) "\n")
-             (insert "Tag Fields: " (prin1-to-string tag-fields) "\n")
-             (insert "Fields: " (prin1-to-string fields) "\n")
-             (insert "Content: " (if content "present" "nil") "\n")
-             (insert "Searchable text: " searchable-text "\n")
-             (insert "Keywords: " (string-join keywords " ") "\n"))
-           
-           ;; 检查所有关键词是否匹配
+           ;; Check if all keywords match
            (when (cl-every 
                   (lambda (keyword)
-                    (let ((found (string-match-p 
-                                (regexp-quote keyword) 
-                                searchable-text)))
-                      ;; Debug output
-                      (with-current-buffer debug-buf
-                        (insert (format "Keyword '%s': %s\n" 
-                                      keyword 
-                                      (if found "matched" "not matched"))))
-                      found))
+                    (string-match-p 
+                     (regexp-quote keyword) 
+                     searchable-text))
                   keywords)
              (push props results)))))
      org-supertag-db--object)
     
-    ;; Show debug buffer
-    (display-buffer debug-buf)
-    
     (nreverse results)))
 
 
-(defvar org-supertag-query-mode-map
+(defvar-local org-supertag-query-mode-map nil
+  "Keymap for `org-supertag-query-mode'.")
+
+(defun org-supertag-query-mode-init-map ()
+  "Initialize the keymap for org-supertag-query-mode."
   (let ((map (make-sparse-keymap)))
     ;; Navigation and Marking
     (define-key map (kbd "n") #'org-supertag-query-next)
     (define-key map (kbd "p") #'org-supertag-query-prev)
     (define-key map (kbd "m") #'org-supertag-query-toggle-mark)
     (define-key map (kbd "RET") #'org-supertag-query-visit-node)
-    (define-key map (kbd "q") #'org-supertag-query-quit)  ; Add quit key
+    (define-key map (kbd "q") #'org-supertag-query-quit)
     
     ;; Export Results
     (define-key map (kbd "e f") #'org-supertag-query-export-results-to-file)
-    (define-key map (kbd "e h") #'org-supertag-query-export-results-here)
     (define-key map (kbd "e n") #'org-supertag-query-export-results-to-new-file)
-    map)
-  "Keymap for `org-supertag-query-mode'.")
+    ;; Add new shortcut for inserting at point
+    (define-key map (kbd "i") #'org-supertag-query-insert-at-point)
+    map))
 
 ;; User Query Command
 (define-minor-mode org-supertag-query-mode
   "Minor mode for org-supertag query results buffer."
   :lighter " OrgST"
-  :keymap org-supertag-query-mode-map
   (when org-supertag-query-mode
+    ;; Initialize buffer-local keymap
+    (unless org-supertag-query-mode-map
+      (setq org-supertag-query-mode-map (org-supertag-query-mode-init-map)))
     ;; Setup when mode is enabled
     (setq buffer-read-only t)
-    ;; Ensure we can use 'q' to quit
-    (local-set-key (kbd "q") #'org-supertag-query-quit)))
+    ;; Use buffer-local keymap
+    (use-local-map org-supertag-query-mode-map)))
 
 (defun org-supertag-query-insert-header (keyword-list nodes)
   "Insert query results header information."
@@ -442,8 +423,8 @@ TAG-NAME is the tag to search for."
   (insert "- m           : Toggle mark\n")
   (insert "- RET         : Visit node\n")
   (insert "- e f         : Export to file\n")
-  (insert "- e h         : Export here\n")
   (insert "- e n         : Export to new file\n")
+  (insert "- i           : Insert selected nodes at current cursor positon\n")
   (insert "- q           : Quit query results\n")
   (insert (make-string 18 ?━))
   (insert "\n")
@@ -453,7 +434,7 @@ TAG-NAME is the tag to search for."
   "Get node content from database."
   (when-let ((props (org-supertag-db-get node-id)))
     (or (plist-get props :content)
-        ;; 如果数据库中没有内容，回退到原来的方法
+        ;; If no content in database, revert to old method
         (when-let* ((file (plist-get props :file-path))
                    (pos (plist-get props :pos)))
           (when (file-exists-p file)
@@ -480,7 +461,7 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-create-item (node)
   "Create display item from node properties."
   (let* ((id (plist-get node :id))
-         ;; 获取标签
+         ;; Get tags
          (tags (let (node-tags)
                 (maphash 
                  (lambda (link-id link-props)
@@ -489,7 +470,7 @@ TAG-NAME is the tag to search for."
                      (push (plist-get link-props :to) node-tags)))
                  org-supertag-db--link)
                 node-tags))
-         ;; 获取字段值
+         ;; Get field values
          (fields (let (node-fields)
                   (maphash
                    (lambda (link-id link-props)
@@ -1005,65 +986,47 @@ Returns cons cell (point . level-adjust)."
   "Store cursor position when search was initiated.")
 
 (defun org-supertag-query-export-results-here ()
-  "Insert search results at cursor position."
+  "Search and insert results at current cursor position.
+Opens query interface and adds 'i' shortcut to insert selected nodes."
   (interactive)
-  (let* ((input (read-string "Enter search keywords (space separated): "))
-         (keywords (split-string input " " t))
-         (block-name (string-join keywords "_"))  ; Use keywords as block name
-         (matched-nodes nil))
-    ;; 1. Find matching nodes
-    (setq matched-nodes (org-supertag-query-find-nodes keywords))
-    ;; 2. If there are matching nodes, continue processing
-    (if matched-nodes
-        (let* ((node-choices 
-                (mapcar (lambda (node)
-                         (let* ((title (plist-get node :title))
-                                (id (plist-get node :id))
-                                (file-path (plist-get node :file-path))
-                                ;; Clean title text
+  ;; Save current position
+  (setq org-supertag-query--original-buffer (current-buffer)
+        org-supertag-query--original-point (point))
+  ;; Start normal query interface
+  (call-interactively #'org-supertag-query))
+
+(defun org-supertag-query-insert-at-point ()
+  "Insert selected nodes at saved cursor position."
+  (interactive)
+  (when-let* ((selected-nodes (org-supertag-get-selected-nodes))
+              (orig-buf org-supertag-query--original-buffer)
+              (orig-point org-supertag-query--original-point))
+    (if (not selected-nodes)
+        (message "No nodes selected")
+      ;; Switch to original buffer and position
+      (with-current-buffer orig-buf
+        (save-excursion
+          (goto-char orig-point)
+          ;; Insert links
+          (let ((content
+                 (with-temp-buffer
+                   (dolist (node-id selected-nodes)
+                     (when-let* ((node (org-supertag-db-get node-id))
+                                (title (plist-get node :title))
                                 (clean-title 
                                  (substring-no-properties 
                                   (if (stringp title)
                                       title
-                                    (prin1-to-string title))))
-                                ;; Get file name (without path)
-                                (file-name 
-                                 (file-name-nondirectory file-path))
-                                ;; Format display options
-                                (display-text 
-                                 (format "%-30s (%s)"  ; Left align, fixed width
-                                        (truncate-string-to-width 
-                                         clean-title 30 nil nil "...")
-                                        file-name)))
-                           (cons display-text id)))
-                       matched-nodes))
-               (selected-nodes
-                (completing-read-multiple 
-                 "Select nodes (TAB:complete, RET:confirm, ,:multi): "
-                 (mapcar #'car node-choices)
-                 nil t)))
-          ;; 3. Generate link content
-          (let ((content
-                 (with-temp-buffer
-                   (dolist (selection selected-nodes)
-                     (let* ((node-id (cdr (assoc selection node-choices)))
-                            (node (org-supertag-db-get node-id))
-                            (title (plist-get node :title))
-                            (clean-title 
-                             (substring-no-properties 
-                              (if (stringp title)
-                                  title
-                                (prin1-to-string title)))))
+                                    (prin1-to-string title)))))
                        (insert (format "- [[id:%s][%s]]\n"
                                      node-id
                                      clean-title))))
                    (buffer-string))))
-            (save-excursion
-              (insert content)
-              (message "Inserted %d node links" 
-                       (length selected-nodes)))))
-      (message "No matching nodes found for keywords: %s" 
-               (string-join keywords " ")))))
+            (insert content)
+            (message "Inserted %d node links at original position" 
+                     (length selected-nodes)))))
+      ;; Kill query buffer
+      (kill-buffer))))
 
 ;;------------------------------------------------------
 ;; User Interactive Command
