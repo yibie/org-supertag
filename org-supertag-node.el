@@ -331,36 +331,28 @@ TARGET-LEVEL is the desired heading level (integer)
 
 Returns adjusted content string with proper heading levels."
   (with-temp-buffer
-    (org-mode)  ; 启用 org-mode 以确保正确处理
+    (org-mode)
     (insert content)
-    (message "Original content:\n%s" content)  ; 调试信息
     (goto-char (point-min))
     
     (when (and target-level (> target-level 0))
-      (message "Adjusting to level %d" target-level)  ; 调试信息
-      ;; 获取当前节点的层级
-      (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)  ; 修改正则表达式以包含标题文本
+      ;; Find and get current level
+      (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
         (let* ((current-level (length (match-string 1)))
                (level-diff (- target-level current-level)))
-          (message "Current level: %d, Level diff: %d" 
-                  current-level level-diff)  ; 调试信息
           
           (unless (zerop level-diff)
             (goto-char (point-min))
-            ;; 调整所有标题的层级
-            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)  ; 修改正则表达式以包含标题文本
+            ;; Adjust all heading levels
+            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
               (let* ((stars (match-string 1))
-                     (text (match-string 2))  ; 保存标题文本
+                     (text (match-string 2))
                      (current-stars-len (length stars))
                      (new-level (+ current-stars-len level-diff))
                      (new-stars (make-string (max 1 new-level) ?*)))
-                (message "Adjusting heading from level %d to %d" 
-                        current-stars-len new-level)  ; 调试信息
-                (replace-match (concat new-stars text))))))))  ; 保持标题文本不变
+                (replace-match (concat new-stars text)))))))
     
-    (let ((result (buffer-string)))
-      (message "Adjusted content:\n%s" result)  ; 调试信息
-      result)))
+    (buffer-string))))
 
 (defun org-supertag-move-node-and-link (node-id target-file &optional target-level)
   "Move node to target file and leave a reference link at original location.
@@ -516,7 +508,6 @@ Returns property list if successful, nil if failed."
       (progn
         (unless (org-at-heading-p)
           (error "Not at a heading"))
-        ;; 使用 org-supertag-db--parse-node-at-point 获取完整属性
         (org-supertag-db--parse-node-at-point))
     (error
      (message "Failed to get node properties: %s" (error-message-string err))
@@ -562,7 +553,6 @@ ID is the node identifier
 PROPS is the property list to update with"
   (unless (and id props)
     (error "Invalid input: id=%s props=%s" id props))
-  ;; 直接使用 org-supertag-db-add 更新数据库
   (org-supertag-db-add id props))
 
 
@@ -687,13 +677,13 @@ NODE-ID is the referenced node's identifier"
   (let* ((target-node (org-supertag-db-get node-id))
          (target-title (plist-get target-node :title))
          (link-text (format "[[id:%s][%s]]" node-id target-title)))
-    ;; 1. 插入链接
+    ;; 1. Insert link
     (insert link-text)
-    ;; 2. 更新引用关系
+    ;; 2. Update reference relationships
     (let* ((current-node-id (org-id-get))
            (current-node (org-supertag-db-get current-node-id)))
       
-      ;; 2.1 更新当前节点的 ref-to
+      ;; 2.1 Update current node's ref-to
       (let* ((current-refs (or (plist-get current-node :ref-to) nil))
         (org-supertag-db-add 
          current-node-id
@@ -703,7 +693,7 @@ NODE-ID is the referenced node's identifier"
            (plist-put current-node :ref-to current-refs)
            :ref-count (length current-refs)))))
       
-      ;; 2.2 更新目标节点的 ref-from
+      ;; 2.2 Update target node's ref-from
       (let* ((target-refs (or (plist-get target-node :ref-from) nil))
         (org-supertag-db-add 
          node-id

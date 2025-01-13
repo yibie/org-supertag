@@ -252,23 +252,23 @@ Only updates node content and basic properties, preserving:
            (when-let* ((file (plist-get props :file-path))
                       (pos (plist-get props :pos))
                       (exists (file-exists-p file)))
-             ;; 保存原有的关系数据
+             ;; Save existing relationship data
              (let ((ref-to (plist-get props :ref-to))
                    (ref-from (plist-get props :ref-from))
                    (ref-count (plist-get props :ref-count)))
-               ;; 更新节点内容
+               ;; Update node content
                (with-current-buffer (find-file-noselect file)
                  (save-excursion
                    (goto-char pos)
                    (when-let ((new-props (org-supertag-db--parse-node-at-point)))
-                     ;; 恢复关系数据
+                     ;; Restore relationship data
                      (setq new-props
                            (plist-put
                             (plist-put
                              (plist-put new-props :ref-to ref-to)
                              :ref-from ref-from)
                             :ref-count ref-count))
-                     ;; 更新数据库
+                     ;; Update database
                      (org-supertag-db-add id new-props)
                      (cl-incf updated))))))))
        org-supertag-db--object)
