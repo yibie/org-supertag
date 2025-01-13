@@ -34,7 +34,7 @@ Key is the behavior name (string), value is a plist containing:
   :group 'org-supertag-behavior)
 
 (defvar org-supertag-behavior--initialized nil
-  "Flag indicating if behavior system is initialized.")
+  "Flag to track if behavior system has been initialized.")
 
 (defun org-supertag-behavior-register (behavior-name &rest props)
   "Register behavior with BEHAVIOR-NAME.
@@ -583,8 +583,8 @@ Prompts for a list of behaviors to execute."
     ;; Setup scheduled behaviors directly
     (org-supertag-behavior--setup-scheduled-behaviors)
 
-    (setq org-supertag-behavior--initialized t))
-  (message "=== Behavior System Init Success ==="))
+    (setq org-supertag-behavior--initialized t)
+    (message "=== Behavior System Init Success ===")))
 
 (defun org-supertag-behavior--protect-id-locations (orig-fun &rest args)
   "Ensure org-id-locations maintains correct state before and after behavior execution."
@@ -795,9 +795,53 @@ Returns t if valid, signals error if invalid."
 ;; Minor Mode
 ;;------------------------------------------------------------------------------
 
+(defvar-local org-supertag-behavior--buffer-initialized nil
+  "Flag to track if current buffer has been initialized.")
+
+(defvar org-supertag-behavior--async-timer nil
+  "Timer for async face refresh.")
+
+(defvar org-supertag-behavior--async-queue nil
+  "Queue of pending async refresh tasks.")
+
+(defvar org-supertag-behavior-async-chunk-size 100
+  "Number of headings to process in each async chunk.")
+
+(defun org-supertag-behavior--setup-buffer ()
+  "Setup current buffer for org-supertag behaviors with lazy loading."
+  (when (and (derived-mode-p 'org-mode)
+             (not org-supertag-behavior--buffer-initialized))
+    ;; 只添加必要的 hooks
+    (add-hook 'after-save-hook 
+              #'org-supertag-behavior--face-refresh-current nil t)
+    (add-hook 'org-after-tags-change-hook 
+              #'org-supertag-behavior--face-refresh-current nil t)
+    ;; 标记为已初始化
+    (setq org-supertag-behavior--buffer-initialized t)
+    ;; 延迟加载：只在有标签的节点才初始化样式
+    (when (save-excursion
+            (goto-char (point-min))
+            (re-search-forward org-complex-heading-regexp nil t))
+      ;; 使用异步刷新
+      (org-supertag-behavior--schedule-async-refresh))))
+
+(defun org-supertag-behavior--face-refresh-current ()
+  "Refresh face for current heading only."
+  (when (and org-supertag-behavior-mode
+             (derived-mode-p 'org-mode)
+             (org-at-heading-p))
+    (save-excursion
+      (when-let ((node-id (org-id-get)))
+        ;; 清除当前行的 overlays
+        (remove-overlays (line-beginning-position)
+                        (line-end-position)
+                        'org-supertag-face t)
+        ;; 只应用当前节点的样式
+        (when (org-supertag-node-get-tags node-id)
+          (org-supertag-behavior--apply-styles node-id))))))
+
 (defun org-supertag-behavior--face-refresh (&optional beg end _len)
-  "Refresh faces incrementally.
-If BEG and END are provided, only refresh that region."
+  "Refresh faces incrementally with async support."
   (when (and org-supertag-behavior-mode
              (derived-mode-p 'org-mode))
     (save-excursion
@@ -805,53 +849,74 @@ If BEG and END are provided, only refresh that region."
         (widen)
         (condition-case err
             (if (and beg end)
-                ;; Incremental update: only process changed region
+                ;; 增量更新仍然同步处理
                 (progn
                   (goto-char (max (point-min) beg))
-                  (when (org-at-heading-p)
-                    (when-let ((node-id (org-id-get)))
-                      ;; First clear old overlays
-                      (remove-overlays (line-beginning-position) 
-                                     (line-end-position) 
-                                     'org-supertag-face t)
-                      ;; Apply new styles
-                      (org-supertag-behavior--apply-styles node-id))))
-              ;; Global refresh: get all nodes in current buffer from database
-              (let ((buffer-file (buffer-file-name)))
-                ;; Clear all old overlays
-                (remove-overlays (point-min) (point-max) 
-                               'org-supertag-face t)
-                ;; Traverse all headings, find nodes with ID
-                (org-with-wide-buffer
-                 (goto-char (point-min))
-                 (while (< (point) (point-max))
-                   (when (and (org-at-heading-p)
-                             (org-id-get))
-                     (let ((node-id (org-id-get)))
-                       (when (org-supertag-node-get-tags node-id)
-                         (org-supertag-behavior--apply-styles node-id))))
-                   ;; Move to next heading or end of file
-                   (if (outline-next-heading)
-                       (forward-line 0)
-                     (goto-char (point-max)))))))
+                  (org-supertag-behavior--face-refresh-current))
+              ;; 全局刷新使用异步处理
+              (org-supertag-behavior--schedule-async-refresh))
           (error
            (message "Error during face refresh: %S" err)))))))
-           
-(defun org-supertag-behavior--setup-buffer ()
-  "Setup current buffer for org-supertag behaviors."
-  (when (derived-mode-p 'org-mode)
-    ;; Delayed initialization, wait for org-mode to fully load
-    (run-with-idle-timer 
-     0.5 nil
-     (lambda ()
-       (when (buffer-live-p (current-buffer))
-         ;; Incremental update hooks
-         (add-hook 'after-save-hook 
-                  #'org-supertag-behavior--face-refresh nil t)
-         (add-hook 'org-after-tags-change-hook 
-                  #'org-supertag-behavior--face-refresh nil t)
-         ;; Initial refresh
-         (org-supertag-behavior--face-refresh))))))
+
+(defun org-supertag-behavior--schedule-async-refresh ()
+  "Schedule async face refresh for current buffer."
+  (let ((buffer (current-buffer))
+        (cache-key (format "face-refresh:%s" (buffer-file-name))))
+    ;; 如果已经在缓存中，跳过
+    (unless (org-supertag-db--cache-get 'query cache-key)
+      ;; 取消现有的定时器
+      (when org-supertag-behavior--async-timer
+        (cancel-timer org-supertag-behavior--async-timer))
+      ;; 清除旧 overlays
+      (remove-overlays (point-min) (point-max) 'org-supertag-face t)
+      ;; 初始化队列
+      (setq org-supertag-behavior--async-queue
+            (list (cons buffer (point-min))))
+      ;; 启动异步处理
+      (setq org-supertag-behavior--async-timer
+            (run-with-idle-timer 0.1 nil
+                                #'org-supertag-behavior--process-async-chunk)))))
+
+(defun org-supertag-behavior--process-async-chunk ()
+  "Process a chunk of headings asynchronously."
+  (when org-supertag-behavior--async-queue
+    (let* ((task (car org-supertag-behavior--async-queue))
+           (buffer (car task))
+           (start-pos (cdr task))
+           (processed 0))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (save-excursion
+            (save-restriction
+              (widen)
+              (goto-char start-pos)
+              ;; 处理一个chunk的标题
+              (while (and (< processed org-supertag-behavior-async-chunk-size)
+                         (< (point) (point-max)))
+                (when (and (org-at-heading-p)
+                          (org-id-get))
+                  (org-supertag-behavior--face-refresh-current)
+                  (cl-incf processed))
+                (unless (outline-next-heading)
+                  (goto-char (point-max))))
+              ;; 更新队列
+              (if (< (point) (point-max))
+                  ;; 还有更多要处理
+                  (setf (cdr task) (point))
+                ;; 处理完成
+                (progn
+                  (setq org-supertag-behavior--async-queue
+                        (cdr org-supertag-behavior--async-queue))
+                  ;; 设置缓存
+                  (org-supertag-db--cache-set 
+                   'query 
+                   (format "face-refresh:%s" (buffer-file-name))
+                   t)))
+              ;; 继续处理下一个chunk
+              (when org-supertag-behavior--async-queue
+                (setq org-supertag-behavior--async-timer
+                      (run-with-idle-timer 0.1 nil
+                                         #'org-supertag-behavior--process-async-chunk))))))))))
 
 (define-minor-mode org-supertag-behavior-mode
   "Toggle org-supertag behavior system."
