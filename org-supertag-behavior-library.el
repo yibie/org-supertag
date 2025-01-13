@@ -1071,29 +1071,21 @@ Essential PARAMS:
         (level (plist-get params 'level))
         (target-point (plist-get params 'target-point))
         (interactive (plist-get params 'interactive)))
-    
-    ;; 如果是交互式，让用户选择插入位置
     (when interactive
       (with-current-buffer (find-file-noselect target-file)
         (setq target-point (org-supertag-query--get-insert-position target-file))
         (setq level (or level (cdr target-point)))
         (setq target-point (car target-point))))
-    
     (if keep-link
-        ;; 保留链接的移动
         (when-let* ((node (org-supertag-db-get node-id))
                     (title (plist-get node :title))
                     (source-pos (point)))
           (let ((reference-content (format "[[id:%s][%s]]\n" node-id title)))
-            (when (org-supertag-delete-node-content node-id)
-              (org-supertag-node--insert-at node-id target-file target-point level)
+            (when (org-supertag-node-move node-id target-file level)
               (save-excursion
                 (goto-char source-pos)
                 (insert reference-content)))))
-      
-      ;; 普通移动
-      (when (org-supertag-delete-node-content node-id)
-        (org-supertag-node--insert-at node-id target-file target-point level)))))
+      (org-supertag-node-move node-id target-file level))))
 
 ;;------------------------------------------------------------------------------
 ;; Archive Management

@@ -69,13 +69,11 @@ Returns a list of keywords."
   "Find tags matching the given keywords.
 KEYWORDS is a list of keywords to match against tag names."
   (let ((all-tags (org-supertag-db-find-by-props '(:type :tag)))
-        matching-tags)
     (dolist (tag-id (mapcar #'car all-tags))
       (when (cl-some (lambda (keyword)
                       (string-match-p (concat "(?i)" keyword) tag-id))
-                    keywords)
         (push tag-id matching-tags)))
-    matching-tags))
+    matching-tags))))
 
 (defun org-supertag-find-matching-nodes (keywords)
   "Find nodes matching the given keywords.
@@ -122,17 +120,8 @@ NODE-ID is the node identifier.
 Returns:
 - List of tags
 - nil if node doesn't exist or has no tags"
-  (when-let* ((props (org-supertag-db-get node-id))
-              (file (plist-get props :file-path))
-              (pos (plist-get props :pos)))
-    (when (file-exists-p file)
-      (with-temp-buffer
-        (insert-file-contents file)
-        (org-mode)  ; Enable org-mode
-        (goto-char pos)
-        (unless (org-at-heading-p)
-          (org-back-to-heading t))
-        (org-get-tags)))))
+  (when-let ((props (org-supertag-db-get node-id)))
+    (plist-get props :tags)))
 
 (defun org-supertag-node-has-children-p (node-id)
   "Check if node has child nodes.
@@ -170,27 +159,6 @@ TAG-NAME is the tag to search for."
          (push props nodes)))
      org-supertag-db--object)
     nodes))
-
-(defun org-supertag-query-format-node (node)
-  "Format node for display.
-NODE is the node property list."
-  (let* ((id (plist-get node :id))
-         (title (plist-get node :title))
-         (file (plist-get node :file-path))
-         (has-children (org-supertag-node-has-children-p id))
-         (tags (org-supertag-query--get-node-tags id))
-         (children-indicator (if has-children "[+]" "   "))
-         (title-part (format "%-60s" (concat title " " children-indicator)))
-         (tags-part (if tags 
-                       (format ":%s:" (mapconcat #'identity tags ":"))
-                     ""))
-         (tags-formatted (format "%-20s" tags-part))
-         (file-part (format "%-12s" (file-name-nondirectory file))))
-    (format "- [ ] %-60s | %-20s | %-12s | [[id:%s][link]]"
-            title-part
-            tags-formatted
-            file-part
-            id)))
 
 ;;---------------------------------------------------------------
 ;; Query Results Page
@@ -230,14 +198,16 @@ NODE is the node property list."
   id          ; Node ID
   title       ; Title
   tags        ; Tags list
+  fields      ; Field values
   file        ; File name
   content     ; Preview content
   marked)     ; Marked status
 
-;; Buffer-local 变量
+;; Buffer-local 
 (defvar-local org-supertag-query-ewoc nil
   "Ewoc object for displaying query results.")
 
+;; Formatting display function
 ;; Formatting display function
 (defun org-supertag-query-pp-item (item)
   "Format display for a single query item."
@@ -279,7 +249,7 @@ NODE is the node property list."
         (dolist (line (split-string truncated-content "\n"))
           (unless (string-empty-p line)
             (insert "    " line "\n")))))))
-
+            
 (defun org-supertag-query-highlight-current ()
   "Highlight current item."
   (let* ((node (ewoc-locate org-supertag-query-ewoc))
@@ -323,40 +293,107 @@ NODE is the node property list."
     (org-supertag-query-next)))
 
 (defun org-supertag-query-find-nodes (keywords)
-  "Find nodes matching keywords."
-  (let (results)
+  "Find nodes matching KEYWORDS."
+  (let ((results nil)
+        (debug-buf (get-buffer-create "*Org SuperTag Query Debug*")))
+    ;; Clear debug buffer
+    (with-current-buffer debug-buf
+      (erase-buffer))
+    
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
-         (when-let* ((file (plist-get props :file-path))
-                    (pos (plist-get props :pos)))
-           (when (file-exists-p file)
-             (with-temp-buffer
-               (insert-file-contents file)
-               (org-mode)  ; Enable org-mode
-               (goto-char pos)
-               ;; Get all searchable content
-               (let* ((title (plist-get props :title))
-                      (tags (org-get-tags))
-                      (fields (org-entry-properties nil 'standard))
-                      (field-values (mapcar #'cdr fields))
-                      ;; Combine all searchable text
-                      (searchable-text (concat 
-                                      title " "
-                                      (mapconcat #'identity (or tags '()) " ")
-                                      " "
-                                      (mapconcat #'identity field-values " "))))
-                 ;; Check if all keywords match
-                 (when (cl-every 
-                        (lambda (keyword)
-                          (string-match-p 
-                           (regexp-quote keyword) 
-                           searchable-text))
-                        keywords)
-                   (push props results))))))))
+         (let* ((title (plist-get props :title))
+                (content (plist-get props :content))
+                ;; 获取标签和标签的字段定义
+                (tag-fields
+                 (let ((fields-map (make-hash-table :test 'equal)))
+                   (maphash 
+                    (lambda (link-id link-props)
+                      (when (and (string-prefix-p ":node-tag:" link-id)
+                               (equal (plist-get link-props :from) id))
+                        (when-let* ((tag-id (plist-get link-props :to))
+                                  (tag (org-supertag-db-get tag-id))
+                                  (fields (plist-get tag :fields)))
+                          (dolist (field fields)
+                            (puthash (plist-get field :name) field fields-map)))))
+                    org-supertag-db--link)
+                   fields-map))
+                ;; 获取标签
+                (tags (let (node-tags)
+                       (maphash 
+                        (lambda (link-id link-props)
+                          (when (and (string-prefix-p ":node-tag:" link-id)
+                                   (equal (plist-get link-props :from) id))
+                            (push (plist-get link-props :to) node-tags)))
+                        org-supertag-db--link)
+                       node-tags))
+                ;; 获取字段值
+                (fields (let (node-fields)
+                         (maphash
+                          (lambda (link-id link-props)
+                            (when (and (string-prefix-p ":node-field:" link-id)
+                                     (equal (plist-get link-props :from) id))
+                              (let* ((field-name (plist-get link-props :field-name))
+                                    (field-def (gethash field-name tag-fields))
+                                    (value (plist-get link-props :value)))
+                                (push (list :name field-name
+                                          :type (plist-get field-def :type)
+                                          :value value)
+                                      node-fields))))
+                          org-supertag-db--link)
+                         node-fields))
+                ;; 构建可搜索文本
+                (searchable-text (concat 
+                                ;; 标题
+                                (or title "")
+                                " "
+                                ;; 标签
+                                (mapconcat #'identity tags " ")
+                                " "
+                                ;; 字段值
+                                (mapconcat
+                                 (lambda (field)
+                                   (format "%s:%s"
+                                          (plist-get field :name)
+                                          (plist-get field :value)))
+                                 fields " ")
+                                " "
+                                ;; 内容
+                                (or content ""))))
+           
+           ;; Debug output
+           (with-current-buffer debug-buf
+             (insert "\nNode: " id "\n")
+             (insert "Title: " (or title "nil") "\n")
+             (insert "Tags: " (prin1-to-string tags) "\n")
+             (insert "Tag Fields: " (prin1-to-string tag-fields) "\n")
+             (insert "Fields: " (prin1-to-string fields) "\n")
+             (insert "Content: " (if content "present" "nil") "\n")
+             (insert "Searchable text: " searchable-text "\n")
+             (insert "Keywords: " (string-join keywords " ") "\n"))
+           
+           ;; 检查所有关键词是否匹配
+           (when (cl-every 
+                  (lambda (keyword)
+                    (let ((found (string-match-p 
+                                (regexp-quote keyword) 
+                                searchable-text)))
+                      ;; Debug output
+                      (with-current-buffer debug-buf
+                        (insert (format "Keyword '%s': %s\n" 
+                                      keyword 
+                                      (if found "matched" "not matched"))))
+                      found))
+                  keywords)
+             (push props results)))))
      org-supertag-db--object)
-    ;; Return results
+    
+    ;; Show debug buffer
+    (display-buffer debug-buf)
+    
     (nreverse results)))
+
 
 (defvar org-supertag-query-mode-map
   (let ((map (make-sparse-keymap)))
@@ -368,13 +405,9 @@ NODE is the node property list."
     (define-key map (kbd "q") #'org-supertag-query-quit)  ; Add quit key
     
     ;; Export Results
-    (define-key map (kbd "C-c C-x f") #'org-supertag-query-export-results-to-file)
-    (define-key map (kbd "C-c C-x h") #'org-supertag-query-export-results-here)
-    (define-key map (kbd "C-c C-x n") #'org-supertag-query-export-results-to-new-file)
-    
-    ;; Region Operations
-    (define-key map (kbd "C-c C-x C-r") #'org-supertag-query-toggle-checkbox-region)
-    (define-key map (kbd "C-c C-x C-u") #'org-supertag-query-untoggle-checkbox-region)
+    (define-key map (kbd "e f") #'org-supertag-query-export-results-to-file)
+    (define-key map (kbd "e h") #'org-supertag-query-export-results-here)
+    (define-key map (kbd "e n") #'org-supertag-query-export-results-to-new-file)
     map)
   "Keymap for `org-supertag-query-mode'.")
 
@@ -393,8 +426,9 @@ NODE is the node property list."
   "Insert query results header information."
   (insert "#+TITLE: SuperTag Query Results\n")
     ;; Search scope
+  (insert "* Query Rules:\n")
   (insert "- Search scope: titles, tags, properties and field values\n")
-  (insert "- Multiple keywords use AND logic (all must match)\n\n")
+  (insert "- Multiple keywords use AND logic (all must match)\n")
   ;; Search information
   (insert "* Search Terms: "
           (propertize (string-join keyword-list " ")
@@ -407,51 +441,72 @@ NODE is the node property list."
   (insert "- n/p         : Navigate results\n")
   (insert "- m           : Toggle mark\n")
   (insert "- RET         : Visit node\n")
-  (insert "- C-c C-x f   : Export to file\n")
-  (insert "- C-c C-x h   : Export here\n")
-  (insert "- C-c C-x n   : Export to new file\n")
-  (insert "- C-c C-x C-r : Toggle checkbox region\n")
-  (insert "- C-c C-x C-u : Untoggle checkbox region\n")
+  (insert "- e f         : Export to file\n")
+  (insert "- e h         : Export here\n")
+  (insert "- e n         : Export to new file\n")
   (insert "- q           : Quit query results\n")
   (insert (make-string 18 ?━))
   (insert "\n")
   )
 
 (defun org-supertag-query-get-node-content (node-id)
-  "Get node preview content using org-element API."
-  (when-let* ((props (org-supertag-db-get node-id))
-              (file (plist-get props :file-path))
-              (pos (plist-get props :pos)))
-    (when (file-exists-p file)
-      (with-temp-buffer
-        (insert-file-contents file)
-        (org-mode)
-        (goto-char pos)
-        (let* ((element (org-element-at-point))
-               (node-id-at-point (org-id-get))
-               (found-pos (org-element-property :begin element)))
-          (when (and (= found-pos pos)
-                    (equal node-id-at-point node-id))
-            ;; Get content, skipping properties
-            (save-excursion
-              (let* ((begin (progn
-                            (org-end-of-meta-data t) ;
-                            (point)))
-                     (end (org-element-property :contents-end element))
-                     (contents (when (and begin end)
-                               (buffer-substring-no-properties begin end))))
-                (when contents
-                  (string-trim contents))))))))))
-                
+  "Get node content from database."
+  (when-let ((props (org-supertag-db-get node-id)))
+    (or (plist-get props :content)
+        ;; 如果数据库中没有内容，回退到原来的方法
+        (when-let* ((file (plist-get props :file-path))
+                   (pos (plist-get props :pos)))
+          (when (file-exists-p file)
+            (with-temp-buffer
+              (insert-file-contents file)
+              (org-mode)
+              (goto-char pos)
+              (let* ((element (org-element-at-point))
+                     (node-id-at-point (org-id-get))
+                     (found-pos (org-element-property :begin element)))
+                (when (and (= found-pos pos)
+                          (equal node-id-at-point node-id))
+                  ;; Get content, skipping properties
+                  (save-excursion
+                    (let* ((begin (progn
+                                  (org-end-of-meta-data t)
+                                  (point)))
+                           (end (org-element-property :contents-end element))
+                           (contents (when (and begin end)
+                                     (buffer-substring-no-properties begin end))))
+                      (when contents
+                        (string-trim contents))))))))))))
+
 (defun org-supertag-query-create-item (node)
   "Create display item from node properties."
-  (let ((id (plist-get node :id)))
+  (let* ((id (plist-get node :id))
+         ;; 获取标签
+         (tags (let (node-tags)
+                (maphash 
+                 (lambda (link-id link-props)
+                   (when (and (string-prefix-p ":node-tag:" link-id)
+                            (equal (plist-get link-props :from) id))
+                     (push (plist-get link-props :to) node-tags)))
+                 org-supertag-db--link)
+                node-tags))
+         ;; 获取字段值
+         (fields (let (node-fields)
+                  (maphash
+                   (lambda (link-id link-props)
+                     (when (and (string-prefix-p ":node-field:" link-id)
+                              (equal (plist-get link-props :from) id))
+                       (push (cons (plist-get link-props :field-name)
+                                 (plist-get link-props :value))
+                             node-fields)))
+                   org-supertag-db--link)
+                  node-fields)))
     (make-org-supertag-query-item
      :id id
      :title (plist-get node :title)
-     :tags (org-supertag-query--get-node-tags id)
+     :tags tags
+     :fields fields
      :file (plist-get node :file-path)
-     :content (org-supertag-query-get-node-content id)
+     :content (plist-get node :content)
      :marked nil)))
 
 (defun org-supertag-query-show-results (keyword-list nodes)
@@ -765,13 +820,13 @@ Returns:
 - nil if move failed"
   (org-supertag-node-move node-id target-file target-level))
 
-(defun org-supertag-insert-nodes (node-ids &optional level-adjust)
-  "Insert nodes at current position.
+(defun org-supertag-insert-nodes (node-ids target-pos-level)
+  "Insert nodes at specified position.
 NODE-IDS is list of node identifiers
-LEVEL-ADJUST is level adjustment option"
+TARGET-POS-LEVEL is cons of (target-point . target-level)"
   (let ((target-file (buffer-file-name))
-        (target-point (point))
-        (target-level (org-supertag-get-target-level level-adjust))
+        (target-point (car target-pos-level))
+        (target-level (cdr target-pos-level))
         (success-count 0))
     
     (unless target-file
@@ -780,10 +835,7 @@ LEVEL-ADJUST is level adjustment option"
     (dolist (node-id node-ids)
       (message "Processing node: %s" node-id)
       (condition-case err
-          (when (org-supertag-node--insert-at node-id 
-                                             target-file 
-                                             target-point 
-                                             target-level)
+          (when (org-supertag-node-move node-id target-file target-level target-point)
             (cl-incf success-count))
         (error
          (message "Failed processing node %s: %s" 
@@ -868,7 +920,7 @@ Available insertion positions:
       ;; Select target file
       (condition-case err
           (let* ((target-file (read-file-name "Export to file: "))
-                 (insert-pos (org-supertag-query--get-insert-position target-file)))
+                 (target-pos-level (org-supertag-query--get-insert-position target-file)))
             
             ;; Validate file type
             (unless (org-supertag-ensure-org-file target-file)
@@ -877,9 +929,8 @@ Available insertion positions:
             ;; Process target file
             (with-current-buffer (find-file-noselect target-file)
               (org-mode)
-              ;; Insert content
-              (goto-char (car insert-pos))
-              (org-supertag-insert-nodes selected-nodes (cdr insert-pos))
+              ;; Insert content at specified position with level
+              (org-supertag-insert-nodes selected-nodes target-pos-level)
               (save-buffer)
               
               ;; Display target file
@@ -899,33 +950,52 @@ Returns cons cell (point . level-adjust)."
                        "Under Heading"
                        "Same Level"))))
     (with-current-buffer (find-file-noselect target-file)
-      (pcase insert-type
-        ("File End"
-         (cons (point-max) nil))
-        
-        ("Under Heading"
-         (let* ((headlines (org-map-entries 
-                          (lambda () 
-                            (cons (org-get-heading t t t t)
-                                 (point)))))
-                (selected (if headlines
-                            (completing-read 
-                             "Select parent heading: "
-                             headlines)
-                          (error "No headlines found in target file"))))
-           (cons (cdr (assoc selected headlines)) :child)))
-        
-        ("Same Level"
-         (let* ((headlines (org-map-entries 
-                          (lambda () 
-                            (cons (org-get-heading t t t t)
-                                 (point)))))
-                (selected (if headlines
-                            (completing-read 
-                             "Select sibling heading: "
-                             headlines)
-                          (error "No headlines found in target file"))))
-           (cons (cdr (assoc selected headlines)) :same-level)))))))
+      (org-with-wide-buffer
+       (pcase insert-type
+         ("File End"
+          (cons (point-max) nil))
+         
+         ("Under Heading"
+          (let* ((headlines (org-map-entries 
+                           (lambda () 
+                             (cons (org-get-heading t t t t)
+                                  (point)))))
+                 (selected (if headlines
+                             (completing-read 
+                              "Select parent heading: "
+                              headlines)
+                           (error "No headlines found in target file")))
+                 (pos (cdr (assoc selected headlines))))
+            ;; Move to selected heading
+            (goto-char pos)
+            ;; Get current level
+            (let ((parent-level (org-current-level)))
+              ;; Move to end of subtree to insert
+              (org-end-of-subtree)
+              (forward-line)
+              ;; Return position and target level
+              (cons (point) (1+ parent-level)))))
+         
+         ("Same Level"
+          (let* ((headlines (org-map-entries 
+                           (lambda () 
+                             (cons (org-get-heading t t t t)
+                                  (point)))))
+                 (selected (if headlines
+                             (completing-read 
+                              "Select sibling heading: "
+                              headlines)
+                           (error "No headlines found in target file")))
+                 (pos (cdr (assoc selected headlines))))
+            ;; Move to selected heading
+            (goto-char pos)
+            ;; Get current level
+            (let ((sibling-level (org-current-level)))
+              ;; Move to end of subtree to insert after
+              (org-end-of-subtree)
+              (forward-line)
+              ;; Return position and target level
+              (cons (point) sibling-level)))))))))
 
 ;;; Save org-supertag-query result at cursor place
 (defvar org-supertag-query--original-buffer nil

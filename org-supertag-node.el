@@ -208,9 +208,16 @@ List of field values, each element is (field-id . value)"
            (file-path (buffer-file-name))
            (pos (point))
            (level (org-outline-level))
-           (olp (org-get-outline-path)))
+           (olp (org-get-outline-path))
+           ;; 获取节点内容
+           (content (save-excursion
+                     (let* ((begin (progn 
+                                   (org-end-of-meta-data t)
+                                   (point)))
+                            (end (org-entry-end-position)))
+                       (buffer-substring-no-properties begin end)))))
       
-      ;; 只更新基本属性
+      ;; 更新所有属性，包括内容
       (let ((props (list :type :node
                         :id node-id
                         :title title
@@ -218,7 +225,7 @@ List of field values, each element is (field-id . value)"
                         :pos pos
                         :level level
                         :olp olp
-                        ;; 保持现有的引用关系不变
+                        :content content  ;; 添加内容
                         :ref-to (when old-node 
                                 (plist-get old-node :ref-to))
                         :ref-from (when old-node 
@@ -261,56 +268,99 @@ Notes:
         (when todo
           (org-todo todo))))))
 
-(defun org-supertag-node--insert-at (node-id target-file &optional target-point target-level)
-  "Insert node at specific location.
-NODE-ID is the node identifier
-TARGET-FILE is the target file path
-TARGET-POINT is buffer position to insert (nil means end of file)
-TARGET-LEVEL is the target heading level
 
-Returns:
-- t if insertion successful
-- nil if failed"
-  (when-let* ((content (org-supertag-get-node-content node-id))
-              (source-file (plist-get (org-supertag-db-get node-id) :file-path)))
-    (with-current-buffer (find-file-noselect target-file)
-      (save-excursion
-        ;; 1. Move to target position
-        (if target-point
-            (goto-char target-point)
-          (goto-char (point-max)))
-        
-        ;; 2. Insert adjusted content
-        (let ((adjusted-content 
-               (org-supertag-adjust-node-level content target-level)))
-          (insert adjusted-content "\n")
-          (forward-line -1)
-          
-          ;; 3. Update node database entry
-          (org-supertag-update-node-db node-id target-file)
-          
-          ;; 4. Save files
-          (save-buffer)
-          (when (and source-file
-                     (not (equal source-file target-file)))
-            (with-current-buffer (find-file-noselect source-file)
-              (save-buffer)))
-          t)))))
-
-(defun org-supertag-node-move (node-id target-file &optional target-level)
+(defun org-supertag-node-move (node-id target-file &optional target-level target-point)
   "Move node to target file.
 NODE-ID is the node identifier
 TARGET-FILE is the target file path
 TARGET-LEVEL is the target heading level
+TARGET-POINT is buffer position to insert (nil means end of file)
 
 Returns:
 - t if move successful
 - nil if move failed"
-  ;; 1. Delete node from source
-  (when (org-supertag-delete-node-content node-id)
-    ;; 2. Insert at target location
-    (org-supertag-node--insert-at node-id target-file nil target-level)))
+  (when-let* ((content (org-supertag-get-node-content node-id)))
+    ;; 1. Delete node from source
+    (when (org-supertag-delete-node-content node-id)
+      ;; 2. Insert to target and update database
+      (with-current-buffer (find-file-noselect target-file)
+        (save-excursion
+          ;; Move to target position
+          (if target-point
+              (goto-char target-point)
+            (goto-char (point-max)))
+          
+          ;; Ensure we're at the beginning of a line
+          (beginning-of-line)
+          
+          ;; Insert with proper level adjustment
+          (let ((adjusted-content 
+                 (if (and target-level (> target-level 0))
+                     (condition-case err
+                         (org-supertag-adjust-node-level content target-level)
+                       (error
+                        (message "Level adjustment failed: %s" (error-message-string err))
+                        content))
+                   content)))
+            ;; Ensure proper spacing before insertion
+            (unless (or (bobp) (looking-back "\n\n" 2))
+              (insert "\n"))
+            
+            ;; Insert content
+            (let ((insert-point (point)))
+              (insert adjusted-content)
+              
+              ;; Ensure proper spacing after insertion
+              (unless (looking-at "\n")
+                (insert "\n"))
+              
+              ;; Move back to inserted heading and sync node
+              (goto-char insert-point)
+              (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
+                (org-back-to-heading t)
+                (org-supertag-node-sync-at-point))
+              
+              ;; Save buffer
+              (save-buffer)
+              t)))))))
 
+(defun org-supertag-adjust-node-level (content target-level)
+  "Adjust heading level of node content.
+CONTENT is the node content string
+TARGET-LEVEL is the desired heading level (integer)
+
+Returns adjusted content string with proper heading levels."
+  (with-temp-buffer
+    (org-mode)  ; 启用 org-mode 以确保正确处理
+    (insert content)
+    (message "Original content:\n%s" content)  ; 调试信息
+    (goto-char (point-min))
+    
+    (when (and target-level (> target-level 0))
+      (message "Adjusting to level %d" target-level)  ; 调试信息
+      ;; 获取当前节点的层级
+      (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)  ; 修改正则表达式以包含标题文本
+        (let* ((current-level (length (match-string 1)))
+               (level-diff (- target-level current-level)))
+          (message "Current level: %d, Level diff: %d" 
+                  current-level level-diff)  ; 调试信息
+          
+          (unless (zerop level-diff)
+            (goto-char (point-min))
+            ;; 调整所有标题的层级
+            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)  ; 修改正则表达式以包含标题文本
+              (let* ((stars (match-string 1))
+                     (text (match-string 2))  ; 保存标题文本
+                     (current-stars-len (length stars))
+                     (new-level (+ current-stars-len level-diff))
+                     (new-stars (make-string (max 1 new-level) ?*)))
+                (message "Adjusting heading from level %d to %d" 
+                        current-stars-len new-level)  ; 调试信息
+                (replace-match (concat new-stars text))))))))  ; 保持标题文本不变
+    
+    (let ((result (buffer-string)))
+      (message "Adjusted content:\n%s" result)  ; 调试信息
+      result)))
 
 (defun org-supertag-move-node-and-link (node-id target-file &optional target-level)
   "Move node to target file and leave a reference link at original location.
@@ -460,24 +510,17 @@ This includes:
     (org-supertag-db-add node-id props)))
 
 (defun org-supertag-node-get-props-at-point ()
-  "Get properties of node at current point.
-Returns:
-- Property list if valid node
-- nil if not a valid node"
-  (when (org-at-heading-p)
-    (let* ((element (org-element-at-point))
-           (id (org-id-get))
-           (title (org-get-heading t t t t))
-           (level (org-current-level))
-           (olp (org-get-outline-path)))
-      (when (and id title)
-        (list :type :node
-              :id id
-              :title title
-              :file-path (buffer-file-name)
-              :pos (point)
-              :level level
-              :olp olp)))))
+  "Get node properties at current point.
+Returns property list if successful, nil if failed."
+  (condition-case err
+      (progn
+        (unless (org-at-heading-p)
+          (error "Not at a heading"))
+        ;; 使用 org-supertag-db--parse-node-at-point 获取完整属性
+        (org-supertag-db--parse-node-at-point))
+    (error
+     (message "Failed to get node properties: %s" (error-message-string err))
+     nil)))
 
 (defun org-supertag-node-update ()
   "Update node at current position.
@@ -514,48 +557,13 @@ Returns:
          (signal (car err) (cdr err)))))))
 
 (defun org-supertag-node-db-update (id props)
-  "Update or create a node in the database.
+  "Update node in database.
 ID is the node identifier
-PROPS are the node properties
-
-Returns:
-- Updated properties on success
-- Throws error on failure"
-  (let* ((existing-node (org-supertag-db-get id))
-         (is-new (not existing-node))
-         (new-props (org-supertag-db--normalize-props
-                    (append
-                     ;; Basic properties
-                     (list :type :node
-                           :id id)
-                     ;; Timestamps
-                     (if is-new
-                         (list :created-at (current-time)
-                               :modified-at (current-time))
-                       (list :created-at (plist-get existing-node :created-at)
-                             :modified-at (current-time)))
-                     ;; User provided properties
-                     props))))
-    
-    ;; Validate required properties
-    (unless (plist-get new-props :title)
-      (error "Missing required property: title"))
-    (unless (plist-get new-props :file-path)
-      (error "Missing required property: file-path"))
-    ;; Update database
-    (org-supertag-db-add id new-props)
-    ;; Trigger appropriate hook
-    (run-hook-with-args 
-     (if is-new
-         'org-supertag-node-created-hook
-       'org-supertag-node-updated-hook)
-     id new-props)
-    ;; Log operation
-    (message "%s node: %s" 
-             (if is-new "Created new" "Updated")
-             id)
-    ;; Return updated properties
-    new-props))
+PROPS is the property list to update with"
+  (unless (and id props)
+    (error "Invalid input: id=%s props=%s" id props))
+  ;; 直接使用 org-supertag-db-add 更新数据库
+  (org-supertag-db-add id props))
 
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
@@ -687,26 +695,23 @@ NODE-ID is the referenced node's identifier"
       
       ;; 2.1 更新当前节点的 ref-to
       (let* ((current-refs (or (plist-get current-node :ref-to) nil))
-             (new-refs (delete-dups (cons node-id current-refs))))
         (org-supertag-db-add 
          current-node-id
          (append
           (list :type :node)
           (plist-put 
-           (plist-put current-node :ref-to new-refs)
-           :ref-count (length new-refs)))))
+           (plist-put current-node :ref-to current-refs)
+           :ref-count (length current-refs)))))
       
       ;; 2.2 更新目标节点的 ref-from
       (let* ((target-refs (or (plist-get target-node :ref-from) nil))
-             (new-target-refs (delete-dups 
-                             (cons current-node-id target-refs))))
         (org-supertag-db-add 
          node-id
          (append
           (list :type :node)
           (plist-put 
-           (plist-put target-node :ref-from new-target-refs)
-           :ref-count (length new-target-refs))))))))
+           (plist-put target-node :ref-from target-refs)
+           :ref-count (length target-refs))))))))))
 
 
 (defun org-supertag-node-add-reference ()
