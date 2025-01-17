@@ -152,6 +152,8 @@ Returns the first tag ID found for the node."
   (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
     (car node-tags)))
 
+
+
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------
@@ -679,29 +681,28 @@ NODE-ID is the referenced node's identifier"
          (link-text (format "[[id:%s][%s]]" node-id target-title)))
     ;; 1. Insert link
     (insert link-text)
+    
     ;; 2. Update reference relationships
     (let* ((current-node-id (org-id-get))
            (current-node (org-supertag-db-get current-node-id)))
       
       ;; 2.1 Update current node's ref-to
-      (let* ((current-refs (or (plist-get current-node :ref-to) nil))
+      (let* ((current-refs (or (plist-get current-node :ref-to) nil)))
+        (setq current-refs (cl-adjoin node-id current-refs :test #'string=))
         (org-supertag-db-add 
          current-node-id
-         (append
-          (list :type :node)
-          (plist-put 
-           (plist-put current-node :ref-to current-refs)
-           :ref-count (length current-refs)))))
+         (append current-node  
+                (list :ref-to current-refs
+                      :ref-count (length current-refs)))))
       
       ;; 2.2 Update target node's ref-from
-      (let* ((target-refs (or (plist-get target-node :ref-from) nil))
+      (let* ((target-refs (or (plist-get target-node :ref-from) nil)))
+        (setq target-refs (cl-adjoin current-node-id target-refs :test #'string=))
         (org-supertag-db-add 
          node-id
-         (append
-          (list :type :node)
-          (plist-put 
-           (plist-put target-node :ref-from target-refs)
-           :ref-count (length target-refs))))))))))
+         (append target-node  
+                (list :ref-from target-refs
+                      :ref-count (length target-refs))))))))
 
 
 (defun org-supertag-node-add-reference ()
@@ -710,7 +711,7 @@ Insert reference to selected node at current position and update relationships."
   (interactive)
   (unless (org-supertag-node--in-node-p)
     (user-error "Must be within a node"))
-  (when-let* ((candidates (org-supertag-node-db--get-candidates))
+  (when-let* ((candidates (org-supertag-node--get-candidates-with-path))
               (selected (completing-read
                         "Reference node: "
                         (mapcar #'car candidates)
@@ -722,7 +723,23 @@ Insert reference to selected node at current position and update relationships."
     (org-supertag-db--parse-node-all-ref)
     (message "Added reference to node '%s'" selected)))
 
-
+(defun org-supertag-node--get-candidates-with-path ()
+  "Get all available nodes as candidates with their full paths.
+Returns: ((\"path/to/node\" . \"node-id\") ...)"
+  (let (candidates)
+    (maphash
+     (lambda (id node)
+       (when (eq (plist-get node :type) :node)
+         (let* ((title (plist-get node :title))
+                (olp (plist-get node :olp))
+                (path (if olp
+                         (mapconcat #'identity olp " / ")
+                       title)))
+           (push (cons path id) candidates))))
+     org-supertag-db--object)
+    (sort candidates 
+          (lambda (a b) 
+            (string< (car a) (car b))))))
 
 (defun org-supertag-node-remove-reference (node-id)
   "Remove reference to specified node.
@@ -797,6 +814,47 @@ Returns: ((title . id) ...)"
               (push (cons title path) refs))))))
     (nreverse refs)))
 
+
+(defun org-supertag-node--update-references (node-id)
+  "Update references after node movement.
+NODE-ID: ID of the moved node"
+  (when-let* ((node (org-supertag-db-get node-id))
+              (refs-to (plist-get node :ref-to))
+              (refs-from (plist-get node :ref-from)))
+    
+    ;; 1. Update references to other nodes
+    (dolist (ref refs-to)
+      (org-supertag-node-db-update-reference node-id ref))
+    
+    ;; 2. Update references from other nodes
+    (dolist (ref refs-from)
+      (org-supertag-node-db-update-reference ref node-id))
+    
+    ;; 3. Trigger reference update event
+    (run-hook-with-args 'org-supertag-node-references-updated-hook 
+                       node-id)))
+
+(defun org-supertag-node-db-update-reference (from-id to-id)
+  "Update reference relationship in database.
+FROM-ID: Source node ID
+TO-ID: Target node ID"
+  (when (and (org-supertag-node-db-exists-p from-id)
+             (org-supertag-node-db-exists-p to-id))
+    ;; 1. Update reference relationship in database
+    (org-supertag-db-link :type :node-ref
+                         :from from-id
+                         :to to-id)
+    
+    ;; 2. Clear related caches
+    (org-supertag-db--cache-remove 'query 
+                                  (format "node-refs:%s" from-id))
+    (org-supertag-db--cache-remove 'query 
+                                  (format "node-refs:%s" to-id))
+    
+    ;; 3. Trigger reference update event
+    (run-hook-with-args 'org-supertag-node-reference-updated-hook
+                       from-id to-id)))
+
 ;;------------------------------------------------------------------------------
 ;; Event Hooks
 ;;------------------------------------------------------------------------------    
@@ -828,6 +886,9 @@ Arguments: (from-id to-id)")
 (defvar org-supertag-node-reference-removed-hook nil
   "Hook run after node reference is removed.
 Arguments: (from-id to-id)")
+
+
+
 
 
 (provide 'org-supertag-node)

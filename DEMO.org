@@ -1,5 +1,5 @@
 #+TITLE: Org Supertag Interactive Demo
-#+AUTHOR: Your Name
+#+AUTHOR: Yibie
 #+DATE: [2024-01-10]
 
 * Welcome to Org Supertag! 
@@ -99,7 +99,7 @@ Basic behaviors are the foundation:
           :prefix "☐"))
 #+end_src
 
-*** Derived Behaviors
+*** Shortcut Behaviors
 Built upon basic behaviors:
 - Specialized for specific use cases
 - Pre-configured parameter sets
@@ -113,7 +113,7 @@ Built upon basic behaviors:
           :prefix "✓"))
 #+end_src
 
-*** Combined Behaviors
+*** Workflow Behaviors
 Chain multiple behaviors for workflows:
 - Compose multiple behaviors
 - Create task-specific workflows
@@ -123,7 +123,7 @@ Chain multiple behaviors for workflows:
 (org-supertag-behavior-register "@done+archive"
   :trigger :on-add
   :list '("@todo=DONE"                                ; <= :list can be a list of behaviors
-          "@property=ARCHIVE_TIME=now"                ; <= Format is "@property=NAME=VALUE", where = separates the behavior name, property name and property value
+          "@property=ARCHIVE_TIME,now"                ; <= Format is "@property=NAME=VALUE", where = separates the behavior name, property name and property value
           "@archive")                                 ; <= This is the behavior "@archive" with no parameters 
   :style '(:face (:foreground "gray50" :strike-through t)  
           :prefix "📦"))

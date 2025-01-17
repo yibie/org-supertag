@@ -1,0 +1,92 @@
+* Changelog
+
+* [2.0.0] - 2025-01-13
+
+** Features
+*** Behavior: Added schedule trigger and deadline management system
+**** Implemented cron-style scheduling for behaviors
+- Format: "minute hour day month weekday"
+- Examples:
+  - "0 9 * * 1-5" (weekdays at 9:00)
+  - "30 * * * *" (every hour at :30)
+  - "0 0 1 * *" (first day of each month)
+**** Added native org-mode timestamp integration
+- Support for SCHEDULED and DEADLINE timestamps
+- Support for absolute timestamps (<2024-03-20 Wed>)
+- Support for relative time expressions (now+2h, now-1d)
+- Support for property-based timing (${prop:DEADLINE}-2h)
+**** Added deadline check behavior (@deadline-check)
+**** Added derived behaviors for deadline management:
+- @overdue-urgent: Set high priority for overdue tasks
+- @upcoming-deadline: Mark tasks due in next 3 days
+- @overdue-archive: Archive overdue completed tasks
+
+*** Field: Enhanced timestamp handling
+- Improved org-mode timestamp format support
+- Date fields now use active timestamps (<...>) for agenda visibility
+- Timestamp fields use inactive timestamps ([...]) for historical records
+- Added automatic format conversion between different timestamp styles
+
+*** Behavior Template: Added template variable system for behaviors
+**** Added support for dynamic variable expansion
+- ${input:prompt} for user input
+- ${date:format} for date operations
+- ${prop:name} for property access
+- ${context:key} for shared data
+**** Added conditional execution with {if:condition}
+**** Added relative date calculations (now+1d, now-1w)
+**** Added simple context object for data sharing
+
+*** Node Management: Added new node operations
+- Added ~org-supertag-move-node-and-link~ command for node relocation with reference
+- Added ~org-supertag-delete-node~ command for complete node cleanup
+- Added flexible node movement behaviors
+- Support for keeping links at original location
+- Interactive target selection
+
+*** Sync: Added automatic synchronization system
+- Added file state tracking
+- Added buffer modification monitoring
+- Added automatic sync with conflict detection
+- Added state persistence and error recovery
+- Added node-level conflict analysis command
+- Added file analysis tools for debugging sync issues
+
+*** Query: Enhanced query system
+- Added cursor-based node insertion in query buffer
+- Added history support for query keywords
+- Added customizable history size
+- Preserved last used keywords
+
+*** Reference: Improved reference system
+- Added reference type tracking (ref-from)
+- Added reference count tracking
+
+*** Tag: Added improved tag change functionality
+
+*** Performance: Added asynchronous face refresh mechanism
+
+** Bug Fixes
+*** Fixed tag prefix matching issues (#9)
+- Improved tag completion with custom completion function
+- Added TAB completion support
+*** Fixed field type options insertion
+*** Fixed behavior system event handling
+*** Improved error handling in node operations
+*** Enhanced synchronization stability
+
+** Refactoring
+*** Query: Rewritten query results display using ewoc for better performance
+*** Query: Implemented query buffer reuse for cursor insertion
+*** Behavior: Improved behavior system architecture with detach support
+*** Sync: Enhanced file synchronization architecture
+
+** Internal Changes
+- Added scheduler system with task management
+- Added robust file synchronization mechanism
+- Optimized reference handling with better metadata tracking
+- Optimized query result caching
+- Improved node deletion with comprehensive cleanup
+- Enhanced query system with history management
+- Improved code organization and modularity
+- Enhanced documentation and examples

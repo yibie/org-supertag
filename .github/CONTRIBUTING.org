@@ -1,0 +1,169 @@
+#+TITLE: Contributing to Org-supertag
+
+Thank you for your interest in contributing to Org-supertag! This guide will help you understand how to participate in project development.
+
+* Development Process
+
+1. Fork the project to your GitHub account
+2. Clone your fork locally
+   #+begin_src bash
+   git clone https://github.com/your-username/org-supertag.git
+   #+end_src
+3. Create a new feature branch
+   #+begin_src bash
+   git checkout -b feature/your-feature-name
+   #+end_src
+4. Commit your changes
+5. Push to your fork
+6. Create a Pull Request
+
+* Code Style
+
+** Elisp Coding Standards
+
+1. Naming Conventions
+   - Use meaningful English names
+   - Avoid abbreviations (except widely accepted ones)
+   - Function names use ~org-supertag-~ prefix
+   - Variable names use ~org-supertag-~ prefix
+
+2. Comment Standards
+   - Each function needs detailed docstrings
+   - Complex code blocks need explanatory comments
+   - Write comments in English
+
+3. Formatting Standards
+   - Use 2 spaces for indentation
+   - Pay attention to bracket alignment
+   - Maintain clear code block separation
+
+** Example
+#+begin_src elisp
+(defun org-supertag-example-function (arg1 arg2)
+  "A clear description of what this function does.
+
+ARG1 is the first argument, it should be a string.
+ARG2 is the second argument, it should be a number.
+
+Return a cons cell (ARG1 . ARG2)."
+  ;; Input validation
+  (unless (stringp arg1)
+    (error "ARG1 must be a string"))
+  (unless (numberp arg2)
+    (error "ARG2 must be a number"))
+  
+  ;; Main logic
+  (cons arg1 arg2))
+#+end_src
+
+* Commit Guidelines
+
+** Commit Message Format
+
+#+begin_example
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+#+end_example
+
+** Type Types
+
+- feat :: New features
+- fix :: Bug fixes
+- docs :: Documentation updates
+- style :: Code style adjustments
+- refactor :: Code refactoring
+- test :: Test-related changes
+- chore :: Build process or auxiliary tool changes
+
+** Example
+
+#+begin_example
+feat(behavior): Add new behavior trigger
+
+- Add :on-schedule trigger type
+- Support scheduled trigger based on org-agenda
+- Add related documentation and tests
+
+Closes #123
+#+end_example
+
+* Test Guidelines
+
+** Unit Test
+- Write test cases for new features
+- Use ~ert~ framework
+- Test files are placed in the ~tests~ directory
+
+** Test Coverage
+- Ensure main features are covered by tests
+- Include tests for normal and abnormal cases
+- Add boundary condition tests
+
+** Example
+
+#+begin_src elisp
+(ert-deftest org-supertag-test-example ()
+  "Test `org-supertag-example-function'."
+  (should (equal (org-supertag-example-function "test" 1)
+                 '("test" . 1)))
+  (should-error (org-supertag-example-function 1 "test")))
+#+end_src
+
+* Documentation Guidelines
+
+** Code Documentation
+- All public APIs need detailed docstrings
+- Include parameter descriptions and return value descriptions
+- Provide usage examples
+
+** User Documentation
+- Update README.org and README_CN.org
+- Add new feature demos in DEMO.org
+- Keep the English and Chinese documentation synchronized
+
+* Release Process
+
+** Version Number Specification
+- Follow Semantic Versioning
+- Format: Major Version.Minor Version.Patch Version
+
+** Update Steps
+- Update version number
+- Update CHANGELOG
+- Create release tag
+- Update documentation
+
+* Issue Feedback
+
+** Submit Issue
+- Use provided issue template
+- Provide detailed description of the problem or suggestion
+- Provide reproduction steps (if applicable)
+
+** Issue Discussion
+- Keep polite and professional
+- Provide constructive feedback
+- Respond to comments and questions in a timely manner
+
+* Code of Conduct
+
+1. Respect all contributors
+2. Keep professional and friendly communication
+3. Welcome different perspectives and suggestions
+4. Focus on technical discussions, avoid unrelated topics
+
+* License
+
+Org-supertag is licensed under the MIT license.
+
+* Contact
+
+For any questions, please contact:
+
+- GitHub Issues
+- Email: yibie@outlook.com
+
+Thank you for your contribution!

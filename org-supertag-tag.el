@@ -8,8 +8,6 @@
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
-
-
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert
@@ -30,7 +28,6 @@ NAME is the name to convert
 TAG-NAME is the name of the tag to check"
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     (org-supertag-tag-get sanitized-name)))
-
 
 ;;----------------------------------------------------------------------
 ;; Tag Base Operation
@@ -265,6 +262,51 @@ VALUE is the value to set"
           (run-hook-with-args 'org-supertag-node-field-updated-hook
                              node-id field-name value))))))
 
+(defun org-supertag-tag-remove-field (tag-id field-name)
+  "Remove a field from a tag.
+TAG-ID: The tag identifier
+FIELD-NAME: The name of the field to remove"
+  (interactive
+   (let* ((node-id (org-id-get))
+          (tags (org-supertag-node-get-tags node-id))
+          (tag-id (completing-read "Select tag: " tags nil t))
+          (tag (org-supertag-tag-get tag-id))
+          (fields (plist-get tag :fields))
+          (field-name (completing-read 
+                      "Select field to remove: "
+                      (mapcar (lambda (field)
+                              (plist-get field :name))
+                             fields)
+                      nil t)))
+     (list tag-id field-name)))
+  
+  (when (yes-or-no-p (format "Remove field '%s' from tag '%s'? This will remove all values of this field." 
+                            field-name tag-id))
+    (let* ((tag (org-supertag-db-get tag-id))
+           (fields (plist-get tag :fields))
+           ;; Remove field from fields list
+           (new-fields (cl-remove-if (lambda (field)
+                                     (equal (plist-get field :name)
+                                            field-name))
+                                   fields))
+           ;; Update tag
+           (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+      ;; Update tag in database
+      (org-supertag-db-add tag-id new-tag)
+      ;; Remove field values from all nodes
+      (let ((nodes (org-supertag-tag-get-nodes tag-id)))
+        (dolist (node-id nodes)
+          ;; Remove from database
+          (org-supertag-field-db-delete-value node-id field-name tag-id)
+          ;; Remove from org buffer
+          (when-let ((pos (condition-case nil
+                             (org-id-find node-id t)
+                           (error nil))))
+            (org-with-point-at pos
+              (org-delete-property field-name)))))
+      (message "Removed field '%s' from tag '%s'" field-name tag-id))))
+
+
 ;;----------------------------------------------------------------------
 ;; Tag User Command
 ;;----------------------------------------------------------------------
@@ -332,63 +374,14 @@ Will prevent duplicate tag application."
         ;; Apply the tag
         (org-supertag-tag-apply tag-id)))))
 
-(defun org-supertag-tag-set-field-value ()
-  "Set field value for tags on current node.
-This function allows interactive editing of field values for all tags
-attached to the current node. It displays a list of fields with their
-current values and lets the user select and modify them one by one."
-  (interactive)
-  (let* ((node-id (org-id-get))
-         ;; Get all tags for the node
-         (tags (org-supertag-node-get-tags node-id))
-         ;; Collect field information for all tags
-         (tag-fields (cl-loop for tag-id in tags
-                             for tag = (org-supertag-tag-get tag-id)
-                             when tag
-                             collect (cons tag-id 
-                                         (plist-get tag :fields))))
-         ;; Build list of all fields
-         (all-fields (cl-loop for (tag-id . fields) in tag-fields
-                             when fields
-                             append (mapcar (lambda (field)
-                                            (list :tag-id tag-id
-                                                  :field field
-                                                  :current-value (org-entry-get nil 
-                                                                             (plist-get field :name))))
-                                          fields)))
-         ;; Display and edit options
-         (field-values
-          (cl-loop for field-info in all-fields
-                   for tag-id = (plist-get field-info :tag-id)
-                   for field = (plist-get field-info :field)
-                   for field-name = (plist-get field :name)
-                   for current-value = (plist-get field-info :current-value)
-                   collect
-                   (cons
-                    (format "[%s] %s (current: %s)" tag-id field-name 
-                           (or current-value "unset"))
-                    (cons tag-id field)))))
-    ;; Let user select fields to edit
-    (while (when-let* ((choice (completing-read "Select field to edit (C-g to finish): "
-                                              (mapcar #'car field-values)
-                                              nil t))
-                       (field-info (cdr (assoc choice field-values)))
-                       (tag-id (car field-info))
-                       (field (cdr field-info)))
-             ;; Set the field value
-             (org-supertag-field-set-value field
-                                          (org-supertag-field-read-value field)
-                                          node-id
-                                          tag-id)
-             t))))
-
 (defun org-supertag-tag-set-field-and-value ()
   "Set field values for tags on the current node.
 This function allows setting field values for tags attached to the current node.
 It provides options to:
 1. Edit existing fields
-2. Add new fields (create new or copy existing)
-3. Add preset fields from templates"
+2. Add new fields
+3. Add preset fields from templates
+4. Remove fields"
   (interactive)
   (let* ((node-id (org-id-get))
          (tags (org-supertag-node-get-tags node-id)))
@@ -405,23 +398,8 @@ It provides options to:
     (unless tags
       (user-error "At least one tag is required to set fields"))
     
-    ;; Collect all existing fields for reuse
-    (let* ((existing-fields
-            (cl-loop for tag-id in tags
-                     for tag = (org-supertag-tag-get tag-id)
-                     append
-                     (cl-loop for field in (plist-get tag :fields)
-                             for field-name = (plist-get field :name)
-                             for field-type = (plist-get field :type)
-                             collect (cons (format "[%s] %s (type: %s)"
-                                                 tag-id
-                                                 field-name
-                                                 field-type)
-                                         (list :name field-name
-                                               :type field-type)))))
-           (_ (message "Collected existing fields: %S" existing-fields))
-           ;; Build choices list
-           (choices
+    ;; Build choices list
+    (let* ((choices
             (cl-loop for tag-id in tags
                      for tag = (org-supertag-tag-get tag-id)
                      append
@@ -442,8 +420,9 @@ It provides options to:
                      collect (cons (format "[%s] + Create new field" tag-id)
                                  (list :type :new-create
                                       :tag-id tag-id))
-                     collect (cons (format "[%s] + Copy existing field" tag-id)
-                                 (list :type :new-copy
+                     ;; Remove field option
+                     collect (cons (format "[%s] - Remove field" tag-id)
+                                 (list :type :remove
                                       :tag-id tag-id))
                      ;; Preset fields
                      append
@@ -503,34 +482,18 @@ It provides options to:
                 (org-supertag-field-read-value field-def)
                 node-id
                 tag-id)))
-            ;; Copy existing field
-            (:new-copy
+            ;; Remove field
+            (:remove
              (let* ((tag-id (plist-get choice-data :tag-id))
-                    (field-choice
-                     (completing-read 
-                      "Select field to copy: "
-                      (mapcar #'car existing-fields)
-                      nil t))
-                    (field-template (cdr (assoc field-choice existing-fields)))
-                    ;; 只使用名称和类型创建新字段
-                    (field-def (list :name (read-string 
-                                          "Field name (press Enter to keep original): "
-                                          (plist-get field-template :name))
-                                   :type (plist-get field-template :type)))
-                    ;; 验证字段定义
-                    (_ (unless (and (plist-get field-def :name)
-                                  (plist-get field-def :type))
-                         (error "Invalid field definition: missing name or type"))))
-               (message "Copying field definition '%s' (type: %s) to tag '%s'"
-                        (plist-get field-def :name)
-                        (plist-get field-def :type)
-                        tag-id)
-               (org-supertag-tag-add-field tag-id field-def)
-               (org-supertag-field-set-value 
-                field-def
-                (org-supertag-field-read-value field-def)
-                node-id
-                tag-id)))
+                    (tag (org-supertag-tag-get tag-id))
+                    (fields (plist-get tag :fields))
+                    (field-name (completing-read 
+                               "Select field to remove: "
+                               (mapcar (lambda (field)
+                                       (plist-get field :name))
+                                      fields)
+                               nil t)))
+               (org-supertag-tag-remove-field tag-id field-name)))
             ;; Preset field
             (:preset
              (let* ((tag-id (plist-get choice-data :tag-id))

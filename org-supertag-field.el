@@ -82,7 +82,15 @@ TAG-ID is the tag ID"
                          (error nil))))
           (condition-case sync-err
               (org-with-point-at pos
-                (org-set-property field-name processed-value))
+                ;; Special handling for tag-reference type
+                (if (eq field-type 'tag-reference)
+                    (when-let* ((ref-result (org-supertag-field-get-reference-value node-id tag-id field-def))
+                               (ref-field (plist-get ref-result :field))
+                               (ref-value (plist-get ref-result :value)))
+                      ;; Set the property with referenced value
+                      (org-set-property field-name ref-value))
+                  ;; Normal handling for other types
+                  (org-set-property field-name processed-value)))
             (error
              (message "Failed to sync field value to org buffer: %s"
                       (error-message-string sync-err))))))
@@ -194,10 +202,9 @@ Returns a list of nodes that match the criteria."
              :formatter org-supertag-format-timestamp
              :reader org-supertag-read-timestamp-field
              :description "Timestamp"))
-    (reference . (:validator org-supertag-validate-reference
-                  :formatter org-supertag-format-reference
-                  :reader org-supertag-read-reference-field
-                  :description "Reference"))
+    (tag-reference . (:validator org-supertag-validate-tag-reference
+                  :reader org-supertag-read-tag-reference-field
+                  :description "Tag Reference"))
     (list . (:validator org-supertag-validate-list
              :formatter org-supertag-format-list
              :reader org-supertag-read-list-field
@@ -259,59 +266,104 @@ FIELD is the field definition."
 
 (defun org-supertag-validate-date (value)
   "Validate date VALUE.
-VALUE is the value to validate."
+VALUE can be either:
+- An org timestamp string (e.g. \"[2025-01-14 Tue]\" or \"<2025-01-14 Tue>\")
+- A time value from org-read-date
+- A standard date string (e.g. \"2025-01-14\")"
   (message "Debug - Validating date value: %S" value)
   (condition-case err
-      (progn
-        ;; Handle time value returned by org-read-date
-        (when (listp value)
-          (setq value (format-time-string "%Y-%m-%d" value)))
-        ;; Try parsing if string
-        (when (stringp value)
-          (org-parse-time-string value))
+      (cond
+       ;; Handle org timestamp string
+       ((and (stringp value)
+             (string-match org-ts-regexp0 value))
         t)
+       ;; Handle time value from org-read-date
+       ((listp value)
+        t)
+       ;; Handle standard date string
+       ((stringp value)
+        (org-parse-time-string value)
+        t)
+       (t nil))
     (error
      (message "Date validation error: %S" err)
      nil)))
 
 (defun org-supertag-format-date (value &optional _field)
-  "Format date value.
-VALUE is the value to format.
-FIELD is the field definition."
+  "Format date value to org active timestamp format.
+VALUE can be either:
+- An org timestamp string (e.g. \"[2025-01-14 Tue]\" or \"<2025-01-14 Tue>\")
+- A time value from org-read-date
+- A standard date string (e.g. \"2025-01-14\")"
   (message "Debug - Formatting date value: %S" value)
   (condition-case err
       (cond
+       ;; Already in org timestamp format - convert to active if needed
+       ((and (stringp value)
+             (string-match org-ts-regexp0 value))
+        (if (string-prefix-p "[" value)
+            (concat "<" (substring value 1 -1) ">")
+          value))
        ;; Handle time value from org-read-date
        ((listp value)
-        (format-time-string "%Y-%m-%d" value))
-       ;; Handle string format
+        (format-time-string "<%Y-%m-%d %a>" value))
+       ;; Handle standard date string
        ((stringp value)
         (let ((time (org-parse-time-string value)))
-          (format-time-string "%Y-%m-%d" (apply #'encode-time time))))
-       ;; Return original for other cases
+          (format-time-string "<%Y-%m-%d %a>"
+                            (apply #'encode-time time time))))
        (t value))
     (error
      (message "Date formatting error: %S" err)
      value)))
 
-(defun org-supertag-validate-timestamp (value field-def)
+(defun org-supertag-validate-timestamp (value &optional _field-def)
   "Validate timestamp value.
-VALUE: Timestamp value to validate.
-FIELD-DEF: Field definition."
-  (condition-case nil
-      (when value
-        (org-parse-time-string value)  ; Try parsing time string
+VALUE can be either:
+- An org timestamp string (e.g. \"[2025-01-14 Tue 10:30]\" or \"<2025-01-14 Tue 10:30>\")
+- A time value from org-read-date
+- A standard timestamp string (e.g. \"2025-01-14 10:30\")"
+  (condition-case err
+      (cond
+       ;; Handle org timestamp string
+       ((and (stringp value)
+             (string-match org-ts-regexp value))
         t)
+       ;; Handle time value from org-read-date
+       ((listp value)
+        t)
+       ;; Handle standard timestamp string
+       ((stringp value)
+        (org-parse-time-string value)
+        t)
+       (t nil))
     (error nil)))
 
 (defun org-supertag-format-timestamp (value field-def)
-  "Format timestamp value.
-VALUE: Timestamp value to format.
-FIELD-DEF: Field definition."
+  "Format timestamp value to org inactive timestamp format.
+VALUE can be either:
+- An org timestamp string (e.g. \"[2025-01-14 Tue 10:30]\" or \"<2025-01-14 Tue 10:30>\")
+- A time value from org-read-date
+- A standard timestamp string (e.g. \"2025-01-14 10:30\")"
   (when value
-    (let ((time (org-parse-time-string value)))
-      (format-time-string "%Y-%m-%d %H:%M" 
-                         (apply #'encode-time time)))))
+    (condition-case err
+        (cond
+         ;; Already in org timestamp format - convert to inactive if needed
+         ((and (stringp value)
+               (string-match org-ts-regexp value))
+          (if (string-prefix-p "<" value)
+              (concat "[" (substring value 1 -1) "]")
+            value))
+         ;; Handle time value from org-read-date
+         ((listp value)
+          (format-time-string "[%Y-%m-%d %a %H:%M]" value))
+         ;; Handle standard timestamp string
+         ((stringp value)
+          (let ((time (org-parse-time-string value)))
+            (format-time-string "[%Y-%m-%d %a %H:%M]"
+                              (apply #'encode-time time))))
+         (t value))
+      (error value))))
 
 (defun org-supertag-validate-email (value)
   "Validate email VALUE."
@@ -331,26 +383,76 @@ FIELD-DEF: Field definition."
   "Format URL VALUE."
   (string-trim value))
 
-(defun org-supertag-validate-reference (value)
-  "Validate reference value.
-VALUE should be a valid org-id."
-  (message "Debug - Validating reference value: %S" value)
+(defun org-supertag-validate-tag-reference (value)
+  "Validate tag reference value.
+VALUE should be a plist with :tag-id and :field."
   (when value
-    (let ((node-ids (org-supertag-get-all-node-ids)))
-      (message "Debug - Available node IDs: %S" node-ids)
-      (member value node-ids))))
+    (let ((tag-id (plist-get value :tag-id))
+          (field-name (plist-get value :field)))
+      (and (stringp tag-id)
+           (org-supertag-tag-exists-p tag-id)
+           (stringp field-name)))))
 
-(defun org-supertag-format-reference (value field)
-  "Format reference value.
-VALUE is the value to format.
-FIELD is the field definition."
-  (message "Debug - Formatting reference value: %S" value)
-  (when value
-    (let ((node-ids (org-supertag-get-all-node-ids)))
-      (if (member value node-ids)
-          (org-with-point-at (org-id-find value t)
-            (org-get-heading t t t t))
-        value))))
+(defun org-supertag-read-tag-reference-field (prompt)
+  "Read tag reference field value.
+PROMPT is the prompt message."
+  (let* ((tags (org-supertag-get-all-tags))
+         (tag-id (completing-read "Select tag to reference: "
+                                tags
+                                nil t))
+         (tag (org-supertag-tag-get tag-id))
+         (available-fields (mapcar (lambda (field)
+                                   (plist-get field :name))
+                                 (plist-get tag :fields)))
+         (field-name (completing-read
+                     "Select field to reference: "
+                     available-fields
+                     nil t)))
+    (list :tag-id tag-id :field field-name)))
+
+(defun org-supertag-field-get-reference-value (node-id tag-id field)
+  "Get referenced field value and type.
+NODE-ID: Current node ID
+TAG-ID: Current tag ID
+FIELD: Field definition containing tag reference"
+  (when-let* ((ref-value (org-supertag-field-get-value field node-id tag-id))
+              (ref-tag-id (plist-get ref-value :tag-id))
+              (ref-field-name (plist-get ref-value :field))
+              (ref-tag (org-supertag-tag-get ref-tag-id))
+              ;; Get complete field definition
+              (ref-field (cl-find ref-field-name 
+                                (plist-get ref-tag :fields)
+                                :key (lambda (f) 
+                                      (plist-get f :name))
+                                :test #'equal)))
+    ;; Return both field definition and value
+    (list :field ref-field
+          :value (org-supertag-field-get-value ref-field node-id ref-tag-id))))
+
+(defun org-supertag-field-inherit-values (node-id tag-id field)
+  "Inherit field values from referenced tag.
+NODE-ID is the current node ID
+TAG-ID is the current tag ID
+FIELD is the field definition containing tag reference"
+  (when-let* ((value (org-supertag-field-get-value field node-id tag-id))
+              (ref-tag-id (plist-get value :tag-id))
+              (ref-fields (plist-get value :fields))
+              (ref-tag (org-supertag-tag-get ref-tag-id)))
+    (dolist (field-name ref-fields)
+      (when-let* ((ref-field (cl-find field-name
+                                     (plist-get ref-tag :fields)
+                                     :key (lambda (f)
+                                           (plist-get f :name))
+                                     :test #'equal))
+                  (ref-value (org-supertag-field-get-value
+                            ref-field node-id ref-tag-id)))
+        ;; Inherit the field value
+        (org-supertag-field-set-value
+         (list :name field-name
+               :type (plist-get ref-field :type))
+         ref-value
+         node-id
+         tag-id)))))
 
 (defun org-supertag-validate-options (value field)
   "Validate options value.
@@ -609,20 +711,20 @@ PROMPT is the prompt message."
     result))
 
 (defun org-supertag-read-date-field (prompt &optional default)
-  "Read date field value.
+  "Read date field value using org-mode's date reader.
 PROMPT is the prompt message.
 DEFAULT is the default value."
   (let* ((input (org-read-date nil t nil prompt nil default))
-         (formatted-date (format-time-string "%Y-%m-%d" input)))
+         (formatted-date (format-time-string "<%Y-%m-%d %a>" input)))
     (message "Debug - Date input from org-read-date: %S -> %S" input formatted-date)
     formatted-date))
 
 (defun org-supertag-read-timestamp-field (prompt)
-  "Read timestamp field value.
+  "Read timestamp field value using org-mode's date reader.
 PROMPT is the prompt message."
   (let* ((time (org-read-date t t))  ; Use org-mode time reader with time
-         (ts (org-timestamp-from-time time t)))  ; Convert to org timestamp
-    (org-timestamp-format ts "%Y-%m-%d %H:%M")))  ; Format to standard format
+         (formatted-ts (format-time-string "[%Y-%m-%d %a %H:%M]" time)))
+    formatted-ts))
 
 (defun org-supertag-read-email-field (prompt &optional default)
   "Read email field value.
@@ -657,22 +759,6 @@ DEFAULT is the default value"
         (message "Invalid URL, please try again")
         (sit-for 1)
         (org-supertag-read-url-field prompt default)))))
-
-(defun org-supertag-read-reference-field (prompt)
-  "Read reference field value.
-PROMPT is the prompt message"
-  (message "Debug - Reading reference field...")
-  (let ((node-ids (org-supertag-get-all-node-ids)))
-    (if node-ids
-        (let* ((nodes-with-titles 
-                (mapcar (lambda (id)
-                         (cons (org-with-point-at (org-id-find id t)
-                                (org-get-heading t t t t))
-                               id))
-                       node-ids))
-               (choice (completing-read prompt (mapcar #'car nodes-with-titles) nil t)))
-          (cdr (assoc choice nodes-with-titles)))
-      (user-error "No nodes available for reference"))))
 
 (defun org-supertag-read-options-field (prompt options)
   "Read options field value.

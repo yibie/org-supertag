@@ -1,4 +1,67 @@
-;; org-supertag.el --- SuperTag plugin for Org mode -*- lexical-binding: t; -*-
+;;; org-supertag.el --- SuperTag plugin for Org mode -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2024 Yibie
+
+;; Author: Yibie
+;; Keywords: org-mode, tags, metadata, workflow, automation
+;; Version: 2.0.0
+;; Package-Requires: ((emacs "28.1") (org "9.6"))
+;; URL: https://github.com/yibie/org-supertag
+
+;; This file is NOT part of GNU Emacs.
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; org-supertag is a powerful tagging system for Org mode that extends the
+;; traditional tagging capabilities with advanced features:
+;;
+;; Core Features:
+;; - Enhanced tag management with metadata and smart completion
+;; - Dynamic tag behaviors and rules
+;; - Flexible tag querying with history support
+;; - Comprehensive node operations (move, delete, reference)
+;; - Automatic tag synchronization
+;; - Custom tag behaviors support
+;;
+;; New in 2.0.0:
+;; - Schedule trigger and deadline management system
+;;   - Cron-style scheduling for behaviors ("minute hour day month weekday")
+;;     Examples: "0 9 * * 1-5" (weekdays at 9:00)
+;;              "30 * * * *" (every hour at :30)
+;;   - Deadline check behaviors (@deadline-check)
+;;   - Overdue and upcoming deadline handling
+;; - Enhanced node movement with link preservation
+;; - Improved tag change functionality
+;; - Automatic file synchronization system
+;;   - Real-time buffer state tracking
+;;   - Conflict detection and resolution
+;;   - Robust error recovery
+;; - Optimized query results using ewoc
+;; - Async face refresh for better performance
+;;
+;; Latest Updates:
+;; - Smart tag completion with TAB support
+;; - Enhanced node management commands
+;; - Query history with customizable size
+;; - Improved reference tracking system
+;;
+;; For detailed usage and examples, see the README.org file in the project
+;; repository.
+
+;;; Code:
 
 (require 'org-supertag-db)
 (require 'org-supertag-node) 
@@ -65,7 +128,7 @@
     ;; 6. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     (add-hook 'org-after-refile-insert-hook 
-              #'org-supertag-node--after-refile-update-ids)
+               #'org-supertag-node--after-refile-update-ids)
     ;; Mark as initialized
     (setq org-supertag--initialized t)))
 
@@ -85,7 +148,8 @@
   (org-supertag-db--cache-clear)
   ;; 6. Remove hooks
   (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
-  (remove-hook 'org-after-refile-insert-hook #'org-supertag-node--after-refile-update-ids)
+  (add-hook 'org-after-refile-insert-hook 
+              #'org-supertag-node--after-refile-update-ids)
   ;; Reset initialization flag
   (setq org-supertag--initialized nil))
 
