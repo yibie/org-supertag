@@ -45,9 +45,7 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 批量填写属性值
 - 对属性值进行类型验证
 
-[[./picture/figure4.gif][M-x org-supertag-tag-add-tag]]
-
-涉及的 2 个命令：
+[[./picture/figure4.gif]]
 
 ~M-x org-supertag-tag-add-tag~
 ~M-x org-supertag-tag-set-field-and-value~
@@ -56,7 +54,9 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 自动创建节点，无需手动创建
 - 在节点间建立引用关系
 
-[[./picture/figure5.gif][M-x org-supertag-node-add-reference]]
+[[./picture/figure5.gif]]
+
+~M-x org-supertag-node-add-reference~
 
 如果节点未能自动创建，你可以直接运行 ~M-x org-supertag-node-create~ 命令，将当前标题转换为节点。
 
@@ -67,9 +67,7 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 设置定时执行的行为
 - 自定义标签样式
 
-[[./picture/figure6.gif][M-x org-supertag-behavior-attach]]
-
-涉及的 2 个命令：
+[[./picture/figure6.gif]]
 
 ~M-x org-supertag-behavior-attach~
 ~M-x org-supertag-behavior-detach~
@@ -82,7 +80,9 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 美观的搜索结果界面
 - 预览标题下的内容
 
-[[./picture/figure8.gif][M-x org-supertag-query]]
+[[./picture/figure8.gif]]
+
+~M-x org-supertag-query~
 
 *** 灵活的导出选项
 多种方式组织搜索结果：
@@ -98,7 +98,7 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 自动更新引用关系
 - 提供手动同步命令
 
-[[./picture/figure7.gif][M-x org-supertag-sync-force-all]]
+[[./picture/figure7.gif]]
 
 如果有的节点需要同步，但未能自动同步，你可以直接运行 ~M-x org-supertag-sync-force-all~ 命令，将所有节点的信息同步到数据库。
 
