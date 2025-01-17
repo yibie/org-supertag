@@ -44,11 +44,10 @@ Make your org-mode tags powerful metadata controllers:
 - Batch fill property values
 - Type validation for property values
 
-[[./picture/figure4.gif][M-x org-supertag-tag-add-tag]]
-
-Two commands involved:
+[[./picture/figure4.gif]]
 
 ~M-x org-supertag-tag-add-tag~
+
 ~M-x org-supertag-tag-set-field-and-value~
 
 *** Node System
@@ -71,6 +70,7 @@ Make tags "smart", enabling:
 [[./picture/figure6.gif]]
 
 ~M-x org-supertag-behavior-attach~
+
 ~M-x org-supertag-behavior-detach~
 
 ** Powerful Search
