@@ -12,6 +12,7 @@
 
 (require 'org-supertag-tag)
 (require 'org-supertag-behavior-library)
+(require 'org-supertag-behavior-template)
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Registry
@@ -101,13 +102,168 @@ If not found, check if tag has associated behaviors."
 (defvar org-supertag-scheduler-timer nil
   "Main timer for the scheduler.")
 
+;; Time format parsing and validation
+(defun org-supertag-parse-time-spec (time-spec)
+  "Parse time specification string.
+TIME-SPEC can be:
+1. Cron format: \"minute hour day month weekday\"
+2. Absolute time: \"YYYY-MM-DD HH:MM\"
+3. Relative time: \"now+2h\", \"now-1d\", etc.
+4. Property-based: \"${prop:DEADLINE}-2h\"
+5. Org timestamp: \"<2024-03-20 Wed>\" or \"[2024-03-20 Wed]\"
+6. Special keywords: \"scheduled\", \"deadline\""
+  (cond
+   ;; Special keywords for org timestamps
+   ((string= time-spec "scheduled")
+    (list :type :org-scheduled))
+   
+   ((string= time-spec "deadline")
+    (list :type :org-deadline))
+   
+   ;; Org timestamp format
+   ((string-match org-ts-regexp time-spec)
+    (list :type :org-timestamp
+          :value (org-time-string-to-time time-spec)))
+   
+   ;; Cron format
+   ((string-match-p "^[0-9*/]+ [0-9*/]+ [0-9*/]+ [0-9*/]+ [0-9*/]+$" time-spec)
+    (if (org-supertag-cron-valid-p time-spec)
+        (list :type :cron
+              :value (org-supertag-parse-cron time-spec))
+      (signal 'org-supertag-behavior-error
+              (list :invalid-cron-format time-spec))))
+   
+   ;; Absolute time
+   ((string-match "^\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\) \\([0-9]\\{2\\}:[0-9]\\{2\\}\\)$" time-spec)
+    (list :type :absolute
+          :value (encode-time 
+                 0                                    ; seconds
+                 (string-to-number (substring (match-string 2 time-spec) 3 5)) ; minutes
+                 (string-to-number (substring (match-string 2 time-spec) 0 2)) ; hours
+                 (string-to-number (substring (match-string 1 time-spec) 8 10)) ; day
+                 (string-to-number (substring (match-string 1 time-spec) 5 7)) ; month
+                 (string-to-number (substring (match-string 1 time-spec) 0 4))))) ; year
+   
+   ;; Relative time from now
+   ((string-match "^now\\([+-]\\)\\([0-9]+\\)\\([hdwmy]\\)$" time-spec)
+    (let* ((op (match-string 1 time-spec))
+           (num (string-to-number (match-string 2 time-spec)))
+           (unit (match-string 3 time-spec))
+           (seconds (pcase unit
+                     ("h" (* num 3600))     ; hours
+                     ("d" (* num 86400))    ; days
+                     ("w" (* num 604800))   ; weeks
+                     ("m" (* num 2592000))  ; months (approx)
+                     ("y" (* num 31557600)) ; years (approx)
+                     (_ 0))))
+      (list :type :relative
+            :value (time-add (current-time)
+                           (if (string= op "+")
+                               seconds
+                             (- seconds))))))
+   
+   ;; Property-based time
+   ((string-match "\\${prop:\\([^}]+\\)}\\([+-][0-9]+[hdwmy]\\)?" time-spec)
+    (list :type :property
+          :prop (match-string 1 time-spec)
+          :offset (match-string 2 time-spec)))
+   
+   (t nil)))
+
+(defun org-supertag-time-matches-p (time-spec current-time node-id)
+  "Check if CURRENT-TIME matches TIME-SPEC for NODE-ID."
+  (when-let* ((spec (org-supertag-parse-time-spec time-spec)))
+    (pcase (plist-get spec :type)
+      (:org-scheduled
+       (when-let* ((pos (org-supertag-db-get-pos node-id))
+                  (scheduled-time (org-with-point-at pos
+                                  (org-get-scheduled-time nil))))
+         (time-equal-p (time-convert scheduled-time 'integer)
+                      (time-convert current-time 'integer))))
+      
+      (:org-deadline
+       (when-let* ((pos (org-supertag-db-get-pos node-id))
+                  (deadline-time (org-with-point-at pos
+                                 (org-get-deadline-time nil))))
+         (time-equal-p (time-convert deadline-time 'integer)
+                      (time-convert current-time 'integer))))
+      
+      (:org-timestamp
+       (let ((target-time (plist-get spec :value)))
+         (time-equal-p (time-convert target-time 'integer)
+                      (time-convert current-time 'integer))))
+      
+      (:cron
+       (org-supertag-cron-matches-p time-spec current-time))
+      
+      (:absolute
+       (let ((target-time (plist-get spec :value)))
+         (time-equal-p (time-convert target-time 'integer)
+                      (time-convert current-time 'integer))))
+      
+      (:relative
+       (let ((target-time (plist-get spec :value)))
+         (time-less-p current-time target-time)))
+      
+      (:property
+       (when-let* ((prop (plist-get spec :prop))
+                  (offset (plist-get spec :offset))
+                  (prop-time (org-supertag-behavior--get-property-time node-id prop)))
+         (when offset
+           (setq prop-time 
+                 (org-supertag-behavior--apply-time-offset prop-time offset)))
+         (time-equal-p (time-convert prop-time 'integer)
+                      (time-convert current-time 'integer)))))))
+
+(defun org-supertag-behavior--get-property-time (node-id prop)
+  "Get time value from property PROP of NODE-ID."
+  (when-let* ((pos (org-supertag-db-get-pos node-id))
+              (value (org-with-point-at pos
+                      (org-entry-get nil prop))))
+    (org-time-string-to-time value)))
+
+(defun org-supertag-behavior--apply-time-offset (time offset)
+  "Apply time OFFSET to TIME.
+OFFSET format: +/-Nh/d/w/m/y"
+  (when (string-match "\\([+-]\\)\\([0-9]+\\)\\([hdwmy]\\)" offset)
+    (let* ((op (match-string 1 offset))
+           (num (string-to-number (match-string 2 offset)))
+           (unit (match-string 3 offset))
+           (seconds (pcase unit
+                     ("h" (* num 3600))     ; hours
+                     ("d" (* num 86400))    ; days
+                     ("w" (* num 604800))   ; weeks
+                     ("m" (* num 2592000))  ; months (approx)
+                     ("y" (* num 31557600)) ; years (approx)
+                     (_ 0))))
+      (time-add time
+                (if (string= op "+")
+                    seconds
+                  (- seconds))))))
+
 ;; Cron format parsing and validation
 (defun org-supertag-parse-cron (cron-string)
   "Parse cron expression.
-CRON-STRING format: \"minute hour day month weekday\""
+CRON-STRING format: \"minute hour day month weekday\"
+Supports:
+- Numbers (e.g. \"5\")
+- Wildcards (\"*\")
+- Step values (\"*/5\" for every 5 units)"
   (let ((fields (split-string cron-string " ")))
     (when (= (length fields) 5)
       (cl-destructuring-bind (minute hour day month weekday) fields
+        ;; Validate each field
+        (unless (and (org-supertag-validate-cron-field 
+                     minute "^\\([0-9]\\|[1-5][0-9]\\)$")
+                    (org-supertag-validate-cron-field 
+                     hour "^\\([0-9]\\|1[0-9]\\|2[0-3]\\)$")
+                    (org-supertag-validate-cron-field 
+                     day "^\\([1-9]\\|[12][0-9]\\|3[01]\\)$")
+                    (org-supertag-validate-cron-field 
+                     month "^\\([1-9]\\|1[0-2]\\)$")
+                    (org-supertag-validate-cron-field 
+                     weekday "^[0-6]$"))
+          (error "Invalid cron expression: %s" cron-string))
         (list :minute minute
               :hour hour
               :day day
@@ -118,7 +274,9 @@ CRON-STRING format: \"minute hour day month weekday\""
   "Validate cron field.
 VALUE is the field value
 PATTERN is the validation pattern"
-  (string-match-p pattern value))
+  (or (string= value "*")
+      (string-match "^\\*/[0-9]+$" value)
+      (string-match-p pattern value)))
 
 (defun org-supertag-cron-valid-p (cron-string)
   "Check if cron expression is valid.
@@ -150,8 +308,18 @@ CRON-STRING is the complete cron expression"
   "Check if cron field matches.
 FIELD-VALUE is the cron field value
 CURRENT-VALUE is the current time value"
-  (or (string= field-value "*")
-      (string= field-value (number-to-string current-value))))
+  (cond
+   ;; Wildcard matches everything
+   ((string= field-value "*")
+    t)
+   ;; Handle */n format (every n units)
+   ((string-match "^\\*/\\([0-9]+\\)$" field-value)
+    (= (mod current-value (string-to-number (match-string 1 field-value))) 0))
+   ;; Direct number match
+   ((string= field-value (number-to-string current-value))
+    t)
+   ;; No match
+   (t nil)))
 
 (defun org-supertag-cron-matches-p (cron-expr time)
   "Check if given time matches cron expression.
@@ -175,62 +343,146 @@ TIME is the time to check"
 ;; Task management
 (defun org-supertag-schedule-add-task (behavior)
   "Add scheduled task.
-BEHAVIOR is the behavior definition"
+BEHAVIOR is the behavior definition with:
+:id        - Task ID (behavior name)
+:schedule  - Time specification (cron, absolute, relative, etc.)
+:action    - Function to execute
+:list      - Optional list of behaviors to execute
+:tag-id    - Associated tag ID
+:node-id   - Associated node ID"
   (let* ((id (plist-get behavior :id))
          (schedule (plist-get behavior :schedule))
-         (action (plist-get behavior :action)))
+         (action (plist-get behavior :action))
+         (behavior-list (plist-get behavior :list))
+         (tag-id (plist-get behavior :tag-id))
+         (node-id (plist-get behavior :node-id)))
     
-    ;; Validate cron format
-    (unless (org-supertag-cron-valid-p schedule)
-      (error "Invalid cron format: %s" schedule))
+    ;; Validate required fields
+    (unless (and id schedule tag-id node-id
+                 (or action behavior-list))  ; Must have either action or list
+      (error "Missing required fields in behavior: %S" behavior))
+    
+    ;; Validate schedule format
+    (unless (org-supertag-parse-time-spec schedule)
+      (error "Invalid time specification: %s" schedule))
     
     ;; Add task
     (puthash id
              (list :schedule schedule
                    :action action
+                   :list behavior-list
+                   :tag-id tag-id
+                   :node-id node-id
                    :last-run nil)
              org-supertag-scheduled-tasks)))
+
+(defun org-supertag-schedule-remove-task (id)
+  "Remove scheduled task with ID."
+  (message "Removing scheduled task: %s" id)
+  (remhash id org-supertag-scheduled-tasks))
+
 
 (defun org-supertag-scheduler-check-tasks ()
   "Check and execute tasks matching current time."
   (let ((now (current-time)))
+    ;; (message "Checking scheduled tasks at %s" (format-time-string "%Y-%m-%d %H:%M:%S" now))
     (maphash
      (lambda (id task)
-       (when (org-supertag-cron-matches-p 
-              (plist-get task :schedule) 
-              now)
-         ;; Avoid repeated execution in same minute
-         (unless (equal (plist-get task :last-run)
-                       (format-time-string "%Y-%m-%d %H:%M" now))
-           ;; Execute task
-           (condition-case err
-               (progn
-                 (message "Executing scheduled task %s" id)
-                 (funcall (plist-get task :action))
-                 ;; Update last execution time
-                 (puthash id
-                          (list :schedule (plist-get task :schedule)
-                                :action (plist-get task :action)
-                                :last-run (format-time-string 
-                                         "%Y-%m-%d %H:%M" 
-                                         now))
-                          org-supertag-scheduled-tasks))
-             (error
-              (message "Error in scheduled task %s: %s" 
-                       id (error-message-string err)))))))
+       ;; (message "Checking task %s with schedule %s" id (plist-get task :schedule))
+       ;; Only execute if we can find a node with this behavior's tag
+       (when-let* ((tag-id (plist-get task :tag-id))  ; Get associated tag
+                  (node-id (plist-get task :node-id)) ; Get associated node
+                  (node-tags (org-supertag-node-get-tags node-id))) ; Get node's tags
+         (when (and (member tag-id node-tags)  ; Check if node has tag
+                   (org-supertag-time-matches-p 
+                    (plist-get task :schedule) 
+                    now
+                    node-id))
+           ;; Avoid repeated execution in same minute
+           (unless (equal (plist-get task :last-run)
+                         (format-time-string "%Y-%m-%d %H:%M" 
+                                             now))
+             ;; Execute task
+             (condition-case err
+                 (progn
+                   (message "Executing scheduled task %s for node %s" id node-id)
+                   (save-excursion
+                     (when-let ((pos (org-supertag-db-get-pos node-id)))
+                       (org-with-point-at pos
+                         (if-let ((behavior-list (plist-get task :list)))
+                             ;; Execute behavior list
+                             (dolist (sub-behavior behavior-list)
+                               (let* ((parts (split-string sub-behavior "="))
+                                      (name (car parts))
+                                      (args (cadr parts)))
+                                 (message "Executing sub-behavior: %s with args: %s" name args)
+                                 (org-supertag-behavior-execute node-id name args)))
+                           ;; Execute single action
+                           (let ((action (plist-get task :action)))
+                             (if (functionp action)
+                                 (funcall action node-id)
+                               (message "Warning: Invalid action for task %s: %S" id action)))))))
+                   ;; Update last execution time
+                   (puthash id
+                            (list :schedule (plist-get task :schedule)
+                                  :action (plist-get task :action)
+                                  :list (plist-get task :list)  ; Preserve behavior list
+                                  :tag-id tag-id
+                                  :node-id node-id
+                                  :last-run (format-time-string 
+                                           "%Y-%m-%d %H:%M" 
+                                           now))
+                            org-supertag-scheduled-tasks))
+               (error
+                (message "Error in scheduled task %s: %s" 
+                         id (error-message-string err))))))))
      org-supertag-scheduled-tasks)))
 
-;; Scheduler control functions remain unchanged
+
+(defun org-supertag-behavior--setup-scheduled-behaviors ()
+  "Setup scheduled behaviors."
+  (message "Setting up scheduler system...")
+  ;; Initialize scheduled tasks storage
+  (setq org-supertag-scheduled-tasks (make-hash-table :test 'equal))
+  ;; Iterate through all behaviors and register scheduled tasks
+  (maphash
+   (lambda (name behavior)
+     (when (and (eq (plist-get behavior :trigger) :schedule)
+                (plist-get behavior :schedule))
+      ;;  (message "Registering scheduled behavior: %s with schedule: %s"
+      ;;           name (plist-get behavior :schedule))
+       ;; Build complete task definition
+       (condition-case err
+           (progn
+             (org-supertag-schedule-add-task
+              (list :id name
+                    :schedule (plist-get behavior :schedule)
+                    :action (plist-get behavior :action)
+                    :list (plist-get behavior :list)
+                    :tag-id name  ; Use behavior name as tag ID since it's registered as a tag
+                    :node-id (org-id-get-create))) ; Create ID for current node
+             (message "Successfully registered scheduled behavior: %s" name))
+         (error
+          (message "Error registering scheduled behavior %s: %s"
+                   name (error-message-string err))))))
+   org-supertag-behavior-registry)
+  
+  ;; Start the scheduler
+  (org-supertag-scheduler-start)
+  (message "Scheduled behaviors setup completed with %d tasks"
+           (hash-table-count org-supertag-scheduled-tasks)))
+
 (defun org-supertag-scheduler-start ()
   "Start the scheduler."
   (unless org-supertag-scheduler-timer
     (setq org-supertag-scheduler-timer
-          (run-at-time t 60 #'org-supertag-scheduler-check-tasks))
-    (message "Scheduler started")))
+          (run-at-time t 300 #'org-supertag-scheduler-check-tasks)) ;; 5 minutes check 1 time
+    (message "Scheduler started with timer: %S" org-supertag-scheduler-timer)))
 
 (defun org-supertag-scheduler-stop ()
   "Stop the scheduler."
   (when org-supertag-scheduler-timer
+    (message "Stopping scheduler timer: %S" org-supertag-scheduler-timer)
     (cancel-timer org-supertag-scheduler-timer)
     (setq org-supertag-scheduler-timer nil)
     (message "Scheduler stopped")))
@@ -251,17 +503,43 @@ Returns t if valid, nil otherwise."
 
 (defun org-supertag-behavior--on-tag-change (node-id tag-id action)
   "Handle behavior when TAG-ID is applied to NODE-ID with ACTION."
-  (message "Debug on-tag-change - node=%s tag=%s action=%s" 
-           node-id tag-id action)
+  ;; (message "Debug on-tag-change - node=%s tag=%s action=%s" 
+  ;;          node-id tag-id action)
   (when-let* ((behavior (org-supertag-behavior--get-behavior tag-id))
               (trigger (plist-get behavior :trigger)))
-    (message "Debug on-tag-change - Found behavior=%S trigger=%S" 
-             behavior trigger)
-    (when (or (eq trigger :always)
-              (eq trigger :on-change)
-              (and (eq trigger :on-add) (eq action :add))
-              (and (eq trigger :on-remove) (eq action :remove)))
-      (org-supertag-behavior-execute node-id behavior))))
+    ;; (message "Debug on-tag-change - Found behavior=%S trigger=%S" 
+    ;;          behavior trigger)
+    (cond
+     ;; Handle scheduled behaviors
+     ((eq trigger :schedule)
+      (if (eq action :add)
+          (progn
+            (message "Registering scheduled behavior for tag %s on node %s" tag-id node-id)
+            (condition-case err
+                (let ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
+                  (org-supertag-schedule-add-task
+                   (list :id behavior-name  ; Use behavior name as ID
+                         :schedule (plist-get behavior :schedule)
+                         :action (plist-get behavior :action)
+                         :list (plist-get behavior :list)
+                         :tag-id tag-id
+                         :node-id node-id))
+                  (message "Successfully registered scheduled behavior %s for tag %s on node %s" 
+                          behavior-name tag-id node-id))
+              (error
+               (message "Error registering scheduled behavior for tag %s: %s"
+                        tag-id (error-message-string err)))))
+        ;; Remove scheduled task when tag is removed
+        (when (eq action :remove)
+          (when-let ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
+            (org-supertag-schedule-remove-task behavior-name)))))
+     
+     ;; Handle regular behaviors
+     ((or (eq trigger :always)
+          (eq trigger :on-change)
+          (and (eq trigger :on-add) (eq action :add))
+          (and (eq trigger :on-remove) (eq action :remove)))
+      (org-supertag-behavior-execute node-id behavior)))))
 
 (defun org-supertag-behavior--plist-p (object)
   "Check if OBJECT is a property list."
@@ -271,58 +549,66 @@ Returns t if valid, nil otherwise."
 
 (defun org-supertag-behavior-execute (node-id behavior-spec &rest params)
   "Execute behavior specified by BEHAVIOR-SPEC on NODE-ID with PARAMS."
-  (pcase behavior-spec
-    ((pred stringp)
-     (when-let* ((behavior (gethash behavior-spec org-supertag-behavior-registry))
-                 (param-names (plist-get behavior :params))
-                 (param-values (when (and param-names params)
-                               (org-supertag-behavior--parse-param-string 
-                                (car params) param-names))))
-       (if (plist-get behavior :list)
-           ;; Execute behavior list
-           (dolist (sub-behavior (plist-get behavior :list))
-             (let* ((parts (split-string sub-behavior "="))
-                    (name (car parts))
-                    (args (cadr parts)))
-               (org-supertag-behavior-execute node-id name args)))
-         ;; Execute single behavior
-         (org-supertag-behavior-execute node-id behavior param-values))))
-    
-    ;; plist: complete behavior definition
-    ((pred org-supertag-behavior--plist-p)
-     (when-let ((pos (org-supertag-db-get-pos node-id)))
-       (save-excursion
-         (org-with-point-at pos
-           ;; Check for behavior list
-           (if-let ((behavior-list (plist-get behavior-spec :list)))
-               ;; Execute behavior list
-               (dolist (sub-behavior behavior-list)
-                 (let* ((parts (split-string sub-behavior "="))
-                        (name (car parts))
-                        (args (cadr parts)))
-                   (org-supertag-behavior-execute node-id name args)))
-             ;; Execute single behavior
-             (when-let ((action (plist-get behavior-spec :action)))
-               (if params
-                   (let ((param-names (plist-get behavior-spec :params))
-                         (param-values (car params)))
-                     (save-excursion
-                       (org-with-point-at pos
-                         (funcall action node-id param-values))))
-                 (save-excursion
-                   (org-with-point-at pos
-                     (funcall action node-id))))))))))
-    
-    ;; function: direct execution
-    ((pred functionp)
-     (when-let ((pos (org-supertag-db-get-pos node-id)))
-       (save-excursion
-         (org-with-point-at pos
-           (if params
-               (apply behavior-spec node-id params)
-             (funcall behavior-spec node-id))))))
-    
-    (_ (error "Invalid behavior spec: %S" behavior-spec))))
+  (cond
+   ;; String: behavior name
+   ((stringp behavior-spec)
+    (when-let* ((behavior (gethash behavior-spec org-supertag-behavior-registry)))
+      (if (plist-get behavior :list)
+          ;; Execute behavior list
+          (dolist (sub-behavior (plist-get behavior :list))
+            (let* ((ctx (make-org-supertag-behavior-context 
+                        :node-id node-id))
+                   (expanded-behavior (org-supertag-behavior-template-expand 
+                                    sub-behavior ctx))
+                   (parts (split-string expanded-behavior "="))
+                   (name (car parts))
+                   (args (cadr parts)))
+              (when name  ; Only need name to exist
+                (org-supertag-behavior-execute node-id name args))))
+        ;; Execute single behavior
+        (let ((param-names (plist-get behavior :params))
+              (action (plist-get behavior :action)))
+          (if (and param-names params)
+              (let ((param-values (org-supertag-behavior--parse-param-string 
+                                 (car params) param-names node-id)))
+                (funcall action node-id param-values))
+            ;; When executing without params, ensure we pass nil as second arg for functions that expect it
+            (if (and action (functionp action))
+                (funcall action node-id nil)
+              (when action
+                (funcall action node-id nil))))))))
+   
+   ;; plist: complete behavior definition
+   ((org-supertag-behavior--plist-p behavior-spec)
+    (when-let* ((pos (org-supertag-db-get-pos node-id)))
+      (save-excursion
+        (org-with-point-at pos
+          ;; Check for behavior list
+          (if-let ((behavior-list (plist-get behavior-spec :list)))
+              ;; Execute behavior list
+              (dolist (sub-behavior behavior-list)
+                (let* ((parts (split-string sub-behavior "="))
+                       (name (car parts))
+                       (args (cadr parts)))
+                  (when name  ; Only need name to exist
+                    (org-supertag-behavior-execute node-id name args))))
+            ;; Execute single behavior
+            (when-let* ((action (plist-get behavior-spec :action)))
+              (if params
+                  (let ((param-values (car params)))
+                    (funcall action node-id param-values))
+                (funcall action node-id nil))))))))
+   
+   ;; function: direct execution
+   ((functionp behavior-spec)
+    (when-let ((pos (org-supertag-db-get-pos node-id)))
+      (save-excursion
+        (org-with-point-at pos
+          (if params
+              (apply behavior-spec node-id params)
+            (funcall behavior-spec node-id nil))))))
+   
+   (t (error "Invalid behavior spec: %S" behavior-spec))))
 
 (defun org-supertag-behavior--do-execute (action &rest params)
   "Execute ACTION at current point with optional PARAMS."
@@ -347,22 +633,31 @@ Returns t if valid, nil otherwise."
     
     (_ (error "Invalid action: %S" action))))
 
-
-(defun org-supertag-behavior--parse-param-string (param-str param-names)
+(defun org-supertag-behavior--parse-param-string (param-str param-names node-id)
   "Parse parameter string into plist based on param names.
-PARAM-STR is string like \"red,yellow,bold\"
-PARAM-NAMES is list of parameter names like '(fg bg weight)
+PARAM-STR is string like \"red,${input:color},bold\"
+PARAM-NAMES is list of parameter names
+NODE-ID is the current node being processed
 
-Returns plist like (:fg \"red\" :bg \"yellow\" :weight \"bold\")"
-  (let* ((values (split-string param-str "," t "[ \t\n\r]+"))
-         (result nil))
-    (cl-loop for name in param-names
-             for value in values
-             do (setq result 
-                      (plist-put result 
-                                (intern (concat ":" (symbol-name name)))
-                                value)))
-    result))
+Returns plist like (:fg \"red\" :bg \"blue\" :weight \"bold\")"
+  ;; 简化的 plist 检查
+  (if (and (listp param-str)
+           (keywordp (car param-str)))
+      param-str
+    ;; 否则进行正常的参数解析
+    (let* ((ctx (make-org-supertag-behavior-context :node-id node-id))
+           (expanded-str (if (stringp param-str)
+                           (org-supertag-behavior-template-expand param-str ctx)
+                         (format "%s" param-str)))
+           (values (split-string expanded-str "," t "[ \t\n\r]+"))
+           (result nil))
+      (cl-loop for name in param-names
+               for value in values
+               do (setq result 
+                        (plist-put result 
+                                  (intern (concat ":" (symbol-name name)))
+                                  value)))
+      result)))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior attach
@@ -442,6 +737,10 @@ Returns plist like (:fg \"red\" :bg \"yellow\" :weight \"bold\")"
        tag-name 
        :type :tag
        :behaviors new-behaviors))
+    
+    ;; Remove scheduled task if it's a scheduled behavior
+    (when (eq (plist-get behavior :trigger) :schedule)
+      (org-supertag-schedule-remove-task behavior-name))
     
     ;; Ensure we're at a valid org heading and execute behavior removal
     (when (org-at-heading-p)
@@ -629,7 +928,7 @@ Prompts for a list of behaviors to execute."
     (advice-add 'org-supertag-behavior--handle-node-change 
                 :around #'org-supertag-behavior--protect-id-locations)
 
-    ;; Setup scheduled behaviors directly
+    ;; Initialize scheduler system
     (org-supertag-behavior--setup-scheduled-behaviors)
 
     (setq org-supertag-behavior--initialized t)
@@ -667,25 +966,6 @@ Prompts for a list of behaviors to execute."
   "Handle tag remove event for NODE-ID and TAG-ID."
   (message "Tag remove handler: node=%s tag=%s" node-id tag-id)
   (org-supertag-behavior--on-tag-change node-id tag-id :remove))
-
-(defun org-supertag-behavior--setup-scheduled-behaviors ()
-  "Setup scheduled behaviors."
-  ;; Initialize scheduled tasks storage
-  (setq org-supertag-scheduled-tasks (make-hash-table :test 'equal))
-  ;; Iterate through all behaviors and register scheduled tasks
-  (maphash
-   (lambda (name behavior)
-     (when (and (eq (plist-get behavior :trigger) :schedule)
-                (plist-get behavior :schedule))
-       ;; Build complete task definition
-       (org-supertag-schedule-add-task
-        (list :id name
-              :schedule (plist-get behavior :schedule)
-              :action (plist-get behavior :action)))))
-   org-supertag-behavior-registry)
-  
-  ;; Start the scheduler
-  (org-supertag-scheduler-start))
 
 (defun org-supertag-behavior--cleanup ()
   "Cleanup behavior system."
@@ -779,6 +1059,24 @@ _ARGS are ignored cycle hook arguments."
 
 
 ;;------------------------------------------------------------------------------
+;; Logging System
+;;------------------------------------------------------------------------------
+
+(defcustom org-supertag-log-level :error
+  "Logging level for org-supertag.
+Valid values are:
+- :error   Only log errors
+- :warn    Log warnings and errors
+- :info    Log general information
+- :debug   Log detailed debug information"
+  :type '(choice
+          (const :tag "Error" :error)
+          (const :tag "Warning" :warn)
+          (const :tag "Info" :info)
+          (const :tag "Debug" :debug))
+  :group 'org-supertag)
+
+;;------------------------------------------------------------------------------
 ;; Error Handling
 ;;------------------------------------------------------------------------------
 
@@ -790,10 +1088,23 @@ ERR is the error object
 NODE-ID is the affected node
 TAG-ID is the tag
 ACTION is the attempted action"
+  ;; Always log basic error info at error level
   (message "Behavior error for tag %s on node %s: %S" 
-           tag-id node-id err)
-  (when (eq :debug org-supertag-log-level)
-    (message "Error details: %S" (cdr err))))
+           tag-id node-id (error-message-string err))
+  
+  ;; Additional logging based on log level
+  (pcase org-supertag-log-level
+    (:debug
+     (message "Debug details:")
+     (message "  Error data: %S" (cdr err))
+     (message "  Node ID: %s" node-id)
+     (message "  Tag ID: %s" tag-id)
+     (message "  Action: %s" action))
+    (:info
+     (message "Info: Attempted action %s failed" action))
+    (:warn
+     (message "Warning: Behavior execution failed"))
+    (_ nil)))
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Validation
@@ -902,8 +1213,8 @@ Returns t if valid, signals error if invalid."
                 (progn
                   (goto-char (max (point-min) beg))
                   (org-supertag-behavior--face-refresh-current))
-              ;; Global refresh uses async processing
-              (org-supertag-behavior--schedule-async-refresh))
+                ;; Global refresh uses async processing
+                (org-supertag-behavior--schedule-async-refresh))
           (error
            (message "Error during face refresh: %S" err)))))))
 
@@ -960,7 +1271,7 @@ Returns t if valid, signals error if invalid."
                   (org-supertag-db--cache-set 
                    'query 
                    (format "face-refresh:%s" (buffer-file-name))
-                   t)))
+                           t)))
               ;; Continue processing next chunk
               (when org-supertag-behavior--async-queue
                 (setq org-supertag-behavior--async-timer
@@ -1002,6 +1313,10 @@ Returns t if valid, signals error if invalid."
 
 (add-hook 'org-supertag-after-load-hook
           #'org-supertag-behavior-setup)
+
+;; 在数据库加载后重新设置调度系统
+(add-hook 'org-supertag-db-after-load-hook 
+          #'org-supertag-behavior--setup-scheduled-behaviors)
 
 
  

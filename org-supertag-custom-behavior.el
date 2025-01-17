@@ -52,11 +52,11 @@
 ;;   :style '(:face (:foreground "red")
 ;;           :prefix "★"))
 ;;
-;; 3. Combined behavior using behavior list:
+;; 3. Workflow behavior using behavior list:
 ;; (org-supertag-behavior-register "@custom-done"
 ;;   :trigger :on-add
 ;;   :list '("@todo=DONE"
-;;           "@property=COMPLETED_TIME=now")
+;;           "@property=COMPLETED_TIME,${date:now}"))
 ;;   :style '(:face (:foreground "green")
 ;;           :prefix "✓"))
 ;;
@@ -89,14 +89,14 @@
 ;;    - Examples: @todo, @priority, @property
 ;;    - Used as building blocks for higher layers
 ;;
-;; 2. Derived Behaviors (Specialization Layer)
+;; 2. Shortcut Behaviors (Specialization Layer)
 ;;    - Built on top of basic behaviors
 ;;    - Pre-configured parameter sets
 ;;    - Specialized for specific use cases
 ;;    - Examples: @done (@todo=DONE), @urgent (@priority=A)
 ;;    - Simplify common operations
 ;;
-;; 3. Combined Behaviors (Integration Layer)
+;; 3. Workflow Behaviors (Integration Layer)
 ;;    - Compose multiple behaviors together
 ;;    - Create complex workflows
 ;;    - Chain actions in meaningful sequences
@@ -134,9 +134,9 @@
 (org-supertag-behavior-register "@move"
   :trigger :on-add
   :action #'org-supertag-behavior--move-node
-  :params '(target-file level target-point interactive keep-link))
+  :params '(target-file))
 
-;; Task State - Basic behavior, other states through parameters
+;; TODO State - Basic behavior, other states through parameters
 (org-supertag-behavior-register "@todo"
   :trigger :on-add
   :action #'org-supertag-behavior--set-todo
@@ -179,6 +179,7 @@
   :params '(scope days action))
 
 
+
 ;; State Propagation Basic Behavior
 (org-supertag-behavior-register "@propagate"
   :trigger :on-add
@@ -212,14 +213,7 @@
 ;; Archive Basic Behavior
 (org-supertag-behavior-register "@archive"
   :trigger :on-add
-  :action #'org-supertag-behavior--archive-subtree
-  :params '(location mark-done save-context))
-
-;; Archive Location Basic Behavior
-(org-supertag-behavior-register "@archive-to"
-  :trigger :on-add
-  :action #'org-supertag-behavior--set-archive-location
-  :params '(file headline scope inherit-tags))
+  :action #'org-supertag-behavior--archive-subtree)
 
 ;; Node Operations - Get Child Node Information
 (org-supertag-behavior-register "@children"
@@ -244,9 +238,8 @@
   :action #'org-supertag-behavior--calculate-progress)
 
 
-
 ;;------------------------------------------------------------------------------
-;; Derived Behaviors - Based on Basic Behaviors
+;; Shortcut Behaviors - Based on Basic Behaviors
 ;;------------------------------------------------------------------------------
 
 ;; 1. Task State Derivatives
@@ -258,109 +251,91 @@
 
 (org-supertag-behavior-register "@start"
   :trigger :on-add
-  :list '("@todo=STARTED")
-  :style '(:face (:foreground "orange" :weight bold)
-          :prefix "▶"))
-
-(org-supertag-behavior-register "@cancel"
-  :trigger :on-add
-  :list '("@todo=CANCELLED")
-  :style '(:face (:foreground "gray" :strike-through t)
-          :prefix "✗"))
+  :list '("@todo=DOING")
+  :style '(:prefix "▶"))
 
 ;; 2. Priority Derivatives
 (org-supertag-behavior-register "@urgent"
   :trigger :on-add
   :list '("@priority=A")
   :style '(:face (:foreground "red" :weight bold)
-          :prefix "⚠"))
-
-(org-supertag-behavior-register "@low"
-  :trigger :on-add
-  :list '("@priority=C")
-  :style '(:face (:foreground "gray")
-          :prefix "▽"))
+          :prefix "🔥"))
 
 ;; 3. Time-Related Derivatives
 (org-supertag-behavior-register "@deadline"
   :trigger :on-add
-  :list '("@timestamp=DEADLINE")
-  :style '(:face (:foreground "red")
-          :prefix "⏰"))
+  :list '("@timestamp=DEADLINE"))
 
 (org-supertag-behavior-register "@scheduled"
   :trigger :on-add
-  :list '("@timestamp=SCHEDULED")
-  :style '(:face (:foreground "blue")
-          :prefix "📅"))
+  :list '("@timestamp=SCHEDULED"))
 
-;; 4. Move-Relate Derivatives
-(org-supertag-behavior-register "@move-to-archive"
-  :trigger :on-add
-  :list '("@move target-file=~/org/archive.org interactive=t"))
-
+;; 4. Move-Related Derivatives
 (org-supertag-behavior-register "@move-to-project"
   :trigger :on-add
-  :list '("@move target-file=~/org/projects.org interactive=t"))
+  :list '("@move=/Users/chenyibin/Documents/notes/project.org"))
 
-;; Move as child with link
-(org-supertag-behavior-register "@move-as-child-with-link"
-  :trigger :on-add
-  :list '("@move level=child keep-link=t"))
 
 ;; 5. Deadline Check Derivatives
-(org-supertag-behavior-register "@overdue-urgent"
-  :trigger :on-add
-  :list '("@deadline-check scope=agenda days=0"
-          "@priority priority=A"))
-
-;; 检查即将到期的任务
-(org-supertag-behavior-register "@upcoming-deadline"
-  :trigger :on-add
-  :list '("@deadline-check scope=agenda days=3"
-          "@todo state=NEXT"))
-
-;; 检查并归档过期的已完成任务
 (org-supertag-behavior-register "@overdue-archive"
-  :trigger :on-add
-  :list '("@deadline-check scope=agenda days=0"
-          "@archive"))
+  :trigger :on-schedule
+  :schedule "0 0 * * 0"  ; every sunday 0:00 execute
+  :action (lambda (node-id)
+            (org-supertag-behavior--check-deadline node-id
+              '(scope subtree
+                days 0
+                action (lambda (heading deadline)
+                        (when (member (org-get-todo-state) 
+                                    org-done-keywords)
+                          (org-archive-subtree-default)))))))
 
 ;;------------------------------------------------------------------------------
-;; Combined Behaviors - Complex Functionality
+;; Workflow Behaviors - Complex Functionality
 ;;------------------------------------------------------------------------------
 
 ;; 1. Complete and Archive
 (org-supertag-behavior-register "@done+archive"
   :trigger :on-add
-  :list '("@todo=DONE"                        ; Set state to DONE
-          "@property=ARCHIVE_TIME=now"         ; Set archive timestamp
-          "@archive")                          ; Execute archive
-  :style '(:face (:foreground "gray50" :strike-through t)
+  :list '("@todo=DONE"                                ; Set state to DONE
+          "@archive")                                 ; Archive using org-archive-location
+  :style '(:face (:foreground "gray50")
           :prefix "📦"))
 
 ;; 2. Start Task and Clock In
 (org-supertag-behavior-register "@start+clock"
   :trigger :on-add
-  :list '("@todo=STARTED" "@clock=start")
-  :style '(:face (:foreground "orange" :weight bold)
-          :prefix "⏱"))
+  :list '("@todo=DOING" 
+          "@clock=start"))
 
 ;; 3. Urgent Task (High Priority + Deadline)
 (org-supertag-behavior-register "@urgent+deadline"
   :trigger :on-add
-  :list '("@priority=A" "@deadline")
+  :list '("@priority=A" 
+          "@deadline-check,scope=agenda,days=0"
+          "@priority=A")
   :style '(:face (:foreground "red" :weight bold)
           :prefix "🚨"))
 
-;; 4. Project Node
-(org-supertag-behavior-register "@project"
+;; Test behavior
+
+;; 1. Base behavior: Record time (testing template variables)
+(org-supertag-behavior-register "@timestamp"
   :trigger :on-add
-  :list '("@property=CATEGORY=PROJECT" "@property=PROJECT_ID=auto")
-  :style '(:face (:foreground "blue" :weight bold)
-          :prefix "📂"))
+  :list '("@property=TIME=${date:now}"))
 
+;; 2. Workflow behavior: Create task and set reminder
+(org-supertag-behavior-register "@task"
+  :trigger :on-add
+  :list '(
+    "@todo=TODO"
+    "@property=CREATED=${date:now}"
+    "@property=WHO=${input:Owner}"))
 
+;; 3. Scheduled check behavior
+(org-supertag-behavior-register "@check"
+  :trigger :on-schedule
+  :schedule "0 * * * *"              ; Check every hour
+  :list '("@todo=WAIT{if:CREATED<${date:now-1d}}"))
 
 (provide 'org-supertag-custom-behavior)
 ;;; org-supertag-custom-behavior.el ends here 

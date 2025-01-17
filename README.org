@@ -2,84 +2,137 @@
 
 * Introduction
 
-Org-supertag is a package that enhances org-mode's tag functionality. It empowers tags to not only assign attributes to nodes but also directly manipulate them, enabling more flexible knowledge management.
+Org-supertag is a package that enhances org-mode's tag functionality. It enables tags to not only set properties for nodes, but also directly manipulate nodes and automatically execute certain behaviors based on time, providing a more flexible way of information management.
+
+Org-supertag offers high degrees of freedom, flexibility, and convenience. Through it, you can customize your own behaviors to achieve more complex functionalities - its potential is essentially limitless.
 
 Org-supertag adopts a non-intrusive design, coexisting harmoniously with org-mode's original features while providing more possibilities.
 
-* Why Tags?
+* Features
 
-Traditional linear note-taking systems have limitations:
+** Feature Overview
 
-1. Single Perspective :: Knowledge is confined to fixed hierarchical structures
-2. Difficult to Reorganize :: Lacks flexible association mechanisms
-3. Fragmentation :: Knowledge points lack organic connections
+- Enhanced Tag Functionality
+    - Set properties for org-headlines, add multiple org-properties at once and batch fill corresponding values
+    - Transform regular org-headlines into searchable and referenceable nodes
+    - Add behaviors to tags that can complete multiple operations at once
+- Convenient Search Functionality
+    - Search with multiple keywords at once (using AND logic)
+    - Beautified search results page showing both titles and content beneath
+    - Multiple search result export methods for easy organization
+      - Export search results to another file
+      - Export search results to a new file (location and filename customizable)
+      - Export search results directly to current cursor position
+- Automatic Synchronization
+    - Automatically sync position and changes of org-headlines converted to Nodes, saving manual operations
+    - Provides manual command to sync all Nodes
+- Integrated Behavior System for Automation
+    - Behavior system makes tags "smart", automatically triggering preset actions when adding/removing tags (like changing styles, setting states, etc.)
+    - One tag can trigger multiple actions, e.g., adding @urgent tag can simultaneously "turn red", "set priority", "add deadline", etc.
+    - Behaviors can be scheduled, combined, and parameterized, making your org-mode workflow more automated and efficient
+    - Behavior system includes a behavior library - you can use predefined common behaviors or create your own custom ones. This modular design makes behaviors easily shareable, reusable, and extensible between different org files or users
+    - Customizable Behavior Commands
+      + Simple configuration syntax
+      + Parameterized configuration
+      + Can combine multiple Behaviors together
 
-Tag systems provide a higher-dimensional organization method:
+** Enhanced Tag System
+Make your org-mode tags powerful metadata controllers:
 
-1. Multi-dimensional Classification :: A piece of knowledge can have multiple attributes simultaneously
-2. Dynamic Reorganization :: Content can be reorganized from different perspectives at any time
-3. Relationship Network :: Weave scattered knowledge points into a network through tags
+*** Adding Tags/Setting Properties
+- Set multiple properties at once when adding tags
+- Batch fill property values
+- Type validation for property values
 
-This organization method not only makes knowledge easier to retrieve and reuse but, more importantly, can stimulate connections between knowledge points, creating a compound effect. Tags, as a metadata management tool, have applications far beyond knowledge management.
+[[./picture/figure4.gif][M-x org-supertag-tag-add-tag]]
 
-Here's my concept diagram:
+Two commands involved:
 
-[[file:picture/figure2.png]]
+~M-x org-supertag-tag-add-tag~
+~M-x org-supertag-tag-set-field-and-value~
 
-* Main Concepts
+*** Node System
+- Automatic node creation, no manual creation needed
+- Establish reference relationships between nodes
 
-** Node
-A node is an abstract information unit containing (org-mode) headings, properties, and content. Each node has a unique identifier and can be referenced and queried.
+[[./picture/figure5.gif][M-x org-supertag-node-add-reference]]
 
-** Super Tag
-A super tag is a metadata template that defines the structure and behavior of nodes. Tags not only describe node properties but can also trigger automated operations.
+If a node isn't automatically created, you can directly run ~M-x org-supertag-node-create~ command to convert the current heading into a node.
 
-Tag format is ~:#tag-name:~.
+*** Behavior System
+Make tags "smart", enabling:
+- Trigger actions when adding/removing tags
+- Combine multiple actions into workflows
+- Set scheduled behaviors
+- Customize tag styles
 
-** Field
-Fields are structured properties of nodes, defined and enforced by tags. The field system supports multiple data types.
+[[./picture/figure6.gif][M-x org-supertag-behavior-attach]]
 
-** Behavior
-Behaviors are automated operations defined and enforced by tags. The behavior system supports various automation operations.
+Two commands involved:
 
-** Query
-The query system supports unified searching across nodes, tags, and fields, supports compound queries with multiple conditions, and query results can be exported and reorganized.
+~M-x org-supertag-behavior-attach~
+~M-x org-supertag-behavior-detach~
 
-* Common Commands
+** Powerful Search
+Efficiently find and organize your nodes:
 
-** Node Operations
-- ~M-x org-supertag-node-create~ :: Convert current heading to a supertag node
-- ~M-x org-supertag-query~ :: Search nodes
-- ~M-x org-supertag-node-add-reference~ :: Add reference to current node
-- ~M-x org-supertag-node-remove-reference~ :: Remove reference from current node
+*** Multi-keyword Search
+- Support multiple keyword combination search (AND logic)
+- Aesthetic search results interface
+- Preview content under headings
 
-** Tag Operations
-- ~M-x org-supertag-tag-add-tag~ :: Add tag to current org-headline, automatically creating a node and setting fields (if they exist)
-- ~M-x org-supertag-tag-batch-add-tag~ :: Batch add tags to multiple org-headlines
-- ~M-x org-supertag-tag-remove~ :: Remove tag from current node
-- ~M-x org-supertag-tag-set-field-value~ :: Set field value
-- ~M-x org-supertag-tag-set-field-and-value~ :: Set both tag field and value simultaneously
+[[./picture/figure8.gif][M-x org-supertag-query]]
 
-** Query Commands
-- ~M-x org-supertag-query~ :: Start query interface
-  1. Enter keywords (multiple keywords separated by spaces)
-  2. Select query results (use C-c C-c in results page)
-  3. Choose export method:
-     - Export to new file
-     - Export to existing file
-     - Insert links at current position
+*** Flexible Export Options
+Multiple ways to organize search results:
+- Export to existing files
+- Create new files to save results
+- Insert at current position
 
-Query results are presented as org-mode links, clicking a link jumps directly to the corresponding node.
+[[./picture/figure9.gif]]
 
-- ~M-x org-supertag-query-in-buffer~ :: Query within current buffer
-- ~M-x org-supertag-query-in-files~ :: Query in specified files, can specify multiple files
+** Automatic Synchronization
+Automatically maintain node organization:
+- Track node position changes
+- Automatically update reference relationships
+- Provide manual sync commands
 
-** Behavior Commands
-- ~M-x org-supertag-behavior-attach~ :: Attach behavior to tag
-- ~M-x org-supertag-behavior-execute-at-point~ :: Execute behavior at current node, prompts for behavior name
-- ~M-x org-supertag-behavior-execute-batch~ :: Execute multiple behaviors at current node sequentially
+[[./picture/figure7.gif][M-x org-supertag-sync-force-all]]
 
-* Installation
+If some nodes need synchronization but haven't auto-synced, you can directly run ~M-x org-supertag-sync-force-all~ command to sync all node information to the database.
+
+* Basic Usage
+
+** Adding Tags
+
+#+begin_src
+M-x org-supertag-tag-add-tag
+#+end_src
+
+Add tags to current heading, can set properties simultaneously.
+
+** Creating References
+#+begin_src
+M-x org-supertag-node-add-reference
+#+end_src
+
+Add references to other nodes.
+
+** Searching
+#+begin_src
+M-x org-supertag-query
+#+end_src
+
+Search nodes using multiple keywords.
+
+** Adding Behaviors
+#+begin_src
+M-x org-supertag-behavior-attach
+#+end_src
+
+Attach automated behaviors to tags.
+
+* Basic Installation
 
 #+begin_src emacs-lisp
 (use-package org-supertag
@@ -89,228 +142,77 @@ Query results are presented as org-mode links, clicking a link jumps directly to
   (org-supertag-setup))
 #+end_src
 
-* Advanced Features
+* Advanced Usage
 
-** Preset Tag Modification
-Org-supertag provides some preset tag types, here are examples:
+** Behavior System Configuration
+Create custom behaviors by editing ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el file:
 
-- project :: Project management
-  - status: Status (planning/active/on-hold/completed/cancelled)
-  - priority: Priority (high/medium/low)
-  - deadline: Deadline
-  - owner: Owner
-
-- task :: Task management
-  - status: Status (todo/in-progress/blocked/done/cancelled)
-  - priority: Priority (A/B/C)
-  - due: Due date
-  - assignee: Assignee
-
-Other preset tags include: person, meeting, place, company, note, etc.
-
-- ~M-x org-supertag-tag-edit-preset~ :: Edit preset tags
-Use this command to edit preset tags, it will automatically add custom-set-variables configuration to your init.el.
-
-*** Setting Custom Preset Tags in init.el
-You can customize preset tags by setting the `org-supertag-preset-tags` variable in init.el. Each preset tag consists of a tag name and field definitions:
+Here's an example
 
 #+begin_src emacs-lisp
-(setq org-supertag-preset-tags
-      '(("book" . ((:name "status"
-                   :type options 
-                   :options ("reading" "completed" "want-to-read")
-                   :description "Reading status")
-                  (:name "rating"
-                   :type number
-                   :description "Rating")
-                  (:name "author"
-                   :type string
-                   :description "Author")))))
+;; Register a behavior named "@urgent"
+;; Parameter explanation:
+;;   - @urgent: behavior name, used to identify and reference this behavior
+;;   - :trigger: trigger condition, :on-add means trigger when adding tag
+;;   - :list: list of actions to execute, each action is a command string
+;;   - :style: tag display style, including font and prefix icon settings
+(org-supertag-behavior-register "@urgent"                 <= Register a behavior named "@urgent"
+  :trigger :on-add                                        <= Trigger when adding tag
+  :list '("@todo=TODO"                                    <= Set TODO state
+         "@priority=A"                                    <= Set priority to A
+         "@deadline=today")                               <= Set deadline to today
+  :style '(:face (:foreground "red" :weight bold)         <= Set tag display to red and bold
+          :prefix "🔥"))                                  <= Show fire icon before tag
 #+end_src
 
-** Query Result Export
-Three export methods are provided, supporting both commands and keyboard shortcuts:
+For more examples, please refer to [[./DEMO.org][DEMO.org]].
 
-*** Export to New File
-- Command: ~M-x org-supertag-query-export-results-to-new-file~
-- Shortcut: ~C-c C-x n~
-- Function: Export query results to a new file, supports selecting insertion position:
-  - End of file
-  - As subheading
-  - As same-level heading
-
-*** Export to Existing File
-- Command: ~M-x org-supertag-query-export-results-to-file~
-- Shortcut: ~C-c C-x f~
-- Function: Export query results to selected position in specified file
-
-*** Insert at Current Position
-- Command: ~M-x org-supertag-query-export-results-here~
-- Function: Insert results as org-mode block at cursor position
-#+begin_query
-- [[id:node-id][Node Title]]
-#+end_query
-
-⚠️Note: This command can only be used outside the search results page
-
-*** Other Related Commands
-- ~C-c C-c~ :: Toggle selection state of current line
-- ~C-c C-x C-r~ :: Select all results in region
-- ~C-c C-x C-u~ :: Unselect all results in region
-
-** Behavior System
-The behavior system is one of org-supertag's core features, enabling tags to perform automated operations.
-
-*** Behavior Types
-org-supertag provides three types of behaviors:
-
-**** Basic Behaviors
-The most fundamental behavior units:
-- Single functionality, flexibility through parameters
-- Directly manipulate node properties or content
-- Examples:
-  - @todo - Set task state
-  - @priority - Set priority
-  - @timestamp - Add timestamp
-  - @property - Set property
-  - @clock - Manage time tracking
-
-**** Derived Behaviors
-Extensions of basic behaviors:
-- Preset parameter combinations
-- Optimized for specific scenarios
-- Examples:
-  - @done - Complete task and record time
-  - @start - Start task and record time
-  - @cancel - Cancel task and add note
-
-**** Combined Behaviors
-Multiple behaviors in workflows:
-- Chain multiple behaviors into workflows
-- Implement complex automation scenarios
-- Examples:
-  - @meeting - Add template + set schedule + mark todo
-  - @archive - Mark complete + move to archive
-
-*** Behavior Definition
-Behavior definitions are stored in ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el:
-
-#+begin_src emacs-lisp
-;; 1. Basic behavior defines what parameters it accepts
-(org-supertag-behavior-register "@todo"
-  :trigger :on-add
-  :action #'org-supertag-behavior--set-todo
-  :params '(state)                                  ; Defines that @todo accepts one parameter named 'state'
-  :style '(:face (:foreground "blue" :weight bold)
-          :prefix "☐"))
-
-;; When using @todo behavior, parameter is passed after '=' sign:
-;; "@todo=DONE"    ; Here "DONE" is passed as the 'state' parameter
-
-;; 2. Example with two parameters
-(org-supertag-behavior-register "@property"
-  :trigger :on-add
-  :action #'org-supertag-behavior--set-property
-  :params '(name value)                             ; Defines that @property accepts two parameters
-  :style '(:face (:foreground "green" :weight bold)
-          :prefix "✓"))
-
-;; When using @property behavior, parameters are separated by comma:
-;; "@property=TYPE,meeting"    ; "TYPE" is passed as 'name', "meeting" as 'value'
-
-;; 3. Using behaviors with parameters in :list
-(org-supertag-behavior-register "@meeting"
-  :trigger :on-add
-  :list '("@todo=TODO"                             ; Uses @todo behavior, passes "TODO" as 'state'
-          "@property=TYPE,meeting"                  ; Uses @property behavior, passes two parameters
-          "@clock")                                ; Uses @clock behavior with no parameters
-  :style '(:face (:foreground "purple" :weight bold)
-          :prefix "📅"))
-#+end_src
-
-*** Parameter Passing in Behavior Lists
-When using :list to chain behaviors, parameters are passed using a special syntax:
-
-1. Basic Format:
-   #+begin_example
-   "@behavior-name=param1,param2,..."
-   #+end_example
-
-2. Examples with Different Parameter Types:
-   - Single parameter:
-     #+begin_example
-     "@todo=DONE"              ; Set TODO state to DONE
-     "@priority=A"             ; Set priority to A
-     #+end_example
-
-   - Multiple parameters:
-     #+begin_example
-     "@property=STATUS,active" ; Set property STATUS to active
-     "@drawer=LOGBOOK,note"   ; Create LOGBOOK drawer with note
-     #+end_example
-
-   - No parameters:
-     #+begin_example
-     "@archive"               ; Execute archive behavior without params
-     "@clock"                ; Start clock without specific params
-     #+end_example
-
-3. Parameter Matching:
-   - Parameters are matched to :params definition in order
-   - For "@property=name,value", matches :params '(name value)
-   - For "@todo=state", matches :params '(state)
-
-4. Complex Examples:
-   #+begin_src emacs-lisp
-   ;; Meeting workflow with multiple parameterized behaviors
-   (org-supertag-behavior-register "@meeting-start"
-     :trigger :on-add
-     :list '("@todo=TODO"                    ; Single param
-             "@property=TYPE,meeting"         ; Two params
-             "@timestamp=SCHEDULED,now"       ; Two params
-             "@drawer=LOGBOOK,meeting-note"   ; Two params
-             "@clock"))                       ; No params
-   #+end_src
-
-*** Trigger Types
-Behaviors can be triggered at different times:
-- :on-add - Triggered when tag is added
-- :on-remove - Triggered when tag is removed
-- :on-change - Triggered when node content changes
-- :always - Triggered on all events
+For more usage details, please refer to [[https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide][Org‐supertag Advance Usage]]
 
 * Changelog
-- 2024-12-31 :: 1.0.0 release
-  - feat behavior-system :: Complete behavior system implementation, forming automated workflows
-    - Three-layer behavior architecture (Basic/Derived/Combined)
+
+- 2025-01-13 2.0.0 release
+  - Added behavior scheduling system
+  - Added behavior template variables
+  - Added automatic sync system
+  - And many improvements
+  See details in [[./CHANGELOG.org][CHANGELOG]]
+
+- 2024-12-31 1.0.0 release
+  - feat behavior-system: Complete behavior system implementation, forming automated workflow
+    - Three-layer behavior architecture (basic/derived/composite)
     - Complete trigger system
     - Rich behavior library functions
     - Style system support
-  - docs :: Provide interactive demo document DEMO.org
-  - refactor :: Core refactoring
-    - Optimize data structures
-    - Improve error handling
-    - Enhance performance
+  - docs: Provide interactive demo document DEMO.org
+  - refactor: Core refactoring
+    - Optimized data structures
+    - Improved error handling
+    - Enhanced performance
 
-- 2024-12-20 :: 0.0.2 release
-  - fix org-supertag-remove :: Fix issue where tag removal was not effective
-  - fix org-supertag-tag-add-tag :: Fix issue where duplicate tags could be added to org-headline
-  - feat org-supertag-tag-edit-preset :: Edit preset tags
-  - feat org-supertag-query-in-buffer :: Query within current buffer
-  - feat org-supertag-query-in-files :: Query in specified files, can specify multiple files
-- 2024-12-19 :: 0.0.1 release
+- 2024-12-20 0.0.2 release
+  - fix org-supertag-remove: Fixed issue where removing tags wasn't effective
+  - fix org-supertag-tag-add-tag: Fixed issue where duplicate tags could be added to org-headline
+  - feat org-supertag-tag-edit-preset: Edit preset tags
+  - feat org-supertag-query-in-buffer: Query in current buffer
+  - feat org-supertag-query-in-files: Query in specified files, can specify multiple files
+- 2024-12-19 0.0.1 release
 
 * Future Plans
 
-- ✅ Provide more query scopes, such as querying within one file or multiple files
-- ✅ Initial implementation of a command system, allowing tags to automatically trigger commands
-- Initial AI integration, associating different tags with different prompts
-- Implement a task scheduling system (experimental feature, may not be implemented)
-- Provide more views like Tana (experimental feature, may not be implemented)
+- ✅ Provide more query scopes, like querying against one or multiple files
+- ✅ Initially implement a command system where tags automatically trigger commands, e.g., when a node is tagged as Task, it automatically sets TODO, priority A, and changes node background to yellow
+- ✅ Implement a task scheduling system to combine multiple nodes for completing a series of tasks, e.g., automatically setting daily review at 9 PM and automatically inserting review results into review nodes (experimental feature, may not be implemented)
+- AI integration, different tags associated with different Prompts, e.g., when a node is marked as "task", automatically trigger AI commands to generate a task list
+- Like Tana, provide more views (experimental feature, may not be implemented)
 
 * Acknowledgments
 
-Thanks to Tana for inspiration, and thanks to the power of org-mode and Emacs.
+Thanks to Tana for inspiration, and thanks to org-mode and Emacs for their power.
 
-I sincerely hope you enjoy this package and benefit from it.
+I sincerely hope you'll like this package and benefit from it.
+
+* Contributing
+
+Contributions welcome! Please check our [[file:.github/CONTRIBUTING.org][contribution guidelines]].
 

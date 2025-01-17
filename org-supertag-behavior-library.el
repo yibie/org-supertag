@@ -89,6 +89,30 @@ Example:
                                  :from from
                                  :to to))))))
 
+(defun org-supertag-behavior--on-property-change (node-id params)
+  "Record property value changes for NODE-ID.
+PARAMS is a property list containing:
+:name - Property name
+:from - Original value
+:to - New value
+:note - Optional change note
+
+Example:
+  (org-supertag-behavior--on-property-change node-id 
+    '(:name \"PRIORITY\" :from \"B\" :to \"A\" :note \"Increased priority\"))"
+  (when-let* ((name (plist-get params :name))
+              (from (plist-get params :from))
+              (to (plist-get params :to))
+              (note (plist-get params :note))
+              (pos (org-supertag-db-get-pos node-id)))
+    (save-excursion
+      (org-with-point-at pos
+        ;; Record change
+        (org-entry-put nil name to)
+        ;; Add change log
+        (when note
+          (org-add-log-setup 'property name from to note))))))
+
 (defun org-supertag-behavior--update-statistics (node-id _params)
   "Update TODO statistics cookies for NODE-ID.
 This function doesn't require any parameters but follows the behavior function
@@ -124,19 +148,13 @@ Example:
           (org-todo next))))))
 
 (defun org-supertag-behavior--propagate-state (node-id params)
-  "Propagate state change to children of NODE-ID based on PARAMS.
-PARAMS is a plist with :state key and optional :recursive flag.
+  "Propagate state to direct children of NODE-ID.
+PARAMS is a property list with :state parameter indicating the state to set.
 
 Example:
-  ;; Propagate to immediate children
   (org-supertag-behavior--propagate-state node-id 
-    '(:state \"DONE\"))
-  ;; Propagate recursively
-  (org-supertag-behavior--propagate-state node-id 
-    '(:state \"DONE\" :recursive t))"
-  (message "Debug propagate-state - node=%s params=%S" node-id params)
+    '(:state \"DONE\"))"
   (when-let* ((state (plist-get params :state))
-              (recursive (plist-get params :recursive))
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
@@ -144,8 +162,7 @@ Example:
           (save-restriction
             (org-narrow-to-subtree)
             (while (outline-next-heading)
-              (when (or (not recursive)
-                       (= (org-outline-level) (1+ level)))
+              (when (= (org-outline-level) (1+ level))
                 (org-todo state)))))))))
 
 ;;------------------------------------------------------------------------------
@@ -154,14 +171,32 @@ Example:
 
 (defun org-supertag-behavior--set-todo (node-id params)
   "Set TODO state for NODE-ID based on PARAMS.
-PARAMS is a plist with :state key."
+PARAMS is a plist with :state key.
+The state must be one of the valid states defined in `org-todo-keywords'."
   (message "Debug set-todo - node=%s params=%S" node-id params)
   (when-let* ((state (plist-get params :state))
               (pos (org-supertag-db-get-pos node-id)))
-    (message "Debug set-todo - Setting state to: %s" state)
-    (save-excursion
-      (org-with-point-at pos
-        (org-todo state)))))
+    ;; Get all valid todo states from org-todo-keywords
+    (let* ((all-keywords (mapcar 
+                         (lambda (seq)
+                           (mapcar 
+                            (lambda (kw)
+                              (if (string-match "\\`\\([^(]*\\)\\(?:(\\w*)\\)?\\'" kw)
+                                  (match-string 1 kw)
+                                kw))
+                            (remove "|" (cdr seq))))
+                         org-todo-keywords))
+           (valid-states (apply #'append all-keywords)))
+      ;; Validate the state
+      (if (member state valid-states)
+          (progn
+            (message "Debug set-todo - Setting state to: %s" state)
+            (save-excursion
+              (org-with-point-at pos
+                (org-todo state))))
+        (user-error "Invalid TODO state: %s. Valid states are: %s" 
+                   state 
+                   (mapconcat #'identity valid-states ", "))))))
 
 
 (defun org-supertag-behavior--set-priority (node-id params)
@@ -396,83 +431,6 @@ Example:
           (when note
             (org-add-note note)))))))
 
-(defun org-supertag-behavior--format-drawer (node-id params)
-  "Format drawer for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :name : Drawer name to format
-- :format : Format type (:indent, :html, :latex, etc.)
-- :style : Optional style properties
-
-Example:
-  ;; Indent drawer
-  (org-supertag-behavior--format-drawer node-id 
-    '(:name \"NOTES\" :format :indent))
-  ;; Format for HTML
-  (org-supertag-behavior--format-drawer node-id 
-    '(:name \"DETAILS\" 
-      :format :html 
-      :style (:class \"custom-drawer\")))"
-  (message "Debug format-drawer - node=%s params=%S" node-id params)
-  (when-let* ((name (plist-get params :name))
-              (format-type (plist-get params :format))
-              (style (plist-get params :style))
-              (pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (condition-case err
-            (pcase format-type
-              (:indent
-               (org-indent-drawer))
-              (:html
-               (let ((org-html-format-drawer-function
-                      (lambda (name contents info)
-                        (format "<div class=\"%s\">%s</div>"
-                                (plist-get style :class)
-                                contents))))
-                 (org-html-format-drawer name "" nil)))
-              (:latex
-               (let ((org-latex-format-drawer-function
-                      (lambda (name contents info)
-                        (format "\\begin{%s}\n%s\\end{%s}"
-                                name contents name))))
-                 (org-latex-format-drawer name "" nil)))
-              (_ (error "Unsupported format type: %s" format-type)))
-          (error
-           (message "Error formatting drawer: %S" err)))))))
-
-(defun org-supertag-behavior--export-drawer (node-id params)
-  "Configure drawer export for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :drawers : List of drawer names or t for all
-- :exclude : Whether to exclude listed drawers
-- :properties : Whether to include properties drawer
-
-Example:
-  ;; Export all drawers
-  (org-supertag-behavior--export-drawer node-id 
-    '(:drawers t))
-  ;; Export specific drawers
-  (org-supertag-behavior--export-drawer node-id 
-    '(:drawers (\"NOTES\" \"DETAILS\")))
-  ;; Exclude specific drawers
-  (org-supertag-behavior--export-drawer node-id 
-    '(:drawers (\"LOGBOOK\") :exclude t))"
-  (message "Debug export-drawer - node=%s params=%S" node-id params)
-  (when-let* ((drawers (plist-get params :drawers))
-              (exclude (plist-get params :exclude))
-              (properties (plist-get params :properties))
-              (pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        ;; 设置导出选项
-        (let ((org-export-with-drawers
-               (if exclude
-                   (cons 'not drawers)
-                 drawers))
-              (org-export-with-properties properties))
-          ;; 可以在这里添加其他导出相关的操作
-          )))))
-
 ;;------------------------------------------------------------------------------
 ;; TODO State Management
 ;;------------------------------------------------------------------------------
@@ -510,28 +468,6 @@ Example:
           (when (and (eq log-type :note) note)
             (org-add-note note)))))))
 
-(defun org-supertag-behavior--set-todo-with-faces (node-id params)
-  "Set TODO state with custom faces for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :state : Target TODO state
-- :face : Face properties plist
-
-Example:
-  (org-supertag-behavior--set-todo-with-faces node-id 
-    '(:state \"DONE\" 
-      :face (:foreground \"green\" :weight bold)))"
-  (message "Debug set-todo-faces - node=%s params=%S" node-id params)
-  (when-let* ((state (plist-get params :state))
-              (face (plist-get params :face))
-              (pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        ;; 临时设置 face
-        (let ((org-todo-keyword-faces
-               (cons (cons state face)
-                     org-todo-keyword-faces)))
-          (org-todo state))))))
-
 (defun org-supertag-behavior--set-todo-with-state-change (node-id params)
   "Set TODO state with state change hook for NODE-ID based on PARAMS.
 PARAMS is a plist with keys:
@@ -566,28 +502,6 @@ Example:
 ;;------------------------------------------------------------------------------
 ;; Priority Management
 ;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior--set-priority-with-faces (node-id params)
-  "Set priority with custom faces for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :priority : Priority character (A, B, or C)
-- :face : Face properties plist
-
-Example:
-  (org-supertag-behavior--set-priority-with-faces node-id 
-    '(:priority \"A\" 
-      :face (:foreground \"red\" :weight bold)))"
-  (message "Debug priority-faces - node=%s params=%S" node-id params)
-  (when-let* ((priority (plist-get params :priority))
-              (face (plist-get params :face))
-              (pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        ;; 临时设置 face
-        (let ((org-priority-faces
-               (cons (cons (string-to-char priority) face)
-                     org-priority-faces)))
-          (org-priority (string-to-char priority)))))))
 
 (defun org-supertag-behavior--cycle-priority (node-id params)
   "Cycle priority for NODE-ID based on PARAMS.
@@ -637,101 +551,29 @@ Example:
           ;; set current priority to default
           (org-priority (string-to-char default)))))))
 
-(defun org-supertag-behavior--priority-with-hook (node-id params)
-  "Set priority with hook for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :priority : Priority character
-- :hook-fn : Function to run after priority change
-- :hook-args : Arguments for hook function
-
-Example:
-  (org-supertag-behavior--priority-with-hook node-id 
-    '(:priority \"A\" 
-      :hook-fn some-function
-      :hook-args (arg1 arg2)))"
-  (message "Debug priority-hook - node=%s params=%S" node-id params)
-  (when-let* ((priority (plist-get params :priority))
-              (hook-fn (plist-get params :hook-fn))
-              (hook-args (plist-get params :hook-args))
-              (pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        ;; add temporary hook
-        (add-hook 'org-after-todo-state-change-hook
-                 (lambda ()
-                   (apply hook-fn hook-args)))
-        ;; set priority
-        (org-priority (string-to-char priority))
-        ;; remove temporary hook
-        (remove-hook 'org-after-todo-state-change-hook
-                    (lambda ()
-                      (apply hook-fn hook-args)))))))
-
 ;;------------------------------------------------------------------------------
 ;; Clock Management
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-behavior--clock-in (node-id params)
-  "Start clock on NODE-ID based on PARAMS.
-PARAMS is a plist with optional keys:
-- :switch-state : State to switch to when starting clock
-- :resume : Whether to resume last clock if exists
-- :use-last-clock : Whether to use last clock time as start
-
-Example:
-  ;; Simple clock in
-  (org-supertag-behavior--clock-in node-id nil)
-  ;; Clock in with state switch
-  (org-supertag-behavior--clock-in node-id '(:switch-state \"STARTED\"))
-  ;; Resume last clock
-  (org-supertag-behavior--clock-in node-id '(:resume t))"
-  (message "Debug clock-in - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
+(defun org-supertag-behavior--clock-in (node-id _params)
+  "Start clock on node with NODE-ID."
+  (when-let ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
-      (let* ((switch-state (plist-get params :switch-state))
-             (resume (plist-get params :resume))
-             (use-last-clock (plist-get params :use-last-clock)))
-          ;; set temporary state switch value
-          (when switch-state
-            (setq-local org-clock-in-switch-to-state switch-state))
-          ;; set whether to resume
-          (setq-local org-clock-in-resume resume)
-          ;; set whether to use last clock
-          (setq-local org-clock-continuously use-last-clock)
-          ;; start clock
-          (condition-case err
-              (org-clock-in)
-            (error
-             (message "Error starting clock: %S" err)))))))
+      (org-with-point-at pos
+        (condition-case err
+            (org-clock-in)
+          (error
+           (message "Error starting clock: %S" err)))))))
 
-(defun org-supertag-behavior--clock-out (node-id params)
-  "Stop clock on NODE-ID based on PARAMS.
-PARAMS is a plist with optional keys:
-- :switch-state : State to switch to after stopping clock
-- :note : Note to add when stopping clock
-
-Example:
-  ;; Simple clock out
-  (org-supertag-behavior--clock-out node-id nil)
-  ;; Clock out with state change
-  (org-supertag-behavior--clock-out node-id 
-    '(:switch-state \"DONE\" :note \"Completed task\"))"
-  (message "Debug clock-out - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
+(defun org-supertag-behavior--clock-out (node-id _params)
+  "Stop clock on node with NODE-ID."
+  (when-let ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
-      (let* ((switch-state (plist-get params :switch-state))
-             (note (plist-get params :note)))
-          ;; set temporary state switch value
-          (when switch-state
-            (setq-local org-clock-out-switch-to-state switch-state))
-          ;; stop clock
-          (condition-case err
-              (org-clock-out nil nil)
-            (error
-             (message "Error stopping clock: %S" err)))
-          ;; add note
-          (when note
-            (org-add-note note))))))
+      (org-with-point-at pos
+        (condition-case err
+            (org-clock-out)
+          (error
+           (message "Error stopping clock: %S" err)))))))
 
 (defun org-supertag-behavior--clock-cancel (node-id _params)
   "Cancel clock on NODE-ID.
@@ -749,38 +591,6 @@ Example:
           (error
            (message "Error canceling clock: %S" err)))))))
 
-(defun org-supertag-behavior--clock-report (node-id params)
-  "Generate clock report for NODE-ID based on PARAMS.
-PARAMS is a plist with optional keys:
-- :scope : Report scope (:subtree, :file, or :all)
-- :range : Time range (:today, :week, :month, or days-number)
-
-Example:
-  ;; Report for today
-  (org-supertag-behavior--clock-report node-id 
-    '(:scope :subtree :range :today))
-  ;; Report for last 7 days
-  (org-supertag-behavior--clock-report node-id 
-    '(:scope :file :range 7))"
-  (message "Debug clock-report - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id))
-              (scope (or (plist-get params :scope) :subtree))
-              (range (or (plist-get params :range) :today)))
-    (save-excursion
-      (org-with-point-at pos
-        (let ((rangeval (pcase range
-                         (:today '(:today))
-                         (:week '(:week))
-                         (:month '(:month))
-                         ((pred numberp) `(:tstart 
-                                         ,(- (org-time-today) 
-                                             (* range 86400))))
-                         (_ '(:today)))))
-          ;; insert or update clock report
-          (condition-case err
-              (org-clock-report `(:scope ,scope ,@rangeval))
-            (error
-             (message "Error generating clock report: %S" err))))))))
 
 ;;------------------------------------------------------------------------------
 ;; Timer Management
@@ -816,107 +626,6 @@ Example:
                 (org-timer-start))
             (error
              (message "Error starting timer: %S" err))))))))
-
-(defun org-supertag-behavior--timer-set (node-id params)
-  "Set countdown timer for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :duration : Timer duration in minutes or 'HH:MM:SS' format
-- :default : Whether to use org-timer-default-timer
-- :effort : Whether to use Effort property
-- :hook-fn : Function to run when timer expires
-
-Example:
-  ;; Set timer for 30 minutes
-  (org-supertag-behavior--timer-set node-id '(:duration \"30\"))
-  ;; Use default timer
-  (org-supertag-behavior--timer-set node-id '(:default t))
-  ;; Use effort property
-  (org-supertag-behavior--timer-set node-id '(:effort t))"
-  (message "Debug timer-set - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (let* ((duration (plist-get params :duration))
-               (use-default (plist-get params :default))
-               (use-effort (plist-get params :effort))
-               (hook-fn (plist-get params :hook-fn)))
-          ;; set temporary hook
-          (when hook-fn
-            (add-hook 'org-timer-done-hook hook-fn))
-          ;; set timer
-          (condition-case err
-              (cond
-               (duration
-                (org-timer-set-timer duration))
-               (use-default
-                (let ((org-timer-default-timer org-timer-default-timer))
-                  (org-timer-set-timer '(16))))
-               (use-effort
-                (org-timer-set-timer))
-               (t
-                (org-timer-set-timer)))
-            (error
-             (message "Error setting timer: %S" err)))
-          ;; remove temporary hook
-          (when hook-fn
-            (remove-hook 'org-timer-done-hook hook-fn)))))))
-
-(defun org-supertag-behavior--timer-pause (node-id params)
-  "Pause or continue timer for NODE-ID based on PARAMS.
-PARAMS is a plist with optional :stop flag to completely stop timer.
-
-Example:
-  ;; Pause/continue timer
-  (org-supertag-behavior--timer-pause node-id nil)
-  ;; Stop timer
-  (org-supertag-behavior--timer-pause node-id '(:stop t))"
-  (message "Debug timer-pause - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (let ((stop (plist-get params :stop)))
-        (condition-case err
-            (org-timer-pause-or-continue stop)
-          (error
-           (message "Error pausing timer: %S" err)))))))
-
-(defun org-supertag-behavior--timer-item (node-id params)
-  "Insert timer item for NODE-ID based on PARAMS.
-PARAMS is a plist with optional :prefix key for custom item prefix.
-
-Example:
-  ;; Insert timer item with default prefix
-  (org-supertag-behavior--timer-item node-id nil)
-  ;; Insert with custom prefix
-  (org-supertag-behavior--timer-item node-id 
-    '(:prefix \"=> \"))"
-  (message "Debug timer-item - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (let ((prefix (plist-get params :prefix)))
-          (when prefix
-            (setq-local org-list-description-max-indent 0)
-            (setq-local org-timer-item-format prefix))
-          (condition-case err
-              (org-timer-item)
-            (error
-             (message "Error inserting timer item: %S" err))))))))
-
-(defun org-supertag-behavior--timer-show-remaining (node-id _params)
-  "Show remaining time for timer on NODE-ID.
-This function doesn't require any parameters but follows the behavior function
-signature for consistency.
-
-Example:
-  (org-supertag-behavior--timer-show-remaining node-id nil)"
-  (message "Debug timer-remaining - node=%s" node-id)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (condition-case err
-            (org-timer-show-remaining-time)
-          (error
-           (message "Error showing remaining time: %S" err)))))))
 
 ;;------------------------------------------------------------------------------
 ;; Deadline Management Library
@@ -1060,251 +769,37 @@ Example:
 ;;; Node Operation - Move Node 
 (defun org-supertag-behavior--move-node (node-id params)
   "Move node with NODE-ID based on PARAMS.
-Essential PARAMS:
-- target-file : Target file path
-- keep-link : Whether to keep a link at original location (t or nil)
-- level : Level adjustment (child, same-level, or number)
-- target-point : Buffer position to insert (nil means end of file)
-- interactive : Whether to interactively select target position"
-  (let ((target-file (plist-get params 'target-file))
-        (keep-link (plist-get params 'keep-link))
-        (level (plist-get params 'level))
-        (target-point (plist-get params 'target-point))
-        (interactive (plist-get params 'interactive)))
-    (when interactive
-      (with-current-buffer (find-file-noselect target-file)
-        (setq target-point (org-supertag-query--get-insert-position target-file))
-        (setq level (or level (cdr target-point)))
-        (setq target-point (car target-point))))
-    (if keep-link
-        (when-let* ((node (org-supertag-db-get node-id))
-                    (title (plist-get node :title))
-                    (source-pos (point)))
-          (let ((reference-content (format "[[id:%s][%s]]\n" node-id title)))
-            (when (org-supertag-node-move node-id target-file level)
-              (save-excursion
-                (goto-char source-pos)
-                (insert reference-content)))))
-      (org-supertag-node-move node-id target-file level))))
+PARAMS is a plist with:
+- target-file : Target file path"
+  (when-let* ((target-file (plist-get params :target-file))
+              (pos (org-supertag-db-get-pos node-id)))
+    (save-excursion
+      (org-with-point-at pos
+        (condition-case err
+            (org-supertag-node-move node-id target-file nil)
+          (error
+           (message "Error moving node: %S" err)))))))
 
 ;;------------------------------------------------------------------------------
 ;; Archive Management
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-behavior--archive-subtree (node-id params)
-  "Archive subtree for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :location : Archive location (file::headline)
-- :mark-done : State to set before archiving
-- :save-context : List of context info to save
-- :find-done : Find and archive done trees
-- :find-old : Find and archive old trees
-
-Example:
-  ;; Simple archive
-  (org-supertag-behavior--archive-subtree node-id nil)
-  ;; Archive with custom location and context
-  (org-supertag-behavior--archive-subtree node-id 
-    '(:location \"archive.org::* Archive\"
-      :mark-done \"DONE\"
-      :save-context (time file todo category)))"
-  (message "Debug archive-subtree - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
+(defun org-supertag-behavior--archive-subtree (node-id _params)
+  "Archive subtree at NODE-ID using org-archive-subtree.
+The archive location is determined by `org-archive-location'."
+  (when-let ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        (let* ((location (plist-get params :location))
-               (mark-done (plist-get params :mark-done))
-               (save-context (plist-get params :save-context))
-               (find-done (plist-get params :find-done))
-               (find-old (plist-get params :find-old)))
-          ;; set archive location (if specified)
-          (when location
-            (setq-local org-archive-location location))
-          ;; set context save (if specified)
-          (when save-context
-            (setq-local org-archive-save-context-info save-context))
-          ;; if need to mark as done, set state first
-          (when (and mark-done
-                     (not (equal (org-get-todo-state) mark-done)))
-            (org-todo mark-done))
-          ;; execute archive
-          (condition-case err
-              (cond
-               (find-done
-                (org-archive-subtree '(4)))
-               (find-old
-                (org-archive-subtree '(16)))
-               (t
-                (org-archive-subtree)))
-            (error
-             (message "Error archiving subtree: %S" err))))))))
-
-(defun org-supertag-behavior--archive-to-sibling (node-id params)
-  "Archive to sibling for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :sibling-heading : Custom archive sibling heading
-- :add-tags : Additional tags to add
-- :time-format : Format for archive time
-
-Example:
-  ;; Archive to default sibling
-  (org-supertag-behavior--archive-to-sibling node-id nil)
-  ;; Archive with custom heading
-  (org-supertag-behavior--archive-to-sibling node-id 
-    '(:sibling-heading \"Old Items\"
-      :add-tags (\"archived\")))"
-  (message "Debug archive-sibling - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (let* ((heading (plist-get params :sibling-heading))
-               (tags (plist-get params :add-tags))
-               (time-format (plist-get params :time-format))
-               ;; set temporary archive options
-               (org-archive-sibling-heading 
-                (or heading org-archive-sibling-heading)))
-          ;; add extra tags
-          (when tags
-            (dolist (tag tags)
-              (org-toggle-tag tag 'on)))
-          ;; execute archive
-          (condition-case err
-              (org-archive-to-archive-sibling)
-            (error
-             (message "Error archiving to sibling: %S" err))))))))
-
-(defun org-supertag-behavior--toggle-archive-tag (node-id params)
-  "Toggle archive tag for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :check-children : Whether to check children
-- :force : :on or :off to force tag state
-- :recursive : Whether to apply recursively
-
-Example:
-  ;; Simple toggle
-  (org-supertag-behavior--toggle-archive-tag node-id nil)
-  ;; Check children and force on
-  (org-supertag-behavior--toggle-archive-tag node-id 
-    '(:check-children t :force :on))"
-  (message "Debug toggle-archive - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id)))
-    (save-excursion
-      (org-with-point-at pos
-        (let ((check-children (plist-get params :check-children))
-              (force (plist-get params :force))
-              (recursive (plist-get params :recursive)))
-              (org-archive-tag (or org-archive-tag "ARCHIVE")))
-          (condition-case err
-              (cond
-               (check-children
-                (org-toggle-archive-tag '(4)))
-               (force
-                (if (eq force :on)
-                    (org-archive-set-tag)
-                  (org-toggle-tag org-archive-tag 'off)))
-               (recursive
-                (org-map-tree
-                 (lambda ()
-                   (org-toggle-archive-tag))))
-               (t
-                (org-toggle-archive-tag)))
-            (error
-             (message "Error toggling archive tag: %S" err)))))))
-
-(defun org-supertag-behavior--set-archive-location (node-id params)
-  "Set archive location for NODE-ID based on PARAMS.
-PARAMS is a plist with keys:
-- :file : Archive file path
-- :headline : Archive headline
-- :scope : :buffer or :subtree for setting scope
-- :inherit-tags : Whether to inherit tags
-
-Example:
-  ;; Set buffer archive location
-  (org-supertag-behavior--set-archive-location node-id 
-    '(:file \"archive.org\" 
-      :headline \"* Archive\"
-      :scope :buffer))
-  ;; Set subtree archive location
-  (org-supertag-behavior--set-archive-location node-id 
-    '(:file \"~/org/archive.org\"
-      :headline \"* Projects\"
-      :scope :subtree
-      :inherit-tags t))"
-  (message "Debug set-archive-loc - node=%s params=%S" node-id params)
-  (when-let* ((pos (org-supertag-db-get-pos node-id))
-              (file (plist-get params :file))
-              (headline (plist-get params :headline))
-              (scope (plist-get params :scope))
-              (inherit-tags (plist-get params :inherit-tags)))
-              (location (concat file "::" headline)))
-    (save-excursion
-      (let ((location (concat file "::" headline)))
-        ;; set inherited tags option
-        (setq-local org-archive-subtree-add-inherited-tags 
-                    inherit-tags)
-        ;; set archive location
         (condition-case err
-            (pcase scope
-              (:buffer
-               (save-excursion
-                 (goto-char (point-min))
-                 (insert "#+ARCHIVE: " location "\n")))
-              (:subtree
-               (org-entry-put nil "ARCHIVE" location))
-              (_ (error "Invalid scope: %s" scope)))
-            (error
-             (message "Error setting archive location: %S" err))))))
-            
-
-;;------------------------------------------------------------------------------
-;; Progress Tracking Library
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior--calculate-progress ()
-  "Calculate progress for current heading based on children's TODO states.
-Returns (total done progress) where progress is a float 0-100."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((current-level (org-outline-level))
-          (total 0)
-          (done 0)
-          (done-states (or org-done-keywords '("DONE"))))
-
-      ;; save current position
-      (let ((start-pos (point)))
-        ;; move to first child
-        (outline-next-heading)
-        
-        ;; traverse all children
-        (while (and (not (eobp))
-                   (> (org-outline-level) current-level))
-          (let ((todo-state (org-get-todo-state))
-                (heading (org-get-heading t t t t)))
-                (todo (org-get-todo-state)))
-                (setq total (1+ total))
-                (message "Found child: %s (TODO=%s)" heading todo-state)
-                (when (member todo-state done-states)
-                  (setq done (1+ done))))
-              (outline-next-heading))
-        ;; restore position
-        (goto-char start-pos))
-      (message "Final count: %d total, %d done" total done)
-      (list total done 
-            (if (> total 0)
-                (* 100.0 (/ (float done) total))
-              0.0))))
-
-(defun org-supertag-behavior--update-progress-display (title progress)
-  "Update progress display in TITLE with PROGRESS percentage.
-Returns the new title string with [XX%] format.
-
-Example:
-  (org-supertag-behavior--update-progress-display \"Task A\" 75.5)
-  ;; => \"Task A [75.5%]\""
-  (if (string-match "\\[\\([0-9.]+\\)%\\]" title)
-      (replace-match (format "[%.1f%%]" progress) t nil title)
-    (concat title (format " [%.1f%%]" progress))))
+            (progn
+              (org-archive-subtree)
+              (org-supertag-db-update-buffer)
+              (when-let* ((location-parts (split-string org-archive-location "::"))
+                         (target-file (expand-file-name (car location-parts))))
+                (with-current-buffer (find-file-noselect target-file)
+                  (org-supertag-db-update-buffer))))
+          (error
+           (message "Error archiving subtree: %S" err)))))))
 
 ;;------------------------------------------------------------------------------
 ;; Face Management Library
@@ -1396,12 +891,12 @@ FACE-PLIST is a property list of face attributes."
                     (behavior (org-supertag-behavior--get-behavior tag-id))
                     (style (plist-get behavior :style))
                     (prefix (plist-get style :prefix)))
-               (when prefix
-                 (when (looking-at org-complex-heading-regexp)
-                   (let* ((current-title (match-string 4))
-                          (new-title (if (string-prefix-p prefix current-title)
-                                       current-title
-                                     (concat prefix " " current-title))))
-                     (replace-match new-title t t nil 4))))))))))))
+                     (when prefix
+                       (when (looking-at org-complex-heading-regexp)
+                         (let* ((current-title (match-string 4))
+                                (new-title (if (string-prefix-p prefix current-title)
+                                             current-title
+                                           (concat prefix " " current-title))))
+                         (replace-match new-title t t nil 4))))))))))))
 
 (provide 'org-supertag-behavior-library) 
