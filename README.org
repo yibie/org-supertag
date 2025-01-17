@@ -55,7 +55,9 @@ Two commands involved:
 - Automatic node creation, no manual creation needed
 - Establish reference relationships between nodes
 
-[[./picture/figure5.gif][M-x org-supertag-node-add-reference]]
+[[./picture/figure5.gif]]
+
+~M-x org-supertag-node-add-reference~
 
 If a node isn't automatically created, you can directly run ~M-x org-supertag-node-create~ command to convert the current heading into a node.
 
@@ -66,9 +68,7 @@ Make tags "smart", enabling:
 - Set scheduled behaviors
 - Customize tag styles
 
-[[./picture/figure6.gif][M-x org-supertag-behavior-attach]]
-
-Two commands involved:
+[[./picture/figure6.gif]]
 
 ~M-x org-supertag-behavior-attach~
 ~M-x org-supertag-behavior-detach~
@@ -81,7 +81,9 @@ Efficiently find and organize your nodes:
 - Aesthetic search results interface
 - Preview content under headings
 
-[[./picture/figure8.gif][M-x org-supertag-query]]
+[[./picture/figure8.gif]]
+
+~M-x org-supertag-query~
 
 *** Flexible Export Options
 Multiple ways to organize search results:
@@ -97,7 +99,9 @@ Automatically maintain node organization:
 - Automatically update reference relationships
 - Provide manual sync commands
 
-[[./picture/figure7.gif][M-x org-supertag-sync-force-all]]
+[[./picture/figure7.gif]]
+
+~M-x org-supertag-sync-force-all~
 
 If some nodes need synchronization but haven't auto-synced, you can directly run ~M-x org-supertag-sync-force-all~ command to sync all node information to the database.
 
