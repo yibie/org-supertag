@@ -927,12 +927,16 @@ Available insertion positions:
 Returns cons cell (point . level-adjust)."
   (let ((insert-type (completing-read 
                      "Insert at: "
-                     '("File End" 
+                     '("File Start" 
+                       "File End" 
                        "Under Heading"
                        "Same Level"))))
     (with-current-buffer (find-file-noselect target-file)
       (org-with-wide-buffer
        (pcase insert-type
+         ("File Start"
+          (cons (org-supertag-find-file-content-start) nil))
+         
          ("File End"
           (cons (point-max) nil))
          

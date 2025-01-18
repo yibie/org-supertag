@@ -326,6 +326,46 @@ Returns:
               (save-buffer)
               t)))))))
 
+(defun org-supertag-node-move-node ()
+  "Interactive command to move current node to another location.
+
+The command will:
+1. Check if current position is in a valid node
+2. Ask user to select target file
+3. Ask user to select insert position in target file
+4. Move the node to target location"
+  (interactive)
+  (unless (org-at-heading-p)
+    (user-error "Must be on a heading"))
+  
+  (let ((node-id (org-id-get)))
+    (unless node-id
+      (user-error "Current heading has no node ID"))
+    
+    (unless (org-supertag-db-get node-id)
+      (user-error "Current node not found in database"))
+    
+    ;; Get target file and position
+    (let* ((target-file (read-file-name "Move to file: "))
+           (insert-pos (org-supertag-query--get-insert-position target-file))
+           (target-pos (car insert-pos))
+           (level-adj (cdr insert-pos)))
+      
+      (if (org-supertag-node-move node-id target-file level-adj target-pos)
+          (message "Node moved successfully")
+        (message "Failed to move node")))))
+
+(defun org-supertag-find-file-content-start ()
+  "Find the position where actual content should start in current buffer.
+This skips over the org-mode file header (#+TITLE:, #+AUTHOR:, etc.)
+and returns the position where new content should be inserted."
+  (save-excursion
+    (goto-char (point-min))
+    (while (and (not (eobp))
+                (looking-at "^#\\+\\|^$"))
+      (forward-line 1))
+    (point)))
+
 (defun org-supertag-adjust-node-level (content target-level)
   "Adjust heading level of node content.
 CONTENT is the node content string
