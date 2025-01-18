@@ -1,5 +1,23 @@
 * Changelog
 
+* [2.1.0] - 2024-03-20
+
+** Features
+*** Node: Enhanced node movement functionality
+**** Added interactive node movement command
+- Added ~org-supertag-node-move-node~ for direct node movement
+- Support comprehensive insertion positions:
+  - File start (after org-mode header)
+  - File end
+  - Under selected heading
+  - Same level as selected heading
+- Added clear error messages and operation feedback
+**** Added file start position support
+- Added helper function to locate content start after org-mode header
+- Added "File Start" option for node movement and export operations
+- Improved file header preservation during node operations
+- Better integration with existing query and export features
+
 * [2.0.0] - 2025-01-13
 
 ** Features
