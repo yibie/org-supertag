@@ -76,12 +76,46 @@
   :group 'org
   :prefix "org-supertag-")
 
+;; ;; Add SuperTag menu after Tools menu
+;; (define-key-after
+;;   global-map
+;;   [menu-bar supertag]
+;;   (cons "SuperTag" (make-sparse-keymap "SuperTag"))
+;;   'tools)
+
+;; ;; Node operations
+;; (define-key global-map [menu-bar supertag query]
+;;   '("Query Node" . org-supertag-node-query))
+;; (define-key global-map [menu-bar supertag create]
+;;   '("Create Node" . org-supertag-node-create))
+;; (define-key global-map [menu-bar supertag move]
+;;   '("Move Node" . org-supertag-node-move-node))
+;; (define-key global-map [menu-bar supertag delete]
+;;   '("Delete Node" . org-supertag-node-delete))
+
+;; ;; Separator
+;; (define-key global-map [menu-bar supertag sep1]
+;;   '("--"))
+
+;; ;; System operations
+;; (define-key global-map [menu-bar supertag sync]
+;;   '("Sync Nodes" . org-supertag-sync-nodes))
+
+;; ;; Information display
+;; (define-key global-map [menu-bar supertag info]
+;;   '("Show Node Info" . org-supertag-node-info))
+;; (define-key global-map [menu-bar supertag show-all]
+;;   '("Show All Nodes" . org-supertag-node-show-all))
+;; (define-key global-map [menu-bar supertag show-graph]
+;;   '("Show Node Graph" . org-supertag-node-show-graph))
+
 ;;;###autoload
 (define-minor-mode org-supertag-mode
   "Toggle org-supertag mode."
   :init-value nil
   :lighter " SuperTag"
   :group 'org-supertag
+  :keymap (make-sparse-keymap)
   (if org-supertag-mode
       (org-supertag--enable)
     (org-supertag--disable)))
@@ -142,8 +176,6 @@
   (when org-supertag-sync--timer
     (cancel-timer org-supertag-sync--timer)
     (setq org-supertag-sync--timer nil))
-  ;; 4. Clean up ID tracking
-  (org-supertag-node--cleanup-id-tracking)
   ;; 5. Clear cache
   (org-supertag-db--cache-clear)
   ;; 6. Remove hooks
@@ -189,9 +221,6 @@ Used for manual cleanup or system state reset."
   ;; Enable behavior system
   (org-supertag-behavior-mode 1))
 
-(add-hook 'org-supertag-mode-hook #'org-supertag--initialize)
-
-
-
-
 (provide 'org-supertag)
+
+;;; org-supertag.el ends here

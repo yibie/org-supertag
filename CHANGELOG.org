@@ -1,6 +1,6 @@
 * Changelog
 
-* [2.1.0] - 2024-03-20
+* [2.1.0] - 2025-01-18
 
 ** Features
 *** Node: Enhanced node movement functionality
