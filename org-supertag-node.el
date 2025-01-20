@@ -239,7 +239,10 @@ List of field values, each element is (field-id . value)"
                                      (current-time)))))
         
         ;; Update database
-        (org-supertag-db-add node-id props)))))
+        (org-supertag-db-add node-id props)
+        
+        ;; Return node ID
+        node-id))))
 
 (defun org-supertag-node-get-props ()
   "Get properties of current node."
@@ -449,21 +452,17 @@ Returns:
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-create ()
-  "Create a new supertag node at current position.
-
-Use cases:
-1. Convert regular org heading to supertag node
-2. Ensure heading has no associated node ID
-
-Prerequisites:
-1. Cursor must be on a heading
-2. Heading must not already have a node ID"
+  "Create a new node at point."
   (interactive)
-  (unless (org-at-heading-p)
-    (user-error "Cursor must be on a heading"))
-  (when (org-id-get)
-    (user-error "Heading already has a node"))
-  (org-supertag-node-sync-at-point))
+  (let* ((file-path (buffer-file-name))
+         (pos (point))
+         (node-id (org-supertag-node--create-id))
+         (props (list :file-path file-path
+                     :pos pos)))
+    (org-set-property org-supertag-node-id-property node-id)
+    (org-supertag-db-put node-id props)
+    (run-hook-with-args 'org-supertag-node-created-hook node-id props)
+    node-id))
 
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data.
