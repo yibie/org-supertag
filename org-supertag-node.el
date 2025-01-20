@@ -298,42 +298,46 @@ Returns:
           ;; Ensure we're at the beginning of a line
           (beginning-of-line)
           
-          ;; Insert with proper level adjustment
-          (let ((adjusted-content 
-                 (if (and target-level (> target-level 0))
-                     (condition-case err
-                         (org-supertag-adjust-node-level content target-level)
-                       (error
-                        (message "Level adjustment failed: %s" (error-message-string err))
-                        content))
-                   content)))
-            ;; Ensure proper spacing before insertion
-            (unless (or (bobp) (looking-back "\n\n" 2))
-              (insert "\n"))
-            
-            ;; Insert content
-            (let ((insert-point (point)))
-              (insert adjusted-content)
-              
-              ;; Ensure proper spacing after insertion
-              (unless (looking-at "\n")
+          ;; Temporarily disable folding
+          (let ((org-fold-core-style 'overlays))  ; 使用 overlay 样式避免一些问题
+            ;; Insert with proper level adjustment
+            (let ((adjusted-content 
+                   (if (and target-level (> target-level 0))
+                       (condition-case err
+                           (org-supertag-adjust-node-level content target-level)
+                         (error
+                          (message "Level adjustment failed: %s" (error-message-string err))
+                          content))
+                     content)))
+              ;; Ensure proper spacing before insertion
+              (unless (or (bobp) (looking-back "\n\n" 2))
                 (insert "\n"))
               
-              ;; Move back to inserted heading and sync node
-              (goto-char insert-point)
-              (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
-                (org-back-to-heading t)
-                (org-supertag-node-sync-at-point))
-              
-              ;; Save buffer
-              (save-buffer)
-              t)))))))
+              ;; Insert content
+              (let ((insert-point (point)))
+                (insert adjusted-content)
+                
+                ;; Ensure proper spacing after insertion
+                (unless (looking-at "\n")
+                  (insert "\n"))
+                
+                ;; Move back to inserted heading and sync node
+                (goto-char insert-point)
+                (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
+                  (org-back-to-heading t)
+                  ;; 确保正确展开新插入的节点
+                  (org-show-subtree)
+                  (org-supertag-node-sync-at-point))
+                
+                ;; Save buffer
+                (save-buffer)
+                t))))))))
 
 (defun org-supertag-node-move-node ()
   "Interactive command to move current node to another location.
 
 The command will:
-1. Check if current position is in a valid node
+1. Check if current position is in a valid node, if not create one
 2. Ask user to select target file
 3. Ask user to select insert position in target file
 4. Move the node to target location"
@@ -341,9 +345,11 @@ The command will:
   (unless (org-at-heading-p)
     (user-error "Must be on a heading"))
   
-  (let ((node-id (org-id-get)))
-    (unless node-id
-      (user-error "Current heading has no node ID"))
+  ;; Get or create node ID
+  (let ((node-id (or (org-id-get)
+                     (progn 
+                       (org-supertag-node-create)
+                       (org-id-get)))))
     
     (unless (org-supertag-db-get node-id)
       (user-error "Current node not found in database"))
@@ -452,17 +458,21 @@ Returns:
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-create ()
-  "Create a new node at point."
+  "Create a new supertag node at current position.
+
+Use cases:
+1. Convert regular org heading to supertag node
+2. Ensure heading has no associated node ID
+
+Prerequisites:
+1. Cursor must be on a heading
+2. Heading must not already have a node ID"
   (interactive)
-  (let* ((file-path (buffer-file-name))
-         (pos (point))
-         (node-id (org-supertag-node--create-id))
-         (props (list :file-path file-path
-                     :pos pos)))
-    (org-set-property org-supertag-node-id-property node-id)
-    (org-supertag-db-put node-id props)
-    (run-hook-with-args 'org-supertag-node-created-hook node-id props)
-    node-id))
+  (unless (org-at-heading-p)
+    (user-error "Cursor must be on a heading"))
+  (when (org-id-get)
+    (user-error "Heading already has a node"))
+  (org-supertag-node-sync-at-point))
 
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data.
@@ -850,8 +860,7 @@ Returns: ((title . id) ...)"
                     (org-uuidgen-p path))
             (when-let* ((node (org-supertag-db-get path))
                        (title (plist-get node :title)))
-              (push (cons title path) refs))))))
-    (nreverse refs)))
+              (push (cons title path) refs))))))))
 
 
 (defun org-supertag-node--update-references (node-id)
