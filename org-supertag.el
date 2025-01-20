@@ -70,6 +70,7 @@
 (require 'org-supertag-query)
 (require 'org-supertag-behavior)
 (require 'org-supertag-sync)
+(require 'org-supertag-luhmann)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
