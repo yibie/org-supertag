@@ -165,7 +165,7 @@ otherwise returns nil."
                         (if (string= current-heading (org-get-heading t t t t))
                             "yes" "no"))
                
-               node-id)))))
+               node-id))))))
 
 (defun org-supertag-tag--remove (tag-id node-id)
   "Remove a tag from a node.
