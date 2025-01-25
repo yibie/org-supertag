@@ -71,6 +71,17 @@ Useful for excluding specific subdirectories."
   :type 'string
   :group 'org-supertag-sync)
 
+(defcustom org-supertag-sync-auto-create-node t
+  "Whether to automatically create nodes for new headlines."
+  :type 'boolean
+  :group 'org-supertag-sync)
+
+(defcustom org-supertag-sync-node-creation-level 0
+  "Minimum heading level for automatic node creation.
+Set to 0 to create nodes for all levels."
+  :type 'integer
+  :group 'org-supertag-sync)
+
 ;;; Variables
 
 (defvar org-supertag-sync--state (make-hash-table :test 'equal)
@@ -175,17 +186,20 @@ Returns one of:
 (defun org-supertag-sync--process-node (element)
   "Process org node ELEMENT during sync.
 Ensures node has ID and is properly registered in database."
-  (let* ((begin (org-element-property :begin element))
-         (id (org-element-property :ID element)))
-    (save-excursion
-      (goto-char begin)
-      (when (org-at-heading-p)
-        ;; If no ID, create one
-        (unless id
-          (org-id-get-create)
-          (setq id (org-element-property :ID element)))
-        ;; Sync to database
-        (org-supertag-node-sync-at-point)))))
+  (when (and org-supertag-sync-auto-create-node
+             (>= (org-element-property :level element) 
+                 org-supertag-sync-node-creation-level))
+    (let* ((begin (org-element-property :begin element))
+           (id (org-element-property :ID element)))
+      (save-excursion
+        (goto-char begin)
+        (when (org-at-heading-p)
+          ;; 如果没有 ID，自动创建
+          (unless id
+            (org-id-get-create)
+            (setq id (org-element-property :ID element)))
+          ;; 同步到数据库
+          (org-supertag-node-sync-at-point))))))
 
 (defun org-supertag-db-update-buffer ()
   "Update database with all nodes in current buffer.
@@ -193,16 +207,17 @@ Ensures all headings have IDs and are properly registered."
   (save-excursion
     (org-with-wide-buffer
      (goto-char (point-min))
-     (let ((parse-tree (org-element-parse-buffer 'element))
-           (count 0))
-       ;; 处理所有标题
-       (org-element-map parse-tree 'headline
-         (lambda (element)
-           (when (org-supertag-sync--process-node element)
-             (cl-incf count)))
-         nil nil 'headline)
+     (let ((count 0))
+       ;; Scan all headings
+       (while (re-search-forward org-heading-regexp nil t)
+         (when (and org-supertag-sync-auto-create-node
+                    (>= (org-outline-level) org-supertag-sync-node-creation-level))
+           (unless (org-id-get)
+             (org-id-get-create)
+             (org-supertag-node-sync-at-point)
+             (cl-incf count))))
        (when (> count 0)
-         (message "Updated %d nodes in buffer" count))))))
+         (message "Created %d new nodes in buffer" count))))))
 
 ;;-------------------------------------------------------------------
 ;; State Management
