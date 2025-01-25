@@ -1,5 +1,15 @@
 * Changelog
 
+* [2.2.1] - 2025-01-26
+** Refactor: Improve query history handling and fix node navigation
+
+* Fix history saving for multi-keyword queries
+* Store complete search queries in history
+* Fix recenter error in node navigation
+* Improve error handling in node lookup
+* Add proper return values for navigation functions
+* Update documentation for modified functions
+
 * [2.2.0] - 2025-01-25
 ** Features
 **** Add automatic node creation for org headlines

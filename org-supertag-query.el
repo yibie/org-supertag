@@ -6,7 +6,7 @@
 (require 'org-supertag-field) 
 (require 'cl-lib)
 
-(defcustom org-supertag-query-history-max-items 50
+(defcustom org-supertag-query-history-max-items 500
   "Maximum number of keywords to keep in history.
 When the limit is reached, least frequently used items will be removed."
   :type 'integer
@@ -21,49 +21,83 @@ Each element is a cons cell (keyword . frequency)."
 (defvar org-supertag-query--last-keyword nil
   "Store the last used search keyword.")
 
-(defun org-supertag-query--update-keyword-frequency (keyword)
-  "Update frequency count for KEYWORD in history."
-  (let* ((current (assoc keyword org-supertag-query-history-keywords))
-         (new-freq (1+ (or (cdr current) 0)))
-         (new-history (assoc-delete-all keyword org-supertag-query-history-keywords)))
-    ;; Add new keyword-frequency pair
-    (setq new-history (cons (cons keyword new-freq) new-history))
-    ;; Sort by frequency (descending)
-    (setq new-history (sort new-history (lambda (a b) (> (cdr a) (cdr b)))))
-    ;; Store current keyword as last used
-    (setq org-supertag-query--last-keyword keyword)
-    ;; Trim to max items if needed, but preserve last used keyword
-    (when (and org-supertag-query-history-max-items
-               (> (length new-history) org-supertag-query-history-max-items))
-      (let* ((last-item (car (last new-history)))
-             (last-keyword (car last-item))
-             (trimmed (seq-take new-history (1- org-supertag-query-history-max-items))))
-        ;; If last used keyword would be trimmed (freq=1), keep it
-        (when (and (string= last-keyword org-supertag-query--last-keyword)
-                  (= (cdr last-item) 1))
-          ;; Remove the last item of trimmed list to make room
-          (setq trimmed (butlast trimmed))
-          ;; Add the last used keyword back
-          (setq trimmed (append trimmed (list last-item))))
-        (setq new-history trimmed)))
-    ;; Update and save
-    (setq org-supertag-query-history-keywords new-history)
-    (customize-save-variable 'org-supertag-query-history-keywords new-history)))
+(defcustom org-supertag-query-history-file
+  (expand-file-name "query-history.el" org-supertag-data-directory)
+  "File to store query history."
+  :type 'file
+  :group 'org-supertag)
+
+(defvar org-supertag-query--history nil
+  "List of query history items.
+Each item is a plist with :query, :count, and :last-used keys.")
+
+(defun org-supertag-query--load-history ()
+  "Load query history from file."
+  (when (file-exists-p org-supertag-query-history-file)
+    (with-temp-buffer
+      (insert-file-contents org-supertag-query-history-file)
+      (setq org-supertag-query--history (read (current-buffer))))))
+
+(defun org-supertag-query--save-history ()
+  "Save query history to file."
+  (with-temp-file org-supertag-query-history-file
+    (let ((print-length nil)
+          (print-level nil))
+      (prin1 org-supertag-query--history (current-buffer)))))
+
+(defun org-supertag-query--update-keyword-frequency (input)
+  "Update frequency of search INPUT in query history.
+INPUT is a string containing the complete search query."
+  (let ((now (format-time-string "%Y-%m-%d %H:%M:%S")))
+    (let* ((query-str (if (stringp input) input (prin1-to-string input)))
+           (entry (or (cl-find query-str org-supertag-query--history
+                             :key (lambda (x) (plist-get x :query))
+                             :test #'equal)
+                    (progn
+                      (push `(:query ,query-str :count 0 :last-used ,now)
+                            org-supertag-query--history)
+                      (car org-supertag-query--history)))))
+      ;; Update count and timestamp
+      (plist-put entry :count (1+ (plist-get entry :count)))
+      (plist-put entry :last-used now)))
+  
+  ;; Sort and truncate history
+  (setq org-supertag-query--history
+        (sort org-supertag-query--history
+              (lambda (a b)
+                (or (> (plist-get a :count) (plist-get b :count))
+                    (and (= (plist-get a :count) (plist-get b :count))
+                         (string> (plist-get a :last-used)
+                                  (plist-get b :last-used)))))))
+  (when (> (length org-supertag-query--history) org-supertag-query-history-max-items)
+    (setq org-supertag-query--history
+          (seq-take org-supertag-query--history org-supertag-query-history-max-items)))
+  
+  ;; Save changes
+  (org-supertag-query--save-history))
+
+(defun org-supertag-query-get-history (&optional limit)
+  "Get query history, optionally limited to LIMIT entries."
+  (if limit
+      (seq-take org-supertag-query--history limit)
+    org-supertag-query--history))
+
+;; Hook to load history on startup
+(add-hook 'after-init-hook #'org-supertag-query--load-history)
 
 ;;---------------------------------------------------------------
 ;; Org-supertag-query ineral function
 ;;---------------------------------------------------------------
 
 (defun org-supertag-query--get-keywords ()
-  "Get keywords from user input with history support.
-Returns a list of keywords."
-  (let* ((history (mapcar #'car org-supertag-query-history-keywords))
-         (input (completing-read "Enter query keywords (space separated): " 
-                               history nil nil nil nil))
-         (keywords (split-string input " " t)))
-    (when keywords
-      (org-supertag-query--update-keyword-frequency input))
-    keywords))
+  "Get keywords from user input with history support."
+  (let* ((history (mapcar (lambda (x) (plist-get x :query))
+                         (org-supertag-query-get-history 10)))
+         (input (completing-read "Search: " history nil nil nil 'history history)))
+    ;; Save complete search query
+    (org-supertag-query--update-keyword-frequency input)
+    ;; Return list of individual keywords
+    (split-string input " " t)))
 
 (defun org-supertag-find-matching-tags (keywords)
   "Find tags matching the given keywords.
@@ -468,7 +502,7 @@ TAG-NAME is the tag to search for."
                    (when (and (string-prefix-p ":node-tag:" link-id)
                             (equal (plist-get link-props :from) id))
                      (push (plist-get link-props :to) node-tags)))
-                 org-supertag-db--link)
+                org-supertag-db--link)
                 node-tags))
          ;; Get field values
          (fields (let (node-fields)
@@ -520,18 +554,24 @@ NODES is the list of matched nodes to display."
     (switch-to-buffer buf)))
 
 (defun org-supertag-query--find-node (node-id)
-  "Visit node with specified ID."
+  "Visit node with specified ID.
+NODE-ID is the identifier of the node to find.
+
+Returns t if node was found and visited successfully, nil otherwise."
   (when-let* ((props (org-supertag-db-get node-id))
-              (file (plist-get props :file-path)))
-    (when (file-exists-p file)
-      ;; Open file
-      (find-file file)
+              (file-path (plist-get props :file-path))
+              ((file-exists-p file-path))
+              (buffer (find-file-noselect file-path)))
+    (with-current-buffer buffer
       (widen)
-      (when-let ((marker (org-id-find-id-in-file node-id file)))
-        (goto-char (cdr marker)) 
+      (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+        (goto-char (cdr marker))
         (org-show-entry)
         (org-show-children)
-        (recenter)))))
+        ;; Switch to buffer before recentering
+        (switch-to-buffer buffer)
+        (recenter)
+        t))))
 
 (defun org-supertag-query-visit-node ()
   "Visit current selected node."
