@@ -407,7 +407,7 @@ Returns adjusted content string with proper heading levels."
                        (new-stars (make-string (max 1 new-level) ?*)))
                   (replace-match (concat new-stars text)))))))
     
-    (buffer-string))))
+    (buffer-string))))))
 
 (defun org-supertag-move-node-and-link (node-id target-file &optional target-level)
   "Move node to target file and leave a reference link at original location.
