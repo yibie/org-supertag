@@ -80,92 +80,106 @@ otherwise returns nil."
   "Apply tag to the node at current position."
   (save-excursion
     (let* ((original-pos (point))
-           (original-line (line-number-at-pos))
-           
-           ;; 1. 严格验证当前位置
-           (unless (org-at-heading-p)
-             (error "Must be at a heading to apply tag"))
-           
-           ;; 2. 获取当前标题的范围
-           (let* ((heading-begin (line-beginning-position))
-                  (heading-end (line-end-position))
-                  ;; 确保光标确实在这个标题的范围内
-                  (_ (unless (and (>= original-pos heading-begin)
-                                (<= original-pos heading-end))
-                       (error "Cursor not in heading line"))))
-             
-             ;; 3. 获取当前标题信息
-             (let* ((current-heading (org-get-heading t t t t))
-                    (current-id (org-id-get))
-                    (tag (org-supertag-db-get tag-id))
-                    (node-id (org-id-get-create)))
-               
-               ;; 4. 记录位置和标题信息
-               (message "Starting tag application:")
-               (message "  Original position: %d (line %d)" original-pos original-line)
-               (message "  Current heading line: %d-%d" heading-begin heading-end)
-               (message "  Current heading: '%s'" current-heading)
-               (message "  Current ID: %s" current-id)
-               (message "  Applying tag: %s" tag-id)
-               
-               ;; 5. 验证标签
-               (unless tag
-                 (error "Tag %s not found" tag-id))
-               (unless (eq (plist-get tag :type) :tag)
-                 (error "Invalid tag type for %s" tag-id))
-               
-               ;; 6. 确保节点存在于数据库
-               (unless (org-supertag-db-get node-id)
-                 (org-supertag--create-node node-id)
-                 (message "  Created new node in database: %s" node-id))
-               
-               ;; 7. 添加标签关系
-               (org-supertag-node-db-add-tag node-id tag-id)
-               (message "  Added tag relationship to database")
-               
-               ;; 8. 处理预设字段
-               (when-let ((fields (plist-get tag :fields)))
-                 (message "  Processing fields for tag %s: %S" tag-id fields)
-                 (dolist (field fields)
-                   (let* ((field-name (plist-get field :name))
-                          (field-type (plist-get field :type))
-                          (type-def (org-supertag-get-field-type field-type))
-                          (initial-value (org-supertag-field-get-initial-value field)))
-                     (message "    Processing field: name=%s type=%s" field-name field-type)
-                     (unless type-def
-                       (error "Invalid field type: %s" field-type))
-                     
-                     (when-let* ((formatter (plist-get type-def :formatter))
-                                 (formatted-value (if formatter
-                                                    (funcall formatter initial-value field)
-                                                  (format "%s" initial-value))))
-                       (org-set-property field-name formatted-value)
-                       (org-supertag-tag--set-field-value 
-                        tag-id node-id field-name initial-value)))))
-               
-               ;; 9. 更新 org 标签
-               (let* ((old-tags (org-get-tags))
-                      (new-tag (concat "#" tag-id))
-                      (new-tags (cons new-tag old-tags)))
-                 (message "  Updating org tags: %S -> %S" old-tags new-tags)
-                 (org-set-tags new-tags))
-               
-               ;; 10. 触发行为
-               (message "  Triggering behaviors")
-               (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
-               (org-supertag-behavior--on-tag-change node-id tag-id :add)
-               (org-supertag-behavior--apply-styles node-id)
-               
-               ;; 11. 完成信息
-               (message "Tag application completed:")
-               (message "  Node: %s" node-id)
-               (message "  Tag: %s" tag-id)
-               (message "  Final position: %d (line %d)" (point) (line-number-at-pos))
-               (message "  Still at original heading: %s" 
-                        (if (string= current-heading (org-get-heading t t t t))
-                            "yes" "no"))
-               
-               node-id))))))
+           (original-line (line-number-at-pos)))
+      
+      ;; 添加详细的初始位置信息
+      (message "\nStarting org-supertag-tag-apply:")
+      (message "Initial position: %d (line %d)" original-pos original-line)
+      (message "At heading: %s" (if (org-at-heading-p) "yes" "no"))
+      (message "Current line content: '%s'"
+               (buffer-substring-no-properties 
+                (line-beginning-position)
+                (line-end-position)))
+      
+      ;; 如果在标题上，输出标题信息
+      (when (org-at-heading-p)
+        (message "Current heading: '%s'" (org-get-heading t t t t))
+        (message "Current ID: %s" (org-id-get)))
+      
+      ;; 1. 严格验证当前位置
+      (unless (org-at-heading-p)
+        (error "Must be at a heading to apply tag"))
+      
+      ;; 2. 获取当前标题的范围
+      (let ((heading-begin (line-beginning-position))
+            (heading-end (line-end-position)))
+        ;; 确保光标确实在这个标题的范围内
+        (unless (and (>= original-pos heading-begin)
+                    (<= original-pos heading-end))
+          (error "Cursor not in heading line"))
+        
+        ;; 3. 获取当前标题信息
+        (let* ((current-heading (org-get-heading t t t t))
+               (current-id (org-id-get))
+               (tag (org-supertag-db-get tag-id))
+               (node-id (org-id-get-create)))
+          
+        ;; 4. 记录位置和标题信息
+        (message "Starting tag application:")
+        (message "  Original position: %d (line %d)" original-pos original-line)
+        (message "  Current heading line: %d-%d" heading-begin heading-end)
+        (message "  Current heading: '%s'" current-heading)
+        (message "  Current ID: %s" current-id)
+        (message "  Applying tag: %s" tag-id)
+        
+        ;; 5. 验证标签
+        (unless tag
+          (error "Tag %s not found" tag-id))
+        (unless (eq (plist-get tag :type) :tag)
+          (error "Invalid tag type for %s" tag-id))
+        
+        ;; 6. 确保节点存在于数据库
+        (unless (org-supertag-db-get node-id)
+          (org-supertag--create-node node-id)
+          (message "  Created new node in database: %s" node-id))
+        
+        ;; 7. 添加标签关系
+        (org-supertag-node-db-add-tag node-id tag-id)
+        (message "  Added tag relationship to database")
+        
+        ;; 8. 处理预设字段
+        (when-let ((fields (plist-get tag :fields)))
+          (message "  Processing fields for tag %s: %S" tag-id fields)
+          (dolist (field fields)
+            (let* ((field-name (plist-get field :name))
+                   (field-type (plist-get field :type))
+                   (type-def (org-supertag-get-field-type field-type))
+                   (initial-value (org-supertag-field-get-initial-value field)))
+              (message "    Processing field: name=%s type=%s" field-name field-type)
+              (unless type-def
+                (error "Invalid field type: %s" field-type))
+              
+              (when-let* ((formatter (plist-get type-def :formatter))
+                          (formatted-value (if formatter
+                                             (funcall formatter initial-value field)
+                                           (format "%s" initial-value))))
+                (org-set-property field-name formatted-value)
+                (org-supertag-tag--set-field-value 
+                 tag-id node-id field-name initial-value)))))
+        
+        ;; 9. 更新 org 标签
+        (let* ((old-tags (org-get-tags))
+               (new-tag (concat "#" tag-id))
+               (new-tags (cons new-tag old-tags)))
+          (message "  Updating org tags: %S -> %S" old-tags new-tags)
+          (org-set-tags new-tags))
+        
+        ;; 10. 触发行为
+        (message "  Triggering behaviors")
+        (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
+        (org-supertag-behavior--on-tag-change node-id tag-id :add)
+        (org-supertag-behavior--apply-styles node-id)
+        
+        ;; 11. 完成信息
+        (message "Tag application completed:")
+        (message "  Node: %s" node-id)
+        (message "  Tag: %s" tag-id)
+        (message "  Final position: %d (line %d)" (point) (line-number-at-pos))
+        (message "  Still at original heading: %s" 
+                 (if (string= current-heading (org-get-heading t t t t))
+                     "yes" "no"))
+        
+        node-id)))))
 
 (defun org-supertag-tag--remove (tag-id node-id)
   "Remove a tag from a node.
@@ -391,36 +405,46 @@ Will prevent duplicate tag application."
        (t input)))))
   
   (when tag-name
-    ;; 1. 首先验证位置
-    (unless (org-supertag-node-at-valid-heading-p)
-      (user-error "Must be at a valid heading to add tag"))
-    
-    ;; 2. 保存当前位置信息用于验证
-    (let* ((heading-pos (point))
-           (current-heading (org-get-heading t t t t))
-           (node-id (org-id-get))
-           (sanitized-name (org-supertag-sanitize-tag-name tag-name))
-           (current-tags (org-supertag-node-get-tags node-id)))
+    (save-excursion  ; 保护整个操作的光标位置
+      ;; 1. 首先验证位置
+      (unless (org-supertag-node-at-valid-heading-p)
+        (user-error "Must be at a valid heading to add tag"))
       
-      (message "Adding tag: %s to heading '%s'" sanitized-name current-heading)
-      
-      (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-             (preset-fields (org-supertag-get-preset-fields sanitized-name))
-             ;; Get or create the tag
-             (tag-id
-              (cond
-               (existing-tag
-                sanitized-name)
-               (preset-fields
-                (progn
-                  (message "Creating new tag from preset with fields: %S" preset-fields)
-                  (org-supertag-tag-create sanitized-name :fields preset-fields)))
-               (t
-                (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
-                    (org-supertag-tag-create sanitized-name)
-                  (user-error "Tag creation cancelled"))))))
-        ;; Apply the tag
-        (org-supertag-tag-apply tag-id)))))
+      ;; 2. 保存当前位置信息用于验证
+      (let* ((heading-pos (point))  ; 保存验证过的标题位置
+             (current-heading (org-get-heading t t t t))
+             (node-id (org-id-get))
+             (sanitized-name (org-supertag-sanitize-tag-name tag-name))
+             (current-tags (org-supertag-node-get-tags node-id)))
+        
+        (message "Adding tag: %s to heading '%s' at position %d" 
+                sanitized-name current-heading heading-pos)
+        
+        ;; 3. 确保我们仍在正确的标题位置
+        (unless (= (point) heading-pos)
+          (goto-char heading-pos))
+        
+        (let* ((existing-tag (org-supertag-tag-get sanitized-name))
+               (preset-fields (org-supertag-get-preset-fields sanitized-name))
+               ;; Get or create the tag
+               (tag-id
+                (cond
+                 (existing-tag
+                  sanitized-name)
+                 (preset-fields
+                  (progn
+                    (message "Creating new tag from preset with fields: %S" preset-fields)
+                    (org-supertag-tag-create sanitized-name :fields preset-fields)))
+                 (t
+                  (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
+                      (org-supertag-tag-create sanitized-name)
+                    (user-error "Tag creation cancelled"))))))
+          
+          ;; 4. 再次确保位置正确
+          (goto-char heading-pos)
+          
+          ;; 5. 应用标签
+          (org-supertag-tag-apply tag-id))))))
 
 (defun org-supertag-tag-set-field-and-value ()
   "Set field values for tags on the current node.
