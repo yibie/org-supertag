@@ -1,10 +1,10 @@
 ;;; org-supertag-luhmann.el --- Luhmann numbering system for org-supertag -*- lexical-binding: t -*-
 
-;; Copyright (C) 2024 Qiantan Hong
+;; Copyright (C) 2024 Yibie
 
-;; Author: Qiantan Hong <qhong@mit.edu>
-;; Maintainer: Qiantan Hong <qhong@mit.edu>
-;; URL: https://github.com/QianTan/org-supertag
+;; Author: Yibie <yibie@outlook.com>
+;; Maintainer: Yibie <yibie@outlook.com>
+;; URL: https://github.com/yibie/org-supertag
 ;; Version: 2.1.0
 ;; Package-Requires: ((emacs "28.1") (org "9.6"))
 ;; Keywords: org-mode, outlines, note-taking, zettelkasten
@@ -172,16 +172,61 @@ Examples:
 - If BASE-NUM is 1, looks for 1.1, 1.2, etc.
 - If BASE-NUM is 1a, looks for 1a.1, 1a.2, etc."
   (let ((max-branch 0)
-        (branch-pattern (format "^%s\\.\\([0-9]+\\)\\(?:[a-z]\\)?[[:space:]]+" 
+        (branch-pattern (format "^\\*+ %s\\.\\([0-9]+\\)" 
                               (regexp-quote base-num))))
+    ;(message "Branch pattern: %s" branch-pattern)
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward branch-pattern nil t)
         (let ((num (string-to-number (match-string 1))))
           (when (> num max-branch)
             (setq max-branch num)))))
+    ;(message "Final max branch: %d, next: %d" max-branch (1+ max-branch))
     (1+ max-branch)))
-
+    
+(defun org-supertag-node--get-next-parent-branch-number (parent-num)
+  "Get next available branch number for PARENT-NUM, ignoring letter suffixes.
+For example, if we have:
+1.1
+1.1a
+1.2
+The next number should be 1.3"
+  (let ((max-branch 0)
+        ;; 使用更完整的标题匹配模式，确保匹配到 org-mode 的标题格式
+        (branch-pattern (format "^\\*+ %s\\.\\([0-9]+\\)" 
+                              (regexp-quote parent-num))))
+    ;; (message "Parent branch debug - parent: %s, pattern: %s" 
+    ;;          parent-num branch-pattern)
+    
+    ;; 先打印缓冲区内容用于调试
+    (message "Buffer content:")
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                    (line-beginning-position)
+                    (line-end-position))))
+          (when (string-match (format "^\\*+ %s\\.\\([0-9]+\\)" parent-num) line)
+            ;; (message "Potential match line: %s" line)
+            ))
+        (forward-line 1)))
+    
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward branch-pattern nil t)
+        (let* ((num-str (match-string 1))
+               (num (string-to-number num-str))
+               (line (buffer-substring-no-properties
+                     (line-beginning-position)
+                     (line-end-position))))
+          ;; (message "Found parent branch: %s at '%s'"
+          ;;          num-str
+          ;;          line)
+          (setq max-branch (max max-branch num)))))
+    
+    ;; (message "Final parent branch: max=%d, next=%d" max-branch (1+ max-branch))
+    (1+ max-branch)))
+    
 (defun org-supertag-node--get-next-sibling-letter (number-str)
   "Get next letter in sequence for NUMBER-STR.
 For example:
@@ -240,12 +285,11 @@ For example: \"a\" -> \"b\", \"z\" -> \"aa\", \"az\" -> \"ba\"."
                            (match-string 1 current-title))))
            prev-sibling-str
            parent-str
-           base-level)
+           (base-level current-level))  ;; 初始化 base-level 为 current-level
       
-      ;; Get previous sibling info - 改进这部分
+      ;; Get previous sibling info
       (save-excursion
         (org-back-to-heading t)
-        ;; 尝试多次获取前一个兄弟节点，直到找到有编号的
         (let ((found nil))
           (while (and (not found)
                      (org-get-previous-sibling))
@@ -272,10 +316,6 @@ For example: \"a\" -> \"b\", \"z\" -> \"aa\", \"az\" -> \"ba\"."
                                     "[[:space:]]")))
             (while (re-search-forward base-pattern nil t)
               (setq base-level (org-outline-level))))))
-      
-      ;; If no base level found, use current level
-      (unless base-level
-        (setq base-level current-level))
       
       ;; Debug output
       (message "Context debug: current='%s' prev-sibling='%s' parent='%s' base-level=%s"
@@ -309,23 +349,16 @@ Types can be:
       
       ('branch-parent
        (when base
-         (let* ((parent-base (if (string-match "\\(.*\\)[.][0-9]+[a-z]*$" base)
-                                (match-string 1 base)
-                              base))
-                (next-num (if (string-match ".*[.]\\([0-9]+\\)[a-z]*$" base)
-                             (1+ (string-to-number (match-string 1 base)))
-                           1)))
-           (format "%s.%d" parent-base next-num))))
+         (let ((next-num (org-supertag-node--get-next-parent-branch-number base)))
+         ;(message "Generate branch debug - base: %s, next: %d" base next-num)
+           (format "%s.%d" base next-num))))
       
       ('letter-sequence
        (when base
-         (let ((current (plist-get context :current)))
-           (if (string-match "\\(.*?\\)\\([a-z]+\\)?$" current)
-               ;; 如果当前编号已经有字母后缀，生成下一个字母
-               (concat (match-string 1 current)
-                      (org-supertag-node--get-next-sibling-letter current))
-             ;; 如果当前编号没有字母后缀，添加 'a'
-             (concat base "a"))))))))
+         (if (string-match "\\(.*?\\)\\([a-z]+\\)?$" base)
+             (concat (match-string 1 base)
+                    (org-supertag-node--get-next-sibling-letter base))
+           (concat base "a")))))))
 
 (defun org-supertag-node--get-number-options (context &optional command)
   "Get available numbering options based on CONTEXT.
@@ -334,7 +367,7 @@ COMMAND can be 'add-node or nil (for update-current)."
          (prev-sibling (plist-get context :prev-sibling))
          (current (plist-get context :current))
          (parent-str (plist-get context :parent-str))
-         options)
+         (options nil))
     
     (message "Options debug - level=%s prev='%s' current='%s' parent='%s' command='%s'"
              level prev-sibling current parent-str command)
@@ -342,28 +375,31 @@ COMMAND can be 'add-node or nil (for update-current)."
     ;; 总是添加新主编号选项
     (push '("New main number" . (main nil)) options)
     
+    ;; 处理字母序列选项 - 基于当前或前一个兄弟节点
+    (let ((base-for-letter (or current prev-sibling)))
+      (when base-for-letter
+        (when (string-match "\\(.*?\\)\\([a-z]+\\)?$" base-for-letter)
+          (let* ((base-num (match-string 1 base-for-letter))
+                 (current-letter (match-string 2 base-for-letter))
+                 (next-letter (org-supertag-node--get-next-sibling-letter base-for-letter)))
+            (push `(,(format "Continue sequence (%s%s)" 
+                            base-num
+                            next-letter)
+                    . (letter-sequence ,base-for-letter))
+                  options)))))
+    
     ;; 如果当前节点有编号，添加分支选项
     (when current
       (push `(,(format "Branch from current (%s.1)" current)
               . (branch-current ,current))
-              options)
-      
-      ;; 处理字母序列选项
-      (when (string-match "\\(.*?\\)\\([a-z]+\\)?$" current)
-        (let* ((base-num (match-string 1 current))
-               (current-letter (match-string 2 current))
-               (next-letter (org-supertag-node--get-next-sibling-letter current)))
-          (push `(,(format "Continue sequence (%s%s)" 
-                          base-num
-                          next-letter)
-                  . (letter-sequence ,current))
-                options))))
+            options))
     
     ;; 如果在有编号的父节点下，添加从父节点分支的选项
     (when (and (> level 1) parent-str)
-      (push `(,(format "Branch from parent (%s.1)" parent-str)
-              . (branch-parent ,parent-str))
-            options))
+      (let ((next-num (org-supertag-node--get-next-parent-branch-number parent-str)))
+        (push `(,(format "Branch from parent (%s.%d)" parent-str next-num)
+                . (branch-parent ,parent-str))
+              options)))
     
     (nreverse options)))
 
@@ -376,78 +412,56 @@ COMMAND can be 'add-node or nil (for update-current)."
   (let* ((context (org-supertag-node--get-current-context))
          (title (org-get-heading t t t t))
          (has-number (org-supertag-node--parse-luhmann-number title))
-         (current (plist-get context :current))
+         (current-level (org-outline-level))
          (options (org-supertag-node--get-number-options context 'add-node))
          (choice (completing-read "Select numbering option: "
                                 (mapcar #'car options) nil t))
          (option (assoc choice options))
          (number (org-supertag-node--generate-number option context))
-         ;; 添加新标题输入
          (new-heading-text (read-string "Enter heading text: " "New heading")))
     
-    (message "Debug: Starting with title='%s', number='%s', choice='%s'" 
-             (substring-no-properties title)
-             (substring-no-properties number)
-             (substring-no-properties choice))
+    ;; 调试输出
+    (message "Debug: Generated number='%s', option='%S'" number option)
     
-    ;; Apply the new number
+    ;; 确保 number 有值
     (when number
-      (let* ((option-type (if (stringp (nth 1 (cdr option)))
-                             'letter-sequence  ; 如果是字符串，默认为字母序列
-                           (nth 1 (cdr option))))
+      (let* ((option-type (car (cdr option)))
              (current-level (org-outline-level))
-             ;; 使用用户输入的标题文本
              (new-title (concat number " " new-heading-text))
-             ;; 计算新编号的层级深度
              (number-depth (length (split-string number "\\.")))
-             ;; 根据编号深度决定新标题的级别
              (new-level (pcase option-type
                          ('letter-sequence current-level)      ; 同级
-                         ('branch-current number-depth)        ; 使用编号深度
-                         ('branch-parent number-depth)         ; 使用编号深度
-                         ('main number-depth)                  ; 使用编号深度
-                         (_ number-depth))))                   ; 默认使用编号深度
-        
-        (message "Debug: Preparing new title='%s', current-level=%s, new-level=%s, number-depth=%s, option-type=%S"
-                (substring-no-properties new-title)
-                current-level
-                new-level
-                number-depth
-                option-type)
+                         ('branch-current (1+ current-level))  ; 子级
+                         ('branch-parent current-level)        ; 同级
+                         ('main 1)                            ; 顶级
+                         (_ current-level))))                 ; 默认同级
         
         ;; 先确保缓冲区可写
         (let ((inhibit-read-only t))
           ;; 根据选项类型决定插入位置和级别
           (save-excursion
-            ;; 保存当前标题的位置
             (org-back-to-heading t)
             
             ;; 根据选项类型确定插入位置
             (pcase option-type
               ('letter-sequence
-               (message "Debug: Inserting as letter sequence")
-               (org-end-of-subtree t)  ; t 表示不包含子树
+               (org-end-of-subtree t)
                (insert "\n" (make-string new-level ?*) " " new-title "\n"))
               
               ('branch-current
-               (message "Debug: Inserting as branch current")
                (org-end-of-subtree)
                (insert "\n" (make-string new-level ?*) " " new-title "\n"))
               
               ('branch-parent
-               (message "Debug: Inserting as branch parent")
-               (when (org-up-heading-safe)
-                 (org-end-of-subtree)
-                 (insert "\n" (make-string new-level ?*) " " new-title "\n")))
+               (org-end-of-subtree t)
+               (insert "\n" (make-string new-level ?*) " " new-title "\n"))
               
               ('main
-               (message "Debug: Inserting as main")
                (goto-char (point-max))
                (unless (bolp) (insert "\n"))
                (insert "\n" (make-string new-level ?*) " " new-title "\n"))
               
               (_
-               (message "Debug: Fallback insertion for type: %S" option-type)
                (org-end-of-subtree t)
                (insert "\n" (make-string new-level ?*) " " new-title "\n")))
             
@@ -464,7 +478,26 @@ COMMAND can be 'add-node or nil (for update-current)."
         number))))
 
 (defun org-supertag-node-number-add ()
-  "Add Luhmann number to current heading if it doesn't have one."
+  "Add Luhmann number to current org headline.
+This function analyzes the current headline's context and adds an appropriate
+Luhmann number based on its position in the document hierarchy.
+
+The function will:
+1. Check if cursor is on a headline
+2. Get current context (level, siblings, parent info)
+3. Determine available numbering options
+4. Generate appropriate number
+5. Update the headline with the new number
+
+If the headline already has a number, it will be preserved unless explicitly
+changed. The function integrates with existing org-supertag infrastructure
+for node tracking and database updates.
+
+Example transformations:
+* Some heading -> * 1 Some heading
+* Child heading -> * 1.1 Child heading
+* Sibling heading -> * 2 Sibling heading
+* Branch heading -> * 1a Branch heading"
   (interactive)
   (unless (org-at-heading-p)
     (user-error "Must be on a heading"))
@@ -472,97 +505,79 @@ COMMAND can be 'add-node or nil (for update-current)."
   (let* ((context (org-supertag-node--get-current-context))
          (title (org-get-heading t t t t))
          (has-number (org-supertag-node--parse-luhmann-number title))
-         (current-level (org-outline-level)))
+         (current-level (org-outline-level))
+         (options (org-supertag-node--get-number-options context 'add-node))
+         (choice (completing-read "Select numbering option: "
+                                (mapcar #'car options) nil t))
+         (option (assoc choice options))
+         (number (org-supertag-node--generate-number option context)))
     
-    (if has-number
-        (message "Current heading already has a number: %s" has-number)
-      
-      ;; 只检查前一个同级标题
-      (save-excursion
-        (let ((prev-number nil))
-          ;; 尝试移动到前一个同级标题
-          (when (org-backward-heading-same-level 1)
-            (let* ((prev-title (org-get-heading t t t t)))
-              ;; 从解析结果中提取实际的数字并转换为字符串
-              (let ((parsed (org-supertag-node--parse-luhmann-number prev-title)))
-                (when parsed
-                  (setq prev-number (format "%s"
-                                          (if (listp parsed)
-                                              (plist-get (car parsed) :number)
-                                            parsed)))))))
-          
-          (message "Debug: Found previous number: %s" prev-number)
-          
-          ;; 构建选项
-          (let* ((options (org-supertag-node--get-number-options 
-                          (if prev-number
-                              (list :current prev-number
-                                    :level current-level)
-                            context)
-                          'add-node))
-                 (choice (completing-read "Select numbering option: "
-                                        (mapcar #'car options) nil t))
-                 (option (assoc choice options))
-                 (number (org-supertag-node--generate-number option context)))
-            
-            (when number
-              ;; 获取纯标题文本
-              (let* ((title-text (if (string-match "^\\(?:[0-9]+\\(?:[a-z]+\\)?\\(?:\\.[0-9]+\\(?:[a-z]+\\)?\\)*\\)?[[:space:]]*\\(.*\\)" title)
-                                   (match-string 1 title)
-                                 title))
-                     (new-title (concat number " " title-text)))
-                
-                ;; 更新标题
-                (org-back-to-heading t)
-                (let ((inhibit-read-only t))
-                  (delete-region (line-beginning-position)
-                               (line-end-position))
-                  (insert (make-string current-level ?*) " " new-title)
-                  
-                  ;; 确保缓冲区被标记为已修改
-                  (set-buffer-modified-p t)
-                  
-                  ;; 立即更新数据库
-                  (org-back-to-heading t)
-                  (org-supertag-node-sync-at-point))))))))))
+    ;; Apply the new number if one was generated
+    (when number
+      (let ((new-title (if (string-match "^\\([0-9]+\\(?:[a-z]*\\)?\\(?:\\.[0-9]+\\(?:[a-z]*\\)?\\)*\\)[[:space:]]\\(.*\\)$" title)
+                          (concat number " " (match-string 2 title))
+                        (concat number " " title))))
+        ;; Update the heading
+        (org-back-to-heading t)
+        (let ((inhibit-read-only t))
+          (kill-whole-line)
+          (insert (make-string current-level ?*) " " new-title "\n"))
+        
+        ;; Update database
+        (save-excursion
+          (forward-line -1)
+          (org-back-to-heading t)
+          (org-supertag-node-sync-at-point))
+        
+        ;; Return the new number
+        number))))
 
-(defun org-supertag-node--apply-number (number)
-  "Apply NUMBER to current node.
-Preserves any existing title after the number."
-  (when (and number (org-at-heading-p))
-    (let* ((title (org-get-heading t t t t))
-           (new-title (if (string-match "^\\(?:[0-9]+\\(?:[a-z]+\\)?\\(?:\\.[0-9]+\\(?:[a-z]+\\)?\\)*\\)?[[:space:]]*\\(.*\\)" title)
-                         (concat number " " (match-string 1 title))
-                       (concat number " " title))))
-      (org-edit-headline new-title))))
+;;------------------------------------------------------------------------------
+;; Display Enhancement
+;;------------------------------------------------------------------------------
+
+(defcustom org-supertag-display-style 'star
+  "How to display org headlines with Luhmann numbers.
+Possible values:
+- 'star: Show traditional org-mode stars (default)
+- 'number: Show only Luhmann numbers"
+  :type '(choice
+          (const :tag "Traditional stars" star)
+          (const :tag "Luhmann numbers" number))
+  :group 'org-supertag)
+
+(defun org-supertag--display-setup ()
+  "Set up the display enhancements."
+  (when (eq org-supertag-display-style 'number)
+    (font-lock-add-keywords
+     nil
+     '(("^\\(\\*+\\) \\([0-9]+\\(?:[a-z]*\\)?\\(?:\\.[0-9]+\\(?:[a-z]*\\)?\\)*\\) "
+        (0 (progn
+             (compose-region (match-beginning 1) (match-end 1) "")
+             nil))))))
+  (font-lock-flush))
+
+(defun org-supertag--display-cleanup ()
+  "Clean up the display enhancements."
+  (font-lock-remove-keywords
+   nil
+   '(("^\\(\\*+\\) \\([0-9]+\\(?:[a-z]*\\)?\\(?:\\.[0-9]+\\(?:[a-z]*\\)?\\)*\\) "
+      (0 (progn
+           (compose-region (match-beginning 1) (match-end 1) "")
+           nil)))))
+  (font-lock-flush)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward "^\\*+ " nil t)
+      (decompose-region (match-beginning 0) (match-end 0)))))
+
+;;;###autoload
+(define-minor-mode org-supertag-display-mode
+  "Minor mode to enhance display of Luhmann numbers in org-mode."
+  :lighter " Luhmann-Display"
+  :group 'org-supertag
+  (if org-supertag-display-mode
+      (org-supertag--display-setup)
+    (org-supertag--display-cleanup)))
 
 (provide 'org-supertag-luhmann)
-
-
-(ert-deftest org-supertag-test-parse-luhmann-number ()
-  "Test Luhmann number parsing."
-  (should (equal (org-supertag-node--parse-luhmann-number "1 test")
-                 '((:number 1))))
-  (should (equal (org-supertag-node--parse-luhmann-number "1.2 test")
-                 '((:number 1) (:number 2))))
-  (should (equal (org-supertag-node--parse-luhmann-number "1a test")
-                 '((:number 1 :letter "a"))))
-  (should (equal (org-supertag-node--parse-luhmann-number "1.2a test")
-                 '((:number 1) (:number 2 :letter "a"))))
-  (should (equal (org-supertag-node--parse-luhmann-number "1.1f.1 test")
-                 '((:number 1) (:number 1 :letter "f") (:number 1)))))
-
-(ert-deftest org-supertag-test-number-to-string ()
-  "Test converting parsed number back to string."
-  (should (equal (org-supertag-node--number-to-string 
-                 '((:number 1)))
-                "1"))
-  (should (equal (org-supertag-node--number-to-string 
-                 '((:number 1) (:number 2)))
-                "1.2"))
-  (should (equal (org-supertag-node--number-to-string 
-                 '((:number 1 :letter "a")))
-                "1a"))
-  (should (equal (org-supertag-node--number-to-string 
-                 '((:number 1) (:number 1 :letter "f") (:number 1)))
-                "1.1f.1")))

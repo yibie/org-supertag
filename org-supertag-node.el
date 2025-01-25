@@ -219,6 +219,8 @@ List of field values, each element is (field-id . value)"
                             (end (org-entry-end-position)))
                        (buffer-substring-no-properties begin end)))))
       
+      (message "Debug - title: %s, level: %d, pos: %d" title level pos)
+      
       ;; 更新所有属性，包括内容
       (let ((props (list :type :node
                         :id node-id
@@ -227,7 +229,7 @@ List of field values, each element is (field-id . value)"
                         :pos pos
                         :level level
                         :olp olp
-                        :content content  ;; 添加内容
+                        :content content
                         :ref-to (when old-node 
                                 (plist-get old-node :ref-to))
                         :ref-from (when old-node 
@@ -237,6 +239,8 @@ List of field values, each element is (field-id . value)"
                         :created-at (or (and old-node 
                                           (plist-get old-node :created-at))
                                      (current-time)))))
+        
+        (message "Debug - props: %S" props)
         
         ;; Update database
         (org-supertag-db-add node-id props)
@@ -390,18 +394,18 @@ Returns adjusted content string with proper heading levels."
       ;; Find and get current level
       (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
         (let* ((current-level (length (match-string 1)))
-               (level-diff (- target-level current-level)))
-          
-          (unless (zerop level-diff)
-            (goto-char (point-min))
-            ;; Adjust all heading levels
-            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
-              (let* ((stars (match-string 1))
-                     (text (match-string 2))
-                     (current-stars-len (length stars))
-                     (new-level (+ current-stars-len level-diff))
-                     (new-stars (make-string (max 1 new-level) ?*)))
-                (replace-match (concat new-stars text)))))))
+          (let* ((level-diff (- target-level current-level)))
+            
+            (unless (zerop level-diff)
+              (goto-char (point-min))
+              ;; Adjust all heading levels
+              (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
+                (let* ((stars (match-string 1))
+                       (text (match-string 2))
+                       (current-stars-len (length stars))
+                       (new-level (+ current-stars-len level-diff))
+                       (new-stars (make-string (max 1 new-level) ?*)))
+                  (replace-match (concat new-stars text)))))))
     
     (buffer-string))))
 
@@ -549,8 +553,17 @@ This includes:
 (defun org-supertag--create-node (node-id)
   "Create a new node with NODE-ID."
   (org-supertag-node--ensure-id-system)
-  (let ((props (org-supertag-db--parse-node-at-point)))
-    (org-supertag-db-add node-id props)))
+  (save-excursion
+    (unless (org-at-heading-p)
+      (org-back-to-heading t))
+    (let ((current-id (org-id-get)))
+      (when (and current-id (not (equal current-id node-id)))
+        (error "Position mismatch in create-node: Expected %s but at %s" 
+               node-id current-id)))
+    (let ((props (org-supertag-db--parse-node-at-point)))
+      (unless props
+        (error "Failed to parse node properties at point"))
+      (org-supertag-db-add node-id props))))
 
 (defun org-supertag-node-get-props-at-point ()
   "Get node properties at current point.
@@ -620,7 +633,17 @@ TAG-ID is the tag identifier"
     ;; Schedule save
     (org-supertag-db-save)))
 
-
+(defun org-supertag-node-at-valid-heading-p ()
+  "Check if point is at a valid heading for tag operations.
+Returns t if:
+1. Point is at a heading
+2. Heading is not commented out
+3. Heading is not archived
+4. Heading is not in COMMENT tree"
+  (and (org-at-heading-p)  ; 基本的标题检查
+       (not (org-in-commented-heading-p))  ; 不在被注释的标题
+       (not (org-in-archived-heading-p))   ; 不在归档的标题
+       t))
 ;;------------------------------------------------------------------------------
 ;; Node Relations 
 ;;------------------------------------------------------------------------------    
@@ -702,8 +725,6 @@ List of node IDs"
                                      (format "node-refs:%s:%s" node-id direction)
                                      refs)
           refs))))
-
-
 
 ;; 4. Relationship cleanup
 (defun org-supertag-node-db-remove-reference (from-id to-id)
@@ -936,8 +957,4 @@ Arguments: (from-id to-id)")
 Arguments: (from-id to-id)")
 
 
-
-
-
 (provide 'org-supertag-node)
-
