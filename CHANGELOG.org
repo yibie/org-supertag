@@ -1,5 +1,39 @@
 * Changelog
 
+* [2.2.0] - 2025-01-25
+** Features
+**** Add automatic node creation for org headlines
+- Add ~org-supertag-sync-auto-create-node~ to control auto creation
+- Add ~org-supertag-sync-node-creation-level~ for minimum level
+- Modify ~org-supertag-db-update-buffer~ to handle auto creation
+- Update ~org-supertag-sync--process-node~ for auto conversion
+
+This change enables automatic conversion of org headlines to nodes
+during synchronization, making node creation more seamless while
+maintaining control through customization options.
+
+**** Add directory scope control for synchronization
+- Add org-supertag-sync-directories for monitored directories
+- Add org-supertag-sync-exclude-directories for excluded paths
+- Add org-supertag-sync-file-pattern for file matching
+- Add helper functions for directory management:
+  - ~org-supertag-sync-add-directory~
+  - ~org-supertag-sync-remove-directory~
+  - ~org-supertag-sync-list-directories~
+
+*** Improve 
+**** File organization
+- Move org-supertag-sync-state.el to org-supertag-data-directory
+  - Add directory existence check in org-supertag-sync-init
+  - Keep data files organized under ~/.emacs.d/org-supertag/
+
+*** Bug Fixes
+**** Fix node movement reference format
+- Now completely replaces original heading with link reference
+- Removes redundant title text in reference link
+- Maintains proper heading level and spacing
+
+
 * [2.1.0] - 2025-01-18
 
 ** Features

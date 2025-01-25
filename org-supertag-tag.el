@@ -404,47 +404,32 @@ Will prevent duplicate tag application."
         (substring input (length "Preset: ")))
        (t input)))))
   
-  (when tag-name
-    (save-excursion  ; 保护整个操作的光标位置
-      ;; 1. 首先验证位置
-      (unless (org-supertag-node-at-valid-heading-p)
-        (user-error "Must be at a valid heading to add tag"))
+  (when tag-name  
+    (let* ((node-id (org-id-get))
+           (sanitized-name (org-supertag-sanitize-tag-name tag-name))
+           (current-tags (org-supertag-node-get-tags node-id)))
+      (message "Adding tag: %s" sanitized-name)
+      ;; Check for duplicate tag
+      (when (member sanitized-name current-tags)
+        (user-error "Tag '%s' is already applied to this node" sanitized-name))
       
-      ;; 2. 保存当前位置信息用于验证
-      (let* ((heading-pos (point))  ; 保存验证过的标题位置
-             (current-heading (org-get-heading t t t t))
-             (node-id (org-id-get))
-             (sanitized-name (org-supertag-sanitize-tag-name tag-name))
-             (current-tags (org-supertag-node-get-tags node-id)))
-        
-        (message "Adding tag: %s to heading '%s' at position %d" 
-                sanitized-name current-heading heading-pos)
-        
-        ;; 3. 确保我们仍在正确的标题位置
-        (unless (= (point) heading-pos)
-          (goto-char heading-pos))
-        
-        (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-               (preset-fields (org-supertag-get-preset-fields sanitized-name))
-               ;; Get or create the tag
-               (tag-id
-                (cond
-                 (existing-tag
-                  sanitized-name)
-                 (preset-fields
-                  (progn
-                    (message "Creating new tag from preset with fields: %S" preset-fields)
-                    (org-supertag-tag-create sanitized-name :fields preset-fields)))
-                 (t
-                  (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
-                      (org-supertag-tag-create sanitized-name)
-                    (user-error "Tag creation cancelled"))))))
-          
-          ;; 4. 再次确保位置正确
-          (goto-char heading-pos)
-          
-          ;; 5. 应用标签
-          (org-supertag-tag-apply tag-id))))))
+      (let* ((existing-tag (org-supertag-tag-get sanitized-name))
+             (preset-fields (org-supertag-get-preset-fields sanitized-name))
+             ;; Get or create the tag
+             (tag-id
+              (cond
+               (existing-tag
+                sanitized-name)
+               (preset-fields
+                (progn
+                  (message "Creating new tag from preset with fields: %S" preset-fields)
+                  (org-supertag-tag-create sanitized-name :fields preset-fields)))
+               (t
+                (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
+                    (org-supertag-tag-create sanitized-name)
+                  (user-error "Tag creation cancelled"))))))
+        ;; Apply the tag
+        (org-supertag-tag-apply tag-id)))))
 
 (defun org-supertag-tag-set-field-and-value ()
   "Set field values for tags on the current node.

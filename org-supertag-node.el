@@ -419,43 +419,62 @@ Returns:
 - t if move successful
 - nil if move failed"
   (interactive
-   (let* ((node-id (org-id-get)))
-     (unless node-id
-       (user-error "Current position is not in a node"))
-     (unless (org-supertag-db-get node-id)
-       (user-error "Current node is not registered in database"))
-     (list node-id 
-           (read-file-name "Move to file: "))))
+   (progn
+     (unless (org-at-heading-p)
+       (user-error "Must be on a heading"))
+     
+     ;; Get or create node ID
+     (let* ((node-id (or (org-id-get)
+                        (progn 
+                          (org-supertag-node-create)
+                          (org-id-get))))
+            (target-file (read-file-name "Move to file: ")))
+       (list node-id target-file))))
   
-  (when-let* ((node (org-supertag-db-get node-id))
-              (title (plist-get node :title))
-              (source-file (plist-get node :file-path))
-              (source-pos (point)))
+  (let* ((node (org-supertag-db-get node-id))
+         (title (plist-get node :title))
+         (source-file (plist-get node :file-path))
+         (original-level (org-outline-level))
+         (original-point (point))
+         ;; Get target position
+         (insert-pos (org-supertag-query--get-insert-position target-file))
+         (target-pos (car insert-pos))
+         (level-adj (or target-level (cdr insert-pos)))
+         (reference-content (format "[[id:%s][%s]]" node-id title)))
     
-    ;; 1. Get target position and level adjustment
-    (let* ((insert-pos (org-supertag-query--get-insert-position target-file))
-           (target-pos (car insert-pos))
-           (level-adj (or target-level (cdr insert-pos))))
+    ;; 检查前后空行
+    (let ((prev-blank (save-excursion
+                       (beginning-of-line 0)
+                       (looking-at-p "^[[:space:]]*$")))
+          (next-blank (save-excursion
+                       (org-end-of-subtree)
+                       (forward-line)
+                       (looking-at-p "^[[:space:]]*$"))))
       
-      ;; 2. Store the reference link content
-      (let ((reference-content (format "[[id:%s][%s]]\n" node-id title)))
-        
-        ;; 3. Move the node
-        (with-current-buffer (find-file-noselect target-file)
-          (save-excursion
-            (goto-char target-pos)
-            (when (org-supertag-node-move node-id target-file level-adj)
-              ;; 4. Insert reference at original position
-              (with-current-buffer (find-file-noselect source-file)
-                (save-excursion
-                  (goto-char source-pos)
-                  (insert reference-content)
-                  (save-buffer)))
-              
-              ;; 5. Save target file
-              (save-buffer)
-              (message "Node moved and reference link created")
-              t)))))))
+      ;; Move the node
+      (with-current-buffer (find-file-noselect target-file)
+        (save-excursion
+          (goto-char target-pos)
+          (when (org-supertag-node-move node-id target-file level-adj target-pos)
+            ;; Insert reference at original position
+            (with-current-buffer (find-file-noselect source-file)
+              (save-excursion
+                (goto-char original-point)
+                (beginning-of-line)
+                ;; Replace entire heading with link
+                (delete-region (point) (line-end-position))
+                (insert (concat
+                        (make-string original-level ?*) " "
+                        reference-content
+                        (unless next-blank "\n")))
+                (save-buffer)))
+            
+            ;; Save target file
+            (save-buffer)
+            (message "Node moved and reference link created")
+            t))))))
+
+
 
 ;;------------------------------------------------------------------------------
 ;; Node Commands 
@@ -640,10 +659,18 @@ Returns t if:
 2. Heading is not commented out
 3. Heading is not archived
 4. Heading is not in COMMENT tree"
-  (and (org-at-heading-p)  ; 基本的标题检查
-       (not (org-in-commented-heading-p))  ; 不在被注释的标题
-       (not (org-in-archived-heading-p))   ; 不在归档的标题
-       t))
+  (let ((at-heading (org-at-heading-p)))
+    (message "Checking heading validity:")
+    (message "  At heading: %s" (if at-heading "yes" "no"))
+    (when at-heading
+      (message "  Heading text: '%s'" (org-get-heading t t t t))
+      (message "  Point: %d" (point))
+      (message "  In commented heading: %s" 
+               (if (org-in-commented-heading-p) "yes" "no"))
+      (message "  In archived heading: %s"
+               (if (org-in-archived-heading-p) "yes" "no")))
+    at-heading))
+
 ;;------------------------------------------------------------------------------
 ;; Node Relations 
 ;;------------------------------------------------------------------------------    
