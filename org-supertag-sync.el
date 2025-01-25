@@ -11,7 +11,10 @@
 ;; - Node analysis
 ;; - Customizable sync settings
 
-;; Configuration in init.el
+;; Configuration auto sync directories in init.el
+;; (setq org-supertag-sync-auto-interval 30)
+
+;; Configuration sync files scope in init.el
 ;; (setq org-supertag-sync-directories
 ;;       '("~/org/work"
 ;;         "~/org/projects"))
@@ -46,7 +49,7 @@ Stores the file in the org-supertag data directory."
   :type 'file
   :group 'org-supertag-sync)
 
-(defcustom org-supertag-sync-auto-interval 30
+(defcustom org-supertag-sync-auto-interval 300
   "Interval in seconds for automatic synchronization."
   :type 'integer
   :group 'org-supertag-sync)
