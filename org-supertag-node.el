@@ -409,72 +409,91 @@ Returns adjusted content string with proper heading levels."
     
     (buffer-string))))))
 
-(defun org-supertag-move-node-and-link (node-id target-file &optional target-level)
-  "Move node to target file and leave a reference link at original location.
-NODE-ID is the node identifier
-TARGET-FILE is the target file path
-TARGET-LEVEL is the target heading level
+(defun org-supertag--move-node-and-link (node-id target-file &optional target-level)
+  "Internal function to move a node and create link.
+NODE-ID is the ID of the node to move.
+TARGET-FILE is the destination file path.
+TARGET-LEVEL is the optional target heading level."
 
-Returns:
-- t if move successful
-- nil if move failed"
-  (interactive
-   (progn
-     (unless (org-at-heading-p)
-       (user-error "Must be on a heading"))
-     
-     ;; Get or create node ID
-     (let* ((node-id (or (org-id-get)
-                        (progn 
-                          (org-supertag-node-create)
-                          (org-id-get))))
-            (target-file (read-file-name "Move to file: ")))
-       (list node-id target-file))))
-  
+  ;; 1. 获取源节点信息
   (let* ((node (org-supertag-db-get node-id))
-         (title (plist-get node :title))
-         (source-file (plist-get node :file-path))
-         (original-level (org-outline-level))
-         (original-point (point))
-         ;; Get target position
-         (insert-pos (org-supertag-query--get-insert-position target-file))
-         (target-pos (car insert-pos))
-         (level-adj (or target-level (cdr insert-pos)))
-         (reference-content (format "[[id:%s][%s]]" node-id title)))
-    
-    ;; 检查前后空行
-    (let ((prev-blank (save-excursion
-                       (beginning-of-line 0)
-                       (looking-at-p "^[[:space:]]*$")))
-          (next-blank (save-excursion
-                       (org-end-of-subtree)
-                       (forward-line)
-                       (looking-at-p "^[[:space:]]*$"))))
-      
-      ;; Move the node
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
+         (source-file (or (plist-get node :file-path)
+                          (buffer-file-name)))
+         (source-pos (or (plist-get node :pos)
+                         (point)))
+         (source-element (with-current-buffer (find-file-noselect source-file)
+                           (save-excursion
+                             (goto-char source-pos)
+                             (org-element-at-point))))
+         (title (org-element-property :raw-value source-element))
+         (content (buffer-substring (org-element-property :contents-begin source-element)
+                                    (org-element-property :contents-end source-element)))
+         (properties (org-element-property :PROPERTY source-element))
+         (level (or target-level
+                    (org-element-property :level source-element)
+                    1)))
+
+    ;; 2. 在目标位置创建完整节点
+    (with-current-buffer (find-file-noselect target-file)
+      (save-excursion
+        (let* ((insert-pos (org-supertag-query--get-insert-position target-file))
+               (target-pos (car insert-pos)))
           (goto-char target-pos)
-          (when (org-supertag-node-move node-id target-file level-adj target-pos)
-            ;; Insert reference at original position
-            (with-current-buffer (find-file-noselect source-file)
-              (save-excursion
-                (goto-char original-point)
-                (beginning-of-line)
-                ;; Replace entire heading with link
-                (delete-region (point) (line-end-position))
-                (insert (concat
-                        (make-string original-level ?*) " "
-                        reference-content
-                        (unless next-blank "\n")))
-                (save-buffer)))
-            
-            ;; Save target file
-            (save-buffer)
-            (message "Node moved and reference link created")
-            t))))))
+          ;; 插入完整节点内容
+          (insert (make-string level ?*)
+                  " " title "\n"
+                  content "\n")
+          (save-buffer))))
 
+    ;; 3. 修改源节点为链接
+    (with-current-buffer (find-file-noselect source-file)
+      (save-excursion
+        (goto-char source-pos)
+        (org-narrow-to-subtree)
+        (delete-region (point) (point-max))
+        (beginning-of-line)  ;; 移动到行头
+        (delete-region (point) (line-end-position))  ;; 清理从行头到行末的内容
+        (insert (make-string level ?*)
+                " " (org-link-make-string (concat "id:" node-id) title) "\n")
+        (widen)
+        (save-buffer)))))
 
+(defun org-supertag-move-node-and-link ()
+  "Interactive command to move a node and create link.
+Prompts user for node and target file from a list of Org files."
+  (interactive)
+  
+  ;; 1. 获取当前节点信息
+  (unless (org-id-get)
+    (org-id-get-create))
+  (let* ((node-id (org-id-get))
+         (title (org-get-heading t t t t))
+         (target-file (completing-read
+                       "Move node to file: "
+                       (org-supertag--get-org-file-list)  ;; 获取 Org 文件列表
+                       nil t))  ;; 强制用户选择一个文件
+         (target-level (when current-prefix-arg
+                         (read-number "Target level: " (org-outline-level)))))
+
+    ;; 2. 调用内部函数
+    (org-supertag--move-node-and-link node-id target-file target-level)
+    
+    ;; 3. 显示成功消息
+    (message "Moved node '%s' to %s" title target-file)))
+
+(defun org-supertag--get-org-file-list ()
+  "Return a list of Org files in the specified directory.
+The directory is determined by `org-directory' or `default-directory'."
+  (let* ((dir (or (if (boundp 'org-directory)
+                      org-directory
+                    default-directory)))
+         (files (directory-files-recursively dir "\.org$" t)))  ;; 添加 t 参数以确保返回完整路径
+    ;; 过滤掉备份文件和隐藏文件
+    (seq-filter (lambda (file)
+                  (and (not (string-match-p "/\\.#" file))  ;; 排除备份文件
+                       (not (string-match-p "/\\.org$" file))  ;; 排除隐藏文件
+                       (file-regular-p file)))  ;; 确保是文件而不是目录
+                files)))
 
 ;;------------------------------------------------------------------------------
 ;; Node Commands 
