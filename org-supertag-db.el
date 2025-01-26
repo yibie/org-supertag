@@ -1182,9 +1182,17 @@ Returns:
                (properties (org-element-property :PROPERTIES element))
                ;; Get node content directly
                (content (save-excursion
-                         (org-end-of-meta-data t)  
-                         (let ((begin (point))
-                               (end (org-element-property :contents-end element)))
+                         (org-end-of-meta-data t)
+                         (let* ((begin (point))
+                                (end (org-element-property :contents-end element))
+                                ;; Find next heading position
+                                (next-heading (save-excursion
+                                                (when (re-search-forward "^\\(\\*+\\)" nil t)
+                                                  (match-beginning 0)))))
+                           ;; Use the minimum of end and next-heading
+                           (setq end (if (and next-heading end)
+                                         (min end next-heading)
+                                       (or next-heading end)))
                            (when (and begin end (< begin end))
                              (string-trim (buffer-substring-no-properties begin end)))))))
           (message "Parsed headline: id=%s title=%s level=%s" id title level)
