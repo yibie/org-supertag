@@ -1,5 +1,14 @@
 * Changelog
 
+* [2.2.3] - 2024-03-20
+** Features
+**** Improve field type selection and display
+- Add help message showing available field types with descriptions
+- Use all field types from org-supertag-field-types instead of hardcoded list
+- Format field display with fixed-width alignment for better readability
+- Clean up help buffer after type selection
+- Improve field editing interface with consistent formatting
+
 * [2.2.2] - 2025-01-26
 ** Bug Fixes
 **** Fix node movement and link creation

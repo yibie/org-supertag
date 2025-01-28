@@ -109,23 +109,30 @@ Returns t if valid, otherwise throws error"
          (required (plist-get field :required))
          (type-def (org-supertag-get-field-type type))
          (validator (plist-get type-def :validator)))
+    ;; Debug output
+    (message "Debug - Validating field: name=%S, type=%S, value=%S" name type value)
+    
+    ;; Check required field
     (when (and required (null value))
       (error "Field '%s' is required" name))
+    
+    ;; Allow nil for non-required fields
     (if (null value)
         t
+      ;; Type-specific validation
       (progn
+        ;; Basic type check for strings
         (when (and (eq type 'string) (not (stringp value)))
           (error "Field '%s' requires string type, got %S" name (type-of value)))
+        
+        ;; Call type-specific validator if exists
         (when validator
           (condition-case err
-              (unless (if (eq type 'options)
-                         (funcall validator value field)
-                       (funcall validator value))
-                (error "Value '%s' does not meet %s type requirements" value type))
+              (if (not (funcall validator value))
+                (error "Value '%s' does not meet validation requirements" value))
             (error
              (error "Error validating field '%s': %s" name (error-message-string err)))))
         t))))
-
 (defun org-supertag-field-get-value (field-def node-id tag-id)
   "Get field value.
 FIELD-DEF: field definition
@@ -454,22 +461,26 @@ FIELD is the field definition containing tag reference"
          node-id
          tag-id)))))
 
-(defun org-supertag-validate-options (value field)
+(defun org-supertag-validate-options (value &optional field-def)
   "Validate options value.
 VALUE is the value to validate.
-FIELD is the field definition containing :options."
-  (let ((options (plist-get field :options)))
+FIELD-DEF is the optional field definition containing :options."
+  (let ((options (when field-def (plist-get field-def :options))))
     (message "Debug - Validating options: value=%S, options=%S" value options)
-    (and options                         ; Must have predefined options
-         (stringp value)                 ; Value must be string
-         (member value options))))       ; Value must be one of the options
+    (cond
+     ((null options) 
+      (stringp value))
+     (t (and (stringp value)
+             (member value options))))))
 
 (defun org-supertag-format-options (value field)
   "Format options value.
 VALUE is the value to format.
-FIELD is the field definition."
+FIELD is the field definition.
+
+Returns a trimmed string if VALUE is a string, otherwise returns nil."
   (message "Debug - Formatting options value: %S" value)
-  (when value
+  (when (and value (stringp value))  ; Only process if value is a non-nil string
     (string-trim value)))
 
 (defun org-supertag-validate-number (value)
@@ -560,7 +571,32 @@ FIELD-DEF is the field definition."
         value
       (error "Invalid range format, use 'min-max' format like '1-10'"))))
 
+;;---------------------------------------------------------------------------
+;; Get Field Initial Value
+;;---------------------------------------------------------------------------
 
+(defun org-supertag-field-get-initial-value (field)
+  "Get initial value for FIELD."
+  (let ((field-type (plist-get field :type))
+        (field-value (plist-get field :value))
+        (field-options (plist-get field :options)))
+    (message "Getting initial value for field: %S" field)
+    (let ((initial-value
+           (cond
+            ((eq field-type 'behavior)
+             field-value)
+            ((and (eq field-type 'options) field-options)
+             (car field-options))
+            ((eq field-type 'date)
+             (format-time-string "%Y-%m-%d"))
+            ((eq field-type 'string)
+             " ")  
+            (t nil))))
+      (message "Initial value for field %s (%s): %S" 
+               (plist-get field :name)
+               field-type
+               initial-value)
+      initial-value)))
 ;;------------------------------------------------------------------------------
 ;; Behavior Field Type
 ;;------------------------------------------------------------------------------
@@ -791,114 +827,6 @@ PROMPT is the prompt message"
         (org-supertag-read-number-field prompt)))))
 
 ;;----------------------------------------------------------------------
-;; Preset Field
-;;----------------------------------------------------------------------
-
-(defcustom org-supertag-preset-fields
-  '(("Priority" 
-     :type options
-     :values ("P1" "P2" "P3" "P4")
-     :description "Task Priority")
-    ("Status" 
-     :type options
-     :values ("To Do" "In Progress" "Done" "On Hold")
-     :description "Task Status")
-    ("Deadline" 
-     :type date
-     :description "Task Deadline")
-    ("Progress" 
-     :type number
-     :min 0
-     :max 100
-     :description "Progress Bar")
-    ("Who" 
-     :type string
-     :description "Who")
-    ("Tags" 
-     :type list
-     :separator ","
-     :description "Keywords or Tags")
-    ("URL" 
-     :type url
-     :description "Related Links")
-    ("Rating" 
-     :type number
-     :min 1 
-     :max 5
-     :description "Five-star Rating"))
-  "Preset field definition list.
-Each preset field is a (name . props) pair, where:
-- name is the field name
-- props is the field properties plist"
-  :type '(repeat (cons string plist))
-  :group 'org-supertag)
-
-(defun org-supertag--parse-preset-field (field-def)
-  "Parse preset field definition.
-FIELD-DEF is the preset field definition"
-  (let* ((name (car field-def))
-         (props (cdr field-def))
-         (field-type (plist-get props :type)))
-    (append 
-     (list :name name
-           :type field-type)
-     ;; 可选属性
-     (when-let ((desc (plist-get props :description)))
-       (list :description desc))
-     ;; 对于 options 类型，:values 属性会转换为 :options
-     (when (eq field-type 'options)
-       (when-let ((values (plist-get props :values)))
-         (list :options values)))
-     ;; 对于其他类型，保持原有属性
-     (unless (eq field-type 'options)
-       (when-let ((values (plist-get props :values)))
-         (list :values values)))
-     (when-let ((min (plist-get props :min)))
-       (list :min min))
-     (when-let ((max (plist-get props :max)))
-       (list :max max))
-     (when-let ((sep (plist-get props :separator)))
-       (list :separator sep)))))
-
-(defun org-supertag-get-preset-field (name)
-  "Get preset field definition.
-NAME is the field name"
-  (when-let ((field-def (assoc name org-supertag-preset-fields)))
-    (org-supertag--parse-preset-field field-def)))
-
-(defun org-supertag-format-preset-field (preset)
-  "Format preset field options.
-PRESET is the preset field definition"
-  (let ((name (car preset))
-        (desc (plist-get (cdr preset) :description)))
-    (format "- %s%s"
-            name
-            (if desc (format " (%s)" desc) ""))))
-
-(defun org-supertag-field-get-initial-value (field)
-  "Get initial value for FIELD."
-  (let ((field-type (plist-get field :type))
-        (field-value (plist-get field :value))
-        (field-options (plist-get field :options)))
-    (message "Getting initial value for field: %S" field)
-    (let ((initial-value
-           (cond
-            ((eq field-type 'behavior)
-             field-value)
-            ((and (eq field-type 'options) field-options)
-             (car field-options))
-            ((eq field-type 'date)
-             (format-time-string "%Y-%m-%d"))
-            ((eq field-type 'string)
-             "")  ; 为字符串类型提供空字符串作为初始值
-            (t nil))))
-      (message "Initial value for field %s (%s): %S" 
-               (plist-get field :name)
-               field-type
-               initial-value)
-      initial-value)))
-
-;;----------------------------------------------------------------------
 ;; Field Modification
 ;;----------------------------------------------------------------------
 
@@ -973,6 +901,8 @@ This will clear all existing values of this field across all nodes."
         
         (message "Field '%s' modified. You may now set new values." 
                  new-name)))))
+
+
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

@@ -78,189 +78,53 @@ otherwise returns nil."
 ;; Tag-Node Relation Operation
 ;;----------------------------------------------------------------------
 
-;; (defun org-supertag-tag-apply (tag-id)
-;;   "Apply tag to the node at current position."
-;;   (save-excursion
-;;     (let* ((original-pos (point))
-;;            (original-line (line-number-at-pos))
-;;            (sanitized-tag-id (org-supertag-sanitize-tag-name tag-id)))
-      
-;;       ;; Debug info
-;;       (message "\nDebug org-supertag-tag-apply:")
-;;       (message "Input tag-id: %s" tag-id)
-;;       (message "Sanitized tag-id: %s" sanitized-tag-id)
-;;       (message "Preset tags: %S" org-supertag-preset-tags)
-      
-;;       ;; 1. Validate position
-;;       (unless (org-at-heading-p)
-;;         (error "Must be at a heading to apply tag"))
-      
-;;       ;; 2. Get or create node ID
-;;       (let* ((node-id (or (org-id-get)
-;;                          (progn 
-;;                            (org-supertag-node-create)
-;;                            (org-id-get))))
-;;              (tag (org-supertag-tag-get sanitized-tag-id)))
-        
-;;         ;; 3. 获取当前标题信息
-;;         (let* ((current-heading (org-get-heading t t t t))
-;;                (current-id (org-id-get))
-;;                (tag (org-supertag-db-get tag-id))
-;;                (node-id (org-id-get-create)))
-          
-;;         ;; 4. 记录位置和标题信息
-;;         (message "Starting tag application:")
-;;         (message "  Original position: %d (line %d)" original-pos original-line)
-;;         (message "  Current heading line: %d-%d" heading-begin heading-end)
-;;         (message "  Current heading: '%s'" current-heading)
-;;         (message "  Current ID: %s" current-id)
-;;         (message "  Applying tag: %s" tag-id)
-        
-;;         ;; 5. 验证标签
-;;         (unless tag
-;;           (error "Tag %s not found" tag-id))
-;;         (unless (eq (plist-get tag :type) :tag)
-;;           (error "Invalid tag type for %s" tag-id))
-        
-;;         ;; 6. 确保节点存在于数据库
-;;         (unless (org-supertag-db-get node-id)
-;;           (org-supertag--create-node node-id)
-;;           (message "  Created new node in database: %s" node-id))
-        
-;;         ;; 7. 添加标签关系
-;;         (org-supertag-node-db-add-tag node-id tag-id)
-;;         (message "  Added tag relationship to database")
-        
-;;         ;; 8. 处理预设字段
-;;         (when-let ((fields (plist-get tag :fields)))
-;;           (message "  Processing fields for tag %s: %S" tag-id fields)
-;;           (dolist (field fields)
-;;             (let* ((field-name (plist-get field :name))
-;;                    (field-type (plist-get field :type))
-;;                    (type-def (org-supertag-get-field-type field-type))
-;;                    (initial-value (org-supertag-field-get-initial-value field)))
-;;               (message "    Processing field: name=%s type=%s" field-name field-type)
-;;               (unless type-def
-;;                 (error "Invalid field type: %s" field-type))
-              
-;;               (when-let* ((formatter (plist-get type-def :formatter))
-;;                           (formatted-value (if formatter
-;;                                              (funcall formatter initial-value field)
-;;                                            (format "%s" initial-value))))
-;;                 (org-set-property field-name formatted-value)
-;;                 (org-supertag-tag--set-field-value 
-;;                  tag-id node-id field-name initial-value)))))
-        
-;;         ;; 9. 更新 org 标签
-;;         (let* ((old-tags (org-get-tags))
-;;                (new-tag (concat "#" tag-id))
-;;                (new-tags (cons new-tag old-tags)))
-;;           (message "  Updating org tags: %S -> %S" old-tags new-tags)
-;;           (org-set-tags new-tags))
-        
-;;         ;; 10. 触发行为
-;;         (message "  Triggering behaviors")
-;;         (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
-;;         (org-supertag-behavior--on-tag-change node-id tag-id :add)
-;;         (org-supertag-behavior--apply-styles node-id)
-        
-;;         ;; 11. 完成信息
-;;         (message "Tag application completed:")
-;;         (message "  Node: %s" node-id)
-;;         (message "  Tag: %s" tag-id)
-;;         (message "  Final position: %d (line %d)" (point) (line-number-at-pos))
-;;         (message "  Still at original heading: %s" 
-;;                  (if (string= current-heading (org-get-heading t t t t))
-;;                      "yes" "no"))
-        
-;;         node-id)))))
-
 (defun org-supertag-tag-apply (tag-id)
   "Apply tag to the node at current position."
-  (save-excursion
-    (let* ((original-pos (point))
-           (original-line (line-number-at-pos))
-           (sanitized-tag-id (org-supertag-sanitize-tag-name tag-id))
-           (heading-begin (org-entry-beginning-position))
-           (heading-end (org-entry-end-position))
-           (current-heading (org-get-heading t t t t))
-           (current-id (org-id-get))
-           (node-id (or current-id (org-id-get-create)))
-           (tag (org-supertag-db-get sanitized-tag-id)))
-      
-      ;; Debug info
-      (message "\nDebug org-supertag-tag-apply:")
-      (message "Input tag-id: %s" tag-id)
-      (message "Sanitized tag-id: %s" sanitized-tag-id)
-      (message "Preset tags: %S" org-supertag-preset-tags)
-      (message "Original position: %d (line %d)" original-pos original-line)
-      (message "Current heading line: %d-%d" heading-begin heading-end)
-      (message "Current heading: '%s'" current-heading)
-      (message "Current ID: %s" current-id)
-      (message "Applying tag: %s" tag-id)
-      
-      ;; 1. Validate position
-      (unless (org-at-heading-p)
-        (error "Must be at a heading to apply tag"))
-      
-      ;; 2. Validate tag
-      (unless tag
-        (error "Tag %s not found" sanitized-tag-id))
-      (unless (eq (plist-get tag :type) :tag)
-        (error "Invalid tag type for %s" sanitized-tag-id))
-      
-      ;; 3. Ensure node exists
-      (unless (org-supertag-db-get node-id)
-        (org-supertag--create-node node-id)
-        (message "Created new node in database: %s" node-id))
-      
-      ;; 4. Add tag relationship
-      (org-supertag-node-db-add-tag node-id sanitized-tag-id)
-      (message "Added tag relationship to database")
-      
-      ;; 5. Process preset fields
-      (when-let ((fields (plist-get tag :fields)))
-        (message "Processing fields for tag %s: %S" sanitized-tag-id fields)
-        (dolist (field fields)
-          (let* ((field-name (plist-get field :name))
-                 (field-type (plist-get field :type))
-                 (type-def (org-supertag-get-field-type field-type))
-                 (initial-value (org-supertag-field-get-initial-value field)))
-            (message "Processing field: name=%s type=%s" field-name field-type)
-            (unless type-def
-              (error "Invalid field type: %s" field-type))
-            
-            (when-let* ((formatter (plist-get type-def :formatter))
-                        (formatted-value (if formatter
-                                           (funcall formatter initial-value field)
-                                         (format "%s" initial-value))))
-              (org-set-property field-name formatted-value)
-              (org-supertag-tag--set-field-value 
-               sanitized-tag-id node-id field-name initial-value)))))
-      
-      ;; 6. Update org tags
-      (let* ((old-tags (org-get-tags))
-             (new-tag (concat "#" sanitized-tag-id))
-             (new-tags (cons new-tag old-tags)))
-        (message "Updating org tags: %S -> %S" old-tags new-tags)
-        (org-set-tags new-tags))
-      
-      ;; 7. Trigger behaviors
-      (message "Triggering behaviors")
-      (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
-      (org-supertag-behavior--on-tag-change node-id sanitized-tag-id :add)
-      (org-supertag-behavior--apply-styles node-id)
-      
-      ;; 8. Completion info
-      (message "Tag application completed:")
-      (message "Node: %s" node-id)
-      (message "Tag: %s" sanitized-tag-id)
-      (message "Final position: %d (line %d)" (point) (line-number-at-pos))
-      (message "Still at original heading: %s" 
-               (if (string= current-heading (org-get-heading t t t t))
-                   "yes" "no"))
-      
-      t)))
+  (let* ((tag (org-supertag-db-get tag-id))
+         (node-id (org-id-get-create)))
+    (message "Applying tag: %s to node: %s" tag-id node-id)
+    ;; Validation
+    (unless tag
+      (error "Tag %s not found" tag-id))
+    (unless (eq (plist-get tag :type) :tag)
+      (error "Invalid tag type for %s" tag-id))
+    (unless (org-supertag-db-get node-id)
+      (org-supertag--create-node node-id))
+    
+    ;; Link node and tag
+    (org-supertag-node-db-add-tag node-id tag-id)
+    ;; Apply fields
+    (when-let ((fields (plist-get tag :fields)))
+      (message "Processing fields for tag %s: %S" tag-id fields)
+      (dolist (field fields)
+        (let* ((field-name (plist-get field :name))
+               (field-type (plist-get field :type))
+               (type-def (org-supertag-get-field-type field-type))
+               (initial-value (org-supertag-field-get-initial-value field)))
+          (message "Processing field: name=%s type=%s initial=%S" 
+                   field-name field-type initial-value)
+          (unless type-def
+            (error "Invalid field type: %s" field-type))
+
+          (when-let* ((formatter (plist-get type-def :formatter))
+                      (formatted-value (if formatter
+                                         (funcall formatter initial-value field)
+                                       (format "%s" initial-value))))
+            (message "Setting field %s = %s" field-name formatted-value)
+            (org-set-property field-name formatted-value)
+            (org-supertag-tag--set-field-value 
+             tag-id node-id field-name initial-value)))))
+    
+    ;; Add tag to node tags
+    (let ((tags (org-get-tags)))
+      (org-set-tags (cons (concat "#" tag-id) tags)))
+    
+    ;; Behavior Active
+    (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
+    (org-supertag-behavior--on-tag-change node-id tag-id :add)
+    (org-supertag-behavior--apply-styles node-id)
+    
+    node-id))
 
 
 (defun org-supertag-tag--remove (tag-id node-id)
@@ -446,268 +310,97 @@ FIELD-NAME: The name of the field to remove"
               (org-delete-property field-name)))))
       (message "Removed field '%s' from tag '%s'" field-name tag-id))))
 
+(defun org-supertag-tag-batch-set-fields (tag-id)
+  "Batch set field values for a tag.
+TAG-ID: The tag identifier"
+  (interactive
+   (let* ((node-id (org-id-get))
+          (tags (org-supertag-node-get-tags node-id))
+          (tag-id (completing-read "Select tag: " tags nil t)))
+     (list tag-id)))
+  
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (fields (plist-get tag :fields))
+         (nodes (org-supertag-tag-get-nodes tag-id))
+         (field-values (make-hash-table :test 'equal)))
+    
+    ;; Collect field values
+    (dolist (field fields)
+      (let* ((field-name (plist-get field :name))
+             (field-type (plist-get field :type))
+             (value (org-supertag-field-read-value field)))
+        (puthash field-name value field-values)))
+    
+    ;; Apply values to all nodes
+    (dolist (node-id nodes)
+      (dolist (field fields)
+        (let* ((field-name (plist-get field :name))
+               (value (gethash field-name field-values)))
+          (org-supertag-field-set-value field value node-id tag-id))))
+    
+    (message "Batch set field values for tag '%s' completed." tag-id)))
 
 ;;----------------------------------------------------------------------
 ;; Tag User Command
 ;;----------------------------------------------------------------------
 
-;; (defun org-supertag-tag-add-tag (tag-name)
-;;   "Add a tag to the current headline.
-;; TAG-NAME can be an existing tag or a new tag name.
-;; Will prevent duplicate tag application."
-;;   (interactive
-;;    (let* ((all-tags (org-supertag-get-all-tags))
-;;           (preset-names (mapcar #'car org-supertag-preset-tags))
-;;           (candidates (delete-dups
-;;                       (append all-tags
-;;                              (mapcar (lambda (name) 
-;;                                      (concat "Preset: " name))
-;;                                    preset-names))))
-;;           (input (completing-read-default
-;;                  "Enter tag name (TAB: complete): "
-;;                  ;; Custom Compeleting function
-;;                  (lambda (string pred action)
-;;                    (if (eq action 'metadata)
-;;                        '(metadata (category . org-supertag-tag))
-;;                      (let ((exact-match (member string candidates)))
-;;                        (cond
-;;                         ((eq action 'lambda) ; exact match test
-;;                          (member string candidates))
-;;                         ((eq action t)       ; all matches
-;;                          (cl-remove-if-not
-;;                           (lambda (candidate)
-;;                             (string-prefix-p string candidate t))
-;;                           candidates))
-;;                         (t string)))))       ; return input string
-;;                  nil nil)))  ; 
-;;      (list
-;;       (cond
-;;        ((member input candidates) input)
-;;        ((string-prefix-p "Preset: " input)
-;;         (substring input (length "Preset: ")))
-;;        (t input)))))
-  
-;;   (when tag-name  
-;;     (let* ((node-id (org-id-get))
-;;            (sanitized-name (org-supertag-sanitize-tag-name tag-name))
-;;            (current-tags (org-supertag-node-get-tags node-id)))
-;;       (message "Adding tag: %s" sanitized-name)
-;;       ;; Check for duplicate tag
-;;       (when (member sanitized-name current-tags)
-;;         (user-error "Tag '%s' is already applied to this node" sanitized-name))
-      
-;;       (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-;;              (preset-fields (org-supertag-get-preset-fields sanitized-name))
-;;              ;; Get or create the tag
-;;              (tag-id
-;;               (cond
-;;                (existing-tag
-;;                 sanitized-name)
-;;                (preset-fields
-;;                 (progn
-;;                   (message "Creating new tag from preset with fields: %S" preset-fields)
-;;                   (org-supertag-tag-create sanitized-name :fields preset-fields)))
-;;                (t
-;;                 (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
-;;                     (org-supertag-tag-create sanitized-name)
-;;                   (user-error "Tag creation cancelled"))))))
-;;         ;; Apply the tag
-;;         (org-supertag-tag-apply tag-id)))))
-
 (defun org-supertag-tag-add-tag (tag-name)
-  "Add tag to current headline.
-TAG-NAME is the name of the tag to add.
-
-This function provides a completion interface that marks preset tags
-with (P) annotation."
+  "Add a tag to the current headline.
+TAG-NAME can be an existing tag or a new tag name.
+Will prevent duplicate tag application."
   (interactive
-   (let* ((user-tags (org-supertag-get-all-tags))
-          (preset-tags (mapcar #'car org-supertag-preset-tags))
-          (candidates
-           (append
-            user-tags
-            (mapcar (lambda (name) 
-                     (concat name " (P)")) preset-tags))))
-     (list (completing-read
-            "Select tag: "
-            candidates
-            nil t))))
+   (let* ((all-tags (org-supertag-get-all-tags))
+          (preset-names (mapcar #'car org-supertag-preset-tags))
+          ;; Remove any existing preset tags from all-tags to avoid duplicates
+          (user-tags (cl-remove-if (lambda (tag) (member tag preset-names)) all-tags))
+          (candidates (delete-dups
+                      (append 
+                       ;; Format preset tags with [P] prefix
+                       (mapcar (lambda (name) 
+                               (format "[P] %s" name))
+                             preset-names)
+                       ;; Regular tags as is
+                       user-tags)))
+          (input (completing-read
+                 "Enter tag name (TAB: complete): "
+                 candidates nil nil)))
+     (list
+      (cond
+       ((string-prefix-p "[P] " input)
+        (substring input 4))  ; Remove [P] prefix
+       (t input)))))
   
-  ;; Remove the (P) suffix when processing the tag
-  (let* ((clean-tag-name (replace-regexp-in-string " (P)$" "" tag-name))
-         (sanitized-tag (org-supertag-sanitize-tag-name clean-tag-name))
-         (preset-tag (assoc clean-tag-name org-supertag-preset-tags))
-         (node-id (org-id-get-create)))
-    
-    ;; Debug info
-    (message "Adding tag: %s (sanitized: %s)" clean-tag-name sanitized-tag)
-    (when preset-tag
-      (message "Processing preset tag: %S" preset-tag))
-    
-    ;; Add basic tag
-    (org-set-tags (cons sanitized-tag (org-get-tags)))
-    
-    ;; Process preset fields if applicable
-    (when preset-tag
-      (let ((fields (cdr preset-tag)))
-        (dolist (field fields)
-          (let* ((field-name (plist-get field :name))
-                 (field-type (plist-get field :type))
-                 (type-def (org-supertag-get-field-type field-type))
-                 (initial-value (org-supertag-field-get-initial-value field)))
-            
-            ;; Debug field processing
-            (message "Processing field: %s (%s)" field-name field-type)
-            
-            (when-let* ((formatter (plist-get type-def :formatter))
-                        (formatted-value (if formatter
-                                           (funcall formatter initial-value field)
-                                         (format "%s" initial-value))))
-              (org-set-property field-name formatted-value)
-              (org-supertag-tag--set-field-value 
-               sanitized-tag node-id field-name initial-value))))))
-    
-    ;; Trigger behaviors
-    (org-supertag-behavior--on-tag-change node-id sanitized-tag :add)
-    (org-supertag-behavior--apply-styles node-id)
-    
-    (message "Tag %s added successfully" clean-tag-name)))
-
-(defun org-supertag-tag-set-field-and-value ()
-  "Set field values for tags on the current node.
-This function allows setting field values for tags attached to the current node.
-It provides options to:
-1. Edit existing fields
-2. Add new fields
-3. Add preset fields from templates
-4. Remove fields"
-  (interactive)
-  (let* ((node-id (org-id-get))
-         (tags (org-supertag-node-get-tags node-id)))
-    
-    (unless node-id
-      (error "Not on a valid node"))
-    
-    (when (null tags)
-      (when (y-or-n-p "No tags on current node. Add a tag?")
-        (call-interactively #'org-supertag-tag-add-tag)
-        ;; Refresh tags list
-        (setq tags (org-supertag-node-get-tags node-id))))
-    
-    (unless tags
-      (user-error "At least one tag is required to set fields"))
-    
-    ;; Build choices list
-    (let* ((choices
-            (cl-loop for tag-id in tags
-                     for tag = (org-supertag-tag-get tag-id)
-                     append
-                     ;; Existing fields
-                     (cl-loop for field in (plist-get tag :fields)
-                             for field-name = (plist-get field :name)
-                             for field-type = (plist-get field :type)
-                             for current-value = (org-supertag-field-get-value 
-                                                field node-id tag-id)
-                             collect
-                             (cons (format "[%s] %s (type: %s, current: %s)"
-                                         tag-id field-name field-type
-                                         (or current-value "unset"))
-                                       (list :type :existing
-                                            :tag-id tag-id
-                                            :field field)))
-                     ;; New field options
-                     collect (cons (format "[%s] + Create new field" tag-id)
-                                 (list :type :new-create
-                                      :tag-id tag-id))
-                     ;; Remove field option
-                     collect (cons (format "[%s] - Remove field" tag-id)
-                                 (list :type :remove
-                                      :tag-id tag-id))
-                     ;; Preset fields
-                     append
-                     (cl-loop for preset in org-supertag-preset-fields
-                             for preset-name = (car preset)
-                             for preset-desc = (plist-get (cdr preset) :description)
-                             collect
-                             (cons (format "[%s] + Preset: %s (%s)"
-                                         tag-id preset-name preset-desc)
-                                   (list :type :preset
-                                        :tag-id tag-id
-                                        :preset-name preset-name))))))
-      ;; Loop until user presses C-g
-      (while t
-        (let* ((choice (completing-read "Select field: " choices nil t))
-               (choice-data (cdr (assoc choice choices))))
-          
-          (pcase (plist-get choice-data :type)
-            ;; Existing field
-            (:existing
-             (let ((field (plist-get choice-data :field))
-                   (tag-id (plist-get choice-data :tag-id)))
-               (message "Setting value for field '%s' (type: %s) in tag '%s'"
-                        (plist-get field :name)
-                        (plist-get field :type)
-                        tag-id)
-               (org-supertag-field-set-value 
-                field
-                (org-supertag-field-read-value field)
-                node-id
-                tag-id)))
-            ;; Create new field
-            (:new-create
-             (let* ((tag-id (plist-get choice-data :tag-id))
-                    (field-name (read-string "Field name: "))
-                    (type-choices
-                     (mapcar (lambda (type-def)
-                              (let ((type-name (car type-def))
-                                    (type-spec (cdr type-def)))
-                                (format "%s - %s"
-                                        (symbol-name type-name)
-                                        (plist-get type-spec :description))))
-                            org-supertag-field-types))
-                    (field-type-choice
-                     (completing-read 
-                      (format "Field type for '%s': " field-name)
-                      type-choices
-                      nil t))
-                    (field-type (intern (car (split-string field-type-choice " - "))))
-                    (field-def (list :name field-name
-                                   :type field-type)))
-               (message "Adding new field '%s' (type: %s) to tag '%s'"
-                        field-name field-type tag-id)
-               (org-supertag-tag-add-field tag-id field-def)
-               (org-supertag-field-set-value 
-                field-def
-                (org-supertag-field-read-value field-def)
-                node-id
-                tag-id)))
-            ;; Remove field
-            (:remove
-             (let* ((tag-id (plist-get choice-data :tag-id))
-                    (tag (org-supertag-tag-get tag-id))
-                    (fields (plist-get tag :fields))
-                    (field-name (completing-read 
-                               "Select field to remove: "
-                               (mapcar (lambda (field)
-                                       (plist-get field :name))
-                                      fields)
-                               nil t)))
-               (org-supertag-tag-remove-field tag-id field-name)))
-            ;; Preset field
-            (:preset
-             (let* ((tag-id (plist-get choice-data :tag-id))
-                    (preset-name (plist-get choice-data :preset-name))
-                    (field-def (org-supertag-get-preset-field preset-name)))
-               (message "Adding preset field '%s' (type: %s) to tag '%s'"
-                        preset-name
-                        (plist-get field-def :type)
-                        tag-id)
-               (org-supertag-tag-add-field tag-id field-def)
-               (org-supertag-field-set-value 
-                field-def
-                (org-supertag-field-read-value field-def)
-                node-id
-                tag-id)))))))))
+  (when tag-name  
+    (let* ((node-id (org-id-get))
+           (sanitized-name (org-supertag-sanitize-tag-name tag-name))
+           (current-tags (org-supertag-node-get-tags node-id)))
+      (message "Adding tag: %s" sanitized-name)
+      ;; Check for duplicate tag
+      (when (member sanitized-name current-tags)
+        (user-error "Tag '%s' is already applied to this node" sanitized-name))
+      
+      (let* ((existing-tag (org-supertag-tag-get sanitized-name))
+             (preset-fields (org-supertag-get-preset-fields sanitized-name))
+             ;; Get or create the tag
+             (tag-id
+              (cond
+               ;; If tag exists, use it
+               (existing-tag
+                sanitized-name)
+               ;; If it's a preset tag, create with preset fields
+               (preset-fields
+                (progn
+                  (message "Creating new tag from preset with fields: %S" preset-fields)
+                  (org-supertag-tag-create sanitized-name :fields preset-fields)))
+               ;; Otherwise create a new empty tag
+               (t
+                (if (y-or-n-p (format "Create new tag '%s'? " sanitized-name))
+                    (org-supertag-tag-create sanitized-name)
+                  (user-error "Tag creation cancelled"))))))
+        ;; Apply the tag
+        (org-supertag-tag-apply tag-id)
+        ;; Skip immediate field value input for preset tags
+        (message "Tag '%s' applied. Use `org-supertag-tag-set-field-and-value' to set field values." tag-id)))))
 
 (defun org-supertag-tag-batch-add-tag (tag-name)
   "Batch add tags to selected headlines.
@@ -760,7 +453,6 @@ TAG-NAME is the name of the tag to add."
                  tag-name
                  (length selected-headlines))))))
 
-
 (defun org-supertag-tag-remove ()
   "Remove tag from current node.
 This function:
@@ -784,10 +476,432 @@ This function:
     (message "Removed tag '%s' and its fields" tag-id)))
 
 ;;----------------------------------------------------------------------
+;; Field Edit Mode
+;;----------------------------------------------------------------------  
+
+(defun org-supertag-tag-set-field-and-value ()
+  "Set field values for tags on the current node using a table interface."
+  (interactive)
+  (org-supertag-tag-edit-fields-table))
+
+(define-derived-mode org-supertag-field-edit-mode special-mode "OrgSuperTag-FieldEdit"
+  "Major mode for editing org-supertag fields."
+  (setq-local buffer-read-only nil)
+  
+  ;; 定义按键绑定
+  (let ((map org-supertag-field-edit-mode-map))
+    (define-key map (kbd "n") #'org-supertag-field-edit-next-field)
+    (define-key map (kbd "p") #'org-supertag-field-edit-prev-field)
+    (define-key map (kbd "RET") #'org-supertag-field-edit-complete-field)
+    (define-key map (kbd "C-c C-c") #'org-supertag-field-edit-save)
+    (define-key map (kbd "C-c C-k") #'org-supertag-field-edit-cancel)))
+
+(defun org-supertag-tag--insert-tag-fields (tag-id source-buffer source-point)
+  "Insert fields for a tag.
+TAG-ID is the tag identifier.
+SOURCE-BUFFER is the buffer containing the org node.
+SOURCE-POINT is the point in SOURCE-BUFFER."
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (fields (plist-get tag :fields))
+         ;; 1. Calculate the maximum field name length
+         (max-name-length
+          (if fields
+              (apply #'max
+                    (mapcar (lambda (field)
+                             (length (plist-get field :name)))
+                           fields))
+              0))
+         ;; 2. Calculate the maximum type name length
+         (max-type-length
+          (if fields
+              (apply #'max
+                    (mapcar (lambda (field)
+                             (length (symbol-name (plist-get field :type))))
+                           fields))
+              0)))
+
+    (insert (format "Tag: %s\n" tag-id))
+    (insert "──────────────────────────────────────────────\n")
+    (if fields
+        (progn
+          (dolist (field fields)
+            (let* ((field-name (plist-get field :name))
+                   (field-type (plist-get field :type))
+                   (current-value 
+                    (with-current-buffer source-buffer
+                      (save-excursion
+                        (goto-char source-point)
+                        (org-entry-get (point) field-name nil t))))
+                   ;; 3. Use fixed width formatting for fields
+                   (formatted-line
+                    (format (format "  %%-%ds [%%-%ds]: %%s\n" 
+                                  max-name-length 
+                                  max-type-length)
+                           field-name
+                           (symbol-name field-type)
+                           (or current-value ""))))
+              (insert formatted-line)))
+          (insert "  [Press 'a' to add, 'e' to edit, 'd' to delete fields]\n"))
+      ;; If no fields defined
+      (insert "  No fields defined\n")
+      (insert "  [Press 'a' to add fields]\n"))))
+
+(defun org-supertag-tag--add-field (tag-id)
+  "Add a new field to TAG-ID."
+  (let* ((field-name (read-string "Field name: "))
+         (all-types (mapcar #'car org-supertag-field-types))
+         (type-help
+          (concat
+           "Available types:\n"
+           (mapconcat
+            (lambda (type)
+              (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
+                                   :description)))
+                (format "  %-12s - %s" type desc)))
+            all-types
+            "\n")))
+         (field-type
+          (minibuffer-with-setup-hook
+              (lambda ()
+                (let ((inhibit-read-only t))
+                  (with-current-buffer (get-buffer-create "*Minibuf Help*")
+                    (erase-buffer)
+                    (insert type-help)
+                    (display-buffer (current-buffer)
+                                  '((display-buffer-in-side-window)
+                                    (side . bottom)
+                                    (window-height . fit-window-to-buffer))))))
+            (intern
+             (completing-read 
+              "Field type: "
+              (mapcar #'symbol-name all-types)
+              nil t))))
+         (field-def
+          (list :name field-name
+                :type field-type)))
+    ;; 清理帮助 buffer
+    (when-let ((help-buf (get-buffer "*Minibuf Help*")))
+      (kill-buffer help-buf))
+    ;; Add options for options type
+    (when (eq field-type 'options)
+      (let ((options
+             (split-string
+              (read-string "Options (comma separated): ")
+              "," t "[ \t]+")))
+        (setq field-def 
+              (plist-put field-def :options options))))
+    ;; Add description
+    (let ((desc (read-string "Description (optional): ")))
+      (when (not (string-empty-p desc))
+        (setq field-def 
+              (plist-put field-def :description desc))))
+    ;; Add field to tag
+    (org-supertag-tag-add-field tag-id field-def)))
+
+(defun org-supertag-tag--refresh-field-table (context)
+  "Refresh the field table display.
+CONTEXT is the edit context plist containing:
+- :node-id        The node ID
+- :node-title     The node title
+- :tags           List of tags
+- :source-buffer  The source buffer
+- :source-point   The point in source buffer"
+  (let ((inhibit-read-only t)
+        (current-point (point)))
+    (erase-buffer)
+    ;; Header
+    (insert (format "Fields for Node: %s\n" 
+                    (plist-get context :node-title)))
+    ;; Fields
+    (dolist (tag-id (plist-get context :tags))
+      (org-supertag-tag--insert-tag-fields 
+       tag-id
+       (plist-get context :source-buffer)
+       (plist-get context :source-point)))
+    ;; Help text
+    (insert "\nCommands:\n")
+    (insert "n: Next field            p: Previous field\n")
+    (insert "RET: Edit field value    a: Add field\n")
+    (insert "e: Edit field            d: Delete field\n")
+    (insert "C-c C-c: Save           C-c C-k: Cancel\n")
+    ;; Restore point
+    (goto-char (min current-point (point-max)))))
+
+(defun org-supertag-tag--edit-field (tag-id field-name)
+  "Edit an existing field in TAG-ID with FIELD-NAME."
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (fields (plist-get tag :fields))
+         (field (cl-find field-name fields
+                        :key (lambda (f) (plist-get f :name))
+                        :test #'equal))
+         (action (completing-read 
+                 "Action: "
+                 '("Edit type" "Edit options" "Edit description")
+                 nil t)))
+    (pcase action
+      ("Edit type"
+       (let* ((all-types (mapcar #'car org-supertag-field-types))
+              (type-help
+               (concat
+                "Available types:\n"
+                (mapconcat
+                 (lambda (type)
+                   (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
+                                        :description)))
+                     (format "  %-12s - %s" type desc)))
+                 all-types
+                 "\n")))
+              (new-type
+               (minibuffer-with-setup-hook
+                   (lambda ()
+                     (let ((inhibit-read-only t))
+                       (with-current-buffer (get-buffer-create "*Minibuf Help*")
+                         (erase-buffer)
+                         (insert type-help)
+                         (display-buffer (current-buffer)
+                                       '((display-buffer-in-side-window)
+                                         (side . bottom)
+                                         (window-height . fit-window-to-buffer))))))
+                 (intern
+                  (completing-read 
+                   "New type: "
+                   (mapcar #'symbol-name all-types)
+                   nil t)))))
+         ;; 清理帮助 buffer
+         (when-let ((help-buf (get-buffer "*Minibuf Help*")))
+           (kill-buffer help-buf))
+         
+         (setq field (plist-put field :type new-type))
+         ;; 如果新类型是 options，添加选项
+         (when (eq new-type 'options)
+           (let ((options
+                  (split-string
+                   (read-string "Options (comma separated): ")
+                   "," t "[ \t]+")))
+             (setq field (plist-put field :options options))))
+         ;; 更新字段列表
+         (let ((new-fields (cl-substitute field
+                                        (cl-find field-name fields
+                                                :key (lambda (f) (plist-get f :name))
+                                                :test #'equal)
+                                        fields
+                                        :test #'equal)))
+           ;; 更新 tag 定义
+           (setq tag (plist-put tag :fields new-fields))
+           (org-supertag-db-add tag-id tag))))
+      
+      ("Edit options"
+       (when (eq (plist-get field :type) 'options)
+         (let ((new-options
+                (split-string
+                 (read-string "New options (comma separated): "
+                            (mapconcat #'identity 
+                                     (plist-get field :options)
+                                     ","))
+                 "," t "[ \t]+")))
+           (setq field (plist-put field :options new-options))
+           ;; 更新字段列表
+           (let ((new-fields (cl-substitute field
+                                          (cl-find field-name fields
+                                                  :key (lambda (f) (plist-get f :name))
+                                                  :test #'equal)
+                                          fields
+                                          :test #'equal)))
+             ;; 更新 tag 定义
+             (setq tag (plist-put tag :fields new-fields))
+             (org-supertag-db-add tag-id tag)))))
+      
+      ("Edit description"
+       (let ((new-desc (read-string "New description: "
+                                   (plist-get field :description))))
+         (setq field (plist-put field :description new-desc))
+         ;; 更新字段列表
+         (let ((new-fields (cl-substitute field
+                                        (cl-find field-name fields
+                                                :key (lambda (f) (plist-get f :name))
+                                                :test #'equal)
+                                        fields
+                                        :test #'equal)))
+           ;; 更新 tag 定义
+           (setq tag (plist-put tag :fields new-fields))
+           (org-supertag-db-add tag-id tag)))))))
+
+(defun org-supertag-tag--goto-first-field ()
+  "Move cursor to the first field in the OrgSuperTag-FieldEdit buffer.
+If no field exists, move to the first line after the separator line."
+  (let ((field-buffer (get-buffer "*Org SuperTag Fields*")))
+    (when field-buffer
+      (with-current-buffer field-buffer
+        (goto-char (point-min))
+        ;; Find first separator line
+        (if (re-search-forward "^─+$" nil t)
+            (progn
+              ;; Try to find first field
+              (forward-line 1)
+              (if (looking-at "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$")
+                  (beginning-of-line)
+                ;; If no field, stay at current line
+                t))
+          ;; If no separator found, go to beginning
+          (goto-char (point-min)))))))
+
+(defun org-supertag-tag-edit-fields-table ()
+  "Edit fields of current node's tags in a table format."
+  (interactive)
+  (let* ((source-buffer (current-buffer))
+         (source-point (point))
+         (node-id (org-id-get))
+         (tags (org-supertag-node-get-tags node-id))
+         (node-title (org-get-heading t t t t))
+         (edit-buffer (get-buffer-create "*Org SuperTag Fields*")))
+    
+    ;; Prepare the edit buffer
+    (with-current-buffer edit-buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-supertag-field-edit-mode)
+        
+        ;; Store context
+        (setq-local org-supertag--edit-context
+                    (list :node-id node-id
+                          :node-title node-title
+                          :tags tags
+                          :source-buffer source-buffer
+                          :source-point source-point))
+        
+        ;; Initial content
+        (insert (format "Fields for Node: %s\n" node-title))
+        (dolist (tag-id tags)
+          (org-supertag-tag--insert-tag-fields tag-id source-buffer source-point))
+        
+        ;; Add help text
+        (insert "\nCommands:\n")
+        (insert "TAB: Next field          S-TAB: Previous field\n")
+        (insert "RET: Edit field value    a: Add fields\n")
+        (insert "e: Edit field            d: Delete field\n")
+        (insert "C-c C-c: Save           C-c C-k: Cancel\n")
+        
+        ;; Add key bindings for field operations
+        (define-key org-supertag-field-edit-mode-map
+          (kbd "a")
+          (lambda ()
+            (interactive)
+            (let ((tag-id (save-excursion
+                           (re-search-backward "^Tag: \\(.+\\)$" nil t)
+                           (match-string 1))))
+              (org-supertag-tag--add-field tag-id)
+              (org-supertag-tag--refresh-field-table org-supertag--edit-context))))
+        
+        (define-key org-supertag-field-edit-mode-map
+          (kbd "e")
+          (lambda ()
+            (interactive)
+            (save-excursion
+              (beginning-of-line)
+              (when (looking-at "^  \\([^ ]+\\) \\[")
+                (let* ((field-name (match-string 1))
+                       (tag-id (save-excursion
+                                (re-search-backward "^Tag: \\(.+\\)$" nil t)
+                                (match-string 1))))
+                  (org-supertag-tag--edit-field tag-id field-name)
+                  (org-supertag-tag--refresh-field-table org-supertag--edit-context))))))
+        
+        (define-key org-supertag-field-edit-mode-map
+          (kbd "d")
+          (lambda ()
+            (interactive)
+            (save-excursion
+              (beginning-of-line)
+              (when (looking-at "^  \\([^ ]+\\) \\[")
+                (let* ((field-name (match-string 1))
+                       (tag-id (save-excursion
+                                (re-search-backward "^Tag: \\(.+\\)$" nil t)
+                                (match-string 1))))
+                  (when (yes-or-no-p (format "Delete field '%s'? " field-name))
+                    (org-supertag-tag-remove-field tag-id field-name)
+                    (org-supertag-tag--refresh-field-table org-supertag--edit-context)))))))))
+    
+    ;; Display buffer below current buffer and position cursor
+    (let ((window (display-buffer edit-buffer
+                                '((display-buffer-below-selected)
+                                  (window-height . fit-window-to-buffer)
+                                  (preserve-size . (nil . t))
+                                  (select . t)))))  
+      (select-window window)
+      ;; 2. Set the cursor position
+      (goto-char (point-min))
+      (re-search-forward "^─+$" nil t)
+      (forward-line 1))))
+
+
+(defun org-supertag-field-edit-next-field ()
+  "Move to next editable field."
+  (interactive)
+  (forward-line)
+  (when (looking-at "^$")
+    (forward-line)))
+
+(defun org-supertag-field-edit-prev-field ()
+  "Move to previous editable field."
+  (interactive)
+  (forward-line -1)
+  (when (looking-at "^$")
+    (forward-line -1)))
+
+(defun org-supertag-field-edit-complete-field ()
+  "Edit the current field value."
+  (interactive)
+  (when (looking-at "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$")
+    (let* ((field-name (match-string 1))
+           (field-type (match-string 2))
+           (current-value (match-string 3))
+           (tag-id (save-excursion
+                    (re-search-backward "^Tag: \\(.+\\)$" nil t)
+                    (match-string 1)))
+           (tag (org-supertag-tag-get tag-id))
+           (field (cl-find (string-trim field-name)
+                          (plist-get tag :fields)
+                          :key (lambda (f) (plist-get f :name))
+                          :test #'equal))
+           (new-value (org-supertag-field-read-value field)))
+      (when new-value
+        (save-excursion
+          (beginning-of-line)
+          (when (re-search-forward ": .*$" nil t)
+            (replace-match (format ": %s" new-value))))))))
+
+(defun org-supertag-field-edit-save ()
+  "Save all field values and close the edit buffer."
+  (interactive)
+  (let* ((context org-supertag--edit-context)
+         (node-id (plist-get context :node-id))
+         (source-buffer (plist-get context :source-buffer))
+         (source-point (plist-get context :source-point)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$" nil t)
+        (let ((field-name (string-trim (match-string 1)))
+              (new-value (string-trim (match-string 3))))
+          (unless (string-empty-p new-value)
+            (with-current-buffer source-buffer
+              (save-excursion
+                (goto-char source-point)
+                (org-set-property field-name new-value)))))))
+    (quit-window t)))
+
+(defun org-supertag-field-edit-cancel ()
+  "Cancel editing and close the buffer."
+  (interactive)
+  (when (yes-or-no-p "Cancel editing? Changes will be lost.")
+    (quit-window t)))
+
+
+
+;;----------------------------------------------------------------------
 ;; Preset Tag
 ;;----------------------------------------------------------------------
 
-(defvar org-supertag-preset-tags
+(defcustom org-supertag-preset-tags
   '(("project" . ((:name "status"
                   :type options 
                   :options ("planning" "active" "on-hold" "completed" "cancelled")
@@ -871,33 +985,73 @@ Format:
 
 Each field definition is a plist with properties:
 - :name        Field name
-- :type        Field type (string, options, date, number, etc)
+- :type        Field type (string, options, date, etc)
 - :options     List of options (for options type)
 - :description Field description
 
 Example user configuration:
 (setq org-supertag-preset-tags
-      '((\"book\" . ((name \"status\"
-                     :type options
-                     :options (\"reading\" \"completed\" \"want-to-read\")
-                     :description \"Reading status\")
-                    (:name \"rating\"
-                     :type number
-                     :min 1
-                     :max 5
-                     :description \"Book rating\")
-                    (:name \"author\"
-                     :type string
-                     :description \"Author\")))))")
+      (append org-supertag-preset-tags
+              '((\"book\" . ((:name \"status\"
+                             :type options
+                             :options (\"reading\" \"completed\" \"want-to-read\")
+                             :description \"Reading status\")
+                            (:name \"author\"
+                             :type string
+                             :description \"Author\"))))))"
+  :type '(repeat (cons (string :tag "Tag name")
+                      (repeat (plist :options ((:name string)
+                                              (:type (choice (const string)
+                                                            (const options)
+                                                            (const date)))
+                                              (:options (repeat string))
+                                              (:description string))))))
+  :group 'org-supertag
+  :set (lambda (sym val)
+         (set-default sym val)
+         ;; Optionally add hook to refresh tag cache if needed
+         ))
 
 (defun org-supertag-get-preset-fields (tag-name)
   "Get predefined fields for a tag.
-TAG-NAME is the name of the tag."
-  (message "Getting preset fields for tag: %s" tag-name)
+TAG-NAME is the name of the tag.
+
+Returns a list of field definitions with the following properties:
+- :name        Field name (required)
+- :type        Field type (required)
+- :options     List of options (for options type)
+- :description Field description (optional)
+
+Example return value:
+((:name \"status\"
+  :type options
+  :options (\"todo\" \"in-progress\" \"done\")
+  :description \"Task status\")
+ (:name \"priority\"
+  :type options
+  :options (\"high\" \"medium\" \"low\")))"
   (when-let ((preset (assoc tag-name org-supertag-preset-tags)))
     (let ((fields (cdr preset)))
-      (message "Found preset fields: %S" fields)
-      fields)))
+      ;; Validate and normalize field definitions
+      (cl-loop for field in fields
+               collect (let* ((name (plist-get field :name))
+                             (type (plist-get field :type))
+                            (options (plist-get field :options))
+                            (description (plist-get field :description)))
+                         
+                         ;; Ensure required fields are present
+                         (unless (and name type)
+                           (error "Invalid field definition in preset tag %s: missing name or type" tag-name))
+                         
+                         ;; Build normalized field definition
+                         (append
+                          (list :name name
+                                :type type)
+                          ;; Add optional properties
+                          (when description
+                            (list :description description))
+                          (when (and options (eq type 'options))
+                            (list :options options))))))))
 
 (defun org-supertag-tag-edit-preset ()
   "Edit preset tag definitions interactively.
@@ -936,9 +1090,9 @@ This function allows:
                (insert (format "  - %s (%s)\n"
                              (plist-get field :name)
                              (plist-get field :type))))))
-         (org-mode)
-         (display-buffer (current-buffer))))
-      
+       (org-mode)
+       (display-buffer (current-buffer))))
+     
       ;; Add new preset
       (:new
        (let* ((tag-name (read-string "Tag name: "))
@@ -999,9 +1153,9 @@ This function allows:
                               "Field type: "
                               '("string" "options" "date" "number")
                               nil t))
-                   (field-def
-                    (list :name field-name
-                          :type (intern field-type))))
+                    (field-def
+                     (list :name field-name
+                           :type (intern field-type))))
               ;; Add options for options type
               (when (string= field-type "options")
                 (let ((options
@@ -1092,31 +1246,5 @@ This function allows:
                                (remove field current-fields))
                           (assoc-delete-all 
                            tag-name org-supertag-preset-tags))))))))))))))
-
-(defun org-supertag--parse-preset-field (field-def)
-  "Parse preset field definition.
-FIELD-DEF is the preset field definition"
-  (let* ((name (car field-def))
-         (props (cdr field-def)))
-    (message "Parsing preset field: %s with props: %S" name props)
-    (let ((parsed-field
-           (append 
-            (list :name name
-                  :type (plist-get props :type))
-            ;; 可选属性
-            (when-let ((desc (plist-get props :description)))
-              (list :description desc))
-            (when-let ((values (plist-get props :values)))
-              (list :options values))
-            (when-let ((min (plist-get props :min)))
-              (list :min min))
-            (when-let ((max (plist-get props :max)))
-              (list :max max))
-            (when-let ((sep (plist-get props :separator)))
-              (list :separator sep)))))
-      (message "Parsed field result: %S" parsed-field)
-      parsed-field)))
-
-
 
 (provide 'org-supertag-tag)
