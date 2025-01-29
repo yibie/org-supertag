@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 2.2.2
+;; Version: 2.2.3
 ;; Package-Requires: ((emacs "28.1") (org "9.6"))
 ;; URL: https://github.com/yibie/org-supertag
 
@@ -39,7 +39,7 @@
 ;; New in 2.0.0:
 ;; - Schedule trigger and deadline management system
 ;;   - Cron-style scheduling for behaviors ("minute hour day month weekday")
-;;     Examples: "0 9 * * 1-5" (weekdays at 9:00)
+;;     Examples: " 0 9 * * 1-5" (weekdays at 9:00)
 ;;              "30 * * * *" (every hour at :30)
 ;;   - Deadline check behaviors (@deadline-check)
 ;;   - Overdue and upcoming deadline handling
