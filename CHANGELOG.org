@@ -1,6 +1,31 @@
 * Changelog
 
-* [2.2.3] - 2024-03-20
+* [2.2.4] - 2024-12-20
+** Refactor
+**** Change field type tag-reference to direct node reference
+
+BREAKING CHANGE: Completely redesign the tag-reference field type to 
+reference nodes directly instead of referencing other tag's field values.
+
+Before:
+- tag-reference pointed to another tag's field value
+- Used for value inheritance between different tags
+
+After:
+- tag-reference now directly points to org nodes
+- Uses org-mode's link format ([[id:NODE-ID][TITLE]])
+- Enables direct node relationships
+
+Changes:
+1. Rewrote org-supertag-field--convert-value to handle org-mode link format
+2. Modified org-supertag-validate-tag-reference to validate node existence
+3. Added node title lookup for better link display
+
+Note: This is a breaking change. Existing tag-reference fields will need 
+to be migrated to the new format.
+
+
+* [2.2.3] - 2025-01-28
 ** Features
 **** Improve field type selection and display
 - Add help message showing available field types with descriptions

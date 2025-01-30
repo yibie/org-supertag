@@ -475,6 +475,43 @@ This function:
     (org-supertag-tag--remove tag-id node-id)
     (message "Removed tag '%s' and its fields" tag-id)))
 
+(defun org-supertag-tag-delete (tag-id)
+  "Delete a tag completely, including removing it from all nodes.
+TAG-ID: The tag identifier to delete.
+This will:
+1. Remove the tag from all nodes that have it
+2. Delete all field values associated with this tag
+3. Delete the tag definition from the database"
+  (interactive (list (completing-read "Tag to delete: " (org-supertag-get-all-tags))))
+  (when (yes-or-no-p (format "Delete tag '%s'? This will remove it from all nodes. " tag-id))
+    (let ((nodes (org-supertag-tag-get-nodes tag-id))
+          (tag (org-supertag-db-get tag-id)))
+      ;; Validation
+      (unless tag
+        (error "Tag %s not found" tag-id))
+      (unless (eq (plist-get tag :type) :tag)
+        (error "Invalid tag type for %s" tag-id))
+
+      ;; Remove tag from all nodes
+      (dolist (node-id nodes)
+        ;; Remove tag link from node
+        (org-supertag-node-db-remove-tag node-id tag-id)
+        ;; Remove all field values for this tag
+        (dolist (field (plist-get tag :fields))
+          (let ((field-name (plist-get field :name)))
+            ;; Remove from database
+            (org-supertag-field-db-delete-value node-id field-name tag-id)
+            ;; Remove from org buffer
+            (when-let ((pos (condition-case nil
+                              (org-id-find node-id t)
+                            (error nil))))
+              (org-with-point-at pos
+                (org-delete-property field-name))))))
+
+      ;; Delete tag from database
+      (org-supertag-db-remove-object tag-id)
+      (message "Deleted tag '%s' and removed it from %d nodes" tag-id (length nodes)))))
+
 ;;----------------------------------------------------------------------
 ;; Field Edit Mode
 ;;----------------------------------------------------------------------  
@@ -713,7 +750,7 @@ CONTEXT is the edit context plist containing:
       
       ("Edit description"
        (let ((new-desc (read-string "New description: "
-                                   (plist-get field :description))))
+                                   (plist-get field :description)))
          (setq field (plist-put field :description new-desc))
          ;; 更新字段列表
          (let ((new-fields (cl-substitute field
@@ -724,7 +761,7 @@ CONTEXT is the edit context plist containing:
                                         :test #'equal)))
            ;; 更新 tag 定义
            (setq tag (plist-put tag :fields new-fields))
-           (org-supertag-db-add tag-id tag)))))))
+           (org-supertag-db-add tag-id tag))))))))
 
 (defun org-supertag-tag--goto-first-field ()
   "Move cursor to the first field in the OrgSuperTag-FieldEdit buffer.
@@ -833,7 +870,6 @@ If no field exists, move to the first line after the separator line."
       (re-search-forward "^─+$" nil t)
       (forward-line 1))))
 
-
 (defun org-supertag-field-edit-next-field ()
   "Move to next editable field."
   (interactive)
@@ -895,7 +931,72 @@ If no field exists, move to the first line after the separator line."
   (when (yes-or-no-p "Cancel editing? Changes will be lost.")
     (quit-window t)))
 
+;;------------------------------------------------------------
+;; Company Completion
+;;------------------------------------------------------------
 
+;;(require 'company)
+
+(defvar org-supertag-company-prefix-regexp
+  "#\\([[:word:]:-]*\\)"
+  "Regexp to match the prefix for company completion.")
+
+(defun org-supertag-company--make-candidate (tag-name)
+  "Create a company candidate from TAG-NAME."
+  (let* ((tag (org-supertag-tag-get tag-name))
+         (fields (plist-get tag :fields))
+         (field-count (length fields)))
+    (propertize tag-name
+                'tag tag
+                'help-echo (format "SuperTag with %d field(s)" field-count))))
+
+(defun org-supertag-company--candidates (prefix)
+  "Get completion candidates for PREFIX."
+  (let* ((prefix-no-hash (if (> (length prefix) 1)
+                            (org-supertag-sanitize-tag-name (substring prefix 1))
+                          ""))
+         (all-tags (org-supertag-get-all-tags)))
+    (cl-loop for tag-name in all-tags
+             when (string-prefix-p prefix-no-hash tag-name t)
+             collect (org-supertag-company--make-candidate tag-name))))
+
+(defun org-supertag-company--post-completion (candidate)
+  "Handle post-completion actions for CANDIDATE."
+  (let* ((tag (get-text-property 0 'tag candidate))
+         (tag-name (plist-get tag :name)))
+    ;; Delete the completion prefix including #
+    (delete-region (- (point) (length candidate) 1) (point))
+    ;; Apply tag
+    (org-supertag-tag-add-tag tag-name)))
+
+;;;###autoload
+(defun org-supertag-company-backend (command &optional arg &rest ignored)
+  "Company backend for org-supertag completion.
+COMMAND, ARG and IGNORED are standard arguments for company backends."
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'org-supertag-company-backend))
+    (prefix (and (eq major-mode 'org-mode)
+                 (save-excursion
+                   (when (looking-back org-supertag-company-prefix-regexp
+                                     (line-beginning-position))
+                     (match-string-no-properties 0)))))
+    (candidates (org-supertag-company--candidates arg))
+    (post-completion (org-supertag-company--post-completion arg))
+    (annotation (when-let* ((tag (get-text-property 0 'tag arg))
+                           (fields (plist-get tag :fields)))
+                 (format " [%d fields]" (length fields))))
+    (quickhelp-string (get-text-property 0 'help-echo arg))
+    (sorted t)))
+
+;;;###autoload
+(defun org-supertag-setup-completion ()
+  "Setup company completion for org-supertag."
+  (when (and (eq major-mode 'org-mode)
+             (featurep 'company))
+    (add-to-list 'company-backends 'org-supertag-company-backend)))
+
+(add-hook 'org-mode-hook #'org-supertag-setup-completion)
 
 ;;----------------------------------------------------------------------
 ;; Preset Tag
@@ -1129,7 +1230,7 @@ This function allows:
       ;; Edit existing preset
       ((pred stringp)
        (let* ((tag-name action)
-              (current-fields (cdr (assoc tag-name org-supertag-preset-tags)))
+              (current-fields (cdr (assoc tag-name org-supertag-preset-tags))
               (field-choices
                (append
                 '(("Add new field" . :new)
@@ -1205,7 +1306,10 @@ This function allows:
                  (when (eq field-type 'options)
                    (let ((new-options
                           (split-string
-                           (read-string "New options (comma separated): ")
+                           (read-string "New options (comma separated): "
+                            (mapconcat #'identity 
+                                     (plist-get field :options)
+                                     ","))
                            "," t "[ \t]+")))
                      (setq field
                            (plist-put field :options new-options))
@@ -1223,7 +1327,7 @@ This function allows:
                 (:description
                  (let ((new-desc
                         (read-string "New description: "
-                                    (plist-get field :description))))
+                                             (plist-get field :description)))
                    (setq field
                          (plist-put field :description new-desc))
                    (customize-save-variable
@@ -1245,6 +1349,6 @@ This function allows:
                     (cons (cons tag-name
                                (remove field current-fields))
                           (assoc-delete-all 
-                           tag-name org-supertag-preset-tags))))))))))))))
+                           tag-name org-supertag-preset-tags))))))))))))))))
 
 (provide 'org-supertag-tag)

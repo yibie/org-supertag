@@ -72,6 +72,7 @@
 (require 'org-supertag-sync)
 (require 'org-supertag-luhmann)
 
+
 (defgroup org-supertag nil
   "Customization options for org-supertag."
   :group 'org
@@ -162,8 +163,6 @@
     (org-supertag-sync-init)
     ;; 6. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
-    (add-hook 'org-after-refile-insert-hook 
-               #'org-supertag-node--after-refile-update-ids)
     ;; Mark as initialized
     (setq org-supertag--initialized t)))
 
@@ -181,8 +180,6 @@
   (org-supertag-db--cache-clear)
   ;; 6. Remove hooks
   (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
-  (add-hook 'org-after-refile-insert-hook 
-              #'org-supertag-node--after-refile-update-ids)
   ;; Reset initialization flag
   (setq org-supertag--initialized nil))
 
