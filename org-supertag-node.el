@@ -111,6 +111,18 @@ TAG-ID is the tag identifier"
     (run-hook-with-args 'org-supertag-node-tag-added-hook
                         node-id tag-id)))
 
+(defun org-supertag-node-db-remove-tag (node-id tag-id)
+  "Remove a tag from a node.
+NODE-ID is the node identifier
+TAG-ID is the tag identifier"
+  (when (and (org-supertag-node-db-exists-p node-id)
+             (org-supertag-db-exists-p tag-id))
+    ;; Remove relationship
+    (org-supertag-db-remove-link :node-tag node-id tag-id)
+    ;; Trigger event
+    (run-hook-with-args 'org-supertag-node-tag-removed-hook
+                        node-id tag-id)))
+
 (defun org-supertag-node-db--get-candidates ()
   "Get list of all referenceable node candidates.
 
@@ -689,6 +701,84 @@ Returns t if:
       (message "  In archived heading: %s"
                (if (org-in-archived-heading-p) "yes" "no")))
     at-heading))
+
+(defun org-supertag-node--format-path (file-path olp title)
+  "Format node path for display.
+FILE-PATH is the path to the file
+OLP is the outline path list
+TITLE is the node title"
+  (let* ((file-name (if file-path 
+                        (file-name-nondirectory file-path)
+                      "<no file>"))  
+         (path-parts (append (list file-name) 
+                           (or olp nil)  
+                           (list (or title "<no title>")))))  
+    (mapconcat #'identity 
+               (remove nil path-parts)  
+               " / ")))
+
+(defun org-supertag-node--collect-nodes ()
+  "Collect all nodes with their paths.
+Returns a list of (node-id . display-string) pairs."
+  (let (nodes)
+    (maphash
+     (lambda (id props)
+       (when (eq (plist-get props :type) :node)
+         (let* ((file-path (plist-get props :file-path))
+                (title (or (plist-get props :title) "<untitled>"))
+                (olp (plist-get props :olp))
+                ;; 确保所有字符串属性都是纯文本
+                (clean-title (if (stringp title)
+                               (substring-no-properties title)
+                             "<invalid title>"))
+                (display (org-supertag-node--format-path file-path olp clean-title)))
+           (push (cons id display) nodes))))
+     org-supertag-db--object)
+    ;; 按显示字符串排序
+    (sort nodes (lambda (a b) 
+                 (string< (cdr a) (cdr b))))))
+
+;;;###autoload
+(defun org-supertag-node-find ()
+  "Find and jump to a node using completion.
+Displays nodes with their full paths in format:
+filename / outline-path / title"
+  (interactive)
+  (let* ((nodes (org-supertag-node--collect-nodes))
+         (candidates (mapcar #'cdr nodes))
+         (choice (completing-read "Find node: " candidates nil t))
+         (node-id (car (rassoc choice nodes))))
+    
+    (if node-id
+        (if (org-supertag-query--find-node node-id)
+            (message "Jumped to node: %s" choice)
+          (message "Error: Could not find node location"))
+      (message "No matching node found"))))
+
+;;;###autoload
+(defun org-supertag-node-find-other-window ()
+  "Like `org-supertag-node-find' but display node in other window."
+  (interactive)
+  (let* ((nodes (org-supertag-node--collect-nodes))
+         (candidates (mapcar #'cdr nodes))
+         (choice (completing-read "Find node: " candidates nil t))
+         (node-id (car (rassoc choice nodes))))
+    
+    (when node-id
+      (when-let* ((props (org-supertag-db-get node-id))
+                  (file-path (plist-get props :file-path))
+                  ((file-exists-p file-path)))
+        ;; Open file in other window
+        (find-file-other-window file-path)
+        ;; Find and show node
+        (widen)
+        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+          (goto-char (cdr marker))
+          (org-show-entry)
+          (org-show-children)
+          (recenter)
+          (message "Jumped to node: %s" choice))))))
+
 
 ;;------------------------------------------------------------------------------
 ;; Node Relations 
