@@ -475,7 +475,7 @@ This function:
     (org-supertag-tag--remove tag-id node-id)
     (message "Removed tag '%s' and its fields" tag-id)))
 
-(defun org-supertag-tag-delete (tag-id)
+(defun org-supertag-tag-delete-at-all (tag-id)
   "Delete a tag completely, including removing it from all nodes.
 TAG-ID: The tag identifier to delete.
 This will:
@@ -716,14 +716,14 @@ CONTEXT is the edit context plist containing:
                    (read-string "Options (comma separated): ")
                    "," t "[ \t]+")))
              (setq field (plist-put field :options options))))
-         ;; 更新字段列表
+         ;; Update field value in tag definition
          (let ((new-fields (cl-substitute field
                                         (cl-find field-name fields
                                                 :key (lambda (f) (plist-get f :name))
                                                 :test #'equal)
                                         fields
                                         :test #'equal)))
-           ;; 更新 tag 定义
+           ;; Update tag in database
            (setq tag (plist-put tag :fields new-fields))
            (org-supertag-db-add tag-id tag))))
       
@@ -737,14 +737,14 @@ CONTEXT is the edit context plist containing:
                                      ","))
                  "," t "[ \t]+")))
            (setq field (plist-put field :options new-options))
-           ;; 更新字段列表
+           ;; Update field value in tag definition
            (let ((new-fields (cl-substitute field
                                           (cl-find field-name fields
                                                   :key (lambda (f) (plist-get f :name))
                                                   :test #'equal)
                                           fields
                                           :test #'equal)))
-             ;; 更新 tag 定义
+             ;; Update tag in database
              (setq tag (plist-put tag :fields new-fields))
              (org-supertag-db-add tag-id tag)))))
       
@@ -752,14 +752,14 @@ CONTEXT is the edit context plist containing:
        (let ((new-desc (read-string "New description: "
                                    (plist-get field :description)))
          (setq field (plist-put field :description new-desc))
-         ;; 更新字段列表
+         ;; Update field value in tag definition
          (let ((new-fields (cl-substitute field
                                         (cl-find field-name fields
                                                 :key (lambda (f) (plist-get f :name))
                                                 :test #'equal)
                                         fields
                                         :test #'equal)))
-           ;; 更新 tag 定义
+           ;; Update tag in database
            (setq tag (plist-put tag :fields new-fields))
            (org-supertag-db-add tag-id tag))))))))
 
@@ -938,8 +938,9 @@ If no field exists, move to the first line after the separator line."
 ;;(require 'company)
 
 (defvar org-supertag-company-prefix-regexp
-  "#\\([[:word:]:-]*\\)"
-  "Regexp to match the prefix for company completion.")
+  "#\\([[:alnum:]_-]*\\)"
+  "Regexp to match the prefix for company completion.
+Only allows alphanumeric characters, underscore and hyphen after #.")
 
 (defun org-supertag-company--make-candidate (tag-name)
   "Create a company candidate from TAG-NAME."
@@ -963,11 +964,19 @@ If no field exists, move to the first line after the separator line."
 (defun org-supertag-company--post-completion (candidate)
   "Handle post-completion actions for CANDIDATE."
   (let* ((tag (get-text-property 0 'tag candidate))
-         (tag-name (plist-get tag :name)))
+         (tag-name (plist-get tag :name))
+         (node-id (org-id-get))
+         (current-tags (and node-id (org-supertag-node-get-tags node-id))))
+    
     ;; Delete the completion prefix including #
     (delete-region (- (point) (length candidate) 1) (point))
-    ;; Apply tag
-    (org-supertag-tag-add-tag tag-name)))
+    
+    ;; Only proceed if tag not already applied
+    (if (and node-id (member tag-name current-tags))
+        (message "Tag '%s' is already applied to this node" tag-name)
+
+      ;; Apply tag to handle fields
+        (org-supertag-tag-apply tag-name))))
 
 ;;;###autoload
 (defun org-supertag-company-backend (command &optional arg &rest ignored)
@@ -997,6 +1006,7 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
     (add-to-list 'company-backends 'org-supertag-company-backend)))
 
 (add-hook 'org-mode-hook #'org-supertag-setup-completion)
+
 
 ;;----------------------------------------------------------------------
 ;; Preset Tag
@@ -1275,8 +1285,8 @@ This function allows:
                'org-supertag-preset-tags
                (cons (cons tag-name 
                           (append current-fields (list field-def)))
-                     (assoc-delete-all 
-                      tag-name org-supertag-preset-tags)))))
+                          (assoc-delete-all 
+                           tag-name org-supertag-preset-tags)))))
            ;; Remove tag
            (:remove
             (when (yes-or-no-p 
@@ -1330,17 +1340,17 @@ This function allows:
                                              (plist-get field :description)))
                    (setq field
                          (plist-put field :description new-desc))
-                   (customize-save-variable
-                    'org-supertag-preset-tags
-                    (cons (cons tag-name
-                               (mapcar (lambda (f)
-                                       (if (equal (plist-get f :name)
-                                                field-name)
-                                           field
-                                         f))
-                                     current-fields))
-                          (assoc-delete-all 
-                           tag-name org-supertag-preset-tags)))))
+                         (customize-save-variable
+                          'org-supertag-preset-tags
+                          (cons (cons tag-name
+                                     (mapcar (lambda (f)
+                                             (if (equal (plist-get f :name)
+                                                      field-name)
+                                                 field
+                                               f))
+                                           current-fields))
+                                 (assoc-delete-all 
+                                  tag-name org-supertag-preset-tags)))))
                 (:remove
                  (when (yes-or-no-p 
                         (format "Remove field '%s'? " field-name))

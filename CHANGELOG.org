@@ -1,6 +1,31 @@
 * Changelog
 
-* [2.2.4] - 2024-12-20
+* [2.2.6] - 2024-1-31
+** Features
+*** Add comprehensive node finding system
+- Add ~org-supertag-node-find~ command for interactive node finding
+- Add ~org-supertag-node-find-other-window~ for other window display
+- Show complete node path in format "filename / outline-path / title"
+- Add robust error handling for missing metadata
+- Sort results alphabetically for easier navigation
+- Improve node visibility with automatic expansion
+
+* [2.2.5] - 2024-1-30
+** Features
+*** Add company-mode completion for supertags
+
+This commit adds interactive tag completion using company-mode:
+- Add company backend for supertag completion
+- Trigger completion with '#' prefix
+- Integrate with existing tag management system
+- Simplify implementation by reusing org-supertag-tag-add-tag
+- Add tag deletion functionality (org-supertag-tag-delete)
+
+The completion system provides a smoother user experience for adding
+supertags to org headlines, with proper tag formatting and handling
+of preset tags.
+
+* [2.2.4] - 2024-1-29
 ** Refactor
 **** Change field type tag-reference to direct node reference
 
@@ -197,3 +222,4 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
+
