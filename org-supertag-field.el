@@ -398,16 +398,6 @@ VALUE should be a node ID (string) or nil, or an org-mode link format."
                (message "Debug - Node exists? %S" exists)
                exists)))))
 
-(defun org-supertag-read-tag-reference-field (prompt)
-  "Read tag reference field value.
-PROMPT is the prompt message."
-  (when-let* ((candidates (org-supertag-node--get-candidates-with-path))
-              (selected (completing-read prompt
-                                       (mapcar #'car candidates)
-                                       nil t))
-              (node-id (cdr (assoc selected candidates))))
-    (message "Debug - Selected node ID: %S" node-id)
-    node-id))
 
 (defun org-supertag-field-get-reference-value (node-id tag-id field)
   "Get referenced field value and type.

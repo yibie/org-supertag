@@ -964,13 +964,26 @@ Available insertion positions:
 
 (defun org-supertag-query--get-insert-position (target-file)
   "Get insertion position and level adjustment for target file.
+Shows outline structure in format: filename / outline-path / title
 Returns cons cell (point . level-adjust)."
-  (let ((insert-type (completing-read 
-                     "Insert at: "
-                     '("File Start" 
-                       "File End" 
-                       "Under Heading"
-                       "Same Level"))))
+  (let* ((headlines (with-current-buffer (find-file-noselect target-file)
+                     (org-with-wide-buffer
+                      (org-map-entries
+                       (lambda ()
+                         (let* ((title (org-get-heading t t t t))
+                                (olp (org-get-outline-path))
+                                (display (org-supertag-node--format-path
+                                        (file-name-nondirectory target-file)
+                                        olp
+                                        title)))
+                           (cons display (point))))))))
+         (insert-type (completing-read 
+                      "Insert at: "
+                      (append
+                       '("File Start" "File End")
+                       (when headlines
+                         '("Under Heading" "Same Level"))))))
+    
     (with-current-buffer (find-file-noselect target-file)
       (org-with-wide-buffer
        (pcase insert-type
@@ -981,15 +994,10 @@ Returns cons cell (point . level-adjust)."
           (cons (point-max) nil))
          
          ("Under Heading"
-          (let* ((headlines (org-map-entries 
-                           (lambda () 
-                             (cons (org-get-heading t t t t)
-                                  (point)))))
-                 (selected (if headlines
-                             (completing-read 
-                              "Select parent heading: "
-                              headlines)
-                           (error "No headlines found in target file")))
+          (let* ((selected (completing-read 
+                           "Select parent heading: "
+                           (mapcar #'car headlines)
+                           nil t))
                  (pos (cdr (assoc selected headlines))))
             ;; Move to selected heading
             (goto-char pos)
@@ -1002,15 +1010,10 @@ Returns cons cell (point . level-adjust)."
               (cons (point) (1+ parent-level)))))
          
          ("Same Level"
-          (let* ((headlines (org-map-entries 
-                           (lambda () 
-                             (cons (org-get-heading t t t t)
-                                  (point)))))
-                 (selected (if headlines
-                             (completing-read 
-                              "Select sibling heading: "
-                              headlines)
-                           (error "No headlines found in target file")))
+          (let* ((selected (completing-read 
+                           "Select sibling heading: "
+                           (mapcar #'car headlines)
+                           nil t))
                  (pos (cdr (assoc selected headlines))))
             ;; Move to selected heading
             (goto-char pos)

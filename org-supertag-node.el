@@ -512,21 +512,41 @@ The directory is determined by `org-directory' or `default-directory'."
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-create ()
-  "Create a new supertag node at current position.
+  "Create a new supertag node.
 
-Use cases:
-1. Convert regular org heading to supertag node
-2. Ensure heading has no associated node ID
+Two use cases:
+1. At blank position - Create new heading with ID
+2. At existing heading without ID - Add ID to heading
 
-Prerequisites:
-1. Cursor must be on a heading
-2. Heading must not already have a node ID"
+Returns:
+- Node ID on success
+- Throws error on failure"
   (interactive)
-  (unless (org-at-heading-p)
-    (user-error "Cursor must be on a heading"))
-  (when (org-id-get)
-    (user-error "Heading already has a node"))
-  (org-supertag-node-sync-at-point))
+  (let ((at-heading (org-at-heading-p)))
+    (cond
+     ;; Case 1: At existing heading
+     ((and at-heading (org-id-get))
+      (user-error "Heading already has a node"))
+     
+     ;; Case 2: At existing heading without ID
+     (at-heading
+      (org-supertag-node-sync-at-point))
+     
+     ;; Case 3: At blank position
+     (t
+      (let* ((title (read-string "Node title: "))
+             ;; Ensure we're at beginning of line
+             (_ (beginning-of-line))
+             ;; Get current level or default to 1
+             (current-level (if (org-at-heading-p)
+                              (org-outline-level)
+                            1)))
+        ;; Insert new heading
+        (insert (make-string current-level ?*) " " title "\n")
+        ;; Move back to heading
+        (forward-line -1)
+        ;; Create node
+        (org-supertag-node-sync-at-point))))))
 
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data.
@@ -913,39 +933,24 @@ NODE-ID is the referenced node's identifier"
 
 (defun org-supertag-node-add-reference ()
   "Add node reference.
-Insert reference to selected node at current position and update relationships."
+Insert reference to selected node at current position and update relationships.
+Displays nodes with their full paths in format:
+filename / outline-path / title"
   (interactive)
   (unless (org-supertag-node--in-node-p)
     (user-error "Must be within a node"))
-  (when-let* ((candidates (org-supertag-node--get-candidates-with-path))
-              (selected (completing-read
-                        "Reference node: "
-                        (mapcar #'car candidates)
-                        nil t))
-              (target-id (cdr (assoc selected candidates))))
-    ;; 1. Insert reference
-    (org-supertag-node--insert-reference target-id)
-    ;; 2. Update reference relationships
-    (org-supertag-db--parse-node-all-ref)
-    (message "Added reference to node '%s'" selected)))
-
-(defun org-supertag-node--get-candidates-with-path ()
-  "Get all available nodes as candidates with their full paths.
-Returns: ((\"path/to/node\" . \"node-id\") ...)"
-  (let (candidates)
-    (maphash
-     (lambda (id node)
-       (when (eq (plist-get node :type) :node)
-         (let* ((title (plist-get node :title))
-                (olp (plist-get node :olp))
-                (path (if olp
-                         (mapconcat #'identity olp " / ")
-                       title)))
-           (push (cons path id) candidates))))
-     org-supertag-db--object)
-    (sort candidates 
-          (lambda (a b) 
-            (string< (car a) (car b))))))
+  
+  (let* ((nodes (org-supertag-node--collect-nodes))
+         (candidates (mapcar #'cdr nodes))
+         (choice (completing-read "Reference node: " candidates nil t))
+         (node-id (car (rassoc choice nodes))))
+    
+    (when node-id
+      ;; Insert reference
+      (org-supertag-node--insert-reference node-id)
+      ;; Update reference relationships
+      (org-supertag-db--parse-node-all-ref)
+      (message "Added reference to: %s" choice))))
 
 (defun org-supertag-node-remove-reference (node-id)
   "Remove reference to specified node.
