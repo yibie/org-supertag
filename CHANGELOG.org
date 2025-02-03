@@ -1,5 +1,14 @@
 * Changelog
 
+* [2.2.8] - 2024-02-03
+** Bug Fixes
+*** Fix tag deletion to ensure complete cleanup
+- Replace org-supertag-db-remove-object with direct remhash for reliable deletion
+- Add comprehensive cleanup of all tag-related database entries
+- Implement proper cleanup sequence for tag removal
+- Add debug logging for deletion process tracking
+- Add org-supertag-after-tag-delete-hook for post-deletion customization
+
 * [2.2.7] - 2025-02-02
 ** Features
 *** Improve node movement(org-supertag-node-move-node) with outline path display
@@ -230,4 +239,6 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
+
+
 
