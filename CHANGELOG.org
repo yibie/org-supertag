@@ -1,5 +1,18 @@
 * Changelog
 
+* [2.2.9] - 2024-02-03
+** Features
+*** Added
+- New component: org-supertag-view.el
+  - Provides visualization system for tag content
+  - Smart command ~org-supertag-view-tag~ that:
+    - Shows tag content directly when cursor is on a tag
+    - Offers tag completion when not on a tag
+  - Table-based view showing:
+    - Node titles
+    - Node types
+    - Creation dates
+
 * [2.2.8] - 2024-02-03
 ** Bug Fixes
 *** Fix tag deletion to ensure complete cleanup
