@@ -12,16 +12,24 @@
 If point is on a tag, show content for that tag.
 Otherwise, prompt for a tag using completion."
   (interactive)
-  (if-let* ((tag-at-point (org-supertag-view--get-tag-name)))
-      (progn
-        (message "Found tag at point: %s" tag-at-point)
-        (org-supertag-view--show-content tag-at-point))
-    ;; 如果光标不在标签上，提供补全
-    (let ((tag (completing-read "View tag: "
-                              (org-supertag-view--get-all-tags)
-                              nil t)))
-      (message "Selected tag: %s" tag)
-      (org-supertag-view--show-content tag))))
+  (let ((tag-at-point (org-supertag-view--get-tag-name)))
+    (if tag-at-point
+        ;; If point is on a tag, show content for that tag
+        (org-supertag-view--show-content tag-at-point)
+      ;; If point is not on a tag, prompt for a tag using completion
+      (let ((tag (completing-read "View tag: "
+                                (org-supertag-view--get-all-tags)
+                                nil t)))
+        (org-supertag-view--show-content tag)))))
+
+(defun org-supertag-view--get-tag-name ()
+  "Get tag name at point.
+Returns nil if no tag is found at point."
+  (save-excursion
+    (when (thing-at-point-looking-at "#\\([[:alnum:]_-]+\\)")
+      (let ((tag-name (match-string-no-properties 1)))
+        (when (gethash tag-name org-supertag-db--object)
+          tag-name)))))
 
 (defun org-supertag-view--get-all-tags ()
   "Get all available tags from the database."
@@ -94,6 +102,8 @@ Returns a list of plists with properties :node, :type, and :date."
   :group 'org-supertag
   (setq buffer-read-only t)
   (buffer-disable-undo))
+
+
 
 (provide 'org-supertag-view)
 
