@@ -479,7 +479,6 @@ Special input format:
         (user-error "Tag '%s' is already applied to this node" sanitized-name))
       
       (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-             (preset-fields (org-supertag-get-preset-fields sanitized-name))
              ;; Get or create the tag
              (tag-id
               (cond
@@ -1160,6 +1159,8 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
   (cl-case command
     (interactive (company-begin-backend 'org-supertag-company-backend))
     (prefix (and (eq major-mode 'org-mode)
+                 (or (org-at-heading-p)  ; 添加标题位置检查
+                     (org-at-property-p)) ; 保留属性位置检查
                  (save-excursion
                    (when (looking-back org-supertag-company-prefix-regexp
                                      (line-beginning-position))
@@ -1168,17 +1169,19 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
     (post-completion (org-supertag-company--post-completion arg))
     (annotation (when-let* ((tag (get-text-property 0 'tag arg))
                            (fields (plist-get tag :fields)))
-                 (format " [%d fields]" (length fields))))))
+                           (format " [%d fields]" (length fields))))))
 
 ;;;###autoload
 (defun org-supertag-setup-completion ()
   "Setup company completion for org-supertag."
   (when (and (eq major-mode 'org-mode)
              (featurep 'company))
-    (add-to-list 'company-backends 'org-supertag-company-backend)))
+    (add-to-list 'company-backends 'org-supertag-company-backend)
+    ;; 确保 company-mode 在标题处也能工作
+    (make-local-variable 'company-minimum-prefix-length)
+    (setq-local company-minimum-prefix-length 1))) ; 设置为1以便在输入#后立即触发
 
 (add-hook 'org-mode-hook #'org-supertag-setup-completion)
-
 
 ;;----------------------------------------------------------------------
 ;; Preset Tag
@@ -1418,8 +1421,8 @@ This function allows:
                             'org-supertag-preset-tags
                             (cons (cons tag-name
                                        (append fields (list field-def)))
-                                           (assoc-delete-all 
-                                            tag-name org-supertag-preset-tags)))))
+                                       (assoc-delete-all 
+                                        tag-name org-supertag-preset-tags)))))
               ;; Remove tag
               (:remove
                (when (yes-or-no-p 
