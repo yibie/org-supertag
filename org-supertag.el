@@ -71,6 +71,7 @@
 (require 'org-supertag-behavior)
 (require 'org-supertag-sync)
 (require 'org-supertag-luhmann)
+(require 'org-supertag-view)
 
 
 (defgroup org-supertag nil
