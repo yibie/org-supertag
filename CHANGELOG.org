@@ -1,5 +1,19 @@
 * Changelog
 
+* [2.2.11] - 2024-02-12
+** Features
+*** Enhanced org-supertag-view with field value display
+- Added field value support in tag view table
+- Implemented case-insensitive field name matching
+- Added comprehensive field value lookup
+- Display field values in dedicated columns
+- Improved table formatting for better readability
+
+* [2.2.10] - 2024-02-03
+** Fix
+**** Fix tag company completion not working in heading
+**** Fix field edit mode not working
+
 * [2.2.9] - 2024-02-03
 ** Features
 *** Added
@@ -252,6 +266,8 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
+
+
 
 
 
