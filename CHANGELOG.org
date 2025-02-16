@@ -1,5 +1,19 @@
 * Changelog
 
+* [2.2.12] - 2024-02-16
+** Features
+*** Enhanced reference creation with duplicate detection
+- Added smart node reference creation that checks for existing nodes
+- Reuses existing nodes when title matches exactly
+- Prevents duplicate node creation for same content
+- Improves reference management efficiency
+** Bug Fixes
+*** Fix field edit mode keymap and key bindings
+- Fixed keymap initialization in org-supertag-field-edit-mode
+- Simplified mode definition by removing unnecessary syntax-table
+- Fixed key bindings for field editing operations (e, d)
+- Improved error handling in field operations
+
 * [2.2.11] - 2024-02-12
 ** Features
 *** Enhanced org-supertag-view with field value display
@@ -266,6 +280,8 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
+
+
 
 
 

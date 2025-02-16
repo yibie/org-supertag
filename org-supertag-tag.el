@@ -713,8 +713,7 @@ The hook functions are called with one argument:
                 (when (yes-or-no-p (format "Delete field '%s'? " field-name))
                   (org-supertag-tag-remove-field tag-id field-name)
                   (org-supertag-tag--refresh-field-table org-supertag--edit-context))))))))
-    map)
-  "Keymap for `org-supertag-field-edit-mode'.")
+    map))
 
 (define-derived-mode org-supertag-field-edit-mode special-mode "OrgSuperTag-FieldEdit"
   "Major mode for editing org-supertag fields."
