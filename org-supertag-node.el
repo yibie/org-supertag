@@ -931,26 +931,111 @@ NODE-ID is the referenced node's identifier"
                       :ref-count (length target-refs))))))))
 
 
+(defun org-supertag-node--find-by-title (title)
+  "Find node by exact title match.
+TITLE is the title to search for.
+Returns node-id if found, nil otherwise."
+  (let ((result nil))
+    (maphash
+     (lambda (id props)
+       (when (and (eq (plist-get props :type) :node)
+                  (string= (plist-get props :title) title))
+         (setq result id)))
+     org-supertag-db--object)
+    result))
+
 (defun org-supertag-node-add-reference ()
-  "Add node reference.
-Insert reference to selected node at current position and update relationships.
-Displays nodes with their full paths in format:
-filename / outline-path / title"
+  "Add reference to current node.
+If region is active:
+  1. Checks if node with same title exists
+  2. If exists, uses that node
+  3. If not, creates a new node from selected text
+  4. Replaces selection with a link to the node
+If no region:
+  1. Insert reference to an existing node
+In both cases:
+  - Creates node if current heading isn't one
+  - Updates reference relationships"
   (interactive)
-  (unless (org-supertag-node--in-node-p)
-    (user-error "Must be within a node"))
-  
-  (let* ((nodes (org-supertag-node--collect-nodes))
-         (candidates (mapcar #'cdr nodes))
-         (choice (completing-read "Reference node: " candidates nil t))
-         (node-id (car (rassoc choice nodes))))
+  ;; 确保在有效的节点内或创建新节点
+  (let ((current-node-id (or (org-id-get)
+                            (when (org-at-heading-p)
+                              (org-supertag-node-create)
+                              (org-id-get)))))
+    (unless current-node-id
+      (user-error "Must be within a node or at a heading"))
     
-    (when node-id
-      ;; Insert reference
-      (org-supertag-node--insert-reference node-id)
-      ;; Update reference relationships
-      (org-supertag-db--parse-node-all-ref)
-      (message "Added reference to: %s" choice))))
+    (if (use-region-p)
+        ;; 处理选中文本的情况
+        (let* ((source-buffer (current-buffer))
+               (beg (copy-marker (region-beginning)))
+               (end (copy-marker (region-end)))
+               (selected-text (buffer-substring-no-properties beg end))
+               ;; 检查是否已存在相同标题的节点
+               (existing-node-id (org-supertag-node--find-by-title selected-text)))
+          
+          (if existing-node-id
+              ;; 如果存在，直接使用现有节点
+              (progn
+                (with-current-buffer source-buffer
+                  (delete-region beg end)
+                  (goto-char beg)
+                  (org-supertag-node--insert-reference existing-node-id))
+                (message "Using existing node: %s" selected-text))
+            
+            ;; 如果不存在，创建新节点
+            (let ((target-file (completing-read
+                              "Create reference in file: "
+                              (org-supertag--get-org-file-list)
+                              nil t)))
+              
+              (unwind-protect
+                  (with-current-buffer (find-file-noselect target-file)
+                    (save-excursion
+                      (goto-char (point-max))
+                      ;; 确保在文件末尾有空行
+                      (unless (bolp) (insert "\n"))
+                      (unless (looking-back "\n\n" (- (point) 2))
+                        (insert "\n"))
+                      
+                      ;; 插入新节点
+                      (insert "* " selected-text "\n")
+                      ;; 确保在新节点上
+                      (forward-line -1)
+                      ;; 创建节点并获取 ID
+                      (let ((new-node-id (org-supertag-node-create)))
+                        ;; 返回原缓冲区并替换选中文本为链接
+                        (with-current-buffer source-buffer
+                          (delete-region beg end)
+                          (goto-char beg)
+                          (org-supertag-node--insert-reference new-node-id))
+                        
+                        ;; 保存所有更改
+                        (save-buffer)
+                        (with-current-buffer source-buffer
+                          (save-buffer))
+                        
+                        (message "Created reference node: %s" selected-text))))
+                ;; 清理标记
+                (set-marker beg nil)
+                (set-marker end nil))))
+          
+          ;; 确保标记被清理（以防early return的情况）
+          (set-marker beg nil)
+          (set-marker end nil))
+      
+      ;; 处理无选中文本的情况 - 添加已存在节点的引用
+      (let* ((nodes (org-supertag-node--collect-nodes))
+             (candidates (mapcar #'cdr nodes))
+             (choice (completing-read "Reference node: " candidates nil t))
+             (node-id (car (rassoc choice nodes))))
+        
+        (when node-id
+          ;; 插入引用
+          (org-supertag-node--insert-reference node-id)
+          ;; 更新引用关系
+          (org-supertag-db--parse-node-all-ref)
+          (message "Added reference to: %s" choice))))))
 
 (defun org-supertag-node-remove-reference (node-id)
   "Remove reference to specified node.
