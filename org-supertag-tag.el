@@ -717,13 +717,7 @@ The hook functions are called with one argument:
 
 (define-derived-mode org-supertag-field-edit-mode special-mode "OrgSuperTag-FieldEdit"
   "Major mode for editing org-supertag fields."
-  (setq-local buffer-read-only nil)
-  (let ((map org-supertag-field-edit-mode-map))
-    (define-key map (kbd "n") #'org-supertag-field-edit-next-field)
-    (define-key map (kbd "p") #'org-supertag-field-edit-prev-field)
-    (define-key map (kbd "RET") #'org-supertag-field-edit-complete-field)
-    (define-key map (kbd "C-c C-c") #'org-supertag-field-edit-save)
-    (define-key map (kbd "C-c C-k") #'org-supertag-field-edit-cancel)))
+  (setq-local buffer-read-only nil))
 
 (defun org-supertag-tag--insert-tag-fields (tag-id source-buffer source-point)
   "Insert fields for a tag."
