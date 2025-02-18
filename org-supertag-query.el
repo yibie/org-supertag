@@ -675,73 +675,7 @@ START and END define the region boundaries."
     (when selected-nodes
       (message "Found %d selected nodes" (length selected-nodes))
       (nreverse selected-nodes))))
-      
-(defun org-supertag-get-target-level (level-adjust)
-  "Calculate target heading level.
-LEVEL-ADJUST can be:
-  nil        - Keep original level
-  :child     - Make child of current heading
-  :same-level - Make same level as current heading
-
-Returns:
-- Calculated target level
-- nil if no adjustment needed"
-  (let ((current-level (when (org-at-heading-p)
-                        (org-current-level))))
-    (cond
-     ((eq level-adjust :child)
-      (if current-level
-          (1+ current-level)
-        1))
-     ((eq level-adjust :same-level)
-      (or current-level 1))
-     (t nil))))
-
-(defun org-supertag-adjust-node-level (content target-level)
-  "Adjust heading level of node content.
-CONTENT is the node content
-TARGET-LEVEL is the target heading level
-
-Returns:
-- Adjusted content string"
-  (with-temp-buffer
-    (org-mode)
-    (insert content)
-    (goto-char (point-min))
-    (when target-level
-      (let* ((source-level (org-current-level))
-             (level-diff (- target-level source-level)))
-        (unless (zerop level-diff)
-          (org-map-entries
-           (lambda ()
-             (let* ((current-level (org-current-level))
-                    (new-level (+ current-level level-diff))
-                    (new-stars (make-string (max 1 new-level) ?*)))
-               (replace-match new-stars t t nil 1)))
-           t nil))))
-    (buffer-string)))
-
-(defun org-supertag-delete-node-content (node-id)
-  "Delete node content from source file.
-NODE-ID is the node identifier
-
-Returns:
-- t if deletion successful
-- nil if node not found or deletion failed"
-  (when-let* ((node (org-supertag-db-get node-id))
-              (source-file (plist-get node :file-path))
-              (loc (org-supertag-find-node-location node-id source-file)))
-    (with-current-buffer (find-file-noselect source-file)
-      (org-with-wide-buffer
-       (goto-char (car loc))
-       (when (org-at-heading-p)
-         (let* ((element (org-element-at-point))
-                (begin (org-element-property :begin element))
-                (end (org-element-property :end element)))
-           (delete-region begin end)
-           (when (looking-at "\n") (delete-char 1))
-           (save-buffer)
-           t))))))
+  
 
 (defun org-supertag-find-node-location (node-id file)
   "Locate node position in file by ID.

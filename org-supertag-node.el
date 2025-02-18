@@ -289,7 +289,34 @@ Notes:
         (when todo
           (org-todo todo))))))
 
-
+(defun org-supertag-get-node-content (node-id)
+  "Get complete node content including subtree.
+NODE-ID is the node identifier.
+Returns the complete node content as string, or nil if not found."
+  (message "[Get Content] Starting for node: %s" node-id)
+  (when-let* ((node (org-supertag-db-get node-id))
+              (file (plist-get node :file-path)))
+    (message "[Get Content] Found node in database, file: %s" file)
+    (if (file-exists-p file)
+        (progn
+          (message "[Get Content] File exists, attempting to get content")
+          (with-current-buffer (find-file-noselect file)
+            (org-with-wide-buffer
+             (message "[Get Content] Searching for node ID in file")
+             (when (org-find-entry-with-id node-id)
+               (message "[Get Content] Found node entry")
+               (org-back-to-heading t)
+               (let* ((element (org-element-at-point))
+                      (begin (org-element-property :begin element))
+                      (end (org-element-property :end element))
+                      (content (buffer-substring-no-properties begin end)))
+                 (message "[Get Content] Got content from %d to %d (%d chars)" 
+                         begin end (length content))
+                 (if (string-suffix-p "\n" content)
+                     content
+                   (concat content "\n")))))))
+      (message "[Get Content] File does not exist: %s" file)
+      nil)))
 (defun org-supertag-node-move (node-id target-file &optional target-level target-point)
   "Move node to target file.
 NODE-ID is the node identifier
@@ -300,54 +327,111 @@ TARGET-POINT is buffer position to insert (nil means end of file)
 Returns:
 - t if move successful
 - nil if move failed"
-  (when-let* ((content (org-supertag-get-node-content node-id)))
-    ;; 1. Delete node from source
-    (when (org-supertag-delete-node-content node-id)
-      ;; 2. Insert to target and update database
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          ;; Move to target position
-          (if target-point
-              (goto-char target-point)
-            (goto-char (point-max)))
-          
-          ;; Ensure we're at the beginning of a line
-          (beginning-of-line)
-          
-          ;; Temporarily disable folding
-          (let ((org-fold-core-style 'overlays))  ; 使用 overlay 样式避免一些问题
-            ;; Insert with proper level adjustment
-            (let ((adjusted-content 
-                   (if (and target-level (> target-level 0))
-                       (condition-case err
-                           (org-supertag-adjust-node-level content target-level)
-                         (error
-                          (message "Level adjustment failed: %s" (error-message-string err))
-                          content))
-                     content)))
-              ;; Ensure proper spacing before insertion
-              (unless (or (bobp) (looking-back "\n\n" 2))
-                (insert "\n"))
-              
-              ;; Insert content
-              (let ((insert-point (point)))
-                (insert adjusted-content)
-                
-                ;; Ensure proper spacing after insertion
-                (unless (looking-at "\n")
-                  (insert "\n"))
-                
-                ;; Move back to inserted heading and sync node
-                (goto-char insert-point)
-                (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
-                  (org-back-to-heading t)
-                  ;; 确保正确展开新插入的节点
-                  (org-show-subtree)
-                  (org-supertag-node-sync-at-point))
-                
-                ;; Save buffer
-                (save-buffer)
-                t))))))))
+  (message "[Move] Starting node move: ID=%s to file=%s level=%s point=%s" 
+           node-id target-file target-level target-point)
+  
+  (let ((content (org-supertag-get-node-content node-id)))
+    (message "[Move] Content retrieved: %s chars" (if content (length content) "nil"))
+    
+    (if content
+        (progn
+          (message "[Move] Got node content: %d chars" (length content))
+          ;; 1. Delete node from source
+          (if (org-supertag-delete-node-content node-id)
+              (progn
+                (message "[Move] Successfully deleted source node")
+                ;; 2. Insert to target and update database
+                (with-current-buffer (find-file-noselect target-file)
+                  (save-excursion
+                    ;; Move to target position
+                    (if target-point
+                        (progn
+                          (goto-char target-point)
+                          (message "[Move] Moving to specified point: %d" target-point))
+                      (progn
+                        (goto-char (point-max))
+                        (message "[Move] Moving to end of file")))
+                    
+                    ;; Ensure we're at the beginning of a line
+                    (beginning-of-line)
+                    (message "[Move] Current point after positioning: %d" (point))
+                    
+                    ;; Temporarily disable folding
+                    (let ((org-fold-core-style 'overlays))  
+                      ;; Insert with proper level adjustment
+                      (let ((adjusted-content 
+                             (if (and target-level (> target-level 0))
+                                 (progn
+                                   (message "[Move] Adjusting content to level %d" target-level)
+                                   (org-supertag-adjust-node-level content target-level))
+                               content)))
+                        
+                        (message "[Move] Content ready for insertion (%d chars)" 
+                                (length adjusted-content))
+                        
+                        ;; Ensure proper spacing before insertion
+                        (unless (or (bobp) (looking-back "\n\n" 2))
+                          (insert "\n"))
+                        
+                        ;; Insert content
+                        (let ((insert-point (point)))
+                          (message "[Move] Inserting content at point %d" insert-point)
+                          (insert adjusted-content)
+                          
+                          ;; Ensure proper spacing after insertion
+                          (unless (looking-at "\n")
+                            (insert "\n"))
+                          
+                          ;; Move back to inserted heading and sync node
+                          (goto-char insert-point)
+                          (message "[Move] Searching for ID: %s" node-id)
+                          (org-with-wide-buffer
+                           (if (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
+                               (progn
+                                 (org-back-to-heading t)
+                                 (message "[Move] Found heading at point %d" (point))
+                                 (org-show-subtree)
+                                 (message "[Move] Syncing node")
+                                 (org-supertag-node-sync-at-point))
+                             (message "[Move] Failed to find inserted node ID")))
+                          
+                          ;; Save buffer
+                          (save-buffer)
+                          (message "[Move] Node move completed successfully")
+                          t)))))
+            (message "[Move] Failed to delete source node")
+            nil))
+      (message "[Move] Failed to get node content")
+      nil))))
+
+(defun org-supertag-delete-node-content (node-id)
+  "Delete node content from source file.
+NODE-ID is the node identifier
+
+Returns:
+- t if deletion successful
+- nil if node not found or deletion failed"
+  (message "Attempting to delete node: %s" node-id)
+  (when-let* ((node (org-supertag-db-get node-id))
+              (source-file (plist-get node :file-path))
+              ((file-exists-p source-file))
+              (loc (org-supertag-find-node-location node-id source-file)))
+    (message "Found node location in %s at %s" source-file loc)
+    (with-current-buffer (find-file-noselect source-file)
+      (org-with-wide-buffer
+       (goto-char (car loc))
+       (if (org-at-heading-p)
+           (let* ((element (org-element-at-point))
+                  (begin (org-element-property :begin element))
+                  (end (org-element-property :end element)))
+             (message "Deleting region from %d to %d" begin end)
+             (delete-region begin end)
+             (when (looking-at "\n") 
+               (delete-char 1))
+             (save-buffer)
+             t)
+         (message "Not at heading after moving to location")
+         nil)))))
 
 (defun org-supertag-node-move-node ()
   "Interactive command to move current node to another location.
@@ -361,11 +445,16 @@ The command will:
   (unless (org-at-heading-p)
     (user-error "Must be on a heading"))
   
-  ;; Get or create node ID
+  ;; Get or create node ID and ensure it's synced
   (let ((node-id (or (org-id-get)
                      (progn 
                        (org-supertag-node-create)
                        (org-id-get)))))
+    
+    (message "Moving node with ID: %s" node-id)
+    
+    ;; 确保节点信息已同步到数据库
+    (org-supertag-node-sync-at-point)
     
     (unless (org-supertag-db-get node-id)
       (user-error "Current node not found in database"))
@@ -375,6 +464,9 @@ The command will:
            (insert-pos (org-supertag-query--get-insert-position target-file))
            (target-pos (car insert-pos))
            (level-adj (cdr insert-pos)))
+      
+      (message "Target file: %s, position: %s, level: %s" 
+               target-file target-pos level-adj)
       
       (if (org-supertag-node-move node-id target-file level-adj target-pos)
           (message "Node moved successfully")
@@ -406,20 +498,20 @@ Returns adjusted content string with proper heading levels."
       ;; Find and get current level
       (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
         (let* ((current-level (length (match-string 1)))
-          (let* ((level-diff (- target-level current-level)))
-            
-            (unless (zerop level-diff)
-              (goto-char (point-min))
-              ;; Adjust all heading levels
-              (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
-                (let* ((stars (match-string 1))
-                       (text (match-string 2))
-                       (current-stars-len (length stars))
-                       (new-level (+ current-stars-len level-diff))
-                       (new-stars (make-string (max 1 new-level) ?*)))
-                  (replace-match (concat new-stars text)))))))
+               (level-diff (- target-level current-level)))
+          
+          (unless (zerop level-diff)
+            (goto-char (point-min))
+            ;; Adjust all heading levels
+            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
+              (let* ((stars (match-string 1))
+                     (text (match-string 2))
+                     (current-stars-len (length stars))
+                     (new-level (+ current-stars-len level-diff))
+                     (new-stars (make-string (max 1 new-level) ?*)))
+                (replace-match (concat new-stars text))))))))
     
-    (buffer-string))))))
+    (buffer-string)))
 
 (defun org-supertag--move-node-and-link (node-id target-file &optional target-level)
   "Internal function to move a node and create link.
@@ -957,7 +1049,6 @@ In both cases:
   - Creates node if current heading isn't one
   - Updates reference relationships"
   (interactive)
-  ;; 确保在有效的节点内或创建新节点
   (let ((current-node-id (or (org-id-get)
                             (when (org-at-heading-p)
                               (org-supertag-node-create)
@@ -966,16 +1057,16 @@ In both cases:
       (user-error "Must be within a node or at a heading"))
     
     (if (use-region-p)
-        ;; 处理选中文本的情况
+        ;; Handle selected text
         (let* ((source-buffer (current-buffer))
                (beg (copy-marker (region-beginning)))
                (end (copy-marker (region-end)))
                (selected-text (buffer-substring-no-properties beg end))
-               ;; 检查是否已存在相同标题的节点
+               ;; Check if node with same title exists
                (existing-node-id (org-supertag-node--find-by-title selected-text)))
           
           (if existing-node-id
-              ;; 如果存在，直接使用现有节点
+              ;; If exists, use existing node
               (progn
                 (with-current-buffer source-buffer
                   (delete-region beg end)
@@ -983,7 +1074,7 @@ In both cases:
                   (org-supertag-node--insert-reference existing-node-id))
                 (message "Using existing node: %s" selected-text))
             
-            ;; 如果不存在，创建新节点
+            ;; If not, create new node
             (let ((target-file (completing-read
                               "Create reference in file: "
                               (org-supertag--get-org-file-list)
@@ -993,47 +1084,47 @@ In both cases:
                   (with-current-buffer (find-file-noselect target-file)
                     (save-excursion
                       (goto-char (point-max))
-                      ;; 确保在文件末尾有空行
+                      ;; Ensure empty line at end of file
                       (unless (bolp) (insert "\n"))
                       (unless (looking-back "\n\n" (- (point) 2))
                         (insert "\n"))
                       
-                      ;; 插入新节点
+                      ;; Insert new node
                       (insert "* " selected-text "\n")
-                      ;; 确保在新节点上
+                      ;; Ensure new node is at the end of file
                       (forward-line -1)
-                      ;; 创建节点并获取 ID
+                      ;; Create node and get ID
                       (let ((new-node-id (org-supertag-node-create)))
-                        ;; 返回原缓冲区并替换选中文本为链接
+                        ;; Return to original buffer and replace selected text with link
                         (with-current-buffer source-buffer
                           (delete-region beg end)
                           (goto-char beg)
                           (org-supertag-node--insert-reference new-node-id))
                         
-                        ;; 保存所有更改
+                        ;; Save all changes
                         (save-buffer)
                         (with-current-buffer source-buffer
                           (save-buffer))
                         
                         (message "Created reference node: %s" selected-text))))
-                ;; 清理标记
+                ;; Clean up markers
                 (set-marker beg nil)
                 (set-marker end nil))))
           
-          ;; 确保标记被清理（以防early return的情况）
+          ;; Ensure markers are cleaned up (in case of early return)
           (set-marker beg nil)
           (set-marker end nil))
       
-      ;; 处理无选中文本的情况 - 添加已存在节点的引用
+      ;; Handle case with no selected text - add reference to existing node
       (let* ((nodes (org-supertag-node--collect-nodes))
              (candidates (mapcar #'cdr nodes))
              (choice (completing-read "Reference node: " candidates nil t))
              (node-id (car (rassoc choice nodes))))
         
         (when node-id
-          ;; 插入引用
+          ;; Insert reference
           (org-supertag-node--insert-reference node-id)
-          ;; 更新引用关系
+          ;; Update reference relationships
           (org-supertag-db--parse-node-all-ref)
           (message "Added reference to: %s" choice))))))
 
@@ -1062,7 +1153,6 @@ NODE-ID is the referenced node identifier."
             (delete-region (org-element-property :begin element)
                           (org-element-property :end element))
             (cl-incf removed)))
-        (forward-char)))
     ;; 2. update reference
     (when (> removed 0)
       (let* ((current-node-id (org-id-get))
@@ -1089,7 +1179,7 @@ NODE-ID is the referenced node identifier."
              (plist-put target-node :ref-from new-target-refs)
              :ref-count (length new-target-refs)))))))
     
-    (message "Removed %d references" removed)))
+    (message "Removed %d references" removed)))))
 
 (defun org-supertag-node--collect-reference-id-title ()
   "Collect all reference information in current node.
