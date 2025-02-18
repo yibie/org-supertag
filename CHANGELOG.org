@@ -1,5 +1,11 @@
 * Changelog
-
+* [2.2.13] - 2025-02-18
+** Bug Fixes
+*** Fix node movement failing due to missing file path
+- Fixed node sync to properly save file path information
+- Added comprehensive debug logging for node operations
+- Improved error handling in node movement process
+- Enhanced node property validation before movement
 * [2.2.12] - 2024-02-16
 ** Features
 *** Enhanced reference creation with duplicate detection
