@@ -317,6 +317,7 @@ Returns the complete node content as string, or nil if not found."
                    (concat content "\n")))))))
       (message "[Get Content] File does not exist: %s" file)
       nil)))
+
 (defun org-supertag-node-move (node-id target-file &optional target-level target-point)
   "Move node to target file.
 NODE-ID is the node identifier
@@ -330,79 +331,78 @@ Returns:
   (message "[Move] Starting node move: ID=%s to file=%s level=%s point=%s" 
            node-id target-file target-level target-point)
   
-  (let ((content (org-supertag-get-node-content node-id)))
-    (message "[Move] Content retrieved: %s chars" (if content (length content) "nil"))
+  (when-let ((content (org-supertag-get-node-content node-id)))
+    (message "[Move] Got node content: %d chars" (length content))
     
-    (if content
+    ;; 使用 condition-case 包装整个移动过程
+    (condition-case err
         (progn
-          (message "[Move] Got node content: %d chars" (length content))
           ;; 1. Delete node from source
-          (if (org-supertag-delete-node-content node-id)
-              (progn
-                (message "[Move] Successfully deleted source node")
-                ;; 2. Insert to target and update database
-                (with-current-buffer (find-file-noselect target-file)
-                  (save-excursion
-                    ;; Move to target position
-                    (if target-point
-                        (progn
-                          (goto-char target-point)
-                          (message "[Move] Moving to specified point: %d" target-point))
-                      (progn
-                        (goto-char (point-max))
-                        (message "[Move] Moving to end of file")))
+          (unless (org-supertag-delete-node-content node-id)
+            (error "Failed to delete source node"))
+          
+          ;; 2. Insert to target and update database
+          (with-current-buffer (find-file-noselect target-file)
+            (save-excursion
+              ;; Move to target position
+              (if target-point
+                  (progn
+                    (goto-char target-point)
+                    (message "[Move] Moving to specified point: %d" target-point))
+                (progn
+                  (goto-char (point-max))
+                  (message "[Move] Moving to end of file")))
+              
+              ;; Ensure we're at the beginning of a line
+              (beginning-of-line)
+              (message "[Move] Current point after positioning: %d" (point))
+              
+              ;; Temporarily disable folding
+              (let ((org-fold-core-style 'overlays))  
+                ;; Insert with proper level adjustment
+                (let ((adjusted-content 
+                       (if (and target-level (> target-level 0))
+                           (progn
+                             (message "[Move] Adjusting content to level %d" target-level)
+                             (org-supertag-adjust-node-level content target-level))
+                         content)))
+                  
+                  (message "[Move] Content ready for insertion (%d chars)" 
+                          (length adjusted-content))
+                  
+                  ;; Ensure proper spacing before insertion
+                  (unless (or (bobp) (looking-back "\n\n" 2))
+                    (insert "\n"))
+                  
+                  ;; Insert content
+                  (let ((insert-point (point)))
+                    (message "[Move] Inserting content at point %d" insert-point)
+                    (insert adjusted-content)
                     
-                    ;; Ensure we're at the beginning of a line
-                    (beginning-of-line)
-                    (message "[Move] Current point after positioning: %d" (point))
+                    ;; Ensure proper spacing after insertion
+                    (unless (looking-at "\n")
+                      (insert "\n"))
                     
-                    ;; Temporarily disable folding
-                    (let ((org-fold-core-style 'overlays))  
-                      ;; Insert with proper level adjustment
-                      (let ((adjusted-content 
-                             (if (and target-level (> target-level 0))
-                                 (progn
-                                   (message "[Move] Adjusting content to level %d" target-level)
-                                   (org-supertag-adjust-node-level content target-level))
-                               content)))
-                        
-                        (message "[Move] Content ready for insertion (%d chars)" 
-                                (length adjusted-content))
-                        
-                        ;; Ensure proper spacing before insertion
-                        (unless (or (bobp) (looking-back "\n\n" 2))
-                          (insert "\n"))
-                        
-                        ;; Insert content
-                        (let ((insert-point (point)))
-                          (message "[Move] Inserting content at point %d" insert-point)
-                          (insert adjusted-content)
-                          
-                          ;; Ensure proper spacing after insertion
-                          (unless (looking-at "\n")
-                            (insert "\n"))
-                          
-                          ;; Move back to inserted heading and sync node
-                          (goto-char insert-point)
-                          (message "[Move] Searching for ID: %s" node-id)
-                          (org-with-wide-buffer
-                           (if (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
-                               (progn
-                                 (org-back-to-heading t)
-                                 (message "[Move] Found heading at point %d" (point))
-                                 (org-show-subtree)
-                                 (message "[Move] Syncing node")
-                                 (org-supertag-node-sync-at-point))
-                             (message "[Move] Failed to find inserted node ID")))
-                          
-                          ;; Save buffer
-                          (save-buffer)
-                          (message "[Move] Node move completed successfully")
-                          t)))))
-            (message "[Move] Failed to delete source node")
-            nil))
-      (message "[Move] Failed to get node content")
-      nil))))
+                    ;; Move back to inserted heading and sync node
+                    (goto-char insert-point)
+                    (message "[Move] Searching for ID: %s" node-id)
+                    (org-with-wide-buffer
+                     (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
+                       (org-back-to-heading t)
+                       (message "[Move] Found heading at point %d" (point))
+                       (org-show-subtree)
+                       (message "[Move] Syncing node")
+                       (org-supertag-node-sync-at-point)))
+                    
+                    ;; Save buffer
+                    (save-buffer)
+                    (message "[Move] Node move completed successfully")
+                    t)))))
+          t)  ; 成功完成返回 t
+      
+      (error
+       (message "[Move] Error during move: %s" (error-message-string err))
+       nil))))  ; 发生错误返回 nil
 
 (defun org-supertag-delete-node-content (node-id)
   "Delete node content from source file.
