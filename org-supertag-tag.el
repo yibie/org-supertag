@@ -209,6 +209,10 @@ otherwise returns nil."
     (let ((tags (org-get-tags)))
       (org-set-tags (cons (concat "#" tag-id) tags)))
     
+    ;; Record tag relationships
+    (when (featurep 'org-supertag-relation)
+      (org-supertag-relation-record-cooccurrence node-id tag-id))
+    
     ;; Behavior Active
     (run-hook-with-args 'org-supertag-after-tag-apply-hook node-id)
     (org-supertag-behavior--on-tag-change node-id tag-id :add)
@@ -842,9 +846,7 @@ CONTEXT is the edit context plist containing:
     ;; Help text
     (insert "\nCommands:\n")
     (insert "n: Next field            p: Previous field\n")
-    (insert "RET: Edit field value    a: Add field\n")
-    (insert "e: Edit field            d: Delete field\n")
-    (insert "C-c C-c: Save           C-c C-k: Cancel\n")
+    (insert "RET: Edit field value    C-c C-c: Save           C-c C-k: Cancel\n")
     ;; Restore point
     (goto-char (min current-point (point-max)))))
 

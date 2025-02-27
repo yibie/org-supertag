@@ -218,45 +218,58 @@ List of field values, each element is (field-id . value)"
   (when (org-at-heading-p)
     (let* ((node-id (org-id-get-create))
            (old-node (org-supertag-db-get node-id))
+           (element (org-element-at-point))
            (title (org-get-heading t t t t))
            (file-path (buffer-file-name))
            (pos (point))
            (level (org-outline-level))
            (olp (org-get-outline-path))
-           ;; 获取节点内容
+           (todo-state (org-get-todo-state))
+           (priority (org-element-property :priority element))
+           (tags (org-get-tags))
+           (refs-to nil)
            (content (save-excursion
                      (let* ((begin (progn 
                                    (org-end-of-meta-data t)
                                    (point)))
                             (end (org-entry-end-position)))
+                       ;; get content and collect references
+                       (goto-char begin)
+                       (while (re-search-forward org-link-any-re end t)
+                         (let* ((link (org-element-context))
+                                (link-type (org-element-property :type link))
+                                (link-path (org-element-property :path link)))
+                           (when (and (equal link-type "id")
+                                    (org-uuidgen-p link-path))
+                             (push link-path refs-to))))
                        (buffer-substring-no-properties begin end)))))
       
-      (message "Debug - title: %s, level: %d, pos: %d" title level pos)
+      (message "Debug - title: %s, level: %d, pos: %d, todo: %s, priority: %s, refs=%d" 
+               title level pos todo-state priority (length refs-to))
       
-      ;; 更新所有属性，包括内容
-      (let ((props (list :type :node
-                        :id node-id
-                        :title title
-                        :file-path file-path
-                        :pos pos
-                        :level level
-                        :olp olp
-                        :content content
-                        :ref-to (when old-node 
-                                (plist-get old-node :ref-to))
-                        :ref-from (when old-node 
-                                  (plist-get old-node :ref-from))
-                        :ref-count (when old-node
-                                   (plist-get old-node :ref-count))
-                        :created-at (or (and old-node 
-                                          (plist-get old-node :created-at))
-                                     (current-time)))))
+      ;; keep existing reference relations
+      (let* ((refs-from (when old-node (plist-get old-node :ref-from)))
+             (props (list :type :node
+                         :id node-id
+                         :title title
+                         :file-path file-path
+                         :pos pos
+                         :level level
+                         :olp olp
+                         :content content
+                         :todo todo-state
+                         :priority (or priority org-default-priority)
+                         :tags tags
+                         :ref-to (delete-dups refs-to)
+                         :ref-from (or refs-from nil)
+                         :ref-count (+ (length refs-to) (length (or refs-from nil)))
+                         :created-at (or (and old-node 
+                                            (plist-get old-node :created-at))
+                                       (current-time)))))
         
         (message "Debug - props: %S" props)
-        
         ;; Update database
         (org-supertag-db-add node-id props)
-        
         ;; Return node ID
         node-id))))
 
@@ -498,7 +511,7 @@ Returns adjusted content string with proper heading levels."
       ;; Find and get current level
       (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
         (let* ((current-level (length (match-string 1)))
-               (level-diff (- target-level current-level)))
+          (level-diff (- target-level current-level)))
           
           (unless (zerop level-diff)
             (goto-char (point-min))
@@ -727,60 +740,20 @@ This includes:
         (error "Failed to parse node properties at point"))
       (org-supertag-db-add node-id props))))
 
-(defun org-supertag-node-get-props-at-point ()
-  "Get node properties at current point.
-Returns property list if successful, nil if failed."
-  (condition-case err
-      (progn
-        (unless (org-at-heading-p)
-          (error "Not at a heading"))
-        (org-supertag-db--parse-node-at-point))
-    (error
-     (message "Failed to get node properties: %s" (error-message-string err))
-     nil)))
 
 (defun org-supertag-node-update ()
   "Update node at current position.
-
-Use cases:
-1. Manual update after node content changes
-2. Force node data synchronization
-
-Prerequisites:
-1. Cursor must be on a heading
-2. Heading must have an associated node ID
-
-Returns:
-- Node ID on success
-- Throws error on failure"
+Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
   (interactive)
   (unless (org-at-heading-p)
     (user-error "Cursor must be on a heading"))
-  (let ((id (org-id-get)))
-    (unless id
-      (user-error "Heading has no associated node"))
-    ;; Get node properties
-    (let ((props (org-supertag-node-get-props-at-point)))
-      (unless props
-        (error "Unable to get node properties"))
-      ;; Update database
-      (condition-case err
-          (progn
-            (org-supertag-node-db-update id props)
-            (message "Node updated successfully: %s" id)
-            id)
-        (error
-         (message "Node update failed: %s" (error-message-string err))
-         (signal (car err) (cdr err)))))))
-
-(defun org-supertag-node-db-update (id props)
-  "Update node in database.
-ID is the node identifier
-PROPS is the property list to update with"
-  (unless (and id props)
-    (error "Invalid input: id=%s props=%s" id props))
-  (org-supertag-db-add id props))
-
+  
+  (let ((node-id (org-supertag-node-sync-at-point)))
+    (if node-id
+        (progn
+          (message "Node updated successfully: %s" node-id)
+          node-id)
+      (error "Failed to update node"))))
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
   "Remove tag association from a node.
@@ -866,7 +839,6 @@ filename / outline-path / title"
             (message "Jumped to node: %s" choice)
           (message "Error: Could not find node location"))
       (message "No matching node found"))))
-
 ;;;###autoload
 (defun org-supertag-node-find-other-window ()
   "Like `org-supertag-node-find' but display node in other window."
