@@ -684,8 +684,6 @@ Example:
 ;;------------------------------------------------------------------------------
 ;; Node Operations Library
 ;;------------------------------------------------------------------------------
-
-
 ;;; Node Tree Navigation Library
 ;;; This library provides functions for navigating and manipulating the node tree
 ;;; structure in org-mode documents. It includes operations for:
@@ -801,6 +799,175 @@ The archive location is determined by `org-archive-location'."
           (error
            (message "Error archiving subtree: %S" err)))))))
 
+
+;;------------------------------------------------------------------------------
+;; Script Execution Library
+;;------------------------------------------------------------------------------
+
+(defcustom org-supertag-script-executors
+  '(("py" . (;; Python scripts
+             :command "python"
+             :args nil
+             :env (("PYTHONPATH" . "${script_dir}")
+                   ("PYTHONIOENCODING" . "utf-8"))))
+    ("rb" . (;; Ruby scripts
+             :command "ruby"
+             :args nil
+             :env (("RUBYLIB" . "${script_dir}"))))
+    ("js" . (;; Node.js scripts
+             :command "node"
+             :args nil
+             :env (("NODE_PATH" . "${script_dir}"))))
+    ("sh" . (;; Shell scripts
+             :command "bash"
+             :args nil
+             :env (("SCRIPT_DIR" . "${script_dir}"))))
+    ("pl" . (;; Perl scripts
+             :command "perl"
+             :args nil
+             :env (("PERL5LIB" . "${script_dir}"))))
+    ("R" . (;; R scripts
+            :command "Rscript"
+            :args ("--vanilla")
+            :env (("R_LIBS_USER" . "${script_dir}/R/library"))))
+    ("jl" . (;; Julia scripts
+             :command "julia"
+             :args nil
+             :env (("JULIA_LOAD_PATH" . "${script_dir}"))))
+    ("php" . (;; PHP scripts
+              :command "php"
+              :args nil
+              :env (("PHP_INI_SCAN_DIR" . "${script_dir}")))))
+  "Mapping of file extensions to script execution configurations.
+Each configuration is a plist with:
+:command - The command to execute
+:args    - Optional list of command line arguments
+:env     - Environment variables, can use ${script_dir} placeholder"
+  :type '(alist :key-type string
+                :value-type (plist :key-type symbol :value-type sexp))
+  :group 'org-supertag-script)
+
+(defun org-supertag-behavior--get-script-executor (script-path)
+  "Get executor configuration for script at SCRIPT-PATH.
+Returns a plist containing :command, :args, and :env settings.
+Raises error if no executor is configured for the script extension.
+
+Example:
+  (org-supertag-behavior--get-script-executor \"test.py\")
+  ;; => (:command \"python\" :args nil :env ((\"PYTHONPATH\" . \"...\")))"
+  (let ((ext (file-name-extension script-path)))
+    (unless ext
+      (error "Script file has no extension: %s" script-path))
+    (or (assoc-default ext org-supertag-script-executors)
+        (error "No executor configured for extension: %s" ext))))
+
+(defun org-supertag-behavior--setup-script-env (env script-dir)
+  "Setup environment variables from ENV using SCRIPT-DIR.
+Expands ${script_dir} placeholder in environment variable values.
+Returns alist of (var-name . expanded-value) pairs.
+
+Example:
+  (org-supertag-behavior--setup-script-env
+    '((\"PYTHONPATH\" . \"${script_dir}\"))
+    \"/path/to/scripts\")"
+  (mapcar (lambda (var)
+            (let* ((name (car var))
+                   (value (cdr var))
+                   (expanded (replace-regexp-in-string
+                            "${script_dir}"
+                            script-dir
+                            value)))
+              (cons name expanded)))
+          env))
+
+(defun org-supertag-behavior--execute-script (node-id params)
+  "Execute a script and log its output.
+Executes script specified in PARAMS and logs output to NODE-ID.
+
+Required PARAMS:
+- :script-path  : Path to script file
+
+Optional PARAMS:
+- :args         : List of additional command line arguments
+- :log-drawer   : Name of drawer for logging (default: \"SCRIPT_LOG\")
+- :log-format   : Time format for log entries (default: \"%Y-%m-%d %H:%M\")
+
+The function will:
+1. Determine appropriate executor based on script extension
+2. Setup execution environment
+3. Run script and capture output
+4. Log results to specified drawer
+5. Update LAST_RUN property
+
+Example:
+  (org-supertag-behavior--execute-script node-id
+    '(:script-path \"~/scripts/process.py\"
+      :args (\"-v\" \"--mode=batch\")
+      :log-drawer \"EXECUTION_LOG\"
+      :log-format \"%Y-%m-%d %H:%M:%S\"))"
+  (let* ((script-path (plist-get params :script-path))
+         (extra-args (plist-get params :args))
+         (log-drawer (or (plist-get params :log-drawer) "SCRIPT_LOG"))
+         (log-format (or (plist-get params :log-format) "%Y-%m-%d %H:%M"))
+         (log-time (format-time-string log-format))
+         (script-dir (file-name-directory (expand-file-name script-path)))
+         (output-buffer (generate-new-buffer "*script-output*")))
+    
+    (unless (file-exists-p script-path)
+      (error "Script file not found: %s" script-path))
+    
+    (message "Executing script %s at %s" script-path log-time)
+    
+    (let* ((executor (org-supertag-behavior--get-script-executor script-path))
+           (command (plist-get executor :command))
+           (base-args (plist-get executor :args))
+           (all-args (append (or base-args '())
+                            (list script-path)
+                            (or extra-args '())))
+           (env (org-supertag-behavior--setup-script-env
+                 (plist-get executor :env)
+                 script-dir)))
+      
+      ;; Execute script with environment variables
+      (let ((process-environment
+             (append
+              (mapcar (lambda (var)
+                        (format "%s=%s" (car var) (cdr var)))
+                      env)
+              process-environment)))
+        (apply #'call-process
+               command    ; Program
+               nil       ; Input
+               output-buffer ; Output
+               nil       ; Display
+               all-args)))
+    
+    ;; Get output and log results
+    (with-current-buffer output-buffer
+      (let ((output (buffer-string)))
+        (org-with-point-at (org-supertag-db-get-pos node-id)
+          ;; Create log drawer if needed
+          (org-supertag-behavior--insert-drawer 
+           node-id
+           `(:name ,log-drawer
+             :content ""))
+          
+          ;; Add log entry
+          (save-excursion
+            (org-end-of-meta-data t)
+            (when (re-search-forward (format ":%s:" log-drawer) nil t)
+              (forward-line)
+              (insert (format "* %s\n%s\n" log-time output))))
+          
+          ;; Set last run property
+          (org-set-property "LAST_RUN" log-time)
+          
+          ;; Update node
+          (org-supertag-node-sync-at-point))))
+    
+    ;; Cleanup
+    (kill-buffer output-buffer)))
+
 ;;------------------------------------------------------------------------------
 ;; Face Management Library
 ;;------------------------------------------------------------------------------
@@ -898,5 +1065,7 @@ FACE-PLIST is a property list of face attributes."
                                              current-title
                                            (concat prefix " " current-title))))
                          (replace-match new-title t t nil 4))))))))))))
+
+
 
 (provide 'org-supertag-behavior-library) 

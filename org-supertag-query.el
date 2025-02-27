@@ -6,7 +6,19 @@
 (require 'org-supertag-field) 
 (require 'cl-lib)
 
-(defcustom org-supertag-query-history-max-items 500
+;; Data structure for query items
+(cl-defstruct (org-supertag-query-item
+               (:constructor org-supertag-query-item-create)
+               (:copier nil))
+  "Structure for holding query result items."
+  id          ; Node ID
+  title       ; Title
+  tags        ; Tags list
+  fields      ; Field values
+  file        ; File name
+  marked)     ; Marked status
+
+(defcustom org-supertag-query-history-max-items 100
   "Maximum number of keywords to keep in history.
 When the limit is reached, least frequently used items will be removed."
   :type 'integer
@@ -47,28 +59,42 @@ Each item is a plist with :query, :count, and :last-used keys.")
 
 (defun org-supertag-query--update-keyword-frequency (input)
   "Update frequency of search INPUT in query history.
-INPUT is a string containing the complete search query."
-  (let ((now (format-time-string "%Y-%m-%d %H:%M:%S")))
-    (let* ((query-str (if (stringp input) input (prin1-to-string input)))
-           (entry (or (cl-find query-str org-supertag-query--history
-                             :key (lambda (x) (plist-get x :query))
-                             :test #'equal)
-                    (progn
-                      (push `(:query ,query-str :count 0 :last-used ,now)
-                            org-supertag-query--history)
-                      (car org-supertag-query--history)))))
+INPUT is a string containing the complete search query.
+If the query already exists, update its count and timestamp.
+If not, add it as a new entry."
+  (let* ((now (format-time-string "%Y-%m-%d %H:%M:%S"))
+         (query-str (if (stringp input) input (prin1-to-string input)))
+         ;; Remove existing entry if found
+         (existing-entry (cl-find query-str org-supertag-query--history
+                                :key (lambda (x) (plist-get x :query))
+                                :test #'equal)))
+    
+    ;; If entry exists, remove it from history first
+    (when existing-entry
+      (setq org-supertag-query--history
+            (cl-remove query-str org-supertag-query--history
+                      :key (lambda (x) (plist-get x :query))
+                      :test #'equal)))
+    
+    ;; Create or update entry
+    (let ((entry (or existing-entry
+                    `(:query ,query-str :count 0 :last-used ,now))))
       ;; Update count and timestamp
       (plist-put entry :count (1+ (plist-get entry :count)))
-      (plist-put entry :last-used now)))
+      (plist-put entry :last-used now)
+      ;; Add to front of history
+      (push entry org-supertag-query--history)))
   
-  ;; Sort and truncate history
+  ;; Sort by frequency and last used time
   (setq org-supertag-query--history
         (sort org-supertag-query--history
               (lambda (a b)
                 (or (> (plist-get a :count) (plist-get b :count))
                     (and (= (plist-get a :count) (plist-get b :count))
                          (string> (plist-get a :last-used)
-                                  (plist-get b :last-used)))))))
+                                (plist-get b :last-used)))))))
+  
+  ;; Truncate if exceeds max items
   (when (> (length org-supertag-query--history) org-supertag-query-history-max-items)
     (setq org-supertag-query--history
           (seq-take org-supertag-query--history org-supertag-query-history-max-items)))
@@ -90,9 +116,11 @@ INPUT is a string containing the complete search query."
 ;;---------------------------------------------------------------
 
 (defun org-supertag-query--get-keywords ()
-  "Get keywords from user input with history support."
-  (let* ((history (mapcar (lambda (x) (plist-get x :query))
-                         (org-supertag-query-get-history 10)))
+  "Get keywords from user input with history support.
+Return a list of keywords split from user input."
+  (let* ((history (delete-dups
+                  (mapcar (lambda (x) (plist-get x :query))
+                         (org-supertag-query-get-history))))
          (input (completing-read "Search: " history nil nil nil 'history history)))
     ;; Save complete search query
     (org-supertag-query--update-keyword-frequency input)
@@ -227,63 +255,37 @@ TAG-NAME is the tag to search for."
   "Face for file names in query results."
   :group 'org-supertag-query)
 
-;; Data structure
-(cl-defstruct org-supertag-query-item
-  id          ; Node ID
-  title       ; Title
-  tags        ; Tags list
-  fields      ; Field values
-  file        ; File name
-  content     ; Preview content
-  marked)     ; Marked status
-
 ;; Buffer-local 
 (defvar-local org-supertag-query-ewoc nil
   "Ewoc object for displaying query results.")
 
-;; Formatting display function
+
 ;; Formatting display function
 (defun org-supertag-query-pp-item (item)
   "Format display for a single query item."
   (let* ((title (org-supertag-query-item-title item))
          (tags (org-supertag-query-item-tags item))
          (file (org-supertag-query-item-file item))
-         (content (org-supertag-query-item-content item))
          (marked (org-supertag-query-item-marked item))
-         (id (org-supertag-query-item-id item)))
-    
+         (id (org-supertag-query-item-id item)))   
     ;; Title line with checkbox and tags
     (insert (propertize (if marked "☑ " "☐ ")
                        'face (if marked 'org-checkbox-statistics-done
                               'org-checkbox))
             (propertize title 'face 'bold)
             " "
-            (format "[[id:%s][🔗]]" id))  ; Add ID link
-    
-    ;; Tags
+            (format "[[id:%s][🔗]]" id))  ; Add ID link  
     (when tags
       (insert " ")
       (dolist (tag tags)
         (insert (propertize (concat "[" tag "]")
                            'face 'org-supertag-query-tag)
                 " ")))
-    ;; File name
     (when file
       (insert " " (propertize (file-name-nondirectory file)
                              'face 'org-supertag-query-file)))
-    (insert "\n")
-    
-    ;; Content
-    (when content
-      (let ((truncated-content
-             (if (> (length content) org-supertag-query-preview-length)
-                 (concat (substring content 0 org-supertag-query-preview-length)
-                        "...")
-               content)))
-        (dolist (line (split-string truncated-content "\n"))
-          (unless (string-empty-p line)
-            (insert "    " line "\n")))))))
-            
+    (insert "\n")))
+
 (defun org-supertag-query-highlight-current ()
   "Highlight current item."
   (let* ((node (ewoc-locate org-supertag-query-ewoc))
@@ -464,34 +466,6 @@ TAG-NAME is the tag to search for."
   (insert "\n")
   )
 
-(defun org-supertag-query-get-node-content (node-id)
-  "Get node content from database."
-  (when-let ((props (org-supertag-db-get node-id)))
-    (or (plist-get props :content)
-        ;; If no content in database, revert to old method
-        (when-let* ((file (plist-get props :file-path))
-                   (pos (plist-get props :pos)))
-          (when (file-exists-p file)
-            (with-temp-buffer
-              (insert-file-contents file)
-              (org-mode)
-              (goto-char pos)
-              (let* ((element (org-element-at-point))
-                     (node-id-at-point (org-id-get))
-                     (found-pos (org-element-property :begin element)))
-                (when (and (= found-pos pos)
-                          (equal node-id-at-point node-id))
-                  ;; Get content, skipping properties
-                  (save-excursion
-                    (let* ((begin (progn
-                                  (org-end-of-meta-data t)
-                                  (point)))
-                           (end (org-element-property :contents-end element))
-                           (contents (when (and begin end)
-                                     (buffer-substring-no-properties begin end))))
-                      (when contents
-                        (string-trim contents))))))))))))
-
 (defun org-supertag-query-create-item (node)
   "Create display item from node properties."
   (let* ((id (plist-get node :id))
@@ -515,13 +489,12 @@ TAG-NAME is the tag to search for."
                              node-fields)))
                    org-supertag-db--link)
                   node-fields)))
-    (make-org-supertag-query-item
+    (org-supertag-query-item-create
      :id id
      :title (plist-get node :title)
      :tags tags
      :fields fields
      :file (plist-get node :file-path)
-     :content (plist-get node :content)
      :marked nil)))
 
 (defun org-supertag-query-show-results (keyword-list nodes)
@@ -699,24 +672,6 @@ Returns:
           t nil)
          found)))))
 
-(defun org-supertag-get-node-content (node-id)
-  "Get complete content of a node.
-NODE-ID is the node identifier
-
-Returns:
-- Node content string
-- nil if node not found"
-  (when-let* ((node (org-supertag-db-get node-id))
-              (file (plist-get node :file-path))
-              (loc (org-supertag-find-node-location node-id file)))
-    (with-current-buffer (find-file-noselect file)
-      (org-with-wide-buffer
-       (goto-char (car loc))
-       (let ((element (org-element-at-point)))
-         (buffer-substring-no-properties
-          (org-element-property :begin element)
-          (org-element-property :end element)))))))
-
 (defun org-supertag-update-node-db (node-id file)
   "Update node information in database.
 NODE-ID is the node identifier
@@ -869,7 +824,10 @@ Available insertion positions:
 2. Under Heading - Insert as child of selected heading 
 3. Same Level - Insert as sibling of selected heading"
   (interactive)
-  (let* ((selected-nodes (org-supertag-get-selected-nodes)))
+  (let* ((selected-nodes (org-supertag-get-selected-nodes))
+         (target-file (read-file-name "Export to file: "))
+         (target-pos-level (org-supertag-query--get-insert-position target-file)))
+    
     (if (not selected-nodes)
         (message "No nodes selected")
       ;; Select target file
@@ -1170,3 +1128,4 @@ KEYWORDS is a list of keywords to match against node content."
 
 
 (provide 'org-supertag-query)
+

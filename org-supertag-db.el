@@ -105,8 +105,10 @@
      :optional (;; Task Information
                 :scheduled   ; Scheduled time
                 :deadline    ; Deadline time
-                :priority    ; Priority
                 :todo       ; Todo state
+                :priority    ; Priority
+                :tags       ; Tags
+                :content     ; Content
                 ;; Reference Relations
                 :ref-to     ; Referenced nodes
                 :ref-from   ; Nodes referencing this
@@ -1170,16 +1172,19 @@ Returns:
         (let* ((title (org-supertag-db--get-node-title))
                (level (org-element-property :level element))
                (id (org-element-property :ID element))
-               ;; Task properties
-               (scheduled (org-element-property :scheduled element))
-               (deadline (org-element-property :deadline element))
-               (priority (org-element-property :priority element))
-               (todo (org-element-property :todo-keyword element))
+               ;; Task properties - 使用更可靠的获取方式
+               (todo-state (org-get-todo-state))
+               (priority (org-get-priority element))
+               (scheduled (org-get-scheduled-time (point)))
+               (deadline (org-get-deadline-time (point)))
                ;; Get outline path
                (olp (org-get-outline-path t))
                ;; Other properties
-               (tags (org-element-property :tags element))
-               (properties (org-element-property :PROPERTIES element))
+               (tags (org-get-tags))
+               (properties (org-entry-properties nil 'standard))
+               ;; 解析引用关系
+               (refs-to nil)
+               (refs-from nil)
                ;; Get node content directly
                (content (save-excursion
                          (org-end-of-meta-data t)
@@ -1187,15 +1192,31 @@ Returns:
                                 (end (org-element-property :contents-end element))
                                 ;; Find next heading position
                                 (next-heading (save-excursion
-                                                (when (re-search-forward "^\\(\\*+\\)" nil t)
-                                                  (match-beginning 0)))))
+                                              (when (re-search-forward "^\\*+" nil t)
+                                                (match-beginning 0)))))
+                           ;; 在获取内容的同时收集引用
+                           (goto-char begin)
+                           (while (re-search-forward org-link-any-re (or end next-heading) t)
+                             (let* ((link (org-element-context))
+                                    (link-type (org-element-property :type link))
+                                    (link-path (org-element-property :path link)))
+                               (when (and (equal link-type "id")
+                                        (org-uuidgen-p link-path))
+                                 (push link-path refs-to))))
                            ;; Use the minimum of end and next-heading
                            (setq end (if (and next-heading end)
-                                         (min end next-heading)
-                                       (or next-heading end)))
+                                       (min end next-heading)
+                                     (or next-heading end)))
                            (when (and begin end (< begin end))
                              (string-trim (buffer-substring-no-properties begin end)))))))
-          (message "Parsed headline: id=%s title=%s level=%s" id title level)
+          
+          (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%d refs=%d" 
+                  id title level todo-state priority (length refs-to))
+          
+          ;; 获取引用这个节点的其他节点（保持现有的引用关系）
+          (when-let ((existing-node (org-supertag-db-get id)))
+            (setq refs-from (plist-get existing-node :ref-from)))
+          
           (list :type :node
                 :id id
                 :title title
@@ -1204,14 +1225,18 @@ Returns:
                 :olp olp
                 :level level
                 ;; Task properties
+                :todo todo-state
+                :priority priority
                 :scheduled scheduled
                 :deadline deadline
-                :priority priority
-                :todo todo
                 ;; Other properties
                 :properties properties
                 :tags tags
-                :content content 
+                :content content
+                ;; Reference relations
+                :ref-to (delete-dups refs-to)
+                :ref-from (or refs-from nil)
+                :ref-count (+ (length refs-to) (length refs-from))
                 :created-at (current-time)))))))
 
 (defun org-supertag-db--validate-node-props (props)
