@@ -165,7 +165,26 @@ Returns the first tag ID found for the node."
     (car node-tags)))
 
 
-
+(defun org-supertag-node--ensure-sync ()
+  "Ensure current node is properly synced with database.
+If point is in a heading or its content area, create/sync the node.
+Returns node ID if successful, nil otherwise."
+  (save-excursion
+    (condition-case nil
+        (progn
+          ;; Try to move to the parent heading if we're in content
+          (unless (org-at-heading-p)
+            (org-back-to-heading t))
+          ;; Now we're at a heading, check for existing node
+          (let ((node-id (org-id-get)))
+            (if node-id
+                ;; If node exists, ensure it's synced
+                (org-supertag-node-sync-at-point)
+              ;; If no node exists, create one
+              (org-supertag-node-sync-at-point))))
+      ;; If we can't find a parent heading
+      (error nil))))
+      
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------
@@ -463,24 +482,17 @@ The command will:
                      (progn 
                        (org-supertag-node-create)
                        (org-id-get)))))
-    
     (message "Moving node with ID: %s" node-id)
-    
-    ;; 确保节点信息已同步到数据库
     (org-supertag-node-sync-at-point)
-    
     (unless (org-supertag-db-get node-id)
       (user-error "Current node not found in database"))
-    
     ;; Get target file and position
     (let* ((target-file (read-file-name "Move to file: "))
            (insert-pos (org-supertag-query--get-insert-position target-file))
            (target-pos (car insert-pos))
            (level-adj (cdr insert-pos)))
-      
       (message "Target file: %s, position: %s, level: %s" 
                target-file target-pos level-adj)
-      
       (if (org-supertag-node-move node-id target-file level-adj target-pos)
           (message "Node moved successfully")
         (message "Failed to move node")))))
@@ -506,13 +518,11 @@ Returns adjusted content string with proper heading levels."
     (org-mode)
     (insert content)
     (goto-char (point-min))
-    
     (when (and target-level (> target-level 0))
       ;; Find and get current level
       (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
         (let* ((current-level (length (match-string 1)))
           (level-diff (- target-level current-level)))
-          
           (unless (zerop level-diff)
             (goto-char (point-min))
             ;; Adjust all heading levels
@@ -523,7 +533,6 @@ Returns adjusted content string with proper heading levels."
                      (new-level (+ current-stars-len level-diff))
                      (new-stars (make-string (max 1 new-level) ?*)))
                 (replace-match (concat new-stars text))))))))
-    
     (buffer-string)))
 
 (defun org-supertag--move-node-and-link (node-id target-file &optional target-level)
@@ -654,30 +663,17 @@ Returns:
         (org-supertag-node-sync-at-point))))))
 
 (defun org-supertag-node-delete ()
-  "Delete current node and all its associated data.
-This includes:
-1. Delete the org headline
-2. Remove associated tags
-3. Remove associated fields (properties)
-4. Clean up database entries
-5. Remove all references to this node"
+  "Delete current node and all its associated data."
   (interactive)
-  (let ((node-id (org-id-get)))
-    (unless node-id
-      (user-error "Current position is not in a node"))
-    (unless (org-supertag-db-get node-id)
-      (user-error "Current node is not registered in database"))
-    
-    (when (yes-or-no-p "Really delete this node and all its data? ")
-      ;; 1. Get node info before deletion
-      (let* ((node (org-supertag-db-get node-id))
-             (tags (org-supertag-node-get-tags node-id))
-             (ref-from (plist-get node :ref-from)))
-        
+  (if-let ((node-id (org-supertag-node--ensure-sync)))
+      (when (yes-or-no-p "Really delete this node and all its data? ")
+        ;; 1. Get node info before deletion
+        (let* ((node (org-supertag-db-get node-id))
+               (tags (org-supertag-node-get-tags node-id))
+               (ref-from (plist-get node :ref-from)))
         ;; 2. Remove all tags
         (dolist (tag-id tags)
           (org-supertag-tag--remove tag-id node-id))
-        
         ;; 3. Remove all references to this node
         (dolist (ref-node-id ref-from)
           (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
@@ -687,7 +683,6 @@ This includes:
                 (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
                   (delete-region (match-beginning 0) (match-end 0)))
                 (save-buffer)))))
-        
         ;; 4. Delete the headline content including properties
         (org-back-to-heading t)
         (let* ((element (org-element-at-point))
@@ -696,25 +691,21 @@ This includes:
           ;; Delete the entire heading including properties
           (delete-region begin end)
           (when (looking-at "\n") (delete-char 1)))
-        
         ;; 5. Remove from database
         (remhash node-id org-supertag-db--object)
-        
         ;; 6. Clear database caches
         (org-supertag-db--cache-remove 'entity node-id)
         (org-supertag-db--cache-remove 'query (format "type:%s" :node))
         (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
         (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
         (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
-        
         ;; 7. Save changes
         (save-buffer)
         (org-supertag-db-save)
-        
         ;; 8. Run hooks
         (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
-        
-        (message "Node deleted: %s" node-id)))))
+        (message "Node deleted: %s" node-id))
+    (user-error "No node found at current position"))))
 
 (defun org-supertag-node--ensure-id-system ()
   "Ensure org-id system is properly initialized."
@@ -745,15 +736,11 @@ This includes:
   "Update node at current position.
 Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
   (interactive)
-  (unless (org-at-heading-p)
-    (user-error "Cursor must be on a heading"))
-  
-  (let ((node-id (org-supertag-node-sync-at-point)))
-    (if node-id
-        (progn
-          (message "Node updated successfully: %s" node-id)
-          node-id)
-      (error "Failed to update node"))))
+  (if-let ((node-id (org-supertag-node--ensure-sync)))
+      (progn
+        (message "Node updated successfully: %s" node-id)
+        node-id)
+    (user-error "Cannot find or create node at current position")))
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
   "Remove tag association from a node.
@@ -869,35 +856,9 @@ filename / outline-path / title"
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node--in-node-p ()
-  "Check if current position is within a valid org-supertag node.
-Valid node requirements:
-1. Current position can reach a heading
-2. Heading has an ID property
-3. ID exists in database
-
-Returns:
-- (id . title) if in valid node
-- nil if not in valid node, with appropriate message"
-  (condition-case nil
-      (save-excursion
-        (org-back-to-heading t)
-        (let ((id (org-entry-get nil "ID"))
-              (title (org-get-heading t t t t)))
-          (cond
-           ;; No ID
-           ((null id)
-            (message "Current node not created, use org-supertag-node-create command")
-            nil)
-           ;; ID not in database
-           ((not (org-supertag-node-db-exists-p id))
-            (message "Node ID not registered in database, use org-supertag-node-create command")
-            nil)
-           ;; Valid node
-           (t (cons id title)))))
-    ;; Not under any heading
-    (error 
-     (message "Current position not within any node")
-     nil)))
+  "Check if current position is within a valid org-supertag node."
+  (when-let ((node-id (org-supertag-node--ensure-sync)))
+    (cons node-id (org-get-heading t t t t))))
 
 (defun org-supertag-node-db-add-reference (from-id to-id)
   "Add reference relationship between nodes.
@@ -1008,6 +969,8 @@ Returns node-id if found, nil otherwise."
      org-supertag-db--object)
     result))
 
+
+
 (defun org-supertag-node-add-reference ()
   "Add reference to current node.
 If region is active:
@@ -1018,15 +981,13 @@ If region is active:
 If no region:
   1. Insert reference to an existing node
 In both cases:
-  - Creates node if current heading isn't one
+  - Creates node if current position is in a heading or its content
   - Updates reference relationships"
   (interactive)
   (let ((current-node-id (or (org-id-get)
-                            (when (org-at-heading-p)
-                              (org-supertag-node-create)
-                              (org-id-get)))))
+                            (org-supertag-node--ensure-sync))))
     (unless current-node-id
-      (user-error "Must be within a node or at a heading"))
+      (user-error "Must be within a heading or its content area"))
     
     (if (use-region-p)
         ;; Handle selected text
@@ -1100,59 +1061,6 @@ In both cases:
           (org-supertag-db--parse-node-all-ref)
           (message "Added reference to: %s" choice))))))
 
-(defun org-supertag-node-remove-reference (node-id)
-  "Remove reference to specified node.
-NODE-ID is the referenced node identifier."
-  (interactive 
-   (let* ((refs (org-supertag-node--collect-reference-id-title))
-          (selected (completing-read 
-                    "Remove reference: "
-                    (mapcar #'car refs)
-                    nil t)))
-     (list (cdr (assoc selected refs)))))
-  
-  (let ((start (org-entry-beginning-position))
-        (end (org-entry-end-position))
-        (removed 0))
-    ;; 1. delete link
-    (save-excursion
-      (goto-char start)
-      (while (< (point) end)
-        (let ((element (org-element-context)))
-          (when (and (eq (org-element-type element) 'link)
-                    (equal (org-element-property :type element) "id")
-                    (equal (org-element-property :path element) node-id))
-            (delete-region (org-element-property :begin element)
-                          (org-element-property :end element))
-            (cl-incf removed)))
-    ;; 2. update reference
-    (when (> removed 0)
-      (let* ((current-node-id (org-id-get))
-             (current-node (org-supertag-db-get current-node-id))
-             (target-node (org-supertag-db-get node-id)))
-        ;; 2.1 update current node ref-to
-        (let* ((current-refs (plist-get current-node :ref-to))
-               (new-refs (delete node-id current-refs)))
-          (org-supertag-db-add 
-           current-node-id
-           (append
-            (list :type :node)
-            (plist-put 
-             (plist-put current-node :ref-to new-refs)
-             :ref-count (length new-refs)))))        
-        ;; 2.2 update target node ref-from
-        (let* ((target-refs (plist-get target-node :ref-from))
-               (new-target-refs (delete current-node-id target-refs)))
-          (org-supertag-db-add 
-           node-id
-           (append
-            (list :type :node)
-            (plist-put 
-             (plist-put target-node :ref-from new-target-refs)
-             :ref-count (length new-target-refs)))))))
-    
-    (message "Removed %d references" removed)))))
-
 (defun org-supertag-node--collect-reference-id-title ()
   "Collect all reference information in current node.
 Returns: ((title . id) ...)"
@@ -1171,25 +1079,16 @@ Returns: ((title . id) ...)"
                        (title (plist-get node :title)))
               (push (cons title path) refs))))))))
 
-
-(defun org-supertag-node--update-references (node-id)
-  "Update references after node movement.
-NODE-ID: ID of the moved node"
-  (when-let* ((node (org-supertag-db-get node-id))
-              (refs-to (plist-get node :ref-to))
-              (refs-from (plist-get node :ref-from)))
-    
-    ;; 1. Update references to other nodes
-    (dolist (ref refs-to)
-      (org-supertag-node-db-update-reference node-id ref))
-    
-    ;; 2. Update references from other nodes
-    (dolist (ref refs-from)
-      (org-supertag-node-db-update-reference ref node-id))
-    
-    ;; 3. Trigger reference update event
-    (run-hook-with-args 'org-supertag-node-references-updated-hook 
-                       node-id)))
+(defun org-supertag-node-remove-reference (node-id)
+  "Remove reference to specified node."
+  (interactive 
+   (let* ((current-id (org-supertag-node--ensure-sync))
+          (refs (when current-id (org-supertag-node--collect-reference-id-title)))
+          (selected (completing-read 
+                    "Remove reference: "
+                    (mapcar #'car refs)
+                    nil t)))
+     (list (cdr (assoc selected refs))))))
 
 (defun org-supertag-node-db-update-reference (from-id to-id)
   "Update reference relationship in database.
@@ -1243,6 +1142,5 @@ Arguments: (from-id to-id)")
 (defvar org-supertag-node-reference-removed-hook nil
   "Hook run after node reference is removed.
 Arguments: (from-id to-id)")
-
 
 (provide 'org-supertag-node)
