@@ -123,11 +123,15 @@
                 ;; Field Definitions
                 :fields)     ; ((:name "field-name" :type field-type) ...)
      :optional (;; Meta Information
+                :type       ; Tag type (:node, :field, :relation)
+                :relation-type ; Relation type (:cooccurrence, :parent-child, :causal, etc.)
+                :from-tag   ; Tag that this tag references
+                :to-tag     ; Tag that references this tag
+                :created-at  ; Creation time
+                :behaviors  ; Behaviors associated with the tag
                 :description ; Description of tag purpose
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
-                :behaviors  ; Behaviors associated with the tag
-                :created-at  ; Creation time
                 :modified-at)) ; Modification time
   "Entity structure definitions."))
 
@@ -135,7 +139,10 @@
 (defconst org-supertag-db-link-type
   '(:node-tag     ; Node-tag relationship
     :node-field   ; Node-field relationship  
-    :tag-ref)     ; Tag reference relationship
+    :tag-ref      ; Tag reference relationship
+    :tag-tag      ; Tag-tag relationship
+    :relation-group      ; Relation group definition
+    :relation-member)    ; Relation group membership
   "System supported link types.")
 
 (defconst org-supertag-db-link-structure
@@ -144,17 +151,24 @@
      :optional (:created-at)) ; Creation time
     
     (:type :node-field
-     :required (:from         ; node-id
-                :to           ; field-name
-                :tag-id       ; Associated tag
-                :value)       ; Field value
+     :required (:from          ; node-id
+                :to            ; field-name
+                :tag-id        ; Associated tag
+                :value)        ; Field value
      :optional (:created-at   
                 :modified-at))
     
     (:type :tag-ref
-     :required (:from :to)    ; tag-id -> tag-id
-     :optional (:ref-type))   ; Reference type
-    ))
+     :required (:from :to)              ; tag-id -> tag-id
+     :optional (:ref-type))             ; Reference type
+
+    (:type :tag-tag
+     :required (:from :to)              ; tag-id -> tag-id
+     :optional (:relation-type          ; Relation type (:cooccurrence, :parent-child, :causal, etc.)
+                :strength               ; Strength (0.0-1.0)
+                :created-at             ; Creation time
+                :updated-at)))           ; Update time
+  "Entity link structure definitions.")
 
 ;; Behavior System Definitions
 (defconst org-supertag-behavior-timing
@@ -275,12 +289,12 @@ Returns:
 ;; Link Type Validation
 (defun org-supertag-db-valid-link-type-p (type)
   "Check if TYPE is a valid link type.
-Valid types are :node-tag, :node-field, and :tag-ref.
+Valid types are :node-tag, :node-field, :tag-ref, and :tag-tag.
 
 Returns:
 - t if valid
 - nil if invalid"
-  (memq type '(:node-tag :node-field :tag-ref)))
+  (memq type '(:node-tag :node-field :tag-ref :tag-tag)))
 
 (defun org-supertag-db-valid-link-p (type from to props)
   "Validate link data.
@@ -327,7 +341,6 @@ Returns:
   (let* ((struct (cl-find type org-supertag-db-object-structure
                          :key (lambda (x) (plist-get x :type))))
          (required (plist-get struct :required)))
-    ;; Validate type
     (unless struct
       (error "Invalid entity type: %s" type))
     ;; Validate required properties
@@ -716,6 +729,14 @@ TYPE is the link type."
      '(:type :tag-ref
        :required (:from :to :ref-type)
        :optional (:created-at :modified-at)))
+    
+    (:tag-tag
+     '(:type :tag-tag
+       :required (:from :to)
+       :optional (:relation-type
+                 :strength
+                 :created-at
+                 :updated-at)))
     
     (_ nil)))
 
@@ -1151,9 +1172,19 @@ Returns:
     
     result))
 
+(defun org-supertag-db--clean-text (text)
+  "Clean text by removing all text properties and ensuring it's a plain string.
+TEXT is the text to clean.
+Returns a clean string without any text properties."
+  (when text
+    (let ((str (if (stringp text)
+                   text
+                 (format "%s" text))))
+      (substring-no-properties (string-trim str)))))
+
 (defun org-supertag-db--get-node-title ()
   "Get current node title in plain text format."
-  (substring-no-properties 
+  (org-supertag-db--clean-text
    (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
        (when-let ((element (org-element-at-point)))
          (org-element-property :raw-value element))
@@ -1173,16 +1204,20 @@ Returns:
                (level (org-element-property :level element))
                (id (org-element-property :ID element))
                ;; Task properties - 使用更可靠的获取方式
-               (todo-state (org-get-todo-state))
-               (priority (org-get-priority element))
-               (scheduled (org-get-scheduled-time (point)))
-               (deadline (org-get-deadline-time (point)))
+               (todo-state (org-entry-get nil "TODO"))
+               (priority (org-entry-get nil "PRIORITY"))
+               (scheduled (condition-case nil
+                            (org-get-scheduled-time (point))
+                          (error nil)))
+               (deadline (condition-case nil
+                           (org-get-deadline-time (point))
+                         (error nil)))
                ;; Get outline path
                (olp (org-get-outline-path t))
                ;; Other properties
                (tags (org-get-tags))
                (properties (org-entry-properties nil 'standard))
-               ;; 解析引用关系
+               ;; parse reference relations
                (refs-to nil)
                (refs-from nil)
                ;; Get node content directly
@@ -1192,30 +1227,38 @@ Returns:
                                 (end (org-element-property :contents-end element))
                                 ;; Find next heading position
                                 (next-heading (save-excursion
-                                              (when (re-search-forward "^\\*+" nil t)
-                                                (match-beginning 0)))))
-                           ;; 在获取内容的同时收集引用
+                                              (org-next-visible-heading 1)
+                                              (point))))
+                           ;; go to begin
                            (goto-char begin)
-                           (while (re-search-forward org-link-any-re (or end next-heading) t)
-                             (let* ((link (org-element-context))
-                                    (link-type (org-element-property :type link))
-                                    (link-path (org-element-property :path link)))
-                               (when (and (equal link-type "id")
-                                        (org-uuidgen-p link-path))
-                                 (push link-path refs-to))))
-                           ;; Use the minimum of end and next-heading
-                           (setq end (if (and next-heading end)
-                                       (min end next-heading)
-                                     (or next-heading end)))
-                           (when (and begin end (< begin end))
-                             (string-trim (buffer-substring-no-properties begin end)))))))
+                           ;; use more accurate boundary
+                           (let ((content-end (cond
+                                             ;; if there is a next heading and in the current node content range
+                                             ((and next-heading end (< next-heading end))
+                                              (1- next-heading))
+                                             ;; use the content end position of the node
+                                             (end end)
+                                             ;; if none, use the end position of the current node
+                                             (t (org-entry-end-position)))))
+                             ;; collect references
+                             (while (re-search-forward org-link-any-re content-end t)
+                               (let* ((link (org-element-context))
+                                      (link-type (org-element-property :type link))
+                                      (link-path (org-element-property :path link)))
+                                 (when (and (equal link-type "id")
+                                          (org-uuidgen-p link-path))
+                                   (push link-path refs-to))))
+                             ;; only return content when begin and end are valid and have content
+                             (when (and begin content-end (< begin content-end))
+                               (org-supertag-db--clean-text
+                                (buffer-substring-no-properties begin content-end)))))))
+               ;; get other nodes that reference this node (keep existing reference relations)
+               (existing-node (org-supertag-db-get id))
+               (refs-from (when existing-node
+                          (plist-get existing-node :ref-from))))
           
-          (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%d refs=%d" 
+          (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
                   id title level todo-state priority (length refs-to))
-          
-          ;; 获取引用这个节点的其他节点（保持现有的引用关系）
-          (when-let ((existing-node (org-supertag-db-get id)))
-            (setq refs-from (plist-get existing-node :ref-from)))
           
           (list :type :node
                 :id id
@@ -1558,6 +1601,7 @@ Defaults to org-supertag subdirectory under Emacs config directory."
   :type 'directory
   :group 'org-supertag)
 
+
 (defun org-supertag-db-ensure-data-directory ()
   "Ensure database and backup directories exist."
   (let ((db-dir (file-name-directory org-supertag-db-file)))
@@ -1693,8 +1737,7 @@ Returns t on success, nil on failure."
             
             ;; Initialize empty database
             (setq org-supertag-db--object (ht-create)
-                  org-supertag-db--link (ht-create))
-            
+                  org-supertag-db--link (ht-create))  
             ;; Load file
             (load org-supertag-db-file nil t)
             
@@ -1834,5 +1877,124 @@ Steps:
 
 
 
-(provide 'org-supertag-db)
+;;------------------------------------------------------------------------------
+;; Metadata Storage
+;;------------------------------------------------------------------------------  
 
+(defvar org-supertag-db--metadata (ht-create)
+  "Hash table for storing global metadata.
+Metadata is stored as key-value pairs and is used for configuration,
+statistics, and relationship data that doesn't fit the entity model.")
+
+(defun org-supertag-db-get-metadata (key &optional default)
+  "Get metadata value for KEY.
+If KEY does not exist, return DEFAULT or nil if DEFAULT is not provided.
+KEY should be a string or symbol identifying the metadata.
+Returns the stored value or DEFAULT if not found."
+  (ht-get org-supertag-db--metadata (if (symbolp key) key (intern key)) default))
+
+(defun org-supertag-db-set-metadata (key value)
+  "Set metadata KEY to VALUE.
+KEY should be a string or symbol identifying the metadata.
+VALUE can be any Lisp object.
+Returns VALUE if successful.
+
+This is used for storing configuration, statistics, and
+relationship data that doesn't fit into the entity model.
+Example uses:
+- Cooccurrence statistics
+- Tag frequency data
+- Usage history
+- Global settings"
+  (let ((k (if (symbolp key) key (intern key))))
+    ;; Store the value
+    (ht-set! org-supertag-db--metadata k value)
+    ;; Mark database as dirty and schedule save
+    (org-supertag-db--mark-dirty)
+    (org-supertag-db--schedule-save)
+    ;; Emit event for tracking
+    (org-supertag-db-emit 'metadata:changed k value)
+    ;; Return the value
+    value))
+
+(defun org-supertag-db-remove-metadata (key)
+  "Remove metadata entry with KEY.
+KEY should be a string or symbol identifying the metadata.
+Returns t if the key existed and was removed, nil otherwise."
+  (let ((k (if (symbolp key) key (intern key))))
+    (when (ht-contains-p org-supertag-db--metadata k)
+      ;; Remove the entry
+      (ht-remove! org-supertag-db--metadata k)
+      ;; Mark database as dirty and schedule save
+      (org-supertag-db--mark-dirty)
+      (org-supertag-db--schedule-save)
+      ;; Emit event for tracking
+      (org-supertag-db-emit 'metadata:removed k)
+      t)))
+
+(defun org-supertag-db-list-metadata (&optional prefix)
+  "List all metadata keys, optionally filtered by PREFIX.
+If PREFIX is provided, only return keys that start with PREFIX.
+Returns an alist of (key . value) pairs."
+  (let ((results nil))
+    (ht-map (lambda (k v)
+              (when (or (null prefix)
+                        (string-prefix-p prefix (symbol-name k)))
+                (push (cons k v) results)))
+            org-supertag-db--metadata)
+    (nreverse results)))
+
+;; Add metadata save/load support to existing save/load functions
+(add-hook 'org-supertag-db-before-save-hook
+          (lambda ()
+            (ht-set! org-supertag-db--object "metadata"
+                   `(:type :metadata :data ,org-supertag-db--metadata))))
+
+(add-hook 'org-supertag-db-after-load-hook
+          (lambda ()
+            (when-let ((metadata-entry (org-supertag-db-get "metadata")))
+              (setq org-supertag-db--metadata (or (plist-get metadata-entry :data)
+                                                 (ht-create))))))
+
+(defun org-supertag-db-test-metadata ()
+  "Test metadata storage functions."
+  (interactive)
+  (message "\n=== Testing Metadata Functions ===")
+  
+  ;; Set some test metadata
+  (org-supertag-db-set-metadata 'test-key "Test Value")
+  (org-supertag-db-set-metadata "numeric-key" 42)
+  (org-supertag-db-set-metadata 'list-key '(a b c))
+  
+  ;; Display current metadata
+  (message "Current metadata keys: %S" 
+           (mapcar #'car (org-supertag-db-list-metadata)))
+  
+  ;; Retrieve and verify values
+  (let ((test-val (org-supertag-db-get-metadata 'test-key))
+        (num-val (org-supertag-db-get-metadata "numeric-key"))
+        (list-val (org-supertag-db-get-metadata 'list-key))
+        (missing-val (org-supertag-db-get-metadata 'nonexistent "default")))
+    (message "test-key: %S (expected: \"Test Value\")" test-val)
+    (message "numeric-key: %S (expected: 42)" num-val)
+    (message "list-key: %S (expected: (a b c))" list-val)
+    (message "nonexistent: %S (expected: \"default\")" missing-val))
+  
+  ;; Remove a key
+  (org-supertag-db-remove-metadata 'test-key)
+  (message "After removal: %S" 
+           (mapcar #'car (org-supertag-db-list-metadata)))
+  
+  ;; Save and reload test
+  (when (yes-or-no-p "Save database to test persistence? ")
+    (org-supertag-db-save)
+    (setq org-supertag-db--metadata (ht-create)) ;; Clear in-memory
+    (message "Metadata table cleared. Current keys: %S" 
+             (mapcar #'car (org-supertag-db-list-metadata)))
+    (org-supertag-db-load)
+    (message "After reload: %S" 
+             (mapcar #'car (org-supertag-db-list-metadata)))))
+
+(provide 'org-supertag-db)
+;;; org-supertag-db.el ends here
+  
