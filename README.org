@@ -23,6 +23,15 @@ Org-supertag adopts a non-intrusive design, coexisting harmoniously with org-mod
       - Export search results to another file
       - Export search results to a new file (location and filename customizable)
       - Export search results directly to current cursor position
+- Tag Relationship Management
+    - Automatic discovery of relationships between tags based on usage patterns
+    - Statistical analysis of tag co-occurrences and mutual information
+    - Real-time incremental updates when tags are added or removed
+    - Intelligent tag recommendations based on contextual relevance( the more tags a node has, the more relevant it is to the user)
+- Metadata Storage System
+    - Flexible key-value storage for tags, nodes, and application-level data
+    - Support for storing and retrieving arbitrary metadata with tags and nodes
+    - Persistent storage across sessions with automated backup
 - Automatic Synchronization
     - Automatically sync position and changes of org-headlines converted to Nodes, saving manual operations
     - Provides manual command to sync all Nodes
@@ -219,4 +228,3 @@ I sincerely hope you'll like this package and benefit from it.
 * Contributing
 
 Contributions welcome! Please check our [[file:.github/CONTRIBUTING.org][contribution guidelines]].
-

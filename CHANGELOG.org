@@ -1,3 +1,17 @@
+* [2.3.0] - 2025-03-01
+** Features
+*** Add tag relationship management module (org-supertag-relation.el)
+- Implement sophisticated tag relationship system with symbolic representation
+  - Add 10 relationship types with intuitive symbols (A ⊃ B, A → B, A ⋈ B, etc.)
+  - Support relationship categories: hierarchical, causal, associative, co-occurrence
+- Enable automatic discovery of relationships based on usage patterns
+  - Statistical analysis of tag co-occurrences with strength metrics
+  - Real-time incremental updates when tags are added/removed
+- Provide intelligent tag recommendations based on contextual relevance
+- Create dedicated management interface for visualizing and editing relationships
+- Support customizable relation groups for organizing related tags
+- Add relationship strength thresholds to filter insignificant relationships
+
 * Changelog
 * [2.2.13] - 2025-02-18
 ** Bug Fixes
@@ -286,10 +300,3 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
-
-
-
-
-
-
-

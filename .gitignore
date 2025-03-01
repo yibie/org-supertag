@@ -4,10 +4,12 @@
 # Packaging
 .cask
 
+
 # Backup files
 *~
 \#*\#
 .\#*
+*.bak
 
 # Undo-tree save-files
 *.~undo-tree

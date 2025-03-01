@@ -237,60 +237,22 @@ List of field values, each element is (field-id . value)"
   (when (org-at-heading-p)
     (let* ((node-id (org-id-get-create))
            (old-node (org-supertag-db-get node-id))
-           (element (org-element-at-point))
-           (title (org-get-heading t t t t))
-           (file-path (buffer-file-name))
-           (pos (point))
-           (level (org-outline-level))
-           (olp (org-get-outline-path))
-           (todo-state (org-get-todo-state))
-           (priority (org-element-property :priority element))
-           (tags (org-get-tags))
-           (refs-to nil)
-           (content (save-excursion
-                     (let* ((begin (progn 
-                                   (org-end-of-meta-data t)
-                                   (point)))
-                            (end (org-entry-end-position)))
-                       ;; get content and collect references
-                       (goto-char begin)
-                       (while (re-search-forward org-link-any-re end t)
-                         (let* ((link (org-element-context))
-                                (link-type (org-element-property :type link))
-                                (link-path (org-element-property :path link)))
-                           (when (and (equal link-type "id")
-                                    (org-uuidgen-p link-path))
-                             (push link-path refs-to))))
-                       (buffer-substring-no-properties begin end)))))
+           ;; use more accurate boundary
+           (node-data (org-supertag-db--parse-node-at-point))
+           ;; keep existing reference relations
+           (refs-from (when old-node (plist-get old-node :ref-from)))
+           ;; merge properties
+           (props (append node-data
+                         (list :ref-from (or refs-from nil)
+                               :created-at (or (and old-node 
+                                                 (plist-get old-node :created-at))
+                                            (current-time))))))
       
-      (message "Debug - title: %s, level: %d, pos: %d, todo: %s, priority: %s, refs=%d" 
-               title level pos todo-state priority (length refs-to))
-      
-      ;; keep existing reference relations
-      (let* ((refs-from (when old-node (plist-get old-node :ref-from)))
-             (props (list :type :node
-                         :id node-id
-                         :title title
-                         :file-path file-path
-                         :pos pos
-                         :level level
-                         :olp olp
-                         :content content
-                         :todo todo-state
-                         :priority (or priority org-default-priority)
-                         :tags tags
-                         :ref-to (delete-dups refs-to)
-                         :ref-from (or refs-from nil)
-                         :ref-count (+ (length refs-to) (length (or refs-from nil)))
-                         :created-at (or (and old-node 
-                                            (plist-get old-node :created-at))
-                                       (current-time)))))
-        
-        (message "Debug - props: %S" props)
-        ;; Update database
-        (org-supertag-db-add node-id props)
-        ;; Return node ID
-        node-id))))
+      (message "Debug - props: %S" props)
+      ;; Update database
+      (org-supertag-db-add node-id props)
+      ;; Return node ID
+      node-id)))
 
 (defun org-supertag-node-get-props ()
   "Get properties of current node."
@@ -1142,5 +1104,68 @@ Arguments: (from-id to-id)")
 (defvar org-supertag-node-reference-removed-hook nil
   "Hook run after node reference is removed.
 Arguments: (from-id to-id)")
+
+(defun org-supertag-check-and-fix-ids ()
+  "Check and fix ID-related issues in org-supertag.
+This function will:
+1. Update ID locations database
+2. Check for missing IDs
+3. Report problematic entries"
+  (interactive)
+  (let ((missing-ids nil)
+        (total-ids 0)
+        (problematic-files nil))
+    
+    ;; 1. Update ID locations
+    (message "Updating ID locations...")
+    (org-id-update-id-locations)
+    
+    ;; 2. Check database entries
+    (message "Checking database entries...")
+    (maphash
+     (lambda (id props)
+       (cl-incf total-ids)
+       (when (and (eq (plist-get props :type) :node)
+                  (not (org-id-find id 'marker)))
+         (push id missing-ids)
+         (when-let ((file (plist-get props :file-path)))
+           (push file problematic-files))))
+     org-supertag-db--object)
+    
+    ;; 3. Report results
+    (with-output-to-temp-buffer "*Org-Supertag ID Check*"
+      (princ "Org-Supertag ID Check Results\n")
+      (princ "===========================\n\n")
+      
+      (princ (format "Total IDs checked: %d\n" total-ids))
+      (princ (format "Missing IDs: %d\n\n" (length missing-ids)))
+      
+      (when missing-ids
+        (princ "Missing ID Details:\n")
+        (princ "-------------------\n")
+        (dolist (id missing-ids)
+          (when-let ((props (org-supertag-db-get id)))
+            (princ (format "ID: %s\n" id))
+            (princ (format "  Title: %s\n" (or (plist-get props :title) "[No title]")))
+            (princ (format "  File: %s\n" (or (plist-get props :file-path) "[No file]")))
+            (princ "\n"))))
+      
+      (when problematic-files
+        (princ "\nProblematic Files:\n")
+        (princ "-----------------\n")
+        (dolist (file (delete-dups problematic-files))
+          (princ (format "%s\n" file))))
+      
+      (princ "\nRecommended Actions:\n")
+      (princ "------------------\n")
+      (princ "1. Check if problematic files still exist\n")
+      (princ "2. Run org-id-update-id-locations\n")
+      (princ "3. Consider removing invalid entries from the database\n")
+      
+      (when missing-ids
+        (princ "\nTo remove invalid entries, evaluate:\n")
+        (princ "(dolist (id '")
+        (prin1 missing-ids (current-buffer))
+        (princ ") (org-supertag-db-remove id))")))))
 
 (provide 'org-supertag-node)
