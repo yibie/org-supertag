@@ -44,6 +44,11 @@ Org-supertag adopts a non-intrusive design, coexisting harmoniously with org-mod
       + Simple configuration syntax
       + Parameterized configuration
       + Can combine multiple Behaviors together
+- Inline Tag Support
+    - Recognize and process #hashtag style inline tags within regular text content
+    - Associate inline tags with their containing nodes for easy reference
+    - Query nodes by their inline tags using the same powerful query system
+    - Special fontification to make inline tags visually distinct
 
 ** Enhanced Tag System
 Make your org-mode tags powerful metadata controllers:

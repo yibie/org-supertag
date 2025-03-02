@@ -377,21 +377,35 @@ Returns:
                     (unless (looking-at "\n")
                       (insert "\n"))
                     
-                    ;; Move back to inserted heading and sync node
-                    (goto-char insert-point)
-                    (message "[Move] Searching for ID: %s" node-id)
-                    (org-with-wide-buffer
-                     (when (re-search-forward (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" node-id) nil t)
-                       (org-back-to-heading t)
-                       (message "[Move] Found heading at point %d" (point))
-                       (org-show-subtree)
-                       (message "[Move] Syncing node")
-                       (org-supertag-node-sync-at-point)))
-                    
-                    ;; Save buffer
+                    ;; 立即保存缓冲区，避免搜索未保存内容
                     (save-buffer)
-                    (message "[Move] Node move completed successfully")
-                    t)))))
+                    
+                    ;; 使用更可靠的方法查找和同步节点 - 避免直接搜索
+                    (message "[Move] Syncing inserted node...")
+                    (widen)
+                    (let ((marker (org-id-find-id-in-file node-id (buffer-file-name))))
+                      (if marker
+                          (progn
+                            (goto-char (cdr marker))
+                            (when (org-at-heading-p)
+                              (message "[Move] Found heading at point %d" (point))
+                              ;; 确保可见
+                              (org-show-context)
+                              (org-show-subtree)
+                              ;; 同步节点
+                              (org-supertag-node-sync-at-point)
+                              (message "[Move] Node move completed successfully")
+                              t))
+                        (message "[Move] Warning: Could not find ID in target file, but insertion completed")
+                        ;; 尝试返回到插入点并找到标题
+                        (goto-char insert-point)
+                        (when (re-search-forward "^\\*+ " nil t)
+                          (beginning-of-line)
+                          (when (org-at-heading-p)
+                            (message "[Move] Found heading using fallback method")
+                            (org-id-get-create)
+                            (org-supertag-node-sync-at-point)))
+                        t)))))))
           t)  ; 成功完成返回 t
       
       (error

@@ -1,3 +1,39 @@
+* Changelog
+
+* [2.4.0] - 2025-03-02
+** Features
+*** Tag Discovery View
+- Add tag discovery view to help users find and select tags
+- Support tag filtering and sorting
+- Display tag details including description and usage count
+- Allow tag selection and additio
+- Full keyboard driven operation interface:
+  - ~a~ - Add new column
+  - ~t~ - Add tag to column
+  - ~d~ - Delete column
+  - ~r~ - Reset view
+  - ~v~ - View current node
+  - ~m~ - Manage relations
+  - ~q~ - Quit
+
+*** Multi-column Tag View
+- Add multi-column tag view to allow users to compare different tag combinations side by side:
+- Use command ~M-x org-supertag-tag-columns~ to start multi-column tag comparison view
+- Each column displays nodes符合特定标签组合
+- Support dynamic addition and deletion of columns
+- Support adding additional tag filtering conditions to columns
+- Full keyboard driven operation interface:
+  - ~a~ - Add new column
+  - ~t~ - Add tag to column
+  - ~d~ - Delete column
+  - ~r~ - Reset view
+  - ~v~ - View current node
+  - ~m~ - Manage relations
+  - ~q~ - Quit
+
+** Change
+*** Original `org-supertag-view-tag` chang to `org-supertag-view-tag-only`
+
 * [2.3.0] - 2025-03-01
 ** Features
 *** Add tag relationship management module (org-supertag-relation.el)
@@ -12,7 +48,6 @@
 - Support customizable relation groups for organizing related tags
 - Add relationship strength thresholds to filter insignificant relationships
 
-* Changelog
 * [2.2.13] - 2025-02-18
 ** Bug Fixes
 *** Fix node movement failing due to missing file path
