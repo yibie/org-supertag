@@ -104,7 +104,6 @@ DEFAULTS: Plist of field default value overrides"
                    (plist-put (copy-sequence field) 
                             :default default-override)
                  (copy-sequence field)))))  ; Always copy field
-        ;; 确保字段有类型定义
         (unless (plist-get projected-field :type)
           (error "Field '%s' from base tag '%s' has no type defined"
                  field-name (plist-get base-tag :id)))
@@ -113,13 +112,13 @@ DEFAULTS: Plist of field default value overrides"
     ;; Add new fields
     (dolist (field new-fields)
       (let ((field-name (plist-get field :name)))
-        ;; 验证新字段
+        ;; Validate new field
         (unless field-name
           (error "New field must have a name"))
         (unless (plist-get field :type)
           (error "New field '%s' must have a type defined" field-name))
         
-        ;; 检查字段名冲突
+        ;; Check for field name conflicts
         (when (cl-find field-name result
                       :key (lambda (f) (plist-get f :name))
                       :test #'equal)

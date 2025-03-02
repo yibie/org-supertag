@@ -75,7 +75,7 @@
 (require 'org-supertag-sync)
 (require 'org-supertag-luhmann)
 (require 'org-supertag-view)
-
+(require 'org-supertag-inline)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -132,9 +132,13 @@
     (org-supertag-db-init)
     ;; 4. Setup auto-save
     (org-supertag-db--setup-auto-save)
-    ;; 5. Initialize sync system
+    ;; 5. Initialize inline system
+    (when (featurep 'org-supertag-inline)
+      (org-supertag-inline-setup)
+      (org-supertag-inline-mode 1))
+    ;; 6. Initialize sync system
     (org-supertag-sync-init)
-    ;; 6. Add hooks
+    ;; 7. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
     (setq org-supertag--initialized t)))
