@@ -536,15 +536,17 @@ Returns t if node was found and visited successfully, nil otherwise."
               ((file-exists-p file-path))
               (buffer (find-file-noselect file-path)))
     (with-current-buffer buffer
-      (widen)
-      (when-let ((marker (org-id-find-id-in-file node-id file-path)))
-        (goto-char (cdr marker))
-        (org-show-entry)
-        (org-show-children)
-        ;; Switch to buffer before recentering
-        (switch-to-buffer buffer)
-        (recenter)
-        t))))
+      ;; make sure in org-mode buffer, avoid conflict with org-supertag-view.el
+      (when (derived-mode-p 'org-mode)
+        (widen)
+        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+          (goto-char (cdr marker))
+          (org-show-entry)
+          (org-show-children)
+          ;; Switch to buffer before recentering
+          (switch-to-buffer buffer)
+          (recenter)
+          t)))))
 
 (defun org-supertag-query-visit-node ()
   "Visit current selected node."
