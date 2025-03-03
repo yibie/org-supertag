@@ -1,4 +1,13 @@
 * Changelog
+
+* [2.5.1] - 2025-03-03
+** Bug Fixes
+*** Fix org-supertag-tag-delete-at-all to ensure complete cleanup
+- Replace org-supertag-db-remove-object with direct remhash for reliable deletion
+- Add comprehensive cleanup of all tag-related database entries
+- Implement proper cleanup sequence for tag removal
+- Add debug logging for deletion process tracking
+
 * [2.5.0] - 2024-03-03
 ** Features
 *** (org-supertag-inline.el) Add inline tag support for content tagging 
@@ -18,9 +27,10 @@ without adding tags to headlines, making the tagging system more flexible
 and context-aware.
 
 
+
 * [2.4.0] - 2025-03-02
 ** Features
-*** Discover and explore your tags naturally
+*** org-supertag-view-discovery: Discover and explore your tags naturally
 Introducing Tag Discovery View - a new way to explore and understand your tag ecosystem:
 
 - Start from any tag and discover related content:
@@ -46,7 +56,7 @@ Introducing Tag Discovery View - a new way to explore and understand your tag ec
   - ~g~ - Refresh view
   - ~q~ - Quit
 
-*** Compare and analyze with Multi-column Tag View
+*** org-supertag-view-column: Compare and analyze with Multi-column Tag View
 A powerful new way to analyze your tagged content side by side:
 
 - Compare different tag combinations simultaneously:

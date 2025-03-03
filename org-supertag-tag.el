@@ -589,13 +589,7 @@ This will:
   (interactive (list (completing-read "Tag to delete: " (org-supertag-get-all-tags))))
   (when (yes-or-no-p (format "Delete tag '%s'? This will remove it from all nodes. " tag-id))
     (let ((nodes (org-supertag-tag-get-nodes tag-id))
-          (tag (org-supertag-db-get tag-id))
-          (links-to-remove '())
-          (values-to-remove '()))
-      
-      ;; Debug: Print initial state
-      (message "Starting deletion of tag: %s" tag-id)
-      (message "Current database state: %S" org-supertag-db--object)
+          (tag (org-supertag-tag-get tag-id)))
       
       ;; Validation
       (unless tag
@@ -603,26 +597,9 @@ This will:
       (unless (eq (plist-get tag :type) :tag)
         (error "Invalid tag type for %s" tag-id))
 
-      ;; 1. First collect all items that need to be removed
-      ;; Collect links to remove
-      (maphash (lambda (link-id props)
-                 (when (or (equal (plist-get props :from) tag-id)
-                          (equal (plist-get props :to) tag-id))
-                   (push link-id links-to-remove)))
-      
-      (message "Links to remove: %S" links-to-remove)
-      
-      ;; Collect field values to remove
-      (maphash (lambda (value-id props)
-                 (when (equal (plist-get props :tag-id) tag-id)
-                   (push value-id values-to-remove)))
-               org-supertag-db--object)
-      
-      (message "Field values to remove: %S" values-to-remove)
-
-      ;; 2. Remove tag from all nodes
+      ;; 1. First remove tag from all nodes in org buffers
+      (message "Removing tag from %d nodes in buffers..." (length nodes))
       (dolist (node-id nodes)
-        (message "Processing node: %s" node-id)
         ;; Remove from org buffer first
         (when-let ((pos (condition-case nil
                            (org-id-find node-id t)
@@ -636,30 +613,44 @@ This will:
             (let* ((current-tags (org-get-tags))
                    (new-tags (delete (concat "#" tag-id) current-tags)))
               (org-set-tags new-tags)))))
-
-      ;; 3. Now perform all database removals
-      ;; Remove all collected links
-      (dolist (link-id links-to-remove)
-        (message "Removing link: %s" link-id)
-        (remhash link-id org-supertag-db--link))
       
-      ;; Remove all collected field values
-      (dolist (value-id values-to-remove)
-        (message "Removing value: %s" value-id)
-        (remhash value-id org-supertag-db--object))
+      ;; 2. Find and collect all relationships to be removed
+      (message "Collecting tag relationships...")
+      (let ((links-to-remove '()))
+        ;; Find all tag links (node-tag, field values, etc.)
+        (maphash (lambda (link-id props)
+                   (when (or (equal (plist-get props :from) tag-id)
+                             (equal (plist-get props :to) tag-id)
+                             (equal (plist-get props :tag-id) tag-id))
+                     (push link-id links-to-remove)))
+                 org-supertag-db--link)
+        
+        ;; Remove all collected links using proper API
+        (message "Removing %d tag relationships..." (length links-to-remove))
+        (dolist (link-id links-to-remove)
+          (when-let ((link-props (gethash link-id org-supertag-db--link)))
+            (let ((link-type (plist-get link-props :type))
+                  (from (plist-get link-props :from))
+                  (to (plist-get link-props :to)))
+              (org-supertag-db-remove-link link-type from to)))))
       
-      ;; Finally remove the tag itself
-      (message "Removing tag: %s" tag-id)
-      (remhash tag-id org-supertag-db--object)
+      ;; 3. Remove the tag using proper database API
+      (message "Removing tag entity from database...")
+      (message "DEBUG: Before DB remove, tag exists: %s" (org-supertag-db-exists-p tag-id))
+      (org-supertag-db-remove-object tag-id)
+      (message "DEBUG: After DB remove, tag exists: %s" (org-supertag-db-exists-p tag-id))
+      (message "DEBUG: Is DB dirty? %s" org-supertag-db--dirty)
       
-      ;; Debug: Print final state
-      (message "Final database state: %S" org-supertag-db--object)
+      ;; 4. Force database save to persist changes
+      (message "Saving database...")
+      (org-supertag-db--mark-dirty)
+      (org-supertag-db-save)
       
-      ;; Run hooks if defined
+      ;; 5. Run hooks if defined
       (when (boundp 'org-supertag-after-tag-delete-hook)
         (run-hook-with-args 'org-supertag-after-tag-delete-hook tag-id))
       
-      (message "Deleted tag '%s' and removed it from %d nodes" tag-id (length nodes))))))
+      (message "Deleted tag '%s' and removed it from %d nodes" tag-id (length nodes))))) 
 
 (defcustom org-supertag-after-tag-delete-hook nil
   "Hook run after a tag is deleted.
@@ -976,8 +967,6 @@ allowing for easy editing of field values."
          (source-point (point))
          (node-id (org-id-get))
          (tags (org-supertag-node-get-tags node-id))
-         (node-title (org-get-heading t t t t))
-         (edit-buffer (get-buffer-create "*Org SuperTag Fields*")))
     
     ;; Validate we have a node and tags
     (unless node-id
@@ -1168,10 +1157,11 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
     (post-completion (org-supertag-company--post-completion arg))
     (annotation (when-let* ((tag (get-text-property 0 'tag arg))
                            (fields (plist-get tag :fields)))
-                 (if (org-supertag-tag-get-base arg)
+                           (base-tag (org-supertag-tag-get-base arg)))
+                 (if base-tag
                      (format " [%d fields, extends %s]"
                              (length fields)
-                             (org-supertag-tag-get-base arg))
+                             base-tag)
                    (format " [%d fields]" (length fields)))))
     (t nil)))
 
@@ -1321,26 +1311,26 @@ Example return value:
   :options (\"high\" \"medium\" \"low\")))"
   (when-let ((preset (assoc tag-name org-supertag-preset-tags)))
     (let ((fields (cdr preset)))
-      ;; Validate and normalize field definitions
-      (cl-loop for field in fields
-               collect (let* ((name (plist-get field :name))
-                             (type (plist-get field :type))
-                            (options (plist-get field :options))
-                            (description (plist-get field :description)))
-                            
-                            ;; Ensure required fields are present
-                            (unless (and name type)
-                              (error "Invalid field definition in preset tag %s: missing name or type" tag-name))
-                            
-                            ;; Build normalized field definition
-                            (append
-                             (list :name name
-                                   :type type)
-                             ;; Add optional properties
-                             (when description
-                               (list :description description))
-                             (when (and options (eq type 'options))
-                               (list :options options))))))))
+          ;; Validate and normalize field definitions
+          (cl-loop for field in fields
+                   collect (let* ((name (plist-get field :name))
+                                 (type (plist-get field :type))
+                                (options (plist-get field :options))
+                                (description (plist-get field :description)))
+                                
+                                ;; Ensure required fields are present
+                                (unless (and name type)
+                                  (error "Invalid field definition in preset tag %s: missing name or type" tag-name))
+                                
+                                ;; Build normalized field definition
+                                (append
+                                 (list :name name
+                                       :type type)
+                                 ;; Add optional properties
+                                 (when description
+                                   (list :description description))
+                                 (when (and options (eq type 'options))
+                                   (list :options options))))))))
 
 
 (provide 'org-supertag-tag)
