@@ -1001,56 +1001,70 @@ A cons cell in the form (entity . links) where:
 - links is the list of deleted relationships
 Returns nil if entity does not exist"
   (condition-case err
-      (when-let* ((entity (org-supertag-db-get id))
-                  (type (plist-get entity :type))
-                  (outgoing-links (org-supertag-db-get-link nil id))
-                  (incoming-links (org-supertag-db-get-link-reverse nil id))
-                  (removed-data (list :entity entity
-                                    :outgoing-links outgoing-links
-                                    :incoming-links incoming-links)))
-        ;; 1. Trigger pre-removal event
-        (org-supertag-db-emit 'entity:before-remove type id entity)
-        ;; 2. Execute actual deletion if not dry-run
-        (unless dry-run
-          ;; 2.1 Remove associated relationships
-          (let ((link-count (org-supertag-db-unlink-all id)))
-            ;; 2.2 Remove reverse relationships
-            (dolist (rev-link incoming-links)
-              (org-supertag-db-unlink nil (car rev-link) id))
-            ;; 2.3 Perform type-specific cleanup
-            (pcase type
-              (:node
-               ;; Clean node-related data
-               (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
-               (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
-               (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
-              (:tag
-               ;; Clean tag-related data
-               (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
-               (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
-            
-            ;; 2.4 Remove entity itself
-            (ht-remove! org-supertag-db--object id)
-            
-            ;; 2.5 Clear entity cache
-            (org-supertag-db--cache-remove 'entity id)
-            (org-supertag-db--cache-remove 'query (format "type:%s" type))
-            
-            ;; 2.6 Trigger completion event
-            (org-supertag-db-emit 'entity:removed type id entity removed-data)
-            
-            ;; 2.7 Mark database as dirty and schedule save
-            (org-supertag-db--mark-dirty)
-            (org-supertag-db--schedule-save))
-          
-          ;; 3. Return removed data
-          (cons entity 
-                (append outgoing-links incoming-links))))
+      (progn
+        ;; 1. Get entity and check existence
+        (let ((entity (org-supertag-db-get id)))
+          (if (null entity)
+              (progn 
+                (message "Entity %s not found, nothing to remove" id)
+                nil) 
+            ;; 2. Entity exists, get type
+            (let ((type (plist-get entity :type)))
+              (if (null type)
+                  (message "Entity %s has no type, cannot remove properly" id)                
+                ;; 3. Get related links (use empty list as default)
+                (let ((outgoing-links (or (org-supertag-db-get-link nil id) '()))
+                      (incoming-links (or (org-supertag-db-get-link-reverse nil id) '()))
+                      (removed-data (list :entity entity)))
+                  
+                  ;; 4. Trigger events
+                  (org-supertag-db-emit 'entity:before-remove type id entity)
+                  
+                  ;; 5. Execute deletion (unless dry-run)
+                  (unless dry-run
+                    ;; 5.1 Delete all outgoing links
+                    (let ((link-count (org-supertag-db-unlink-all id)))
+                      (message "Removed %d outgoing links for entity %s" link-count id))
+                    
+                    ;; 5.2 Delete all incoming links
+                    (dolist (rev-link incoming-links)
+                      (when (car rev-link) ;; Ensure source exists
+                        (org-supertag-db-unlink nil (car rev-link) id)))
+                    
+                    ;; 5.3 Execute specific cleanup based on type
+                    (pcase type
+                      (:node
+                       (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
+                       (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
+                       (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
+                      (:tag
+                       (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
+                       (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
+                    
+                    ;; 5.4 Remove entity from database
+                    (message "Removing entity %s of type %s from database" id type)
+                    (ht-remove! org-supertag-db--object id)
+                    
+                    ;; 5.5 Clean up cache
+                    (org-supertag-db--cache-remove 'entity id)
+                    (org-supertag-db--cache-remove 'query (format "type:%s" type))
+                    
+                    ;; 5.6 Trigger deletion completion event
+                    (org-supertag-db-emit 'entity:removed type id entity removed-data)
+                    
+                    ;; 5.7 Mark database as dirty and execute save
+                    (message "Marking database as dirty")
+                    (org-supertag-db--mark-dirty)
+                    (message "Scheduling database save")
+                    (org-supertag-db--schedule-save))
+                  
+                  ;; 6. Return deleted data
+                  (cons entity (append outgoing-links incoming-links))))))))
     
     ;; Error handling
     (error
      (message "Error removing entity %s: %s" id (error-message-string err))
-     (signal (car err) (cdr err)))))
+     nil))) ;; Return nil instead of signaling an error
 
 (defun org-supertag-db-remove-link (type from to &optional dry-run)
   "Remove a specific relationship.
