@@ -7,6 +7,7 @@
 - Add comprehensive cleanup of all tag-related database entries
 - Implement proper cleanup sequence for tag removal
 - Add debug logging for deletion process tracking
+*** Fix org-supertag-tag-set-field-and-value for not working
 
 * [2.5.0] - 2024-03-03
 ** Features
