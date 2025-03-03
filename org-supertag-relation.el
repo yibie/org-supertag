@@ -116,7 +116,8 @@ STRENGTH: Relation strength (optional, default is 1.0)"
                      (or (org-supertag-tag-get-name-by-id to-tag) to-tag)
                    ;; otherwise, assume the input is a tag name
                    to-tag))
-         (rel-id (format ":tag-relation:%s->%s" from-tag to-tag))
+         ;; Include rel-type in the relation ID to support multiple relations
+         (rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type))
          (props (list :from from-tag
                      :to to-tag
                      :type rel-type
@@ -125,8 +126,10 @@ STRENGTH: Relation strength (optional, default is 1.0)"
     (puthash rel-id props org-supertag-db--link)
     (message "Add relation: %s -[%s]-> %s" from-name rel-type to-name)))
 
-(defun org-supertag-relation-remove-relation (from-tag to-tag)
-  "Remove the relation between FROM-TAG and TO-TAG."
+(defun org-supertag-relation-remove-relation (from-tag to-tag &optional rel-type)
+  "Remove the relation between FROM-TAG and TO-TAG.
+If REL-TYPE is provided, only remove that specific relation type,
+otherwise remove all relations between the tags."
   (interactive
    (let* ((from-tag (completing-read "Source tag: " (org-supertag-get-all-tags) nil t))
           (to-choices (mapcar
@@ -143,17 +146,36 @@ STRENGTH: Relation strength (optional, default is 1.0)"
                        from-tag))
            (to-name (if (org-supertag-db-exists-p to-tag)
                        (or (org-supertag-tag-get-name-by-id to-tag) to-tag)
-                     to-tag))
-           (rel-id (format ":tag-relation:%s->%s" from-tag to-tag)))
-      (remhash rel-id org-supertag-db--link)
+                     to-tag)))
+      ;; If rel-type is provided, only remove that specific relation
+      (if rel-type
+          (let ((rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type)))
+            (remhash rel-id org-supertag-db--link))
+        ;; Otherwise, remove all relations between these tags
+        (maphash
+         (lambda (key _)
+           (when (and (string-prefix-p ":tag-relation:" key)
+                     (string-match (format ":tag-relation:%s->%s:" from-tag to-tag) key))
+             (remhash key org-supertag-db--link)))
+         org-supertag-db--link))
       (message "Remove relation: %s -> %s" from-name to-name))))
 
-(defun org-supertag-relation-get (from-tag to-tag)
+(defun org-supertag-relation-get (from-tag to-tag &optional rel-type)
   "Get the relation data between FROM-TAG and TO-TAG.
-If the relation exists, return the relation properties list, otherwise return nil."
+If REL-TYPE is provided, get the specific relation type,
+otherwise return all relations between the tags.
+Returns a list of relation property lists."
   (when (and from-tag to-tag)
-    (let ((rel-id (format ":tag-relation:%s->%s" from-tag to-tag)))
-      (gethash rel-id org-supertag-db--link))))
+    (let ((result nil))
+      (maphash
+       (lambda (key props)
+         (when (and (string-prefix-p ":tag-relation:" key)
+                   (string-match (format ":tag-relation:%s->%s:\\(.+\\)" from-tag to-tag) key))
+           (when (or (null rel-type)
+                    (eq rel-type (plist-get props :type)))
+             (push props result))))
+       org-supertag-db--link)
+      result)))
 
 (defun org-supertag-relation-get-all-from (tag-id)
   "Get all relations from the TAG-ID.
@@ -164,8 +186,8 @@ Return the list of (other-tag . rel-type)."
       (maphash
        (lambda (rel-id props)
          (when (and (string-prefix-p ":tag-relation:" rel-id)
-                   (equal (plist-get props :from) tag-id))
-           (let ((to-tag (plist-get props :to))
+                   (string-match (format ":tag-relation:%s->\\([^:]+\\):\\(.+\\)" tag-id) rel-id))
+           (let ((to-tag (match-string 1 rel-id))
                  (rel-type (plist-get props :type)))
              (push (cons to-tag rel-type) result))))
        org-supertag-db--link)
