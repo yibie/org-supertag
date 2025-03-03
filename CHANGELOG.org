@@ -1,35 +1,82 @@
 * Changelog
+* [2.5.0] - 2024-03-03
+** Features
+*** (org-supertag-inline.el) Add inline tag support for content tagging 
+- Enable users to tag specific content within org nodes using #hashtag style
+- Seamlessly insert tags in text with ~C-c C-x #~:
+  - Choose from existing tags through completion
+  - Create new tags on the fly by adding '#' suffix
+  - Quick access to preset tags marked with [P]
+- Tags in content maintain proper spacing for readability
+- Tags automatically link to current node without cluttering headlines
+- Natural writing flow with minimal disruption:
+  "Meeting with Owen who is my #friend about the #project"
+
+This feature allows for more granular content organization while maintaining
+a clean document structure. Users can now tag specific parts of their notes
+without adding tags to headlines, making the tagging system more flexible
+and context-aware.
+
 
 * [2.4.0] - 2025-03-02
 ** Features
-*** Tag Discovery View
-- Add tag discovery view to help users find and select tags
-- Support tag filtering and sorting
-- Display tag details including description and usage count
-- Allow tag selection and additio
-- Full keyboard driven operation interface:
-  - ~a~ - Add new column
-  - ~t~ - Add tag to column
-  - ~d~ - Delete column
-  - ~r~ - Reset view
-  - ~v~ - View current node
-  - ~m~ - Manage relations
+*** Discover and explore your tags naturally
+Introducing Tag Discovery View - a new way to explore and understand your tag ecosystem:
+
+- Start from any tag and discover related content:
+  "Starting with #project, what other tags frequently appear with it?"
+- See the bigger picture of your tag usage:
+  - How many notes use this combination of tags?
+  - Which tags often appear together?
+  - What are the relationships between different tags?
+- Build your tag filters progressively:
+  - Add more tags to narrow down your focus
+  - Remove tags to broaden your view
+  - Reset and start a new exploration path
+- Preview and access content directly:
+  - See matching notes with their titles and status
+  - View complete note content with a single click
+  - Understand tag relationships in context
+- Smooth keyboard-driven operation:
+  - ~a~ - Add tag to filter
+  - ~d~ - Remove tag from filter
+  - ~r~ - Reset all filters
+  - ~v~ - View selected node
+  - ~m~ - Manage tag relations
+  - ~g~ - Refresh view
   - ~q~ - Quit
 
-*** Multi-column Tag View
-- Add multi-column tag view to allow users to compare different tag combinations side by side:
-- Use command ~M-x org-supertag-tag-columns~ to start multi-column tag comparison view
-- Each column displays nodes符合特定标签组合
-- Support dynamic addition and deletion of columns
-- Support adding additional tag filtering conditions to columns
-- Full keyboard driven operation interface:
-  - ~a~ - Add new column
-  - ~t~ - Add tag to column
-  - ~d~ - Delete column
-  - ~r~ - Reset view
-  - ~v~ - View current node
-  - ~m~ - Manage relations
+*** Compare and analyze with Multi-column Tag View
+A powerful new way to analyze your tagged content side by side:
+
+- Compare different tag combinations simultaneously:
+  "Show me all #project tasks alongside #urgent items and #delegated work"
+- Build your analysis view flexibly:
+  - Start with any tag combination
+  - Add new columns for different perspectives
+  - Add related tags based on actual usage patterns
+  - Remove columns you don't need anymore
+- See your content from multiple angles:
+  - Compare todo states across different tag combinations
+  - Track related items across different categories
+  - Identify patterns and relationships in your notes
+- Stay in control with keyboard shortcuts:
+  - ~a~ - Add a new column
+  - ~A~ - Add a column with related tag
+  - ~t~ - Add tag to current column
+  - ~T~ - Add related tag to column
+  - ~d~ - Remove unwanted column
+  - ~r~ - Start fresh
+  - ~v~ - View node details
+  - ~m~ - Manage tag relations
   - ~q~ - Quit
+
+These new views work together to help you:
+- Understand how your tags are connected
+- Find relevant content more efficiently
+- Discover patterns in your note organization
+- Make better decisions about tag usage
+
 
 ** Change
 *** Original `org-supertag-view-tag` chang to `org-supertag-view-tag-only`
@@ -155,7 +202,7 @@ After:
 - Enables direct node relationships
 
 Changes:
-1. Rewrote org-supertag-field--convert-value to handle org-mode link format
+1. Rewritten org-supertag-field--convert-value to handle org-mode link format
 2. Modified org-supertag-validate-tag-reference to validate node existence
 3. Added node title lookup for better link display
 
@@ -335,3 +382,4 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
+

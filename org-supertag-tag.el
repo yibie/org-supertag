@@ -167,6 +167,9 @@ otherwise returns nil."
 ;; Tag-Node Relation Operation
 ;;----------------------------------------------------------------------
 
+(defvar org-supertag-tag-apply-skip-headline nil
+  "When non-nil, `org-supertag-tag-apply' will not add the tag to headline tags.")
+
 (defun org-supertag-tag-apply (tag-id)
   "Apply tag to the node at current position."
   (let* ((tag (org-supertag-db-get tag-id))
@@ -204,9 +207,10 @@ otherwise returns nil."
             (org-supertag-tag--set-field-value 
              tag-id node-id field-name initial-value)))))
     
-    ;; Add tag to node tags
-    (let ((tags (org-get-tags)))
-      (org-set-tags (cons (concat "#" tag-id) tags)))
+    ;; Add tag to node tags (unless skipped for inline tags)
+    (unless org-supertag-tag-apply-skip-headline
+      (let ((tags (org-get-tags)))
+        (org-set-tags (cons (concat "#" tag-id) tags))))
     
     ;; Record tag relationships
     (when (featurep 'org-supertag-relation)
