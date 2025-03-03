@@ -52,22 +52,16 @@ Only used when `org-supertag-view-display-side' is 'bottom or 'top."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-view--display-buffer-right (buffer)
-  "Display BUFFER in the appropriate location based on user settings.
-Displays the buffer on the side defined by `org-supertag-view-display-side',
-or with default behavior if that variable is nil."
-  (let ((display-buffer-alist
-         (when org-supertag-view-display-side
-           `((".*" . ,(append 
-                       `((display-buffer-in-side-window)
-                         (side . ,org-supertag-view-display-side)
-                         (window-width . ,(and (memq org-supertag-view-display-side '(right left))
-                                              org-supertag-view-window-width))
-                         (window-height . ,(and (memq org-supertag-view-display-side '(top bottom))
-                                               org-supertag-view-window-height))
-                         (preserve-size . (t . t))
-                         (dedicated . t)))))))
-        (display-buffer-mark-dedicated t))
-    (pop-to-buffer buffer)))
+  "Display BUFFER in side window according to `org-supertag-view-display-side'."
+  (display-buffer
+   buffer
+   `(display-buffer-in-side-window
+     (side . ,(or org-supertag-view-display-side 'right))
+     (window-width . ,(when (memq org-supertag-view-display-side '(right left))
+                       org-supertag-view-window-width))
+     (window-height . ,(when (memq org-supertag-view-display-side '(top bottom))
+                        org-supertag-view-window-height))
+     (preserve-size . t))))
 
 
 ;;----------------------------------------------------------------------
@@ -97,6 +91,72 @@ Otherwise, show tag-discover panel for exploration."
                                           nil t)))
           (when starting-tag
             (org-supertag-view--show-tag-discover (list starting-tag))))))))
+
+;;----------------------------------------------------------------------
+;; Single Tag View Mode (Traditional Table View)
+;;----------------------------------------------------------------------
+
+;;;###autoload
+(defun org-supertag-view-tag-only ()
+  "Show content related to a tag in traditional table view.
+If point is on a tag, show content for that tag.
+Otherwise, prompt for a tag using completion."
+  (interactive)
+  (let ((tag-at-point (org-supertag-view--get-tag-name)))
+    (if tag-at-point
+        ;; If point is on a tag, show content for that tag
+        (org-supertag-view--show-content-table tag-at-point)
+      ;; If point is not on a tag, prompt for a tag using completion
+      (let ((tag (completing-read "View tag: "
+                                (org-supertag-view--get-all-tags)
+                                nil t)))
+        (org-supertag-view--show-content-table tag)))))
+
+(defun org-supertag-view--show-content-table (tag)
+  "Show content related to TAG in a new buffer with table format."
+  (let ((buf (get-buffer-create (format "*Org SuperTag Table View: %s*" tag))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-mode)
+        (org-supertag-view-mode)
+        (org-supertag-view--insert-header tag)
+        (org-supertag-view--insert-content-table tag)))
+    (org-supertag-view--display-buffer-right buf)))
+
+(defun org-supertag-view--insert-content-table (tag)
+  "Insert content related to TAG in current buffer using table format."
+  (insert "* Related Nodes\n\n")
+  (let* ((content (org-supertag-view--get-related-nodes tag))
+         (tag-def (org-supertag-tag-get tag))
+         (fields (plist-get tag-def :fields)))
+    (if content
+        (progn
+          ;; Build table header
+          (insert "|Node|Type|Date|")
+          (dolist (field fields)
+            (insert (format "%s|" (plist-get field :name))))
+          (insert "\n|-\n")
+          
+          ;; Insert data for each node
+          (dolist (item content)
+            (let ((field-values (plist-get item :fields)))
+              (insert "|")
+              (insert (format "%s|%s|%s|"
+                            (plist-get item :node)
+                            (plist-get item :type)
+                            (plist-get item :date)))
+              ;; Insert field values
+              (dolist (field fields)
+                (let* ((field-name (plist-get field :name))
+                       (value (cdr (assoc field-name field-values))))
+                  (insert (format "%s|" (or value "")))))
+              (insert "\n")))
+          (insert "\n")
+          (save-excursion
+            (forward-line -1)
+            (org-table-align)))
+      (insert (format "No content found for tag #%s" tag)))))
 
 ;;----------------------------------------------------------------------
 ;; Get Value at Point
@@ -205,6 +265,77 @@ Returns a list of plists with properties :node, :type, :date and field values."
         (org-supertag-tag-columns tag))))))
 
 ;;----------------------------------------------------------------------
+;; Mode definitions
+;;----------------------------------------------------------------------
+
+(defvar org-supertag-discover-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view--refresh-discover)
+    (define-key map (kbd "r") 'org-supertag-view--reset-filters)
+    (define-key map (kbd "a") 'org-supertag-view--add-filter)
+    (define-key map (kbd "d") 'org-supertag-view--remove-filter)
+    (define-key map (kbd "v") 'org-supertag-view--view-node)
+    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
+    map)
+  "Keymap for `org-supertag-discover-mode'.")      
+
+(defvar org-supertag-view-column-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view--update-column-view)
+    (define-key map (kbd "a") 'org-supertag-view-add-column)
+    (define-key map (kbd "A") 'org-supertag-view-add-related-column)
+    (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
+    (define-key map (kbd "T") 'org-supertag-view-add-related-tag-to-column)
+    (define-key map (kbd "d") 'org-supertag-view-remove-column)
+    (define-key map (kbd "r") 'org-supertag-view-reset-columns)
+    (define-key map (kbd "v") 'org-supertag-view-view-node-at-point)
+    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
+    map)
+  "Keymap for multi-column tag view mode.")
+
+(define-derived-mode org-supertag-discover-mode special-mode "Org-ST-Discover"
+  "Major mode for progressive tag discovery in org-supertag."
+  :group 'org-supertag
+  (setq buffer-read-only t)
+  (setq truncate-lines t)
+  (setq header-line-format 
+        (propertize " Org-Supertag Tag Discovery" 'face '(:weight bold)))
+  (setq-local org-element-use-cache nil)
+  (setq-local org-mode-hook nil)
+  ;; 确保不影响 minibuffer
+  (setq-local minibuffer-auto-raise t)
+  (setq-local enable-recursive-minibuffers t))
+
+(define-derived-mode org-supertag-column-mode special-mode "SuperTag-Columns"
+  "Major mode for multi-column tag comparison in org-supertag."
+  :group 'org-supertag
+  (setq buffer-read-only t)
+  (setq truncate-lines t)  
+  (buffer-disable-undo)
+  (setq header-line-format 
+        (propertize " Org-Supertag Multi-Column Tag View" 'face '(:weight bold)))
+  (setq-local org-element-use-cache nil)
+  (setq-local org-mode-hook nil)
+  (use-local-map org-supertag-view-column-mode-map))
+
+(define-minor-mode org-supertag-view-mode
+  "Minor mode for viewing org-supertag tag-related content."
+  :lighter " SuperTag-View"
+  :group 'org-supertag
+  (if org-supertag-view-mode
+      ;; When enabling the mode
+      (when (string-match-p "\\*Org SuperTag" (buffer-name))
+        ;; Only set read-only for SuperTag view buffers, not regular org files
+        (setq-local org-supertag-view--prev-read-only buffer-read-only)
+        (setq buffer-read-only t)
+        (buffer-disable-undo))
+    ;; When disabling the mode
+    (when (boundp 'org-supertag-view--prev-read-only)
+      (setq buffer-read-only org-supertag-view--prev-read-only))))
+      
+;;----------------------------------------------------------------------
 ;; Tag Discover Mode - Progressive tag filtering
 ;;----------------------------------------------------------------------
 
@@ -212,24 +343,37 @@ Returns a list of plists with properties :node, :type, :date and field values."
   "Show tag-discover panel with optional FILTER-TAGS.
 If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
   (message "Preparing tag discovery view...")
-  (if (and (not filter-tags) (not org-supertag-view--current-filters))
-      ;; If no filters provided or set, ask for initial tag
-      (let* ((all-tags (org-supertag-view--get-all-tags))
-             (starting-tag (if all-tags
-                              (completing-read "Start tag discovery with: " all-tags nil t)
-                            (message "No tags found in database!")
-                            nil)))
-        (if starting-tag
-            (progn
-              (message "Selected tag: %s" starting-tag)
-              (setq org-supertag-view--current-filters (list starting-tag))
-              (org-supertag-view--show-tag-discover-buffer))
-          (message "No tag selected, cancelling tag discovery.")))
-    ;; Otherwise proceed with filters
-    (progn
-      (setq org-supertag-view--current-filters (or filter-tags org-supertag-view--current-filters))
-      (message "Using filters: %s" org-supertag-view--current-filters)
-      (org-supertag-view--show-tag-discover-buffer))))
+  (let* ((all-tags (org-supertag-view--get-all-tags))
+         (old-completion-extra-properties completion-extra-properties)
+         (completion-extra-properties '(:annotation-function
+                                      (lambda (tag)
+                                        (let ((count (length (org-supertag-view--get-nodes-with-tags (list tag)))))
+                                          (format " (%d nodes)" count))))))
+    (unwind-protect
+        (progn
+          ;; 先设置过滤器，再显示缓冲区
+          (cond
+           ;; 如果提供了过滤器标签，直接使用
+           (filter-tags
+            (setq org-supertag-view--current-filters filter-tags))
+           
+           ;; 如果没有当前过滤器，需要选择一个起始标签
+           ((null org-supertag-view--current-filters)
+            (let ((starting-tag (completing-read "Start tag discovery with: "
+                                               (completion-table-dynamic
+                                                (lambda (_) all-tags))
+                                               nil t)))
+              (when starting-tag
+                (setq org-supertag-view--current-filters (list starting-tag)))))
+          
+          ;; 保持现有过滤器不变
+          (t nil))
+        
+        ;; 如果有过滤器，显示缓冲区
+        (when org-supertag-view--current-filters
+          (org-supertag-view--show-tag-discover-buffer))))
+      ;; 清理
+      (setq completion-extra-properties old-completion-extra-properties)))
 
 (defun org-supertag-view--show-tag-discover-buffer ()
   "Show the tag discover buffer with current filters."
@@ -263,36 +407,40 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
           (insert "  (no filters applied)\n"))
         (insert "\n")
         
-        ;; Co-occurring tags section
+        ;; Co-occurring tags section with debug info
         (insert (propertize "Co-occurring Tags:\n" 'face '(:weight bold)))
         (if org-supertag-view--current-filters
-            (let ((cooccur-tags (org-supertag-view--get-cooccurring-tags org-supertag-view--current-filters))
-                  (count 0))
-              (if cooccur-tags
-                  (dolist (item cooccur-tags)
-                    (let* ((tag (car item))
-                           (strength (cdr item))
-                           (strength-display (if (> strength 0.1)
-                                               (format " (%.1f)" strength)
-                                             "")))
-                      (when (and (not (member tag org-supertag-view--current-filters))
-                        (let ((add-button-text (propertize "[+]" 'face '(:foreground "green"))))
-                          (insert " ")
-                          (insert-text-button add-button-text
-                                             'action 'org-supertag-view--add-filter-button-action
-                                             'tag tag
-                                             'follow-link t
-                                             'help-echo "Add this tag to filters")
-                          (insert (format " %s%s\n" 
-                                         tag 
-                                         (propertize strength-display 'face '(:foreground "gray50"))))
-                          (setq count (1+ count))))))
-                (insert "  (no co-occurring tags found)\n")))
+            (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
+              (message "Found %d nodes for current filters" (length nodes))
+              (let ((cooccur-tags (org-supertag-view--get-cooccurring-tags org-supertag-view--current-filters))
+                    (count 0))
+                (message "Found %d co-occurring tags" (length cooccur-tags))
+                (if cooccur-tags
+                    (dolist (item cooccur-tags)
+                      (let* ((tag (car item))
+                             (strength (cdr item))
+                             (strength-display (if (> strength 0.1)
+                                                 (format " (%.1f)" strength)
+                                               "")))
+                        (when (and (not (member tag org-supertag-view--current-filters)))
+                          (let ((add-button-text (propertize "[+]" 'face '(:foreground "green"))))
+                            (insert " ")
+                            (insert-text-button add-button-text
+                                               'action 'org-supertag-view--add-filter-button-action
+                                               'tag tag
+                                               'follow-link t
+                                               'help-echo "Add this tag to filters")
+                            (insert (format " %s%s\n" 
+                                           tag 
+                                           (propertize strength-display 'face '(:foreground "gray50"))))
+                            (setq count (1+ count))))))
+                  (insert "  (no co-occurring tags found)\n"))))
           (insert "  (select a filter first)\n"))
         (insert "\n")
         
-        ;; Matching nodes section
+        ;; Matching nodes section with debug info
         (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
+          (message "Displaying %d matching nodes" (length nodes))
           (insert (propertize (format "Matching Nodes (%d):\n" (length nodes))
                              'face '(:weight bold)))
           (if nodes
@@ -325,10 +473,10 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
       (condition-case err
           (progn
             ;; 使用明确的参数显示缓冲区
-            (org-supertag-view--display-buffer-right)
+            (org-supertag-view--display-buffer-right buffer)
             (message "Tag discovery buffer displayed successfully"))
         (error
-         (message "Error displaying tag discovery buffer: %s" (error-message-string err))))))))
+         (message "Error displaying tag discovery buffer: %s" (error-message-string err)))))))
 
 (defun org-supertag-view--remove-filter-button-action (button)
   "Action to remove a filter tag when clicking its button."
@@ -434,14 +582,15 @@ that are relevant to the current view context."
               (mapcar (lambda (node-id)
                        (let* ((props (gethash node-id org-supertag-db--object))
                               (title (or (plist-get props :title) "无标题"))
-                              (tags (mapconcat
-                                     (lambda (tag-list)
-                                       (concat "[" (string-join tag-list ", ") "]"))
-                                     (seq-filter
-                                      (lambda (tag-list)
-                                        (member node-id (org-supertag-view--get-nodes-with-tags tag-list)))
-                                      org-supertag-view--current-columns)
-                                     " ")))
+                              (tags-text (mapconcat
+                                        (lambda (tag-list)
+                                          (concat "[" (string-join tag-list ", ") "]"))
+                                        (seq-filter
+                                         (lambda (tag-list)
+                                           (member node-id (org-supertag-view--get-nodes-with-tags tag-list)))
+                                         org-supertag-view--current-columns)
+                                        " ")))
+                         (cons (format "%s %s" title tags-text) node-id)))
                      nodes))))
      
      ;; 标签发现模式
@@ -466,7 +615,7 @@ that are relevant to the current view context."
                                       (mapcar #'car node-titles) nil t)))
         (when selected
           (let ((node-id (cdr (assoc selected node-titles))))
-            (org-supertag-view--goto-node node-id)))))))))
+            (org-supertag-view--goto-node node-id)))))))
 
 ;; 保留这个函数作为向后兼容，但直接调用通用函数
 (defun org-supertag-view--view-node-from-columns ()
@@ -496,22 +645,18 @@ for backward compatibility."
 (defun org-supertag-view--get-nodes-with-tags (tags)
   "Get all nodes that contain all TAGS.
 Returns a list of node IDs."
+  (unless (and tags (listp tags))
+    (error "Invalid tags argument: %S" tags))
   (let ((result nil))
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
-         ;; 获取节点的标签
          (let ((node-tags (org-supertag-node-get-tags id)))
-           ;; 调试输出
-           (message "Node %s has tags: %s" id node-tags)
-           ;; 检查是否包含所有过滤标签
            (when (cl-every (lambda (tag) 
                             (member tag node-tags))
                           tags)
              (push id result)))))
      org-supertag-db--object)
-    ;; 调试输出
-    (message "Found %d nodes matching tags %s" (length result) tags)
     (nreverse result)))
 
 (defun org-supertag-view--get-cooccurring-tags (filter-tags)
@@ -547,74 +692,6 @@ Returns list of (tag-name . count) pairs."
   (interactive)
   (when (eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--show-tag-discover-buffer)))
-
-(defvar org-supertag-discover-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "q") 'quit-window)
-    (define-key map (kbd "g") 'org-supertag-view--refresh-discover)
-    (define-key map (kbd "r") 'org-supertag-view--reset-filters)
-    (define-key map (kbd "a") 'org-supertag-view--add-filter)
-    (define-key map (kbd "d") 'org-supertag-view--remove-filter)
-    (define-key map (kbd "v") 'org-supertag-view--view-node)
-    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
-    map)
-  "Keymap for `org-supertag-discover-mode'.")
-
-(define-derived-mode org-supertag-discover-mode special-mode "Org-ST-Discover"
-  "Major mode for progressive tag discovery in org-supertag."
-  :group 'org-supertag
-  (setq buffer-read-only t)
-  (setq truncate-lines t)
-  (setq header-line-format 
-        (propertize " Org-Supertag Tag Discovery" 'face '(:weight bold)))
-  (setq-local org-element-use-cache nil)
-  (setq-local org-mode-hook nil))
-
-;;----------------------------------------------------------------------
-;; Mode definitions
-;;----------------------------------------------------------------------
-
-(define-minor-mode org-supertag-view-mode
-  "Minor mode for viewing org-supertag tag-related content."
-  :lighter " SuperTag-View"
-  :group 'org-supertag
-  (if org-supertag-view-mode
-      ;; When enabling the mode
-      (when (string-match-p "\\*Org SuperTag" (buffer-name))
-        ;; Only set read-only for SuperTag view buffers, not regular org files
-        (setq-local org-supertag-view--prev-read-only buffer-read-only)
-        (setq buffer-read-only t)
-        (buffer-disable-undo))
-    ;; When disabling the mode
-    (when (boundp 'org-supertag-view--prev-read-only)
-      (setq buffer-read-only org-supertag-view--prev-read-only))))
-
-(defvar org-supertag-view-column-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "q") 'quit-window)
-    (define-key map (kbd "g") 'org-supertag-view--update-column-view)
-    (define-key map (kbd "a") 'org-supertag-view-add-column)
-    (define-key map (kbd "A") 'org-supertag-view-add-related-column)
-    (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
-    (define-key map (kbd "T") 'org-supertag-view-add-related-tag-to-column)
-    (define-key map (kbd "d") 'org-supertag-view-remove-column)
-    (define-key map (kbd "r") 'org-supertag-view-reset-columns)
-    (define-key map (kbd "v") 'org-supertag-view-view-node-at-point)
-    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
-    map)
-  "Keymap for multi-column tag view mode.")
-
-(define-derived-mode org-supertag-column-mode special-mode "SuperTag-Columns"
-  "Major mode for multi-column tag comparison in org-supertag."
-  :group 'org-supertag
-  (setq buffer-read-only t)
-  (setq truncate-lines t)  ;; 禁用折行，允许横向滚动查看所有内容
-  (buffer-disable-undo)
-  ;; 设置标识符，表明这不是 Org 缓冲区
-  (setq-local org-element-use-cache nil)
-  (setq-local org-mode-hook nil)
-  ;; 直接在模式定义中重新设置局部键盘映射，确保优先级最高
-  (use-local-map org-supertag-view-column-mode-map))
 
 ;;----------------------------------------------------------------------
 ;; Public API
@@ -715,7 +792,7 @@ This function is kept for backward compatibility."
              org-supertag-view--current-columns)
     (let* ((column-names (mapcar (lambda (tags)
                                   (format "%s" (string-join tags ", ")))
-                                org-supertag-view--current-columns))
+                                     org-supertag-view--current-columns))
            (selected-col (completing-read "Select column to add tag: " column-names nil t))
            (col-idx (cl-position selected-col column-names :test 'string=)))
       (when col-idx
@@ -736,7 +813,7 @@ This function is kept for backward compatibility."
              (> (length org-supertag-view--current-columns) 1)) ;; 至少保留一列
     (let* ((column-names (mapcar (lambda (tags)
                                   (format "%s" (string-join tags ", ")))
-                                org-supertag-view--current-columns))
+                                     org-supertag-view--current-columns))
            (selected-col (completing-read "Remove column: " column-names nil t))
            (col-idx (cl-position selected-col column-names :test 'string=)))
       (when col-idx
@@ -1086,53 +1163,10 @@ then shows all related tags for selection based on tag relationships."
                             (when (and tag-name (not (string-empty-p tag-name)))
                               ;; 添加相关标签到选定的列
                               (push tag-name (nth col-idx org-supertag-view--current-columns))
-                              (org-supertag-view--update-column-view)
-                              (message "Added related tag '%s' to column" tag-name)))
+                                (org-supertag-view--update-column-view)
+                                (message "Added related tag '%s' to column" tag-name)))
                             (message "No related tags found for %s or all related tags already in column" source-tag)))))))))
     (error (message "Error adding related tag to column: %s" (error-message-string err))))
-
-(defun org-supertag-view-debug-current-state ()
-  "Display debug information about current tag discovery state."
-  (interactive)
-  (let ((buf (get-buffer-create "*Org-SuperTag Debug*")))
-    (with-current-buffer buf
-      (erase-buffer)
-      (insert "=== Current Tag Discovery State ===\n\n")
-      
-      ;; 显示当前过滤器
-      (insert "Current Filters:\n")
-      (if org-supertag-view--current-filters
-          (dolist (tag org-supertag-view--current-filters)
-            (insert (format "  - %s\n" tag)))
-          (insert "  (none)\n"))
-      (insert "\n")
-      
-      ;; 显示所有可用标签
-      (insert "Available Tags:\n")
-      (let ((all-tags (org-supertag-view--get-all-tags)))
-        (if all-tags
-            (dolist (tag all-tags)
-              (insert (format "  - %s\n" tag)))
-          (insert "  (none)\n")))
-      (insert "\n")
-      
-      ;; 显示匹配的节点
-      (when org-supertag-view--current-filters
-        (insert "Matching Nodes:\n")
-        (let ((nodes (org-supertag-view--get-nodes-with-tags 
-                     org-supertag-view--current-filters)))
-          (if nodes
-              (dolist (node-id nodes)
-                (let* ((props (gethash node-id org-supertag-db--object))
-                       (title (or (plist-get props :title) "无标题"))
-                       (tags (org-supertag-node-get-tags node-id)))
-                       (tags-text (format "[%s]" (string-join tags ", "))))
-                       (node-info (format "  • %s\n    ID: %s\n    Tags: %s\n\n"
-                                         title node-id tags-text)))
-                      (insert node-info)))
-            (insert "  (no matching nodes)\n"))))
-      
-      (display-buffer buf))
 
 (provide 'org-supertag-view)
 
