@@ -124,6 +124,18 @@ Otherwise, prompt for a tag using completion."
         (org-supertag-view--insert-content-table tag)))
     (org-supertag-view--display-buffer-right buf)))
 
+(defun org-supertag-view--insert-header (tag)
+  "Insert header information for TAG in the current buffer."
+  (let ((tag-def (org-supertag-tag-get tag)))
+    (insert (propertize (format "Content for tag #%s\n\n" tag)
+                        'face '(:height 1.5 :weight bold)))
+    ;; Add tag description if exists
+    (when-let ((desc (plist-get tag-def :description)))
+      (unless (string-empty-p desc)
+        (insert (format "Description: %s\n\n" desc))))
+    (insert (propertize "Operations:\n" 'face '(:weight bold)))
+    (insert " [q] - Quit    [g] - Refresh    [v] - View Node\n\n")))
+
 (defun org-supertag-view--insert-content-table (tag)
   "Insert content related to TAG in current buffer using table format."
   (insert "* Related Nodes\n\n")
@@ -268,6 +280,14 @@ Returns a list of plists with properties :node, :type, :date and field values."
 ;; Mode definitions
 ;;----------------------------------------------------------------------
 
+(defvar org-supertag-view-table-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view-refresh)
+    (define-key map (kbd "v") 'org-supertag-view--view-node-from-table)
+    map)
+  "Keymap for traditional table view mode.")
+
 (defvar org-supertag-discover-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") 'quit-window)
@@ -324,6 +344,7 @@ Returns a list of plists with properties :node, :type, :date and field values."
   "Minor mode for viewing org-supertag tag-related content."
   :lighter " SuperTag-View"
   :group 'org-supertag
+
   (if org-supertag-view-mode
       ;; When enabling the mode
       (when (string-match-p "\\*Org SuperTag" (buffer-name))
@@ -604,6 +625,28 @@ that are relevant to the current view context."
                        (cons (format "%s %s" title tags-text) node-id)))
                    nodes)))
      
+     ;; 表格视图模式
+     ((and (eq major-mode 'org-mode) 
+           (bound-and-true-p org-supertag-view-mode)
+           (string-match-p "\\*Org SuperTag Table View:" (buffer-name)))
+      (let* ((buffer-name (buffer-name))
+             (tag (progn
+                    (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" buffer-name)
+                    (match-string 1 buffer-name))))
+        (when tag
+          (setq nodes (org-supertag-view--get-nodes-with-tags (list tag)))
+          (setq node-titles
+                (mapcar (lambda (node-id)
+                         (let* ((props (gethash node-id org-supertag-db--object))
+                                (title (or (plist-get props :title) "无标题"))
+                                (type (or (plist-get props :todo-state) "")))
+                           (cons (format "%s %s" title 
+                                        (if (string-empty-p type) 
+                                            "" 
+                                          (format "[%s]" type)))
+                                 node-id)))
+                       nodes)))))
+     
      ;; 其他模式（默认行为）
      (t
       (message "Not in a SuperTag view mode. Cannot select nodes.")
@@ -654,7 +697,7 @@ Returns a list of node IDs."
          (let ((node-tags (org-supertag-node-get-tags id)))
            (when (cl-every (lambda (tag) 
                             (member tag node-tags))
-                          tags)
+                         tags)
              (push id result)))))
      org-supertag-db--object)
     (nreverse result)))
@@ -1030,7 +1073,7 @@ If database is empty, offers to update it."
     (let ((pos (point))
           (line-start (line-beginning-position))
           (found nil))
-      
+          
       ;; 先尝试找到当前行中的view按钮
       (save-excursion
         (goto-char line-start)
@@ -1106,8 +1149,8 @@ then shows all related tags for selection based on tag relationships."
                          (when (and tag-name (not (string-empty-p tag-name)))
                            ;; 添加新标签作为独立的一列
                            (push (list tag-name) org-supertag-view--current-columns)
-                           (org-supertag-view--update-column-view)
-                           (message "Added new column with related tag: %s" tag-name)))
+                             (org-supertag-view--update-column-view)
+                             (message "Added new column with related tag: %s" tag-name)))
                          (message "No related tags found for %s" source-tag)))))))))
     (error (message "Error adding related column: %s" (error-message-string err))))
   
@@ -1167,6 +1210,46 @@ then shows all related tags for selection based on tag relationships."
                                 (message "Added related tag '%s' to column" tag-name)))
                             (message "No related tags found for %s or all related tags already in column" source-tag)))))))))
     (error (message "Error adding related tag to column: %s" (error-message-string err))))
+
+(defun org-supertag-view--view-node-from-table ()
+  "Select and view a node from the traditional table view.
+This function is specific to the traditional table view mode."
+  (interactive)
+  (let* ((buffer-name (buffer-name))
+         (tag nil)
+         (nodes nil)
+         (node-titles nil))
+    
+    ;; 从缓冲区名称中提取标签名
+    (when (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" buffer-name)
+      (setq tag (match-string 1 buffer-name)))
+    
+    (if tag
+        (progn
+          ;; 获取与标签相关的节点
+          (setq nodes (org-supertag-view--get-nodes-with-tags (list tag)))
+          (setq node-titles
+                (mapcar (lambda (node-id)
+                        (let* ((props (gethash node-id org-supertag-db--object))
+                               (title (or (plist-get props :title) "无标题"))
+                               (type (or (plist-get props :todo-state) "")))
+                         (cons (format "%s %s" title 
+                                      (if (string-empty-p type) 
+                                          "" 
+                                        (format "[%s]" type)))
+                               node-id)))
+                       nodes))
+          
+          ;; 让用户选择节点并查看
+          (if nodes
+              (let* ((selected (completing-read "View node: " 
+                                             (mapcar #'car node-titles) nil t)))
+                (when selected
+                  (let ((node-id (cdr (assoc selected node-titles))))
+                        (org-supertag-view--goto-node node-id))))
+                    (org-supertag-view--goto-node node-id))))
+            (message "No nodes found for tag: %s" tag)))
+
 
 (provide 'org-supertag-view)
 
