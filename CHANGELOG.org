@@ -30,7 +30,7 @@ and context-aware.
 
 
 * [2.4.0] - 2025-03-02
-** Features
+** Featuresf
 *** org-supertag-view-discovery: Discover and explore your tags naturally
 Introducing Tag Discovery View - a new way to explore and understand your tag ecosystem:
 
