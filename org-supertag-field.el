@@ -63,19 +63,20 @@ NODE-ID is the target node ID
 TAG-ID is the tag ID"
   (condition-case err
       (let* ((field-name (plist-get field-def :name))
+             (sanitized-name (org-supertag--sanitize-field-name field-name))
              (field-type (plist-get field-def :type))
              (type-def (org-supertag-get-field-type field-type))
              (processed-value
               (progn
                 (message "Debug - Setting field: name=%S, type=%S, initial-value=%S" 
-                         field-name field-type value)
+                         sanitized-name field-type value)
                 (if (and type-def value)
                     (progn
                       (message "Debug - Processing value with type-def: %S" type-def)
                       (when-let ((validator (plist-get type-def :validator)))
                         (message "Debug - Validating with %S" validator)
                         (unless (funcall validator value)
-                          (error "Value validation failed for %s: %S" field-name value)))
+                          (error "Value validation failed for %s: %S" sanitized-name value)))
                       (if-let ((formatter (plist-get type-def :formatter)))
                           (progn
                             (message "Debug - Formatting with %S" formatter)
@@ -84,6 +85,12 @@ TAG-ID is the tag ID"
                   (progn
                     (message "Debug - Using raw value (no processing): %S" value)
                     value)))))
+        
+        ;; Use sanitized name for all operations
+        (unless (string= field-name sanitized-name)
+          (setq field-name sanitized-name)
+          (setq field-def (copy-sequence field-def))
+          (setf (plist-get field-def :name) sanitized-name))
         
         (message "Debug - Final processed value: %S" processed-value)
         
