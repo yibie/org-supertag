@@ -89,7 +89,7 @@ Remember:
                 
                 # 检查 API 可用性
                 import requests
-                test_response = requests.get("http://localhost:11434/api/tags")
+                test_response = requests.get("http://127.0.0.1:11434/api/tags")
                 print(f"[DEBUG] Ollama API 测试: {test_response.status_code}")
                 
                 # 检查对象状态

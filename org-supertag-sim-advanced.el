@@ -76,8 +76,8 @@ BEGIN 和 END 是区域的起始和结束位置."
              
              ;; 显示提取到的实体
              (dolist (entity entities)
-               (let ((entity-text (cdr (assoc "entity" entity)))
-                     (entity-type (cdr (assoc "type" entity))))
+               (let ((entity-text (cdr (assoc 'entity entity)))
+                     (entity-type (cdr (assoc 'type entity))))
                  (insert (format "- %s (%s)\n" entity-text entity-type))))
              
              ;; 如果有实体，提供标签建议
@@ -85,7 +85,7 @@ BEGIN 和 END 是区域的起始和结束位置."
                (insert "\n正在基于提取到的实体生成标签建议...\n")
                
                ;; 提取实体文本
-               (let ((entity-texts (mapcar (lambda (e) (cdr (assoc "entity" e))) entities)))
+               (let ((entity-texts (mapcar (lambda (e) (cdr (assoc 'entity e))) entities)))
                  ;; 连接所有实体文本
                  (let ((combined-text (mapconcat 'identity entity-texts " ")))
                    ;; 异步获取标签建议
@@ -101,15 +101,15 @@ BEGIN 和 END 是区域的起始和结束位置."
                         ;; 显示建议的标签
                         (if suggestions
                             (dolist (suggestion suggestions)
-                              (let ((tag-name (cdr (assoc "tag" suggestion)))
-                                    (score (cdr (assoc "score" suggestion))))
+                              (let ((tag-name (cdr (assoc 'tag suggestion)))
+                                    (score (cdr (assoc 'score suggestion))))
                                 (insert (format "- %s (%.2f)\n" tag-name score))))
                           (insert "没有找到相关标签建议\n"))
                         
                         ;; 添加应用建议的按钮
                         (insert "\n")
                         (dolist (suggestion suggestions)
-                          (let ((tag-name (cdr (assoc "tag" suggestion))))
+                          (let ((tag-name (cdr (assoc 'tag suggestion))))
                             (insert-button (format "[应用标签: %s] " tag-name)
                                           'action `(lambda (_)
                                                     (org-supertag-sim-advanced--apply-tag ,tag-name))
@@ -155,7 +155,7 @@ SUGGESTIONS 是标签建议列表."
   (org-back-to-heading t)
   (let ((applied-count 0))
     (dolist (suggestion suggestions)
-      (let* ((tag-name (cdr (assoc "tag" suggestion)))
+      (let* ((tag-name (cdr (assoc 'tag suggestion)))
              (tag-id (org-supertag-db-find-by-name tag-name :tag)))
         
         ;; 如果标签不存在，创建它
@@ -186,14 +186,14 @@ SUGGESTIONS 是标签建议列表."
          (if suggestions
              (let* ((choices (mapcar (lambda (s) 
                                       (cons (format "%s (%.2f)" 
-                                                    (cdr (assoc "tag" s)) 
-                                                    (cdr (assoc "score" s)))
+                                                    (cdr (assoc 'tag s)) 
+                                                    (cdr (assoc 'score s)))
                                             s))
                                     suggestions))
                     (selection (completing-read "选择要应用的标签: " choices nil t)))
                (when selection
                  (let* ((selected-suggestion (cdr (assoc selection choices)))
-                        (tag-name (cdr (assoc "tag" selected-suggestion))))
+                        (tag-name (cdr (assoc 'tag selected-suggestion))))
                    (org-supertag-sim-advanced--apply-tag tag-name))))
            (message "没有找到相关标签建议")))))))
 
@@ -222,7 +222,7 @@ SUGGESTIONS 是标签建议列表."
        (lambda (entities)
          ;; 实体提取后的回调
          (when entities
-           (let ((entity-texts (mapcar (lambda (e) (cdr (assoc "entity" e))) entities)))
+           (let ((entity-texts (mapcar (lambda (e) (cdr (assoc 'entity e))) entities)))
              ;; 连接所有实体文本
              (let ((combined-text (mapconcat 'identity entity-texts " ")))
                ;; 异步获取标签建议
@@ -234,14 +234,14 @@ SUGGESTIONS 是标签建议列表."
                   (if suggestions
                       (let* ((choices (mapcar (lambda (s) 
                                                (cons (format "%s (%.2f)" 
-                                                             (cdr (assoc "tag" s)) 
-                                                             (cdr (assoc "score" s)))
+                                                             (cdr (assoc 'tag s)) 
+                                                             (cdr (assoc 'score s)))
                                                      s))
                                              suggestions))
                              (selection (completing-read "选择要应用的标签: " choices nil t)))
                         (when selection
                           (let* ((selected-suggestion (cdr (assoc selection choices)))
-                                 (tag-name (cdr (assoc "tag" selected-suggestion))))
+                                 (tag-name (cdr (assoc 'tag selected-suggestion))))
                             (org-supertag-sim-advanced--apply-tag tag-name))))
                     (message "没有找到相关标签建议"))))))))))))
 
@@ -264,14 +264,14 @@ TAG-ID 是要查找相似标签的标签ID."
          (if similar-tags
              (let* ((choices (mapcar (lambda (s)
                                       (cons (format "%s (%.2f)" 
-                                                    (cdr (assoc "tag" s)) 
-                                                    (cdr (assoc "score" s)))
+                                                    (cdr (assoc 'tag s)) 
+                                                    (cdr (assoc 'score s)))
                                             s))
                                     similar-tags))
                     (selection (completing-read "选择要跳转的相似标签: " choices nil t)))
                (when selection
                  (let* ((selected-tag (cdr (assoc selection choices)))
-                        (tag-name (cdr (assoc "tag" selected-tag)))
+                        (tag-name (cdr (assoc 'tag selected-tag)))
                         (tag-id (org-supertag-db-find-by-name tag-name :tag)))
                    (when tag-id
                      (org-supertag-find tag-id)))))
@@ -385,7 +385,7 @@ ORG-FILES 是Org文件路径列表."
                        
                        ;; 组合实体文本并获取标签建议
                        (let ((entity-texts (mapcar (lambda (e) 
-                                                    (cdr (assoc "entity" e))) 
+                                                    (cdr (assoc 'entity e))) 
                                                   entities)))
                          (when entity-texts
                            (let ((combined-text (mapconcat 'identity entity-texts " ")))
@@ -402,8 +402,8 @@ ORG-FILES 是Org文件路径列表."
                                                     (length suggestions)))
                                     (dolist (suggestion suggestions)
                                       (insert (format "      * %s (%.2f)\n" 
-                                                      (cdr (assoc "tag" suggestion))
-                                                      (cdr (assoc "score" suggestion)))))))))))))))))
+                                                      (cdr (assoc 'tag suggestion))
+                                                      (cdr (assoc 'score suggestion)))))))))))))))))
              
              ;; 处理完当前文件，继续处理批次中的下一个文件
              (process-file (car remaining-files-in-batch)
@@ -456,7 +456,7 @@ ORG-FILES 是Org文件路径列表."
                               (message "标签建议: %s" 
                                        (mapconcat 
                                         (lambda (s) 
-                                          (format "%s" (cdr (assoc "tag" s))))
+                                          (format "%s" (cdr (assoc 'tag s))))
                                         suggestions ", ")))))))))))))))
 
 ;; 添加到光标移动钩子

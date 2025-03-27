@@ -217,12 +217,246 @@ print('=== End Debug ===')
   (unless (org-supertag-sim-epc-server-running-p)
     (org-supertag-sim-epc-start-server)))
 
+(defun org-supertag-sim-epc-check-ollama-installed ()
+  "检查Ollama是否已安装，与ollama_bridge.py中的check_ollama_installed功能类似."
+  (org-supertag-sim-epc-log "检查Ollama是否已安装...")
+  (let ((result 
+         (cond
+          ;; Windows系统
+          ((string-match-p "windows" (symbol-name system-type))
+           (let ((possible-paths '("C:/Program Files/Ollama/ollama.exe"
+                                   "C:/Program Files (x86)/Ollama/ollama.exe"
+                                   "~/AppData/Local/Programs/Ollama/ollama.exe"
+                                   "~/scoop/apps/ollama/current/ollama.exe"))
+                 (found nil))
+             (dolist (path possible-paths)
+               (when (file-exists-p (expand-file-name path))
+                 (setq found t)))
+             found))
+          ;; Unix系统(Linux/macOS)
+          (t
+           (= 0 (call-process "which" nil nil nil "ollama"))))))
+    
+    (if result
+        (progn
+          (org-supertag-sim-epc-log "Ollama已安装")
+          t)
+      (org-supertag-sim-epc-log "Ollama未安装")
+      nil)))
+
+(defun org-supertag-sim-epc-get-ollama-install-instruction ()
+  "获取安装Ollama的指令，类似ollama_bridge.py中的get_install_command."
+  (let ((system-type (symbol-name system-type)))
+    (cond
+     ((string-match-p "darwin" system-type)  ;; macOS
+      "curl -fsSL https://ollama.com/install.sh | sh")
+     ((string-match-p "gnu/linux" system-type)  ;; Linux
+      "curl -fsSL https://ollama.com/install.sh | sh")
+     ((string-match-p "windows" system-type)  ;; Windows
+      "Windows安装选项:
+1. 使用winget(推荐):
+   winget install Ollama.Ollama
+
+2. 使用Scoop:
+   scoop bucket add main
+   scoop install ollama
+
+3. 直接下载安装包:
+   访问 https://ollama.com/download")
+     (t
+      "请访问 https://ollama.com 获取安装指南"))))
+
+(defun org-supertag-sim-epc-check-ollama ()
+  "检查Ollama服务是否运行.
+检查方式类似于ollama_bridge.py中的is_service_running方法."
+  (org-supertag-sim-epc-log "检查Ollama服务...")
+  (let ((result (condition-case nil
+                    (with-timeout (3)  ;; 设置3秒超时
+                      (let ((output (shell-command-to-string "curl -s --connect-timeout 2 http://localhost:11434/api/tags")))
+                        (with-temp-buffer
+                          (insert output)
+                          (goto-char (point-min))
+                          ;; 验证是否返回了有效的JSON响应
+                          (and (> (length output) 2)
+                               (or (looking-at "\\[")    ;; 应该以JSON数组开始
+                                   (looking-at "{"))))))  ;; 或JSON对象开始
+                  (error nil))))
+    (if result
+        (progn
+          (org-supertag-sim-epc-log "Ollama服务正在运行")
+          t)
+      (org-supertag-sim-epc-log "无法连接到Ollama服务！请确保Ollama已启动")
+      (message "警告：无法连接到Ollama服务！请确保Ollama已启动")
+      nil)))
+
+(defun org-supertag-sim-epc-start-ollama ()
+  "启动Ollama服务，基于当前系统类型选择适当的启动方式."
+  (org-supertag-sim-epc-log "尝试启动Ollama服务...")
+  (let ((system-type (symbol-name system-type)))
+    (cond
+     ((or (string-match-p "darwin" system-type)
+          (string-match-p "gnu/linux" system-type))
+      (start-process "ollama-start" nil "ollama" "serve"))
+     ((string-match-p "windows" system-type)
+      (start-process "ollama-start" nil "ollama.exe" "serve"))
+     (t (message "不支持的系统类型: %s" system-type)
+        nil))))
+
+(defun org-supertag-sim-epc-ensure-ollama-running ()
+  "确保Ollama服务正在运行，类似于ollama_bridge.py中的_ensure_service流程.
+1. 检查Ollama是否已安装
+2. 如果未安装，提供安装指南
+3. 检查服务是否运行
+4. 如果未运行，启动服务并等待其就绪"
+  ;; 1. 检查Ollama是否已安装
+  (unless (org-supertag-sim-epc-check-ollama-installed)
+    (let ((install-instruction (org-supertag-sim-epc-get-ollama-install-instruction)))
+      (org-supertag-sim-epc-log "Ollama未安装，请安装后再试")
+      (message "Ollama未安装，请运行以下命令安装:\n%s" install-instruction)
+      (error "Ollama未安装，无法继续")))
+  
+  ;; 2. 检查服务是否运行
+  (unless (org-supertag-sim-epc-check-ollama)
+    (message "Ollama服务未运行，正在启动...")
+    
+    ;; 3. 尝试启动服务
+    (let ((system-type (symbol-name system-type)))
+      (cond
+       ((or (string-match-p "darwin" system-type)
+            (string-match-p "gnu/linux" system-type))
+        (start-process "ollama-start" nil "ollama" "serve"))
+       ((string-match-p "windows" system-type)
+        (start-process "ollama-start" nil "ollama.exe" "serve"))
+       (t (message "不支持的系统类型: %s" system-type))))
+    
+    ;; 4. 等待服务启动
+    (let ((max-attempts 5)
+          (attempt 0)
+          (success nil))
+      (while (and (< attempt max-attempts) (not success))
+        (setq attempt (1+ attempt))
+        (message "等待Ollama服务启动... 尝试 %d/%d" attempt max-attempts)
+        (sleep-for 2)  ;; 每次等待2秒
+        (setq success (org-supertag-sim-epc-check-ollama))
+        (when success
+          (message "Ollama服务已成功启动"))
+        (when (and (not success) (= attempt max-attempts))
+          (message "警告: Ollama服务启动失败，请手动启动")
+          (error "Ollama服务启动失败，请手动启动"))))))
+
+(defun org-supertag-sim-epc-verify-ollama-model (model-name)
+  "验证Ollama模型是否存在，类似于ollama_bridge.py中的ensure_model_exists.
+MODEL-NAME是要验证的模型名称."
+  (org-supertag-sim-epc-log "验证模型 %s 是否存在..." model-name)
+  (let ((result (condition-case err
+                    (with-timeout (3)
+                      (let ((output (shell-command-to-string 
+                                     "curl -s --connect-timeout 2 http://127.0.0.1:11434/api/tags")))
+                        (org-supertag-sim-epc-log "API响应: %s" (truncate-string-to-width output 100))
+                        (with-temp-buffer
+                          (insert output)
+                          (goto-char (point-min))
+                          ;; 检查返回的JSON是否包含指定模型
+                          (and (looking-at "{")  ;; 应该是JSON对象
+                               (condition-case err
+                                   (let* ((json-object-type 'hash-table)
+                                          (json-array-type 'list)
+                                          (json-key-type 'string)
+                                          (json-data (json-read))
+                                          (models (gethash "models" json-data))
+                                          (found nil))
+                                     ;; 遍历models数组，检查是否包含指定模型
+                                     (when models
+                                       (dolist (model models)
+                                         (let ((name (gethash "name" model)))
+                                           (org-supertag-sim-epc-log "检查模型: %s" name)
+                                           (when (and name (string= name model-name))
+                                             (setq found t)))))
+                                     found)
+                                 (error
+                                  (org-supertag-sim-epc-log "JSON解析错误: %s" (error-message-string err))
+                                  nil))))))
+                  (error
+                   (org-supertag-sim-epc-log "验证模型时出错: %s" (error-message-string err))
+                   nil))))
+    (if result
+        (progn
+          (org-supertag-sim-epc-log "模型 %s 存在" model-name)
+          t)
+      (org-supertag-sim-epc-log "模型 %s 不存在" model-name)
+      nil)))
+
+(defun org-supertag-sim-epc-pull-ollama-model (model-name)
+  "拉取Ollama模型，类似于ollama_bridge.py中的pull_model.
+MODEL-NAME是要拉取的模型名称."
+  (org-supertag-sim-epc-log "拉取模型 %s..." model-name)
+  (message "正在拉取Ollama模型 %s，这可能需要一些时间..." model-name)
+  (let ((process (start-process "ollama-pull" nil "ollama" "pull" model-name)))
+    (set-process-sentinel 
+     process
+     (lambda (proc event)
+       (if (string-match-p "finished" event)
+           (progn
+             (org-supertag-sim-epc-log "模型 %s 拉取成功" model-name)
+             (message "Ollama模型 %s 拉取成功" model-name))
+         (org-supertag-sim-epc-log "模型 %s 拉取失败: %s" model-name event)
+         (message "警告: Ollama模型 %s 拉取失败: %s" model-name event))))
+    ;; 返回进程以便可以跟踪
+    process))
+
+(defun org-supertag-sim-epc-ensure-ollama-model (model-name)
+  "确保Ollama模型存在且可用，如果不存在则拉取.
+MODEL-NAME是需要的模型名称，默认为gemma-3-4b。"
+  (let ((model (or model-name "hf.co/unsloth/gemma-3-4b-it-GGUF:latest")))
+    ;; 首先确保服务正在运行
+    (org-supertag-sim-epc-ensure-ollama-running)
+    
+    ;; 检查模型是否存在
+    (unless (org-supertag-sim-epc-verify-ollama-model model)
+      (message "模型 %s 不存在，正在拉取..." model)
+      (org-supertag-sim-epc-pull-ollama-model model)
+      ;; 这里不等待拉取完成，因为可能需要较长时间
+      ;; 实际应用中可能需要某种回调机制
+      )))
+
+;; 完整的Ollama检查与初始化流程
+(defun org-supertag-sim-epc-setup-ollama ()
+  "完整设置Ollama环境，包括检查安装、启动服务和准备默认模型."
+  (interactive)
+  (message "正在设置Ollama环境...")
+  (condition-case err
+      (progn
+        ;; 1. 确保Ollama已安装
+        (unless (org-supertag-sim-epc-check-ollama-installed)
+          (let ((install-instruction (org-supertag-sim-epc-get-ollama-install-instruction)))
+            (message "Ollama未安装，请运行以下命令安装:\n%s" install-instruction)
+            (error "Ollama未安装")))
+        
+        ;; 2. 确保服务运行
+        (org-supertag-sim-epc-ensure-ollama-running)
+        
+        ;; 3. 准备默认模型（可选）
+        ;; 这里可以选择是否检查和准备默认模型
+        ;; 由于模型下载可能耗时较长，默认只检查不下载
+        (when (org-supertag-sim-epc-verify-ollama-model "hf.co/unsloth/gemma-3-4b-it-GGUF:latest")
+          (org-supertag-sim-epc-log "默认模型已准备就绪"))
+        
+        (message "Ollama环境设置完成"))
+    (error
+     (message "Ollama环境设置失败: %s" (error-message-string err))
+     nil)))
+
 ;; 功能接口
 (defun org-supertag-sim-epc-init ()
-  "初始化标签相似度引擎."
-  (interactive)
+  "初始化标签相似度引擎的EPC服务和Ollama服务.
+这是供org-supertag-sim-init调用的内部函数。
+普通用户应该使用org-supertag-sim-init作为主要入口点。"
   (org-supertag-sim-epc-log "开始初始化...")
   (org-supertag-sim-epc-ensure-server)
+  
+  ;; 确保Ollama服务已设置并运行（不再捕获错误）
+  (org-supertag-sim-epc-log "确保Ollama服务已运行...")
+  (org-supertag-sim-epc-setup-ollama)
   
   (let* ((db-info (org-supertag-sim-epc--ensure-db-file))
          (db-file (car db-info))
@@ -248,7 +482,7 @@ print('=== End Debug ===')
               (error "初始化失败: %S" response))))
       (error
        (org-supertag-sim-epc-log "初始化过程出错: %s" (error-message-string err))
-       nil))))
+       (error "初始化过程出错: %s" (error-message-string err)))))) ;; 修改这里，直接抛出错误
 
 ;; 辅助函数
 (defun org-supertag-sim-epc-restart-server ()
@@ -463,6 +697,270 @@ print('=== End Debug ===')
       (lambda (err)
         (org-supertag-sim-epc-log "测试过程出错: %s" err)
         (error "测试过程出错: %s" err)))))
+
+(defun org-supertag-sim-epc-extract-entities-async (text callback)
+  "异步从TEXT中提取实体并将结果传递给CALLBACK函数.
+TEXT是要分析的文本
+CALLBACK是接收实体列表的回调函数"
+  (org-supertag-sim-epc-log "异步提取实体，文本长度: %d" (length text))
+  (deferred:$
+    (deferred:try
+      (deferred:$
+        (org-supertag-sim-epc-ensure-server)
+        (deferred:nextc it
+          (lambda (_)
+            (epc:call-deferred org-supertag-sim-epc-manager
+                              'extract_entities
+                              (list text))))
+        (deferred:nextc it
+          (lambda (response)
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result)))
+              (if (string= status "success")
+                  (progn
+                    (org-supertag-sim-epc-log "实体提取成功，找到 %d 个实体" 
+                                              (length result))
+                    (funcall callback result))
+                (error "提取实体失败: %s" 
+                       (or (plist-get response :message) "未知错误")))))))
+      :catch
+      (lambda (err)
+        (org-supertag-sim-epc-log "提取实体出错: %s" (error-message-string err))
+        (message "提取实体出错: %s" (error-message-string err))
+        (funcall callback nil)))))
+
+(defun org-supertag-sim-epc-get-tag-suggestions-async (text limit callback)
+  "异步获取文本的标签建议.
+TEXT是要分析的文本
+LIMIT是返回的建议数量上限
+CALLBACK是接收建议的回调函数"
+  (org-supertag-sim-epc-log "异步获取标签建议，文本长度: %d，上限: %d" 
+                           (length text) limit)
+  (deferred:$
+    (deferred:try
+      (deferred:$
+        (org-supertag-sim-epc-ensure-server)
+        (deferred:nextc it
+          (lambda (_)
+            (epc:call-deferred org-supertag-sim-epc-manager
+                              'suggest_tags
+                              (list text limit))))
+        (deferred:nextc it
+          (lambda (response)
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result)))
+              (if (string= status "success")
+                  (progn
+                    (org-supertag-sim-epc-log "标签建议成功，找到 %d 个建议" 
+                                              (length result))
+                    (funcall callback result))
+                (error "获取标签建议失败: %s" 
+                       (or (plist-get response :message) "未知错误")))))))
+      :catch
+      (lambda (err)
+        (org-supertag-sim-epc-log "获取标签建议出错: %s" (error-message-string err))
+        (message "获取标签建议出错: %s" (error-message-string err))
+        (funcall callback nil)))))
+
+(defun org-supertag-sim-epc-find-similar-async (tag-name limit callback)
+  "异步查找与TAG-NAME相似的标签.
+LIMIT是返回的相似标签数量上限
+CALLBACK是接收相似标签的回调函数"
+  (org-supertag-sim-epc-log "异步查找相似标签: %s，上限: %d" tag-name limit)
+  (deferred:$
+    (deferred:try
+      (deferred:$
+        (org-supertag-sim-epc-ensure-server)
+        (deferred:nextc it
+          (lambda (_)
+            (epc:call-deferred org-supertag-sim-epc-manager
+                              'find_similar
+                              (list tag-name limit))))
+        (deferred:nextc it
+          (lambda (response)
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result)))
+              (if (string= status "success")
+                  (progn
+                    (org-supertag-sim-epc-log "查找相似标签成功，找到 %d 个相似标签" 
+                                              (length result))
+                    (funcall callback result))
+                (error "查找相似标签失败: %s" 
+                       (or (plist-get response :message) "未知错误")))))))
+      :catch
+      (lambda (err)
+        (org-supertag-sim-epc-log "查找相似标签出错: %s" (error-message-string err))
+        (message "查找相似标签出错: %s" (error-message-string err))
+        (funcall callback nil)))))
+
+(defun org-supertag-sim-epc-test-ollama-interaction (prompt &optional system)
+  "直接测试与Ollama的交互.
+发送PROMPT到Ollama并获取响应，可选的SYSTEM参数用于设置系统提示。
+这个函数可以用来验证EPC服务器和Ollama之间的连接是否正常工作。"
+  (interactive "sPrompt: ")
+  (message "正在发送消息到Ollama...")
+  
+  ;; 确保系统已初始化
+  (require 'org-supertag-sim)
+  (unless (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+    (org-supertag-sim-init))
+  
+  ;; 创建交互测试缓冲区
+  (let ((buffer (get-buffer-create "*org-supertag-ollama-test*")))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert "===== Ollama交互测试 =====\n\n")
+      (insert (format "时间: %s\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
+      (insert (format "提示: %s\n" prompt))
+      (when system
+        (insert (format "系统提示: %s\n" system)))
+      (insert "\n正在等待响应...\n\n"))
+    
+    (display-buffer buffer)
+    
+    ;; 使用EPC调用Ollama
+    (deferred:$
+      (deferred:next
+        (lambda ()
+          (org-supertag-sim-epc-log "调用Ollama...")
+          ;; 构建参数列表 - 如果有系统提示则包含
+          (let ((args (if system
+                          (list prompt system)
+                        (list prompt))))
+            (epc:call-deferred org-supertag-sim-epc-manager
+                              'run_ollama
+                              args))))
+      
+      (deferred:nextc it
+        (lambda (response)
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result))
+                  (message (plist-get response :message)))
+              (if (string= status "success")
+                  (progn
+                    (insert "===== Ollama响应 =====\n\n")
+                    (insert result)
+                    (insert "\n\n===== 响应结束 =====\n")
+                    (message "收到Ollama响应"))
+                (insert (format "\n错误: %s\n" (or message "未知错误")))
+                (message "Ollama响应失败: %s" (or message "未知错误")))))))
+      
+      (deferred:error it
+        (lambda (err)
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (insert (format "\n错误: %s\n" (error-message-string err))))
+          (message "调用Ollama出错: %s" (error-message-string err)))))))
+
+(defun org-supertag-sim-epc-interactive-ollama ()
+  "启动一个交互式的Ollama对话界面.
+创建一个缓冲区，用户可以在其中与Ollama进行对话。"
+  (interactive)
+  ;; 确保系统已初始化
+  (require 'org-supertag-sim)
+  (unless (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+    (org-supertag-sim-init))
+  
+  ;; 创建或切换到交互缓冲区
+  (let ((buffer (get-buffer-create "*org-supertag-ollama-chat*")))
+    (switch-to-buffer buffer)
+    
+    ;; 如果缓冲区是新的，设置它
+    (when (= (buffer-size) 0)
+      (insert "===== Ollama 交互式对话 =====\n\n")
+      (insert "在此输入消息，按 C-c C-c 发送\n\n")
+      (insert "系统提示 (可选):\n")
+      (insert "--------------------------\n")
+      (insert "你是一个专注于Emacs和org-mode的AI助手，专为org-supertag项目提供帮助。\n")
+      (insert "--------------------------\n\n")
+      (insert "用户消息:\n")
+      (insert "请输入您的问题...\n")
+      
+      ;; 设置本地按键映射
+      (local-set-key (kbd "C-c C-c") 'org-supertag-sim-epc--send-message)
+      
+      ;; 告知用户如何使用
+      (message "输入您的消息，然后按 C-c C-c 发送给Ollama"))))
+
+(defun org-supertag-sim-epc--send-message ()
+  "从交互式Ollama缓冲区发送消息."
+  (interactive)
+  (with-current-buffer "*org-supertag-ollama-chat*"
+    ;; 提取用户消息和系统提示
+    (let ((system-prompt nil)
+          (user-message nil))
+      
+      ;; 获取系统提示
+      (save-excursion
+        (goto-char (point-min))
+        (when (search-forward "--------------------------\n" nil t)
+          (let ((start (point)))
+            (when (search-forward "--------------------------\n" nil t)
+              (setq system-prompt (buffer-substring-no-properties 
+                                  start
+                                  (- (point) 
+                                     (length "--------------------------\n"))))))))
+      
+      ;; 获取用户消息
+      (save-excursion
+        (goto-char (point-min))
+        (when (search-forward "用户消息:\n" nil t)
+          (setq user-message (buffer-substring-no-properties 
+                             (point)
+                             (point-max)))))
+      
+      ;; 清空用户消息区域并准备接收回复
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-min))
+          (when (search-forward "用户消息:\n" nil t)
+            (delete-region (point) (point-max))
+            (insert user-message)
+            (insert "\n\n等待Ollama响应...\n"))))
+      
+      ;; 发送消息到Ollama
+      (when user-message
+        (deferred:$
+          (deferred:next
+            (lambda ()
+              (let ((args (if system-prompt
+                              (list user-message system-prompt)
+                            (list user-message))))
+                (epc:call-deferred org-supertag-sim-epc-manager
+                                  'run_ollama
+                                  args))))
+          
+          (deferred:nextc it
+            (lambda (response)
+              (with-current-buffer "*org-supertag-ollama-chat*"
+                (save-excursion
+                  (goto-char (point-max))
+                  (let ((status (plist-get response :status))
+                        (result (plist-get response :result))
+                        (message (plist-get response :message)))
+                    (delete-region (- (point-max) 
+                                     (length "\n\n等待Ollama响应...\n")) 
+                                  (point-max))
+                    (if (string= status "success")
+                        (progn
+                          (insert "\n\nOllama回复:\n")
+                          (insert result)
+                          (insert "\n\n------\n\n用户消息:\n"))
+                      (insert "\n\n错误: " (or message "未知错误") "\n\n用户消息:\n"))))
+                (goto-char (point-max)))))
+          
+          (deferred:error it
+            (lambda (err)
+              (with-current-buffer "*org-supertag-ollama-chat*"
+                (save-excursion
+                  (goto-char (point-max))
+                  (delete-region (- (point-max) 
+                                   (length "\n\n等待Ollama响应...\n")) 
+                                (point-max))
+                  (insert "\n\n错误: " (error-message-string err) "\n\n用户消息:\n"))
+                (goto-char (point-max))))))))))
 
 (provide 'org-supertag-sim-epc)
 ;;; org-supertag-sim-epc.el ends here

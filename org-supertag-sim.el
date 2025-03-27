@@ -73,12 +73,37 @@
     vector-dir))
 
 (defun org-supertag-sim-init ()
-  "Initialize the tag similarity engine."
+  "初始化标签相似度引擎，包括EPC服务器和Ollama服务.
+作为统一的入口点，会初始化整个系统，包括底层EPC服务和相似度引擎。"
   (interactive)
-  (org-supertag-db-on 'entity:created #'org-supertag-sim--on-tag-created)
-  (org-supertag-db-on 'entity:removed #'org-supertag-sim--on-tag-removed)
-  (org-supertag-sim--start-sync-timer)
-  (setq org-supertag-sim--initialized t))
+  (message "正在初始化标签相似度系统...")
+  
+  ;; 首先初始化EPC服务和Ollama
+  (condition-case err
+      (progn
+        (unless (org-supertag-sim-epc-server-running-p)
+          (org-supertag-sim-epc-start-server)
+          (sit-for 1)) ;; 给服务器启动一点时间
+        
+        (when (org-supertag-sim-epc-server-running-p)
+          ;; 调用EPC服务初始化
+          (org-supertag-sim-epc-init)
+          
+          ;; 检查EPC初始化是否成功
+          (unless org-supertag-sim-epc-initialized
+            (error "EPC服务初始化失败"))
+          
+          ;; 设置事件监听和同步定时器
+          (org-supertag-db-on 'entity:created #'org-supertag-sim--on-tag-created)
+          (org-supertag-db-on 'entity:removed #'org-supertag-sim--on-tag-removed)
+          (org-supertag-sim--start-sync-timer)
+          
+          ;; 设置初始化完成标志
+          (setq org-supertag-sim--initialized t)
+          (message "标签相似度系统初始化完成")))
+    (error
+     (message "标签相似度系统初始化失败: %s" (error-message-string err))
+     nil)))
 
 (defun org-supertag-sim--update-tag (tag)
   "Update the vector of a single tag.
@@ -140,16 +165,23 @@ TAG-ID is the removed tag ID."
          #'org-supertag-sim--sync-library)))
 
 (defun org-supertag-sim--ensure-initialized ()
-  "确保系统已初始化，返回一个 deferred 对象."
-  (if org-supertag-sim-epc-initialized
-      (deferred:next (lambda () t))  ; 如果已初始化，返回成功
+  "确保系统已初始化，返回一个 deferred 对象.
+如果系统未初始化，会自动尝试初始化。"
+  (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+      ;; 如果两个系统都已初始化，直接返回成功
+      (deferred:next (lambda () t))
+    ;; 否则，尝试初始化
     (deferred:$
       (deferred:next
         (lambda ()
-          (org-supertag-sim-epc-ensure-server)))
+          (message "系统未初始化，正在初始化...")
+          (org-supertag-sim-init)))
       (deferred:nextc it
         (lambda (_)
-          (org-supertag-sim-epc-init))))))
+          ;; 再次检查初始化状态
+          (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+              t
+            (error "系统初始化失败")))))))
 
 (defun org-supertag-sim-find-similar (tag-name &optional top-k callback)
   "Find tags similar to the specified tag.
@@ -223,70 +255,30 @@ Optional CALLBACK will be called with the results."
   (org-supertag-sim--ensure-initialized)
   (let ((buffer (current-buffer)))
     (message "正在分析实体...")
-    (deferred:$
-      (deferred:next
-        (lambda ()
-          (message "发送文本长度: %d" (length text))
-          (message "发送文本预览: %s" (substring text 0 (min 100 (length text))))
-          (epc:call-deferred org-supertag-sim-epc-manager
-                            'extract_entities
-                            (list text))))
+    (condition-case err
+        (epc:call-deferred org-supertag-sim-epc-manager
+                          'extract_entities
+                          (list text))
       (deferred:nextc it
-        (lambda (response)
+        (lambda (result)
           (when (buffer-live-p buffer)
             (with-current-buffer buffer
-              (let ((status (plist-get response :status))
-                    (result (plist-get response :result))
-                    (error-msg (plist-get response :message)))
-                ;; 记录完整响应
-                (message "收到响应: status=%s, result=%s, error=%s"
-                         status result error-msg)
-                (cond
-                 ;; 成功且结果有效
-                 ((and (string= status "success")
-                       result)
-                  (if callback
-                      (funcall callback result)
-                    ;; 默认处理
-                    (message "找到 %d 个实体:" (length result))
-                    (dolist (entity result)
-                      (let ((text (cdr (assoc 'text entity)))
-                            (type (cdr (assoc 'type entity))))
-                        (message "  %s [%s]" text type)))))
-                 ;; 成功但结果为空
-                 ((string= status "success")
-                  (message "未找到实体")
-                  (if callback (funcall callback nil)))
-                 ;; 错误情况
-                 (t
-                  (message "提取实体失败: %s" 
-                           (or error-msg "未知错误"))
-                  (if callback (funcall callback nil)))))))))
-      (deferred:error it
-        (lambda (err)
-          (message "提取实体出错: %s" (error-message-string err))
-          (when callback (funcall callback nil))
-          nil)))))
-
-(defun org-supertag-sim--extract-node-content ()
-  "提取当前节点的标题和内容，去除属性抽屉等无关内容."
-  (let ((node-title (org-get-heading t t t t))
-        (raw-content (org-get-entry)))
-    (with-temp-buffer
-      (insert raw-content)
-      (goto-char (point-min))
-      ;; 跳过属性抽屉
-      (when (re-search-forward ":END:\n+" nil t)
-        (delete-region (point-min) (point)))
-      ;; 移除空行和多余空白
-      (goto-char (point-min))
-      (while (re-search-forward "^[ \t]*\n" nil t)
-        (replace-match ""))
-      ;; 组合标题和处理后的内容
-      (let ((content (string-trim (buffer-string))))
-        (if (string-empty-p content)
-            node-title  ; 如果内容为空，只返回标题
-          (concat node-title "\n\n" content))))))
+              (if callback
+                  (funcall callback result)
+                ;; 默认处理
+                (if result
+                    (progn
+                      (message "找到 %d 个实体:" (length result))
+                      (dolist (entity result)
+                        (let ((entity-text (cdr (assoc 'entity entity)))
+                              (type (cdr (assoc 'type entity)))
+                              (start (cdr (assoc 'start entity)))
+                              (end (cdr (assoc 'end entity))))
+                          (message "  %s [%s] (%d-%d)" entity-text type start end))))
+                  (message "未找到实体")))))))
+      (error
+       (message "提取实体出错: %s" (error-message-string err))
+       nil))))
 
 (defun org-supertag-sim-suggest-tags-from-text (text &optional callback)
   "根据文本内容生成标签建议.
@@ -294,146 +286,85 @@ Optional CALLBACK will be called with the results."
   (let ((buffer (current-buffer)))
     (message "正在分析文本内容...")
     (deferred:$
-      (deferred:next
-        (lambda ()
-          ;; 确保文本不为空
-          (if (string-empty-p text)
-              (error "文本内容为空")
-            ;; 记录发送的文本内容
-            (message "发送文本长度: %d" (length text))
-            (message "发送文本预览: %s" (substring text 0 (min 100 (length text))))
-            (epc:call-deferred org-supertag-sim-epc-manager
-                              'suggest_tags
-                              (list text)))))
-      (deferred:nextc it
-        (lambda (response)
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (let ((status (plist-get response :status))
-                    (result (plist-get response :result))
-                    (error-msg (plist-get response :message)))
-                ;; 记录完整响应
-                (message "收到响应: status=%s, result=%s, error=%s"
-                         status result error-msg)
-                (cond
-                 ;; 成功且结果有效
-                 ((and (string= status "success")
-                       (listp result)
-                       (> (length result) 0))
-                  (if callback
-                      (funcall callback result)
-                    (message "找到 %d 个相关标签: %s" 
-                             (length result)
-                             (mapconcat #'identity result ", "))))
-                 ;; 成功但结果为空
-                 ((string= status "success")
-                  (message "未找到合适的标签建议")
-                  (if callback (funcall callback nil)))
-                 ;; 错误情况
-                 (t
-                  (message "生成标签建议失败: %s" 
-                           (or error-msg "未知错误"))
-                  (if callback (funcall callback nil))))))))))))
-
-(defun org-supertag-sim--apply-selected-tags (tags)
-  "应用用户选择的标签到当前节点."
-  (when tags
-    (message "正在应用标签...")
-    (dolist (tag tags)
-      (unless (org-supertag-tag-exists-p tag)
-        (org-supertag-tag-create tag))
-      (org-supertag-tag-apply tag))
-    (message "成功应用%d个标签" (length tags))))
+      (deferred:try
+        (deferred:$
+          ;; 首先确保系统已初始化
+          (org-supertag-sim--ensure-initialized)
+          (deferred:nextc it
+            (lambda (_)
+              ;; 确保文本不为空
+              (if (string-empty-p text)
+                  (error "文本内容为空")
+                ;; 记录发送的文本内容
+                (message "发送文本长度: %d" (length text))
+                (epc:call-deferred org-supertag-sim-epc-manager
+                                'suggest_tags
+                                (list text)))))
+          (deferred:nextc it
+            (lambda (response)
+              (when (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (let ((status (plist-get response :status))
+                        (result (plist-get response :result))
+                        (error-msg (plist-get response :message)))
+                    (cond
+                     ;; 成功情况
+                     ((string= status "success")
+                      (if callback
+                          (funcall callback result)
+                        (message "找到 %d 个相关标签" (length result))))
+                     ;; 错误情况
+                     (t
+                      (message "生成标签建议失败: %s" 
+                               (or error-msg "未知错误"))
+                      (if callback (funcall callback nil)))))))))
+        :catch
+        (lambda (err)
+          (message "生成标签建议出错: %s" (error-message-string err))
+          (when callback (funcall callback nil)))))))
 
 (defun org-supertag-sim-auto-tag-node ()
-  "从当前节点内容中提取标签。"
+  "Automatically suggest and apply tags for current node based on its content."
   (interactive)
-  (let* ((content (org-supertag-sim--extract-node-content))
-         (progress-reporter (make-progress-reporter "正在处理内容..." 0 100)))
+  (let* ((content (org-get-entry))
+         (node-id (org-id-get-create))
+         (progress-reporter (make-progress-reporter "Analyzing content..." 0 100)))
     
-    ;; 如果内容为空，提示用户
-    (if (string-empty-p (string-trim content))
-        (message "节点内容为空，无法提取标签")
-      
-      ;; 显示初始进度
-      (progress-reporter-update progress-reporter 20)
-      (message "正在从内容中提取标签...内容长度: %d" (length content))
-      
-      ;; 使用实体提取方法获取潜在标签
-      (org-supertag-sim-extract-entities
-       content
-       (lambda (entities)
-         ;; 更新进度
-         (progress-reporter-update progress-reporter 80)
-         (progress-reporter-done progress-reporter)
-         
-         ;; 检查是否有有效的实体
-         (if (and entities (> (length entities) 0))
-             ;; 从实体中提取标签
-             (let* ((tags (mapcar (lambda (entity)
-                                   (let ((text (cdr (assoc 'text entity)))
-                                         (type (cdr (assoc 'type entity))))
-                                     ;; 将实体文本转换为标签格式
-                                     (cons (downcase
-                                            (replace-regexp-in-string
-                                             "\\s-+" "_"
-                                             (replace-regexp-in-string
-                                              "[^[:alnum:][:space:]]" ""
-                                              text)))
-                                           (format "[%s]" type))))
-                                 entities))
-                    ;; 去除重复并保留标签信息
-                    (unique-tags-with-info (let ((seen (make-hash-table :test 'equal))
-                                               result)
-                                           (dolist (tag-info tags (nreverse result))
-                                             (let ((tag (car tag-info))
-                                                   (info (cdr tag-info)))
-                                               (unless (gethash tag seen)
-                                                 (puthash tag info seen)
-                                                 (push (cons tag info) result))))))
-                    (formatted-tags (mapcar (lambda (tag-info)
-                                             (format "%s %s" (car tag-info) (cdr tag-info)))
-                                           unique-tags-with-info))
-                    (tag-names (mapcar #'car unique-tags-with-info))
-                    (prompt (format "从节点内容中提取了 %d 个标签，请选择要应用的标签: " 
-                                   (length unique-tags-with-info)))
-                    (selected-tags
-                     (completing-read-multiple prompt formatted-tags nil t))
-                    (clean-selected-tags 
-                     (mapcar (lambda (selected)
-                               (car (split-string selected " \\[")))
-                            selected-tags)))
-               
-               ;; 应用已选标签
-               (org-supertag-sim--apply-selected-tags clean-selected-tags))
-           
-           ;; 对于短文本，尝试直接使用内容作为标签源
-           (let* ((words (split-string (string-trim content) nil t))
-                  (candidates 
-                   (if (< (length words) 10)
-                       ;; 对于短文本（少于10个词），将所有非停用词作为候选
-                       (seq-filter 
-                        (lambda (word) 
-                          (> (length word) 3))  ;; 简单过滤策略：长度>3
-                        words)
-                     ;; 否则使用空列表
-                     '()))
-                  (unique-candidates (delete-dups 
-                                     (mapcar 
-                                      (lambda (word)
-                                        (downcase
-                                         (replace-regexp-in-string
-                                          "[^[:alnum:][:space:]]" ""
-                                          word)))
-                                      candidates))))
+    ;; 显示初始进度
+    (progress-reporter-update progress-reporter 10)
+    
+    ;; 临时显示提示，但不阻塞界面
+    (run-with-timer 0.5 nil (lambda () 
+                             (progress-reporter-update progress-reporter 30)
+                             (message "正在生成标签建议...")))
+    
+    ;; 标签生成是异步的，不会阻塞界面
+    (org-supertag-sim-suggest-tags-from-text
+     content
+     (lambda (suggested-tags)
+       ;; 更新进度
+       (progress-reporter-update progress-reporter 80)
+       (progress-reporter-done progress-reporter)
+       
+       (if suggested-tags
+           ;; 使用自定义minibuffer显示，带有更多上下文信息
+           (let* ((header (format "为节点建议了%d个标签:" (length suggested-tags)))
+                  (tag-list (mapconcat (lambda (tag) (propertize tag 'face 'font-lock-keyword-face))
+                                      suggested-tags ", "))
+                  (prompt (format "%s\n%s\n\n选择要应用的标签: " 
+                                 header tag-list))
+                  (selected-tags
+                   (completing-read-multiple prompt suggested-tags nil t)))
              
-             (if (> (length unique-candidates) 0)
-                 (let* ((prompt (format "未找到结构化实体，但从文本中提取了 %d 个可能的标签: " 
-                                      (length unique-candidates)))
-                        (selected-tags
-                         (completing-read-multiple prompt unique-candidates nil t)))
-                   ;; 应用已选标签
-                   (org-supertag-sim--apply-selected-tags selected-tags))
-               (message "未能从内容中提取到标签，文本可能太短或没有明显实体")))))))))
+             ;; 应用已选标签
+             (when selected-tags
+               (message "正在应用标签...")
+               ;; 创建并应用标签
+               (dolist (tag selected-tags)
+                 (unless (org-supertag-tag-exists-p tag)
+                   (org-supertag-tag-create tag))
+                 (org-supertag-tag-apply tag))
+               (message "成功应用%d个标签" (length selected-tags))))
+         (message "未找到合适的标签建议"))))))
 
 (provide 'org-supertag-sim)

@@ -21,7 +21,7 @@ except ImportError as e:
     # 如果导入失败，尝试展示更友好的错误信息
     print(f"导入SimTag模块失败: {e}")
     print("请确保已安装所有依赖:")
-    print("pip install epc sentence-transformers torch numpy requests")
+    print("uv pip install epc sentence-transformers torch numpy requests")
     sys.exit(1)
 
 def main():
