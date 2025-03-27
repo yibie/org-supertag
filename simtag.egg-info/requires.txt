@@ -1,0 +1,5 @@
+epc
+requests
+numpy
+torch
+sentence-transformers

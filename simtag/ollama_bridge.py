@@ -51,7 +51,7 @@ class OllamaBridge:
             data = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False  # 不使用流式响应
+                "stream": False,  # 不使用流式响应
             }
             if system:
                 data["system"] = system
