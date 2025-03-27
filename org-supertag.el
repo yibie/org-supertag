@@ -76,6 +76,8 @@
 (require 'org-supertag-luhmann)
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
+(require 'org-supertag-sim)
+(require 'org-supertag-sim-epc)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -89,7 +91,8 @@
   :lighter " ST"
   :group 'org-supertag
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-c C-r") 'org-supertag-relation-manage)
+            (define-key map (kbd "C-c t m") 'org-supertag-relation-manage)
+            (define-key map (kbd "C-c t v") 'org-supertag-view-tag)
             map)
   (if org-supertag-mode
       (org-supertag--enable)
@@ -138,7 +141,15 @@
       (org-supertag-inline-mode 1))
     ;; 6. Initialize sync system
     (org-supertag-sync-init)
-    ;; 7. Add hooks
+    ;; 7. Initialize EPC server for similarity features
+    (when (featurep 'org-supertag-sim-epc)
+      (condition-case err
+          (progn
+            (org-supertag-sim-epc-start-server)
+            (org-supertag-sim-init))
+        (error
+         (message "Failed to start EPC server: %s" (error-message-string err)))))
+    ;; 8. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
     (setq org-supertag--initialized t)))
@@ -153,6 +164,9 @@
   (when org-supertag-sync--timer
     (cancel-timer org-supertag-sync--timer)
     (setq org-supertag-sync--timer nil))
+  ;; 4. Stop EPC server
+  (when (featurep 'org-supertag-sim-epc)
+    (org-supertag-sim-epc-stop-server))
   ;; 5. Clear cache
   (org-supertag-db--cache-clear)
   ;; 6. Remove hooks
@@ -168,9 +182,12 @@ Used for manual cleanup or system state reset."
   (org-supertag-db-save)
   ;; 2. Clean up auto-save timer
   (org-supertag-db--cleanup-auto-save)
-  ;; 3. Clear cache
+  ;; 3. Stop EPC server
+  (when (featurep 'org-supertag-sim-epc)
+    (org-supertag-sim-epc-stop-server))
+  ;; 4. Clear cache
   (org-supertag-db--cache-clear)
-  ;; 4. Reset dirty data flag
+  ;; 5. Reset dirty data flag
   (org-supertag-db--clear-dirty))
 
 ;;;###autoload
@@ -184,7 +201,7 @@ Used for manual cleanup or system state reset."
       (unless (file-exists-p custom-file)
         (unless (file-exists-p org-supertag-data-directory)
           (make-directory org-supertag-data-directory t)) 
-        (when-let ((template (locate-library "org-supertag-custom-behavior.el")))
+        (when-let* ((template (locate-library "org-supertag-custom-behavior.el")))
           (copy-file template custom-file)
           (message "Created custom behaviors file at %s" custom-file)))
       (when (file-exists-p custom-file)
