@@ -150,6 +150,57 @@ M-x org-supertag-behavior-attach
 
 Attach automated behaviors to tags.
 
+** Using Inline Tags
+#+begin_src
+M-x org-supertag-inline-insert-tag
+#+end_src
+
+Insert hashtag-style inline tags within your content. These tags:
+- Can be added anywhere in your text with `C-c t i`
+- Are automatically linked to the current node
+- Support completion of existing tags
+- Allow creation of new tags on-the-fly by adding '#' suffix
+- Are displayed with distinctive styling for better readability
+
+[[./picture/figure10.gif]]
+*** Customization Options
+
+
+You can customize the appearance and behavior of inline tags:
+
+#+begin_src emacs-lisp
+;; Enable or disable tag highlighting
+(setq org-supertag-inline-enable-fontification t)
+
+;; Customize colors for light theme
+(setq org-supertag-inline-light-theme-colors
+      '(:box (:line-width -1 :color "#d0d0d0")
+        :background "#f8f8f8"
+        :foreground "#2a2a2a"))
+
+;; Customize colors for dark theme
+(setq org-supertag-inline-dark-theme-colors
+      '(:box (:line-width -1 :color "#505050")
+        :background "#383838"
+        :foreground "#e8e8e8"))
+
+;; Customize text properties
+(setq org-supertag-inline-text-properties
+      '(:height 0.95
+        :weight normal
+        :spacing 0.2))
+
+;; Control whether to hide the # prefix
+(setq org-supertag-inline-hide-hash t)
+
+;; Customize the regexp pattern for matching tags
+(setq org-supertag-inline-tag-regexp "#\\([[:alnum:]_-]+\\)")
+
+;; Specify contexts where tags should not be highlighted
+(setq org-supertag-inline-excluded-contexts
+      '(src-block comment example-block export-block))
+#+end_src
+
 * Basic Installation
 
 #+begin_src emacs-lisp

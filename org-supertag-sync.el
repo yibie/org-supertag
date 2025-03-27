@@ -146,11 +146,11 @@ Returns one of:
         (add-hook 'after-save-hook 
                   #'org-supertag-sync--handle-save
                   nil t)
-        ;; 监听修改
+        ;; Monitor modifications
         (add-hook 'before-change-functions
                   #'org-supertag-sync--handle-modify 
                   nil t)
-        ;; 添加新的监听
+        ;; Add new monitor
         (add-hook 'org-after-promote-entry-hook
                   #'org-supertag-node-sync-at-point
                   nil t)
@@ -174,14 +174,14 @@ Returns one of:
   "Handle buffer modification between BEG and END."
   (when (and buffer-file-name
              (org-supertag-sync--in-sync-scope-p buffer-file-name))
-    ;; 检查修改是否涉及标题
+    ;; Check if the modification involves a title
     (save-excursion
       (goto-char beg)
       (when (and (org-at-heading-p)
                  (not (org-id-get)))
-        ;; 如果是新标题且没有 ID，创建节点
+        ;; If it's a new title and there's no ID, create a node
         (org-supertag-node-sync-at-point)))
-    ;; 更新同步状态
+    ;; Update sync state
     (let ((state (gethash buffer-file-name org-supertag-sync--state)))
       (when state
         (setcar state (current-time))))))
@@ -197,11 +197,11 @@ Ensures node has ID and is properly registered in database."
       (save-excursion
         (goto-char begin)
         (when (org-at-heading-p)
-          ;; 如果没有 ID，自动创建
+          ;; If there's no ID, create one
           (unless id
             (org-id-get-create)
             (setq id (org-element-property :ID element)))
-          ;; 同步到数据库
+          ;; Sync to database
           (org-supertag-node-sync-at-point))))))
 
 (defun org-supertag-db-update-buffer ()
@@ -256,7 +256,7 @@ Returns a plist containing files grouped by their sync state:
         (unknown nil))
     (maphash
      (lambda (file _state)
-       (when-let ((status (org-supertag-sync-check-state file)))
+       (when-let* ((status (org-supertag-sync-check-state file)))
          (pcase status
            (:needs-update (push file needs-update))
            (:missing (push file missing))
@@ -278,8 +278,7 @@ Returns a plist containing files grouped by their sync state:
             (with-current-buffer (find-file-noselect file)
               (org-supertag-db-update-buffer)
               (org-supertag-sync-update-state file)
-              (push file updated-files)
-              (message "Successfully synchronized %s" file))
+              (push file updated-files))
           (error
            (message "Error updating %s: %s" file (error-message-string err))))))
     
@@ -290,13 +289,8 @@ Returns a plist containing files grouped by their sync state:
                    (plist-get final-states :missing)
                    (plist-get final-states :unknown))))
       (when remaining-issues
-        (message "Files still needing attention:\n%s"
-                 (mapconcat
-                  (lambda (file)
-                    (let ((status (org-supertag-sync-check-state file)))
-                      (format "  %s (%s)" file status)))
-                  remaining-issues
-                  "\n"))))))
+        (message "Files needing attention: %s"
+                 (mapconcat #'identity remaining-issues ", "))))))
 
 (defun org-supertag-sync-start-auto-sync (&optional interval)
   "Start auto-sync timer with INTERVAL seconds."
@@ -393,7 +387,7 @@ Only updates node content and basic properties, preserving:
                (with-current-buffer (find-file-noselect file)
                  (save-excursion
                    (goto-char pos)
-                   (when-let ((new-props (org-supertag-db--parse-node-at-point)))
+                   (when-let* ((new-props (org-supertag-db--parse-node-at-point)))
                      ;; Restore relationship data
                      (setq new-props
                            (plist-put

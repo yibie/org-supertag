@@ -1,0 +1,10 @@
+setuptools>=65.5.0
+wheel>=0.40.0
+numpy>=1.26.0
+torch>=2.1.0
+sentence-transformers>=2.2.2
+requests>=2.31.0
+epc>=0.0.5
+huggingface-hub>=0.16.4
+transformers>=4.34.0
+urllib3<2.0.0

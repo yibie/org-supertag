@@ -3,6 +3,11 @@
 (require 'org-supertag-db)
 (require 'org-supertag-relation)
 
+;; 添加可选的语义相似性支持
+(declare-function org-supertag-sim-find-similar "org-supertag-sim")
+(declare-function org-supertag-sim-init "org-supertag-sim")
+(defvar org-supertag-sim--initialized)
+
 ;; Database status check function
 (defun org-supertag-db-initialized-p ()
   "Check if the org-supertag database is initialized.
@@ -123,6 +128,18 @@ Otherwise, prompt for a tag using completion."
         (org-supertag-view--insert-header tag)
         (org-supertag-view--insert-content-table tag)))
     (org-supertag-view--display-buffer-right buf)))
+
+(defun org-supertag-view--insert-header (tag)
+  "Insert header information for TAG in the current buffer."
+  (let ((tag-def (org-supertag-tag-get tag)))
+    (insert (propertize (format "Content for tag #%s\n\n" tag)
+                        'face '(:height 1.5 :weight bold)))
+    ;; Add tag description if exists
+    (when-let* ((desc (plist-get tag-def :description)))
+      (unless (string-empty-p desc)
+        (insert (format "Description: %s\n\n" desc))))
+    (insert (propertize "Operations:\n" 'face '(:weight bold)))
+    (insert " [q] - Quit    [g] - Refresh    [v] - View Node\n\n")))
 
 (defun org-supertag-view--insert-content-table (tag)
   "Insert content related to TAG in current buffer using table format."
@@ -268,6 +285,14 @@ Returns a list of plists with properties :node, :type, :date and field values."
 ;; Mode definitions
 ;;----------------------------------------------------------------------
 
+(defvar org-supertag-view-table-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view-refresh)
+    (define-key map (kbd "v") 'org-supertag-view--view-node-from-table)
+    map)
+  "Keymap for traditional table view mode.")
+
 (defvar org-supertag-discover-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") 'quit-window)
@@ -287,9 +312,8 @@ Returns a list of plists with properties :node, :type, :date and field values."
     (define-key map (kbd "a") 'org-supertag-view-add-column)
     (define-key map (kbd "A") 'org-supertag-view-add-related-column)
     (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
-    (define-key map (kbd "T") 'org-supertag-view-add-related-tag-to-column)
     (define-key map (kbd "d") 'org-supertag-view-remove-column)
-    (define-key map (kbd "r") 'org-supertag-view-reset-columns)
+    (define-key map (kbd "R") 'org-supertag-view-reset-columns)
     (define-key map (kbd "v") 'org-supertag-view-view-node-at-point)
     (define-key map (kbd "m") 'org-supertag-view-manage-relations)
     map)
@@ -324,6 +348,7 @@ Returns a list of plists with properties :node, :type, :date and field values."
   "Minor mode for viewing org-supertag tag-related content."
   :lighter " SuperTag-View"
   :group 'org-supertag
+
   (if org-supertag-view-mode
       ;; When enabling the mode
       (when (string-match-p "\\*Org SuperTag" (buffer-name))
@@ -343,37 +368,38 @@ Returns a list of plists with properties :node, :type, :date and field values."
   "Show tag-discover panel with optional FILTER-TAGS.
 If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
   (message "Preparing tag discovery view...")
-  (let* ((all-tags (org-supertag-view--get-all-tags))
-         (old-completion-extra-properties completion-extra-properties)
-         (completion-extra-properties '(:annotation-function
-                                      (lambda (tag)
-                                        (let ((count (length (org-supertag-view--get-nodes-with-tags (list tag)))))
-                                          (format " (%d nodes)" count))))))
+  (let* ((all-tags (org-supertag-view--get-all-tags)))
     (unwind-protect
-        (progn
-          ;; 先设置过滤器，再显示缓冲区
-          (cond
-           ;; 如果提供了过滤器标签，直接使用
-           (filter-tags
-            (setq org-supertag-view--current-filters filter-tags))
-           
-           ;; 如果没有当前过滤器，需要选择一个起始标签
-           ((null org-supertag-view--current-filters)
-            (let ((starting-tag (completing-read "Start tag discovery with: "
-                                               (completion-table-dynamic
-                                                (lambda (_) all-tags))
-                                               nil t)))
-              (when starting-tag
-                (setq org-supertag-view--current-filters (list starting-tag)))))
-          
-          ;; 保持现有过滤器不变
-          (t nil))
-        
-        ;; 如果有过滤器，显示缓冲区
-        (when org-supertag-view--current-filters
+    (progn
+
+      (cond
+
+       (filter-tags
+        (setq org-supertag-view--current-filters filter-tags))
+
+       ((null org-supertag-view--current-filters)
+        (let ((starting-tag (completing-read "Start tag discovery with: "
+                                           (org-supertag-view--get-all-tags)
+                                           nil t)))
+          (when starting-tag
+            (setq org-supertag-view--current-filters (list starting-tag)))))
+      
+      (t nil))
+    (when org-supertag-view--current-filters
           (org-supertag-view--show-tag-discover-buffer))))
-      ;; 清理
-      (setq completion-extra-properties old-completion-extra-properties)))
+
+      ))
+
+(defun org-supertag-view--get-similar-tags (tag-id)
+  "获取与 TAG-ID 语义相似的标签.
+返回 (tag . similarity) 对的列表，或在出错时返回 nil."
+  (when (and (featurep 'org-supertag-sim)
+             (bound-and-true-p org-supertag-sim--initialized))
+    (condition-case err
+        (org-supertag-sim-find-similar tag-id 5)
+      (error
+       (message "获取相似标签失败: %s" (error-message-string err))
+       nil))))
 
 (defun org-supertag-view--show-tag-discover-buffer ()
   "Show the tag discover buffer with current filters."
@@ -407,7 +433,7 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
           (insert "  (no filters applied)\n"))
         (insert "\n")
         
-        ;; Co-occurring tags section with debug info
+        ;; Co-occurring tags section
         (insert (propertize "Co-occurring Tags:\n" 'face '(:weight bold)))
         (if org-supertag-view--current-filters
             (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
@@ -426,10 +452,10 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
                           (let ((add-button-text (propertize "[+]" 'face '(:foreground "green"))))
                             (insert " ")
                             (insert-text-button add-button-text
-                                               'action 'org-supertag-view--add-filter-button-action
-                                               'tag tag
-                                               'follow-link t
-                                               'help-echo "Add this tag to filters")
+                                             'action 'org-supertag-view--add-filter-button-action
+                                             'tag tag
+                                             'follow-link t
+                                             'help-echo "Add this tag to filters")
                             (insert (format " %s%s\n" 
                                            tag 
                                            (propertize strength-display 'face '(:foreground "gray50"))))
@@ -438,7 +464,29 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
           (insert "  (select a filter first)\n"))
         (insert "\n")
         
-        ;; Matching nodes section with debug info
+        ;; 添加语义相似标签部分
+        (when (and org-supertag-view--current-filters
+                   (= (length org-supertag-view--current-filters) 1))
+          (insert (propertize "Semantically Similar Tags:\n" 'face '(:weight bold)))
+          (let* ((current-tag (car org-supertag-view--current-filters))
+                 (similar-tags (org-supertag-view--get-similar-tags current-tag)))
+            (if similar-tags
+                (dolist (item similar-tags)
+                  (let* ((similar-tag (car item))
+                         (similarity (cdr item))
+                         (add-button-text (propertize "[+]" 'face '(:foreground "green"))))
+                    (insert " ")
+                    (insert-text-button add-button-text
+                                     'action 'org-supertag-view--add-filter-button-action
+                                     'tag similar-tag
+                                     'follow-link t
+                                     'help-echo "Add this tag to filters")
+                    (insert (format " %s (similarity: %.2f)\n" 
+                                   similar-tag similarity))))
+              (insert "  (no similar tags found)\n")))
+          (insert "\n"))
+        
+        ;; Matching nodes section 
         (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
           (message "Displaying %d matching nodes" (length nodes))
           (insert (propertize (format "Matching Nodes (%d):\n" (length nodes))
@@ -604,6 +652,28 @@ that are relevant to the current view context."
                        (cons (format "%s %s" title tags-text) node-id)))
                    nodes)))
      
+     ;; 表格视图模式
+     ((and (eq major-mode 'org-mode) 
+           (bound-and-true-p org-supertag-view-mode)
+           (string-match-p "\\*Org SuperTag Table View:" (buffer-name)))
+      (let* ((buffer-name (buffer-name))
+             (tag (progn
+                    (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" buffer-name)
+                    (match-string 1 buffer-name))))
+        (when tag
+          (setq nodes (org-supertag-view--get-nodes-with-tags (list tag)))
+          (setq node-titles
+                (mapcar (lambda (node-id)
+                         (let* ((props (gethash node-id org-supertag-db--object))
+                                (title (or (plist-get props :title) "无标题"))
+                                (type (or (plist-get props :todo-state) "")))
+                           (cons (format "%s %s" title 
+                                        (if (string-empty-p type) 
+                                            "" 
+                                          (format "[%s]" type)))
+                                 node-id)))
+                       nodes)))))
+     
      ;; 其他模式（默认行为）
      (t
       (message "Not in a SuperTag view mode. Cannot select nodes.")
@@ -654,7 +724,7 @@ Returns a list of node IDs."
          (let ((node-tags (org-supertag-node-get-tags id)))
            (when (cl-every (lambda (tag) 
                             (member tag node-tags))
-                          tags)
+                         tags)
              (push id result)))))
      org-supertag-db--object)
     (nreverse result)))
@@ -749,25 +819,22 @@ Optional FILTER-TAGS can be provided to initialize the filter."
 Optional INITIAL-TAG can be provided to initialize the first column."
   (interactive)
   (message "Starting multi-column tag view...")
-  ;; 数据库检查逻辑
+  ;; Check if database is initialized
   (if (not (and (boundp 'org-supertag-db--object)
                 org-supertag-db--object
                 (> (hash-table-count org-supertag-db--object) 0)))
-      ;; 数据库检查失败
       (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
           (progn
             (call-interactively 'org-supertag-db-update)
-            ;; 更新后再次确认数据库状态
+            ;; After update db, check if database is initialized
             (if (and (boundp 'org-supertag-db--object)
                      (> (hash-table-count org-supertag-db--object) 0))
                 (org-supertag-view--show-tag-columns initial-tag)
               (message "Database still empty after update. Cannot proceed.")))
-        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))
-    
-    ;; 数据库已初始化，显示多列视图
+        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))    
+    ;; Db is initialized
     (org-supertag-view--show-tag-columns initial-tag)))
 
-;; 为兼容旧代码而保留的函数，但内部使用多列视图
 (defun org-supertag-view--show-content (tag)
   "Show content related to TAG in multi-column view.
 This function is kept for backward compatibility."
@@ -784,6 +851,43 @@ This function is kept for backward compatibility."
         ;; 添加新标签作为独立的一列
         (push (list tag) org-supertag-view--current-columns)
         (org-supertag-view--update-column-view)))))
+
+(defun org-supertag-view-add-cooccurring-column ()
+  "Add a new column with a tag that co-occurs with the selected column's tags."
+  (interactive)
+  (when (and (boundp 'org-supertag-view--current-columns)
+             org-supertag-view--current-columns)
+    (let* ((column-names (mapcar (lambda (tags)
+                                  (format "%s" (string-join tags ", ")))
+                                org-supertag-view--current-columns))
+           (selected-col (completing-read "Select column to find co-occurring tags: " 
+                                        column-names nil t))
+           (col-idx (cl-position selected-col column-names :test 'string=)))
+      (when col-idx
+        (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
+               ;; 获取所有与当前标签共同出现的标签
+               (nodes (org-supertag-view--get-nodes-with-tags current-tags))
+               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
+               ;; 过滤掉已经在当前列中的标签
+               (available-tags 
+                (seq-filter (lambda (tag-pair)
+                             (not (member (car tag-pair) current-tags)))
+                           cooccurring-tags)))
+          (if available-tags
+              (let* ((choices 
+                      (mapcar (lambda (tag-pair)
+                               (format "%s (co-occurs %d times)" 
+                                      (car tag-pair) (cdr tag-pair)))
+                             available-tags))
+                     (selected (completing-read "Choose co-occurring tag for new column: " 
+                                             choices nil t))
+                     (selected-tag (car (nth (cl-position selected choices :test 'equal)
+                                           available-tags))))
+                (when (and selected-tag (not (string-empty-p selected-tag)))
+                  ;; 添加新的列
+                  (push (list selected-tag) org-supertag-view--current-columns)
+                  (org-supertag-view--update-column-view)))
+            (message "No co-occurring tags found for the selected column")))))))
 
 (defun org-supertag-view-add-tag-to-column ()
   "Add a tag to an existing column in multi-column view."
@@ -805,12 +909,54 @@ This function is kept for backward compatibility."
             (push tag (nth col-idx org-supertag-view--current-columns))
             (org-supertag-view--update-column-view)))))))
 
+(defun org-supertag-view-add-related-column ()
+  "Add a new column with a related tag (either by defined relations or co-occurrence)."
+  (interactive)
+  (when (and (boundp 'org-supertag-view--current-columns)
+             org-supertag-view--current-columns)
+    (let* ((column-names (mapcar (lambda (tags)
+                                  (format "%s" (string-join tags ", ")))
+                                org-supertag-view--current-columns))
+           (selected-col (completing-read "Select column to find related tags: " 
+                                        column-names nil t))
+           (col-idx (cl-position selected-col column-names :test 'string=)))
+      (when col-idx
+        (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
+               (tag-id (org-supertag-tag-get-id-by-name (car current-tags)))
+               ;; Get manually defined relations
+               (related-by-similar (org-supertag-relation-find-tags-by-group tag-id 'similar))
+               (related-by-parent (org-supertag-relation-find-tags-by-group tag-id 'parent))
+               (related-by-child (org-supertag-relation-find-tags-by-group tag-id 'child))
+               (manual-related-names 
+                (mapcar (lambda (id) 
+                         (format "%s (defined relation)" 
+                                (org-supertag-tag-get-name-by-id id)))
+                       (append related-by-similar related-by-parent related-by-child)))
+               ;; Get co-occurring tags
+               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
+               (cooccur-names
+                (mapcar (lambda (tag-pair)
+                         (format "%s (co-occurs %d times)" 
+                                (car tag-pair) (cdr tag-pair)))
+                       cooccurring-tags))
+               ;; Combine both types of relations
+               (all-related (append manual-related-names cooccur-names)))
+          (if all-related
+              (let* ((selected (completing-read "Choose related tag for new column: " 
+                                             all-related nil t))
+                     ;; Extract actual tag name from the formatted string
+                     (selected-tag (replace-regexp-in-string " (.*)" "" selected)))
+                (when (and selected-tag (not (string-empty-p selected-tag)))
+                  ;; Add new column
+                  (push (list selected-tag) org-supertag-view--current-columns)
+                  (org-supertag-view--update-column-view)))
+            (message "No related tags found for the selected column")))))))
+
 (defun org-supertag-view-remove-column ()
   "Remove a column from the multi-column view."
   (interactive)
   (when (and (boundp 'org-supertag-view--current-columns)
-             org-supertag-view--current-columns
-             (> (length org-supertag-view--current-columns) 1)) ;; 至少保留一列
+             org-supertag-view--current-columns)
     (let* ((column-names (mapcar (lambda (tags)
                                   (format "%s" (string-join tags ", ")))
                                      org-supertag-view--current-columns))
@@ -820,7 +966,15 @@ This function is kept for backward compatibility."
         (setq org-supertag-view--current-columns
               (append (cl-subseq org-supertag-view--current-columns 0 col-idx)
                       (cl-subseq org-supertag-view--current-columns (1+ col-idx))))
-        (org-supertag-view--update-column-view)))))
+        ;; If all columns are removed, reset the view
+        (if (null org-supertag-view--current-columns)
+            (let ((tag (completing-read "Start fresh with tag: " 
+                                      (org-supertag-view--get-all-tags)
+                                      nil t)))
+              (when (and tag (not (string-empty-p tag)))
+                (setq org-supertag-view--current-columns (list (list tag)))
+                (org-supertag-view--update-column-view)))
+          (org-supertag-view--update-column-view))))))
 
 (defun org-supertag-view-reset-columns ()
   "Reset the multi-column view."
@@ -833,6 +987,26 @@ This function is kept for backward compatibility."
         (setq org-supertag-view--current-columns (list (list tag)))
         (org-supertag-view--update-column-view)))))
 
+(defun org-supertag-view--wrap-text (text available-width)
+  "Wrap TEXT to fit within AVAILABLE-WIDTH.
+Returns a list of wrapped lines."
+  (if (<= (string-width text) available-width)
+      (list text)
+    (let ((words (split-string text " "))
+          (lines '())
+          (current-line ""))
+      (dolist (word words)
+        (let ((new-line (if (string-empty-p current-line)
+                           word
+                         (concat current-line " " word))))
+          (if (<= (string-width new-line) available-width)
+              (setq current-line new-line)
+            (push current-line lines)
+            (setq current-line word))))
+      (when (not (string-empty-p current-line))
+        (push current-line lines))
+      (nreverse lines))))
+
 (defun org-supertag-view--update-column-view ()
   "Update the multi-column tag comparison view with strict column alignment.
 Each row shows corresponding entries from different tags, with proper vertical alignment."
@@ -840,141 +1014,128 @@ Each row shows corresponding entries from different tags, with proper vertical a
   (let ((buffer (get-buffer-create "*Org SuperTag Columns*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
-            (column-width 45)  ;; 列宽略微增加以适应更多内容
-            (padding 1)        ;; 减少列间距，因为我们会使用垂直分隔线
-            (separator "│"))   ;; 垂直分隔线字符
+            (column-width 45)  
+            (padding 1)        
+            (separator "│"))   
         (erase-buffer)
         (org-supertag-column-mode)
-        
-        ;; 标题
         (insert (propertize "Multi-Column Tag View\n\n" 
                            'face '(:height 1.5 :weight bold)))
-        
-        ;; 操作说明 - 更新，添加新的快捷键说明
         (insert (propertize "Operations:\n" 'face '(:weight bold)))
-        (insert " [a] - Add Column    [A] - Add Related Column    [d] - Remove Column    [r] - Reset    [q] - Quit\n")
-        (insert " [t] - Add Tag to Column    [T] - Add Related Tag    [v] - View Node    [m] - Manage Relations\n\n")
-        
-        ;; 准备每列的数据
+        (insert " [a] - Add Column    [A] - Add Related Column    [d] - Remove Column    [R] - Reset\n")
+        (insert " [t] - Add Tag to Column    [v] - View Node      [m] - Manage Relations\n\n")
         (let* ((all-nodes-lists (mapcar (lambda (tags)
                                          (org-supertag-view--get-nodes-with-tags tags))
                                        org-supertag-view--current-columns))
                (col-count (length all-nodes-lists))
                (max-nodes 0))
-          
-          ;; 找出最多节点数
           (dolist (nodes all-nodes-lists)
             (setq max-nodes (max max-nodes (length nodes))))
           
-          ;; 创建一个用于布局控制的函数
           (cl-flet ((insert-in-column 
-                     (col-idx content &optional face fill-char)
-                     ;; 在指定列位置插入内容，并填充到列宽度
+                     (col-idx content &optional face fill-char first-line-prefix other-lines-prefix)
                      (let* ((current-pos (current-column))
                             (target-pos (* col-idx (1+ column-width)))
-                            (padding-needed (- target-pos current-pos)))
-                       ;; 如果需要，先填充空格以对齐到目标列位置
+                            (padding-needed (- target-pos current-pos))
+                            (separator-space (if (> col-idx 0) 2 0))
+                            (avail-width (- column-width separator-space))
+                            (prefix-width (if first-line-prefix 
+                                            (string-width first-line-prefix) 0))
+                            (wrapped-lines (org-supertag-view--wrap-text content 
+                                                                        (- avail-width prefix-width)))
+                            (first-line t))
+                       
                        (when (> padding-needed 0)
                          (insert (make-string padding-needed ?\s)))
                        
-                       ;; 插入分隔符（除第一列外）
                        (when (> col-idx 0)
                          (insert (propertize separator 'face '(:foreground "gray50")))
                          (insert " "))
                        
-                       ;; 插入内容（带可选的face属性）
-                       (let ((text (if face
-                                      (propertize content 'face face)
-                                    content)))
-                         (insert text))
-                       
-                       ;; 计算剩余空间并填充
-                       (let* ((content-width (string-width content))
-                              (separator-space (if (> col-idx 0) 2 0)) 
-                              (avail-width (- column-width separator-space))
-                              (fill-needed (- avail-width content-width)))
-                         (when (and (> fill-needed 0) fill-char)
-                           (insert (make-string fill-needed fill-char)))))))
+                       (dolist (line wrapped-lines)
+                         (when (not first-line)
+                           (insert "\n")
+                           (insert (make-string target-pos ?\s))
+                           (when (> col-idx 0)
+                             (insert (propertize separator 'face '(:foreground "gray50")))
+                             (insert " ")))
+                         
+                         (when (and first-line first-line-prefix)
+                           (insert first-line-prefix))
+                         (when (and (not first-line) other-lines-prefix)
+                           (insert other-lines-prefix))
+                         
+                         (let ((text (if face
+                                        (propertize line 'face face)
+                                      line)))
+                           (insert text))
+                         
+                         (when (and first-line (= (length wrapped-lines) 1))
+                           (let* ((content-width (+ (string-width line) 
+                                                  (if first-line-prefix 
+                                                      (string-width first-line-prefix) 
+                                                    0)))
+                                  (fill-needed (- avail-width content-width)))
+                             (when (and (> fill-needed 0) fill-char)
+                               (insert (make-string fill-needed fill-char)))))
+                         
+                         (setq first-line nil)))))
             
-            ;; 列标题行
+            ;; Insert column headers
             (dotimes (col-idx col-count)
               (let* ((tags (nth col-idx org-supertag-view--current-columns))
                      (tag-text (string-join tags ", "))
-                     (display-text (if (> (string-width tag-text) (- column-width 8))
-                                      (concat (substring tag-text 0 (- column-width 11)) "...")
-                                    tag-text))
-                     (header-text (format "Column %d: %s" (1+ col-idx) display-text)))
+                     (header-text (format "Column %d: %s" (1+ col-idx) tag-text)))
                 (insert-in-column col-idx header-text '(:weight bold) ?\s)))
             
             (insert "\n")
             
-            ;; 分隔线
+            ;; Insert separator line
             (dotimes (col-idx col-count)
               (insert-in-column col-idx "" nil ?─))
             (insert "\n\n")
             
-            ;; 如果没有节点
             (if (= max-nodes 0)
                 (insert "  No nodes found for any combination of tags.\n\n")
               
-              ;; 以行为单位处理，每行显示每列的同一位置节点
+              ;; Insert node content
               (dotimes (row-idx max-nodes)
-                ;; 第一行：序号、按钮和标题
                 (dotimes (col-idx col-count)
                   (let* ((nodes (nth col-idx all-nodes-lists))
-                         (node-id (and (< row-idx (length nodes)) (nth row-idx nodes))))
-                    (if node-id
-                        (let* ((props (gethash node-id org-supertag-db--object))
-                               (title (or (plist-get props :title) "无标题"))
-                               (view-button-text (propertize "[view]" 'face 'link))
-                               (node-number (format "%d. " (1+ row-idx)))
-                               ;; 计算标题最大长度（考虑序号和按钮的空间）
-                               (max-title-len (- column-width 12)) ;; 增加预留空间
-                               (title-width (string-width title))
-                               (title-text (if (> title-width max-title-len)
-                                             (truncate-string-to-width title max-title-len nil nil "...")
-                                           title)))
-                          
-                          ;; 插入到列中，序号和按钮
-                          (insert-in-column col-idx node-number nil nil)
-                          
-                          ;; 插入view按钮
-                          (insert-text-button view-button-text
-                                             'action 'org-supertag-view--view-node-button-action
-                                             'node-id node-id
-                                             'follow-link t
-                                             'help-echo "Click to view this node")
-                          
-                          ;; 插入标题（带填充）
-                          (insert " " title-text))
-                      
-                      ;; 如果该列在当前行没有节点，插入空白列
-                      (insert-in-column col-idx "" nil ?\s))))
+                         (node-id (and (< row-idx (length nodes)) 
+                                     (nth row-idx nodes)))
+                         (view-button-text (propertize "[view]" 'face 'link)))
+                    (when node-id
+                      (let* ((props (gethash node-id org-supertag-db--object))
+                             (title (or (plist-get props :title) "No title"))
+                             (node-number (format "%d. " (1+ row-idx))))
+                        (insert-in-column col-idx title nil nil 
+                                        (concat node-number view-button-text " ")
+                                        "    ")))))
                 (insert "\n")
                 
-                ;; 第二行：TODO状态（如果有）
+                ;; Insert status if exists
                 (let ((has-status nil))
                   (dotimes (col-idx col-count)
                     (let* ((nodes (nth col-idx all-nodes-lists))
-                           (node-id (and (< row-idx (length nodes)) (nth row-idx nodes))))
-                      (if (and node-id 
+                           (node-id (and (< row-idx (length nodes)) 
+                                       (nth row-idx nodes))))
+                      (when (and node-id 
                                (let ((props (gethash node-id org-supertag-db--object)))
-                                 (not (string-empty-p (or (plist-get props :todo-state) "")))))
-                          (let* ((props (gethash node-id org-supertag-db--object))
-                                 (type (or (plist-get props :todo-state) ""))
-                                 (status-text (format "   [%s]" type)))
-                            (setq has-status t)
-                            (insert-in-column col-idx status-text '(:foreground "purple") ?\s))
-                        (insert-in-column col-idx "" nil ?\s))))
+                                 (not (string-empty-p (or (plist-get props :todo-state) 
+                                                        "")))))
+                        (let* ((props (gethash node-id org-supertag-db--object))
+                               (type (or (plist-get props :todo-state) ""))
+                               (status-text (format "   [%s]" type)))
+                          (setq has-status t)
+                          (insert-in-column col-idx status-text 
+                                          '(:foreground "purple") ?\s)))))
                   
-                  ;; 只有当至少有一个状态时才添加换行
                   (when has-status
                     (insert "\n")))
                 
-                ;; 每个节点组后添加一个空行
                 (insert "\n")))
             
-            ;; 底部说明，更新快捷键说明
             (goto-char (point-max))
             (insert (propertize "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" 
                                'face '(:foreground "white")))
@@ -993,23 +1154,17 @@ Each row shows corresponding entries from different tags, with proper vertical a
 (defun org-supertag-view-view-node-at-point ()
   "View the node at point in either single or multi-column view."
   (interactive)
-  ;; 确保数据库已初始化
   (if (not (and (boundp 'org-supertag-db--object)
                 org-supertag-db--object
                 (> (hash-table-count org-supertag-db--object) 0)))
-      ;; 数据库未初始化
       (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
           (progn
             (call-interactively 'org-supertag-db-update)
-            ;; 更新后再次确认数据库状态
             (if (and (boundp 'org-supertag-db--object)
                      (> (hash-table-count org-supertag-db--object) 0))
-                ;; 数据库已更新，继续执行
                 (org-supertag-view--view-node-internal)
               (message "Database still empty after update. Cannot view nodes.")))
         (message "SuperTag database not initialized. Please run org-supertag-db-update first."))
-    
-    ;; 数据库已初始化，继续执行
     (org-supertag-view--view-node-internal)))
 
 (defun org-supertag-view-ensure-database ()
@@ -1025,148 +1180,28 @@ If database is empty, offers to update it."
 (defun org-supertag-view--view-node-internal ()
   "Internal implementation of node viewing logic."
   (cond
-   ;; 当在多列Tag Column模式中
    ((eq major-mode 'org-supertag-column-mode)
     (let ((pos (point))
           (line-start (line-beginning-position))
           (found nil))
-      
-      ;; 先尝试找到当前行中的view按钮
       (save-excursion
         (goto-char line-start)
         (while (and (< (point) (line-end-position))
-          (when (and (looking-at "\\([0-9]+\\)\\. \\[view\\]")
-                     ;; 当光标在按钮附近
-                     (<= (match-beginning 0) pos)
-                     (<= pos (+ (match-beginning 0) 10)))
-            (let ((button (button-at (+ (match-beginning 0) 5))))
-              (when button
-                (setq found t)
-                (button-activate button))))
+                   (when (and (looking-at "\\([0-9]+\\)\\. \\[view\\]")
+                            (<= (match-beginning 0) pos))
+                     (let ((button (button-at (+ (match-beginning 0) 5))))
+                       (when button
+                         (setq found t)
+                         (button-activate button)))))
           (forward-char 1)))
-      
-      ;; 如果没找到按钮，则使用通用节点选择函数
       (unless found
         (org-supertag-view--view-node-from-columns))))
-   
-   ;; 当在Tag Discover模式中
    ((eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--view-node))
-   
-   ;; 当在其他模式中
    (t
-    (message "Please move cursor to a node to view it.")))))
+    (message "Please move cursor to a node to view it."))))
 
-(defun org-supertag-view-add-related-column ()
-  "Add a new column with a tag related to an existing tag.
-This function selects a source tag from the current columns,
-then shows all related tags for selection based on tag relationships."
-  (interactive)
-  ;; 确保我们可以在只读缓冲区中执行
-  (message "Adding column based on related tag...")
-  (condition-case err
-      (let ((inhibit-read-only t))
-        (when (and (boundp 'org-supertag-view--current-columns)
-                  org-supertag-view--current-columns)
-          (let* ((column-names (mapcar (lambda (tags)
-                                       (format "%s" (string-join tags ", ")))
-                                     org-supertag-view--current-columns))
-                (selected-col (completing-read "Select source column for related tags: " 
-                                             column-names nil t))
-                (col-idx (cl-position selected-col column-names :test 'string=)))
-            (when col-idx
-              (let* ((source-tags (nth col-idx org-supertag-view--current-columns))
-                    (source-tag (if (= (length source-tags) 1)
-                                   (car source-tags)
-                                 (completing-read "Select source tag: " source-tags nil t)))
-                    (source-tag-id (org-supertag-tag-get-id-by-name source-tag)))
-                
-                (when source-tag-id
-                  ;; 获取与源标签相关的所有标签
-                  (let* ((related-from (org-supertag-relation-get-all-from source-tag-id))
-                        (related-to (org-supertag-relation-get-all-to source-tag-id))
-                        (related-all (append related-from related-to))
-                        (related-tag-ids (mapcar #'car related-all))
-                        (related-tag-names (delq nil (mapcar #'org-supertag-tag-get-name-by-id 
-                                                           related-tag-ids)))
-                        (relation-choices (mapcar (lambda (tag-name)
-                                                  (let* ((tag-id (org-supertag-tag-get-id-by-name tag-name))
-                                                         (rel-from (org-supertag-relation-get source-tag-id tag-id))
-                                                         (rel-to (org-supertag-relation-get tag-id source-tag-id))
-                                                                 (rel-type (or (and rel-from (plist-get rel-from :type))
-                                                                     (and rel-to (plist-get rel-to :type))
-                                                                     "unknown")))
-                                                    (format "%s (%s)" tag-name rel-type)))
-                                                related-tag-names)))
-                   
-                   (if relation-choices
-                       (let* ((selected (completing-read "Select related tag: " relation-choices nil t))
-                             (tag-name (car (split-string selected " ("))))
-                             (tag-id (org-supertag-tag-get-id-by-name tag-name)))
-                         (when (and tag-name (not (string-empty-p tag-name)))
-                           ;; 添加新标签作为独立的一列
-                           (push (list tag-name) org-supertag-view--current-columns)
-                           (org-supertag-view--update-column-view)
-                           (message "Added new column with related tag: %s" tag-name)))
-                         (message "No related tags found for %s" source-tag)))))))))
-    (error (message "Error adding related column: %s" (error-message-string err))))
-  
 
-(defun org-supertag-view-add-related-tag-to-column ()
-  "Add a tag related to existing tags in a column.
-This function selects a source tag from the selected column,
-then shows all related tags for selection based on tag relationships."
-  (interactive)
-  ;; 确保我们可以在只读缓冲区中执行
-  (message "Adding related tag to column...")
-  (condition-case err
-      (let ((inhibit-read-only t))
-        (when (and (boundp 'org-supertag-view--current-columns)
-                  org-supertag-view--current-columns)
-          (let* ((column-names (mapcar (lambda (tags)
-                                       (format "%s" (string-join tags ", ")))
-                                     org-supertag-view--current-columns))
-                (selected-col (completing-read "Select column to add related tag: " 
-                                             column-names nil t))
-                (col-idx (cl-position selected-col column-names :test 'string=)))
-            (when col-idx
-              (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
-                    (source-tag (if (= (length current-tags) 1)
-                                   (car current-tags)
-                                 (completing-read "Select source tag: " current-tags nil t)))
-                    (source-tag-id (org-supertag-tag-get-id-by-name source-tag)))
-                
-                (when source-tag-id
-                  ;; 获取与源标签相关的所有标签
-                  (let* ((related-from (org-supertag-relation-get-all-from source-tag-id))
-                        (related-to (org-supertag-relation-get-all-to source-tag-id))
-                        (related-all (append related-from related-to))
-                        (related-tag-ids (mapcar #'car related-all))
-                        (related-tag-names (delq nil (mapcar #'org-supertag-tag-get-name-by-id 
-                                                           related-tag-ids)))
-                        ;; 过滤掉已经在当前列中的标签
-                        (filtered-tags (seq-difference related-tag-names current-tags))
-                        (relation-choices (mapcar (lambda (tag-name)
-                                                  (let* ((tag-id (org-supertag-tag-get-id-by-name tag-name))
-                                                         (rel-from (org-supertag-relation-get source-tag-id tag-id))
-                                                         (rel-to (org-supertag-relation-get tag-id source-tag-id))
-                                                         (rel-type (or (and rel-from (plist-get rel-from :type))
-                                                                     (and rel-to (plist-get rel-to :type))
-                                                                     "unknown")))
-                                                    (format "%s (%s)" tag-name rel-type)))
-                                                filtered-tags)))
-                    
-                    (if relation-choices
-                        (let* ((selected (completing-read "Select related tag to add: " relation-choices nil t))
-                              (tag-name (car (split-string selected " ("))))
-                              (tag-id (org-supertag-tag-get-id-by-name tag-name)))
-                            (when (and tag-name (not (string-empty-p tag-name)))
-                              ;; 添加相关标签到选定的列
-                              (push tag-name (nth col-idx org-supertag-view--current-columns))
-                                (org-supertag-view--update-column-view)
-                                (message "Added related tag '%s' to column" tag-name)))
-                            (message "No related tags found for %s or all related tags already in column" source-tag)))))))))
-    (error (message "Error adding related tag to column: %s" (error-message-string err))))
 
 (provide 'org-supertag-view)
 
