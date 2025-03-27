@@ -51,14 +51,14 @@ class OllamaBridge:
             data = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False,  # 不使用流式响应
+                "stream": False  # 不使用流式响应
             }
             if system:
                 data["system"] = system
             
             self.logger.info("发送 API 请求...")
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                "http://127.0.0.1:11434/api/generate",
                 json=data
             )
             

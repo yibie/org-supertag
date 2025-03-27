@@ -238,7 +238,7 @@ class SimtagBridge:
         """获取 Ollama 客户端实例"""
         if SimtagBridge._ollama is None:
             try:
-                from ollama_bridge import OllamaBridge
+                from ollama_bridge_bak import OllamaBridge
                 SimtagBridge._ollama = OllamaBridge()
                 print("Ollama integration enabled")
             except Exception as e:
@@ -901,7 +901,7 @@ def extract_entities(input_file, output_file):
             
             # Initialize Ollama Bridge for NER
             try:
-                from ollama_bridge import OllamaBridge
+                from ollama_bridge_bak import OllamaBridge
                 ollama = OllamaBridge()
                 
                 # Build NER system prompt
@@ -975,7 +975,7 @@ def suggest_tags_from_text(input_file, output_file):
             
             # Initialize Ollama Bridge for tag suggestions
             try:
-                from ollama_bridge import OllamaBridge
+                from ollama_bridge_bak import OllamaBridge
                 ollama = OllamaBridge()
                 
                 # Get tag suggestions
@@ -1065,14 +1065,14 @@ def main():
         elif args.command == 'extract_entities':
             # Import NER extension
             try:
-                from ollama_bridge import extract_entities_from_file
+                from ollama_bridge_bak import extract_entities_from_file
                 extract_entities_from_file(args.input_file, args.output_file)
             except ImportError:
                 print("Error: NER extension not available")
         elif args.command == 'suggest_tags_from_text':
             # Import NER extension
             try:
-                from ollama_bridge import suggest_tags_from_file
+                from ollama_bridge_bak import suggest_tags_from_file
                 suggest_tags_from_file(args.input_file, args.output_file)
             except ImportError:
                 print("Error: NER extension not available")
