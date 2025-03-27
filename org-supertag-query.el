@@ -182,7 +182,7 @@ NODE-ID is the node identifier.
 Returns:
 - List of tags
 - nil if node doesn't exist or has no tags"
-  (when-let ((props (org-supertag-db-get node-id)))
+  (when-let* ((props (org-supertag-db-get node-id)))
     (plist-get props :tags)))
 
 (defun org-supertag-node-has-children-p (node-id)
@@ -303,7 +303,7 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-next ()
   "Move to next result."
   (interactive)
-  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
              (next (ewoc-next org-supertag-query-ewoc current)))
     (goto-char (ewoc-location next))
     (beginning-of-line)
@@ -312,7 +312,7 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-prev ()
   "Move to previous result."
   (interactive)
-  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
              (prev (ewoc-prev org-supertag-query-ewoc current)))
     (goto-char (ewoc-location prev))
     (beginning-of-line)
@@ -539,7 +539,7 @@ Returns t if node was found and visited successfully, nil otherwise."
       ;; make sure in org-mode buffer, avoid conflict with org-supertag-view.el
       (when (derived-mode-p 'org-mode)
         (widen)
-        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+        (when-let* ((marker (org-id-find-id-in-file node-id file-path)))
           (goto-char (cdr marker))
           (org-show-entry)
           (org-show-children)
@@ -642,7 +642,7 @@ START and END define the region boundaries."
       (while (re-search-forward 
               "^☑.*\\[\\[id:\\([^]]+\\)\\]"
               nil t)
-        (when-let ((node-id (match-string-no-properties 1)))
+        (when-let* ((node-id (match-string-no-properties 1)))
           ;; Verify node exists
           (when (org-supertag-node-db-exists-p node-id)
             (push node-id selected-nodes)))))

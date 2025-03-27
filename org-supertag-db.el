@@ -56,7 +56,6 @@
 
 (require 'ht)
 (require 'cl-lib)
-;;(require 'org-supertag-base)
 (require 'org-element)
 
 
@@ -529,7 +528,7 @@ Returns:
       (error "Invalid link data"))
     
     ;; 2. Check if link already exists
-    (if-let ((existing (ht-get org-supertag-db--link rel-id)))
+    (if-let* ((existing (ht-get org-supertag-db--link rel-id)))
         ;; If exists with same props, return ID
         (if (equal existing full-props)
             rel-id
@@ -701,7 +700,7 @@ First tries to read from cache, falls back to entity table if cache miss."
 ID is the entity identifier
 PROP is the property to get
 DEFAULT is returned if entity or property doesn't exist."
-  (if-let ((props (org-supertag-db-get id)))
+  (if-let* ((props (org-supertag-db-get id)))
       (or (plist-get props prop) default)
     default))
 
@@ -1200,7 +1199,7 @@ Returns a clean string without any text properties."
   "Get current node title in plain text format."
   (org-supertag-db--clean-text
    (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
-       (when-let ((element (org-element-at-point)))
+       (when-let* ((element (org-element-at-point)))
          (org-element-property :raw-value element))
        "")))
 
@@ -1300,7 +1299,7 @@ Returns a clean string without any text properties."
   "Validate node property completeness."
   (let ((required '(:id :title :file-path :type)))
     (cl-every (lambda (key)
-                (when-let ((value (plist-get props key)))
+                (when-let* ((value (plist-get props key)))
                   (not (string-empty-p (format "%s" value)))))
                 required)))
 
@@ -1321,7 +1320,7 @@ Returns a list of parsed nodes."
            ;; Only process heading nodes
            (when (and (eq (org-element-type element) 'headline)
                       (org-at-heading-p))
-             (when-let ((node (org-supertag-db--parse-node-at-point)))
+             (when-let* ((node (org-supertag-db--parse-node-at-point)))
                (push node nodes)))))
        t nil))
     ;; Return collected nodes in original order
@@ -1414,7 +1413,7 @@ REF-TO is a list of referenced node IDs"
       (unless (member ref-id old-refs)  ; Only trigger events for new references
         (message "Found new reference, triggering event")
         (org-supertag-db-emit 'ref:created node-id ref-id nil))
-      (when-let ((ref-node (org-supertag-db-get ref-id)))
+      (when-let* ((ref-node (org-supertag-db-get ref-id)))
         (let* ((ref-from (plist-get ref-node :ref-from))
                (new-ref-from (cons node-id (delete node-id ref-from))))
           (message "Updating back-references of referenced node: %S" new-ref-from)
@@ -1427,7 +1426,7 @@ REF-TO is a list of referenced node IDs"
       (unless (member old-ref ref-to)
         (message "Cleaning up old reference: %s" old-ref)
         (org-supertag-db-emit 'ref:removed node-id old-ref nil)
-        (when-let ((ref-node (org-supertag-db-get old-ref)))
+        (when-let* ((ref-node (org-supertag-db-get old-ref)))
           (let ((ref-from (delete node-id (plist-get ref-node :ref-from))))
             (message "Updating back-references of previously referenced node: %S" ref-from)
             (org-supertag-db-add old-ref
@@ -1966,7 +1965,7 @@ Returns an alist of (key . value) pairs."
 
 (add-hook 'org-supertag-db-after-load-hook
           (lambda ()
-            (when-let ((metadata-entry (org-supertag-db-get "metadata")))
+            (when-let* ((metadata-entry (org-supertag-db-get "metadata")))
               (setq org-supertag-db--metadata (or (plist-get metadata-entry :data)
                                                  (ht-create))))))
 

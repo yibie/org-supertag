@@ -8,6 +8,38 @@
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
+
+
+(defun org-supertag-tag--refresh-field-table (context)
+  "Refresh the field table display.
+CONTEXT is the edit context plist containing:
+- :node-id        The node ID
+- :node-title     The node title
+- :tags           List of tags
+- :source-buffer  The source buffer
+- :source-point   The point in source buffer"
+  (let ((inhibit-read-only t)
+        (current-point (point))
+        (current-values (org-supertag-tag--collect-current-values)))
+    (erase-buffer)
+    ;; Header
+    (insert (format "Fields for Node: %s\n" 
+                    (plist-get context :node-title)))
+    ;; Fields
+    (dolist (tag-id (plist-get context :tags))
+      (org-supertag-tag--insert-tag-fields 
+       tag-id
+       (plist-get context :source-buffer)
+       (plist-get context :source-point)))
+    ;; Help text
+    (insert "\nCommands:\n")
+    (insert "n: Next field            p: Previous field\n")
+    (insert "RET: Edit field value    C-c C-c: Save           C-c C-k: Cancel\n")
+    ;; Restore field values
+    (org-supertag-tag--restore-field-values current-values)
+    ;; Restore point
+    (goto-char (min current-point (point-max)))))
+
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert
@@ -186,7 +218,7 @@ otherwise returns nil."
     ;; Link node and tag
     (org-supertag-node-db-add-tag node-id tag-id)
     ;; Apply fields
-    (when-let ((fields (plist-get tag :fields)))
+    (when-let* ((fields (plist-get tag :fields)))
       (message "Processing fields for tag %s: %S" tag-id fields)
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
@@ -400,7 +432,7 @@ FIELD-NAME: The name of the field to remove"
           ;; Remove from database
           (org-supertag-field-db-delete-value node-id field-name tag-id)
           ;; Remove from org buffer
-          (when-let ((pos (condition-case nil
+          (when-let* ((pos (condition-case nil
                              (org-id-find node-id t)
                            (error nil))))
             (org-with-point-at pos
@@ -503,7 +535,7 @@ Special input format:
         ;; Apply the tag
         (org-supertag-tag-apply tag-id)
         ;; Skip immediate field value input for preset tags
-        (message "Tag '%s' applied. Use `org-supertag-tag-set-field-and-value' to set field values." tag-id)))))
+        (message "Tag '%s' applied. Use `org-supertag-tag-edit-fields' to edit field values." tag-id)))))
 
 (defun org-supertag-tag-batch-add-tag (tag-name)
   "Batch add tags to selected headlines.
@@ -601,7 +633,7 @@ This will:
       (message "Removing tag from %d nodes in buffers..." (length nodes))
       (dolist (node-id nodes)
         ;; Remove from org buffer first
-        (when-let ((pos (condition-case nil
+        (when-let* ((pos (condition-case nil
                            (org-id-find node-id t)
                          (error nil))))
           (org-with-point-at pos
@@ -628,7 +660,7 @@ This will:
         ;; Remove all collected links using proper API
         (message "Removing %d tag relationships..." (length links-to-remove))
         (dolist (link-id links-to-remove)
-          (when-let ((link-props (gethash link-id org-supertag-db--link)))
+          (when-let* ((link-props (gethash link-id org-supertag-db--link)))
             (let ((link-type (plist-get link-props :type))
                   (from (plist-get link-props :from))
                   (to (plist-get link-props :to)))
@@ -662,6 +694,229 @@ The hook functions are called with one argument:
 ;;----------------------------------------------------------------------
 ;; Field Edit Mode
 ;;----------------------------------------------------------------------  
+
+(defun org-supertag-tag--add-field (tag-id)
+  "Add a new field to TAG-ID."
+  (let* ((field-name (read-string "Field name: "))
+         (all-types (mapcar #'car org-supertag-field-types))
+         (type-help
+          (concat
+           "Available types:\n"
+           (mapconcat
+            (lambda (type)
+              (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
+                                   :description)))
+                (format "  %-12s - %s" type desc)))
+            all-types
+            "\n")))
+         (field-type
+          (minibuffer-with-setup-hook
+              (lambda ()
+                (let ((inhibit-read-only t))
+                  (with-current-buffer (get-buffer-create "*Minibuf Help*")
+                    (erase-buffer)
+                    (insert type-help)
+                    (display-buffer (current-buffer)
+                                  '((display-buffer-in-side-window)
+                                    (side . bottom)
+                                    (window-height . fit-window-to-buffer))))))
+            (intern
+             (completing-read 
+              "Field type: "
+              (mapcar #'symbol-name all-types)
+              nil t))))
+         (field-def
+          (list :name field-name
+                :type field-type)))
+
+    (when-let* ((help-buf (get-buffer "*Minibuf Help*")))
+      (kill-buffer help-buf))
+    ;; Add options for options type
+    (when (eq field-type 'options)
+      (let ((options
+             (split-string
+              (read-string "Options (comma separated): ")
+              "," t "[ \t]+")))
+        (setq field-def 
+              (plist-put field-def :options options))))
+    ;; Add description
+    (let ((desc (read-string "Description (optional): ")))
+      (when (not (string-empty-p desc))
+        (setq field-def 
+              (plist-put field-def :description desc))))
+    ;; Add field to tag
+    (org-supertag-tag-add-field tag-id field-def)))
+
+(defun org-supertag-tag--edit-field (tag-id field-name)
+  "Edit an existing field in TAG-ID with FIELD-NAME."
+  (let* ((tag (org-supertag-tag-get tag-id))
+         (fields (plist-get tag :fields))
+         (field (cl-find field-name fields
+                        :key (lambda (f) (plist-get f :name))
+                        :test #'equal))
+         (action (completing-read 
+                 "Action: "
+                 '("Edit type" "Edit options" "Edit description")
+                 nil t)))
+    (pcase action
+      ("Edit type"
+       (let* ((all-types (mapcar #'car org-supertag-field-types))
+              (type-help
+               (concat
+                "Available types:\n"
+                (mapconcat
+                 (lambda (type)
+                   (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
+                                        :description)))
+                     (format "  %-12s - %s" type desc)))
+                 all-types
+                 "\n")))
+              (new-type
+               (minibuffer-with-setup-hook
+                   (lambda ()
+                     (let ((inhibit-read-only t))
+                       (with-current-buffer (get-buffer-create "*Minibuf Help*")
+                         (erase-buffer)
+                         (insert type-help)
+                         (display-buffer (current-buffer)
+                                       '((display-buffer-in-side-window)
+                                         (side . bottom)
+                                         (window-height . fit-window-to-buffer))))))
+                 (intern
+                  (completing-read 
+                   "New type: "
+                   (mapcar #'symbol-name all-types)
+                   nil t)))))
+
+         (when-let* ((help-buf (get-buffer "*Minibuf Help*")))
+           (kill-buffer help-buf))
+         
+         (setq field (plist-put field :type new-type))
+         (when (eq new-type 'options)
+           (let ((options
+                  (split-string
+                   (read-string "Options (comma separated): ")
+                   "," t "[ \t]+")))
+             (setq field (plist-put field :options options))))
+         ;; Update field value in tag definition
+         (let ((new-fields (cl-substitute field
+                                        (cl-find field-name fields
+                                                :key (lambda (f) (plist-get f :name))
+                                                :test #'equal)
+                                        fields
+                                        :test #'equal)))
+           ;; Update tag in database
+           (setq tag (plist-put tag :fields new-fields))
+           (org-supertag-db-add tag-id tag))))
+      
+      ("Edit options"
+       (when (eq (plist-get field :type) 'options)
+         (let ((new-options
+                (split-string
+                 (read-string "New options (comma separated): "
+                            (mapconcat #'identity 
+                                     (plist-get field :options)
+                                     ","))
+                 "," t "[ \t]+")))
+           (setq field (plist-put field :options new-options))
+           ;; Update field value in tag definition
+           (let ((new-fields (cl-substitute field
+                                          (cl-find field-name fields
+                                                  :key (lambda (f) (plist-get f :name))
+                                                  :test #'equal)
+                                          fields
+                                          :test #'equal)))
+             ;; Update tag in database
+             (setq tag (plist-put tag :fields new-fields))
+             (org-supertag-db-add tag-id tag)))))
+      
+      ("Edit description"
+       (let ((new-desc (read-string "New description: "
+                                   (plist-get field :description))))
+         (setq field (plist-put field :description new-desc))
+         ;; Update field value in tag definition
+         (let ((new-fields (cl-substitute field
+                                        (cl-find field-name fields
+                                                :key (lambda (f) (plist-get f :name))
+                                                :test #'equal)
+                                        fields
+                                        :test #'equal)))
+           ;; Update tag in database
+           (setq tag (plist-put tag :fields new-fields))
+           (org-supertag-db-add tag-id tag)))))))
+
+(defun org-supertag-field-edit-next-field ()
+  "Move to next editable field."
+  (interactive)
+  (forward-line)
+  (when (looking-at "^$")
+    (forward-line)))
+
+(defun org-supertag-field-edit-prev-field ()
+  "Move to previous editable field."
+  (interactive)
+  (forward-line -1)
+  (when (looking-at "^$")
+    (forward-line -1)))
+
+(defun org-supertag-field-edit-complete-field ()
+  "Edit the current field value."
+  (interactive)
+  (when (looking-at "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$")
+    (let* ((field-name (string-trim (match-string 1)))
+           (field-type (match-string 2))
+           (current-value (match-string 3))
+           ;; Fix tag ID extraction to only get the tag name
+           (tag-id (save-excursion
+                    (beginning-of-line)
+                    (re-search-backward "^Tag: \\([^ \n]+\\)" nil t)
+                    (match-string-no-properties 1)))
+           (tag (org-supertag-tag-get tag-id)))
+      
+      (unless tag
+        (error "Tag '%s' not found" tag-id))
+      
+      (let ((field (cl-find field-name 
+                           (plist-get tag :fields)
+                           :key (lambda (f) (plist-get f :name))
+                           :test #'equal)))
+        ;; Validate field exists and has a type defined
+        (unless field
+          (error "Field '%s' not found in tag '%s'" field-name tag-id))
+        (unless (plist-get field :type)
+          (error "Field '%s' has no type defined" field-name))
+        
+        ;; Read new value
+        (when-let* ((new-value (org-supertag-field-read-value field)))
+          (save-excursion
+            (beginning-of-line)
+            (when (re-search-forward ": .*$" nil t)
+              (replace-match (format ": %s" new-value)))))))))
+
+(defun org-supertag-field-edit-save ()
+  "Save all field values and close the edit buffer."
+  (interactive)
+  (let* ((context org-supertag--edit-context)
+         (node-id (plist-get context :node-id))
+         (source-buffer (plist-get context :source-buffer))
+         (source-point (plist-get context :source-point)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$" nil t)
+        (let ((field-name (string-trim (match-string 1)))
+              (new-value (string-trim (match-string 3))))
+          (unless (string-empty-p new-value)
+            (with-current-buffer source-buffer
+              (save-excursion
+                (goto-char source-point)
+                (org-set-property field-name new-value)))))))
+    (quit-window t)))
+
+(defun org-supertag-field-edit-cancel ()
+  "Cancel editing and close the buffer."
+  (interactive)
+  (when (yes-or-no-p "Cancel editing? Changes will be lost.")
+    (quit-window t)))
 
 (defvar org-supertag-field-edit-mode-map
   (let ((map (make-sparse-keymap)))
@@ -717,6 +972,30 @@ The hook functions are called with one argument:
   "Major mode for editing org-supertag fields."
   (setq-local buffer-read-only nil))
 
+(defun org-supertag-tag--collect-current-values ()
+  "Collect current field values from the edit buffer.
+Returns an alist of (field-name . value) pairs."
+  (let (result)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$" nil t)
+        (let ((field-name (string-trim (match-string 1)))
+              (value (string-trim (match-string 3))))
+          (push (cons field-name value) result))))
+    result))
+
+(defun org-supertag-tag--restore-field-values (values)
+  "Restore field values in the edit buffer.
+VALUES is an alist of (field-name . value) pairs."
+  (when values
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: " nil t)
+        (let* ((field-name (string-trim (match-string 1)))
+               (saved-value (cdr (assoc field-name values))))
+          (when saved-value
+            (insert saved-value)))))))
+
 (defun org-supertag-tag--insert-tag-fields (tag-id source-buffer source-point)
   "Insert fields for a tag."
   (let* ((tag (org-supertag-tag-get tag-id))
@@ -765,179 +1044,6 @@ The hook functions are called with one argument:
       (insert "  No fields defined\n")
       (insert "  [Press 'a' to add fields]\n"))))
 
-(defun org-supertag-tag--add-field (tag-id)
-  "Add a new field to TAG-ID."
-  (let* ((field-name (read-string "Field name: "))
-         (all-types (mapcar #'car org-supertag-field-types))
-         (type-help
-          (concat
-           "Available types:\n"
-           (mapconcat
-            (lambda (type)
-              (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
-                                   :description)))
-                (format "  %-12s - %s" type desc)))
-            all-types
-            "\n")))
-         (field-type
-          (minibuffer-with-setup-hook
-              (lambda ()
-                (let ((inhibit-read-only t))
-                  (with-current-buffer (get-buffer-create "*Minibuf Help*")
-                    (erase-buffer)
-                    (insert type-help)
-                    (display-buffer (current-buffer)
-                                  '((display-buffer-in-side-window)
-                                    (side . bottom)
-                                    (window-height . fit-window-to-buffer))))))
-            (intern
-             (completing-read 
-              "Field type: "
-              (mapcar #'symbol-name all-types)
-              nil t))))
-         (field-def
-          (list :name field-name
-                :type field-type)))
-
-    (when-let ((help-buf (get-buffer "*Minibuf Help*")))
-      (kill-buffer help-buf))
-    ;; Add options for options type
-    (when (eq field-type 'options)
-      (let ((options
-             (split-string
-              (read-string "Options (comma separated): ")
-              "," t "[ \t]+")))
-        (setq field-def 
-              (plist-put field-def :options options))))
-    ;; Add description
-    (let ((desc (read-string "Description (optional): ")))
-      (when (not (string-empty-p desc))
-        (setq field-def 
-              (plist-put field-def :description desc))))
-    ;; Add field to tag
-    (org-supertag-tag-add-field tag-id field-def)))
-
-(defun org-supertag-tag--refresh-field-table (context)
-  "Refresh the field table display.
-CONTEXT is the edit context plist containing:
-- :node-id        The node ID
-- :node-title     The node title
-- :tags           List of tags
-- :source-buffer  The source buffer
-- :source-point   The point in source buffer"
-  (let ((inhibit-read-only t)
-        (current-point (point)))
-    (erase-buffer)
-    ;; Header
-    (insert (format "Fields for Node: %s\n" 
-                    (plist-get context :node-title)))
-    ;; Fields
-    (dolist (tag-id (plist-get context :tags))
-      (org-supertag-tag--insert-tag-fields 
-       tag-id
-       (plist-get context :source-buffer)
-       (plist-get context :source-point)))
-    ;; Help text
-    (insert "\nCommands:\n")
-    (insert "n: Next field            p: Previous field\n")
-    (insert "RET: Edit field value    C-c C-c: Save           C-c C-k: Cancel\n")
-    ;; Restore point
-    (goto-char (min current-point (point-max)))))
-
-(defun org-supertag-tag--edit-field (tag-id field-name)
-  "Edit an existing field in TAG-ID with FIELD-NAME."
-  (let* ((tag (org-supertag-tag-get tag-id))
-         (fields (plist-get tag :fields))
-         (field (cl-find field-name fields
-                        :key (lambda (f) (plist-get f :name))
-                        :test #'equal))
-    (action (completing-read 
-            "Action: "
-            '("Edit type" "Edit options" "Edit description")
-            nil t)))
-    (pcase action
-      ("Edit type"
-       (let* ((all-types (mapcar #'car org-supertag-field-types))
-              (type-help
-               (concat
-                "Available types:\n"
-                (mapconcat
-                 (lambda (type)
-                   (let ((desc (plist-get (cdr (assq type org-supertag-field-types))
-                                        :description)))
-                     (format "  %-12s - %s" type desc)))
-                 all-types
-                 "\n")))
-              (new-type
-               (minibuffer-with-setup-hook
-                   (lambda ()
-                     (let ((inhibit-read-only t))
-                       (with-current-buffer (get-buffer-create "*Minibuf Help*")
-                         (erase-buffer)
-                         (insert type-help)
-                         (display-buffer (current-buffer)
-                                       '((display-buffer-in-side-window)
-                                         (side . bottom)
-                                         (window-height . fit-window-to-buffer))))))
-                 (intern
-                  (completing-read 
-                   "New type: "
-                   (mapcar #'symbol-name all-types)
-                   nil t)))))
-
-         (when-let ((help-buf (get-buffer "*Minibuf Help*")))
-           (kill-buffer help-buf))
-         
-         (setq field (plist-put field :type new-type))
-         (when (eq new-type 'options)
-           (let ((options
-                  (split-string
-                   (read-string "Options (comma separated): ")
-                   "," t "[ \t]+")))
-             (setq field (plist-put field :options options))))
-         ;; Update field value in tag definition
-         (let ((new-fields (cl-substitute field
-                                        (cl-find field-name fields
-                                                :key (lambda (f) (plist-get f :name))
-                                        fields
-                                        :test #'equal)))
-           ;; Update tag in database
-           (setq tag (plist-put tag :fields new-fields))
-           (org-supertag-db-add tag-id tag))))
-      
-      ("Edit options"
-       (when (eq (plist-get field :type) 'options)
-         (let ((new-options
-                (split-string
-                 (read-string "New options (comma separated): "
-                            (mapconcat #'identity 
-                                     (plist-get field :options)
-                                     ","))
-                 "," t "[ \t]+")))
-           (setq field (plist-put field :options new-options))
-           ;; Update field value in tag definition
-           (let ((new-fields (cl-substitute field
-                                          (cl-find field-name fields
-                                                  :key (lambda (f) (plist-get f :name))
-                                          fields
-                                          :test #'equal)))
-             ;; Update tag in database
-             (setq tag (plist-put tag :fields new-fields))
-             (org-supertag-db-add tag-id tag)))))
-      
-      ("Edit description"
-       (let ((new-desc (read-string "New description: "
-                                   (plist-get field :description)))
-         (setq field (plist-put field :description new-desc))
-         ;; Update field value in tag definition
-         (let ((new-fields (cl-substitute field
-                                        (cl-find field-name fields
-                                                :key (lambda (f) (plist-get f :name))
-                                        fields
-                                                :test #'equal)))
-           ;; Update tag in database
-           (setq tag (plist-put tag :fields new-fields))
-           (org-supertag-db-add tag-id tag)))))))))))
 
 (defun org-supertag-tag--goto-first-field ()
   "Move cursor to the first field in the OrgSuperTag-FieldEdit buffer.
@@ -958,7 +1064,7 @@ If no field exists, move to the first line after the separator line."
           ;; If no separator found, go to beginning
           (goto-char (point-min)))))))
 
-(defun org-supertag-tag-edit-fields-table ()
+(defun org-supertag-tag-edit-fields ()
   "Edit fields of current node's tags in a table format.
 Creates a dedicated buffer showing all fields of the node's tags in a table view,
 allowing for easy editing of field values."
@@ -967,6 +1073,8 @@ allowing for easy editing of field values."
          (source-point (point))
          (node-id (org-id-get))
          (tags (org-supertag-node-get-tags node-id))
+         (edit-buffer (get-buffer-create "*Org SuperTag Fields*"))
+         (node-title (org-get-heading t t t t)))
     
     ;; Validate we have a node and tags
     (unless node-id
@@ -1000,86 +1108,7 @@ allowing for easy editing of field values."
       (select-window window)
       (org-supertag-tag--goto-first-field))))
 
-(defun org-supertag-field-edit-next-field ()
-  "Move to next editable field."
-  (interactive)
-  (forward-line)
-  (when (looking-at "^$")
-    (forward-line)))
 
-(defun org-supertag-field-edit-prev-field ()
-  "Move to previous editable field."
-  (interactive)
-  (forward-line -1)
-  (when (looking-at "^$")
-    (forward-line -1)))
-
-(defun org-supertag-field-edit-complete-field ()
-  "Edit the current field value."
-  (interactive)
-  (when (looking-at "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$")
-    (let* ((field-name (string-trim (match-string 1)))
-           (field-type (match-string 2))
-           (current-value (match-string 3))
-           ;; Fix tag ID extraction to only get the tag name
-           (tag-id (save-excursion
-                    (beginning-of-line)
-                    (re-search-backward "^Tag: \\([^ \n]+\\)" nil t)
-                    (match-string-no-properties 1)))
-           (tag (org-supertag-tag-get tag-id)))
-      
-      (unless tag
-        (error "Tag '%s' not found" tag-id))
-      
-      (let ((field (cl-find field-name 
-                           (plist-get tag :fields)
-                           :key (lambda (f) (plist-get f :name))
-                           :test #'equal)))
-        ;; Validate field exists and has a type defined
-        (unless field
-          (error "Field '%s' not found in tag '%s'" field-name tag-id))
-        (unless (plist-get field :type)
-          (error "Field '%s' has no type defined" field-name))
-        
-        ;; Read new value
-        (when-let ((new-value (org-supertag-field-read-value field)))
-          (save-excursion
-            (beginning-of-line)
-            (when (re-search-forward ": .*$" nil t)
-              (replace-match (format ": %s" new-value)))))))))
-
-(defun org-supertag-field-edit-save ()
-  "Save all field values and close the edit buffer."
-  (interactive)
-  (let* ((context org-supertag--edit-context)
-         (node-id (plist-get context :node-id))
-         (source-buffer (plist-get context :source-buffer))
-         (source-point (plist-get context :source-point)))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "^  \\([^[]+\\)\\[\\([^]]+\\)\\]: \\(.*\\)$" nil t)
-        (let ((field-name (string-trim (match-string 1)))
-              (new-value (string-trim (match-string 3))))
-          (unless (string-empty-p new-value)
-            (with-current-buffer source-buffer
-              (save-excursion
-                (goto-char source-point)
-                (org-set-property field-name new-value)))))))
-    (quit-window t)))
-
-(defun org-supertag-field-edit-cancel ()
-  "Cancel editing and close the buffer."
-  (interactive)
-  (when (yes-or-no-p "Cancel editing? Changes will be lost.")
-    (quit-window t)))
-
-;;;###autoload
-(defun org-supertag-tag-set-field-and-value ()
-  "Set field values for tags on the current node using a table interface."
-  (interactive)
-  (unless (fboundp 'org-supertag-tag-edit-fields-table)
-    (error "Required function org-supertag-tag-edit-fields-table not found"))
-  (org-supertag-tag-edit-fields-table))
 
 ;;------------------------------------------------------------
 ;; Company Completion
@@ -1155,15 +1184,16 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
                      (match-string-no-properties 0)))))
     (candidates (org-supertag-company--candidates arg))
     (post-completion (org-supertag-company--post-completion arg))
-    (annotation (when-let* ((tag (get-text-property 0 'tag arg))
-                           (fields (plist-get tag :fields)))
-                           (base-tag (org-supertag-tag-get-base arg)))
-                 (if base-tag
-                     (format " [%d fields, extends %s]"
-                             (length fields)
-                             base-tag)
-                   (format " [%d fields]" (length fields)))))
-    (t nil)))
+    (annotation (let* ((tag (get-text-property 0 'tag arg))
+                      (fields (and tag (plist-get tag :fields)))
+                      (base-tag (and tag (org-supertag-tag-get-base (plist-get tag :id)))))
+                 (when fields
+                   (if base-tag
+                       (format " [%d fields, extends %s]"
+                               (length fields)
+                               base-tag)
+                     (format " [%d fields]" (length fields)))))
+    (t nil))))
 
 ;;;###autoload
 (defun org-supertag-setup-completion ()
@@ -1198,7 +1228,7 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
 
     ("task" . ((:name "status"
                 :type options
-                :options ("todo" "in-progress" "blocked" "done" "cancelled")
+                :options ("todo" "in-progress" "done" "cancelled")
                 :description "Task status")
                (:name "priority" 
                 :type options
@@ -1309,7 +1339,7 @@ Example return value:
  (:name \"priority\"
   :type options
   :options (\"high\" \"medium\" \"low\")))"
-  (when-let ((preset (assoc tag-name org-supertag-preset-tags)))
+  (when-let* ((preset (assoc tag-name org-supertag-preset-tags)))
     (let ((fields (cdr preset)))
           ;; Validate and normalize field definitions
           (cl-loop for field in fields
@@ -1332,5 +1362,7 @@ Example return value:
                                  (when (and options (eq type 'options))
                                    (list :options options))))))))
 
+
+(defalias 'org-supertag-set-field-and-value 'org-supertag-tag-edit-fields)
 
 (provide 'org-supertag-tag)

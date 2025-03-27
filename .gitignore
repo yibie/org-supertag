@@ -24,3 +24,20 @@ tramp
 
 # Visual Studio Code
 .vscode/
+.aider*
+
+# log files
+*.log
+*.log.*
+*.log.*.*
+*.log.*.*.*
+*.log.*.*.*.*
+*.log.*.*.*.*.*
+
+# test files
+*.test
+*.test.*
+*.test.*.*
+*.test.*.*.*
+*.test.*.*.*.*
+*.test.*.*.*.*.*

@@ -52,7 +52,7 @@ Notes:
   "Update an existing node in the database.
 ID is the node identifier
 PROPS are the properties to update"
-  (when-let ((node (org-supertag-db-get id)))
+  (when-let* ((node (org-supertag-db-get id)))
     (let ((new-props nil))
       ;; 1. Preserve creation time
       (setq new-props (list :created-at (plist-get node :created-at)))
@@ -81,7 +81,7 @@ ID is the unique node identifier
 Returns:
 - t   if node exists and type is :node
 - nil if node doesn't exist or type isn't :node"
-  (when-let ((node (org-supertag-db-get id)))
+  (when-let* ((node (org-supertag-db-get id)))
     (eq (plist-get node :type) :node)))
 
 (defun org-supertag-node-db-get-tags (id)
@@ -271,8 +271,8 @@ Notes:
 - Keeps display state consistent with database
 - Does not trigger database updates
 - Only updates display-related properties"
-  (when-let ((node-id (org-id-get)))
-    (when-let ((node (org-supertag-db-get node-id)))
+  (when-let* ((node-id (org-id-get)))
+    (when-let* ((node (org-supertag-db-get node-id)))
       ;; Update properties drawer
       (org-set-property "ID" node-id)
       ;; Update other display states
@@ -325,7 +325,7 @@ Returns:
   (message "[Move] Starting node move: ID=%s to file=%s level=%s point=%s" 
            node-id target-file target-level target-point)
   
-  (when-let ((content (org-supertag-get-node-content node-id)))
+  (when-let* ((content (org-supertag-get-node-content node-id)))
     (message "[Move] Got node content: %d chars" (length content))
     
     ;; 使用 condition-case 包装整个移动过程
@@ -641,7 +641,7 @@ Returns:
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data."
   (interactive)
-  (if-let ((node-id (org-supertag-node--ensure-sync)))
+  (if-let* ((node-id (org-supertag-node--ensure-sync)))
       (when (yes-or-no-p "Really delete this node and all its data? ")
         ;; 1. Get node info before deletion
         (let* ((node (org-supertag-db-get node-id))
@@ -712,7 +712,7 @@ Returns:
   "Update node at current position.
 Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
   (interactive)
-  (if-let ((node-id (org-supertag-node--ensure-sync)))
+  (if-let* ((node-id (org-supertag-node--ensure-sync)))
       (progn
         (message "Node updated successfully: %s" node-id)
         node-id)
@@ -819,7 +819,7 @@ filename / outline-path / title"
         (find-file-other-window file-path)
         ;; Find and show node
         (widen)
-        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+        (when-let* ((marker (org-id-find-id-in-file node-id file-path)))
           (goto-char (cdr marker))
           (org-show-entry)
           (org-show-children)
@@ -833,7 +833,7 @@ filename / outline-path / title"
 
 (defun org-supertag-node--in-node-p ()
   "Check if current position is within a valid org-supertag node."
-  (when-let ((node-id (org-supertag-node--ensure-sync)))
+  (when-let* ((node-id (org-supertag-node--ensure-sync)))
     (cons node-id (org-get-heading t t t t))))
 
 (defun org-supertag-node-db-add-reference (from-id to-id)
@@ -872,7 +872,7 @@ Returns:
 List of node IDs"
   (or (org-supertag-db--cache-get 'query 
                                  (format "node-refs:%s:%s" node-id direction))
-      (when-let ((node (org-supertag-db-get node-id)))
+      (when-let* ((node (org-supertag-db-get node-id)))
         (let ((refs (pcase direction
                      ('to (plist-get node :refs-to))
                      ('from (plist-get node :refs-from))
@@ -1142,7 +1142,7 @@ This function will:
        (when (and (eq (plist-get props :type) :node)
                   (not (org-id-find id 'marker)))
          (push id missing-ids)
-         (when-let ((file (plist-get props :file-path)))
+         (when-let* ((file (plist-get props :file-path)))
            (push file problematic-files))))
      org-supertag-db--object)
     
@@ -1158,7 +1158,7 @@ This function will:
         (princ "Missing ID Details:\n")
         (princ "-------------------\n")
         (dolist (id missing-ids)
-          (when-let ((props (org-supertag-db-get id)))
+          (when-let* ((props (org-supertag-db-get id)))
             (princ (format "ID: %s\n" id))
             (princ (format "  Title: %s\n" (or (plist-get props :title) "[No title]")))
             (princ (format "  File: %s\n" (or (plist-get props :file-path) "[No file]")))

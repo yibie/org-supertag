@@ -87,8 +87,8 @@ Enabling this option will update related co-occurrences immediately when tags ar
 
 (defun org-supertag-relation-add-relation (from-tag to-tag rel-type &optional strength)
   "Add a tag relation.
-FROM-TAG: Source tag
-TO-TAG: Target tag
+FROM-TAG: Source tag ID
+TO-TAG: Target tag ID
 REL-TYPE: Relation type
 STRENGTH: Relation strength (optional, default is 1.0)"
   (interactive
@@ -97,7 +97,11 @@ STRENGTH: Relation strength (optional, default is 1.0)"
           (rel-choices (org-supertag-relation--get-relation-type-choices))
           (rel-type (org-supertag-relation--get-type-from-choice 
                     (completing-read "Relation type: " rel-choices nil t))))
-     (list from-tag to-tag rel-type 1.0)))
+     (list 
+      (org-supertag-tag-get-id-by-name from-tag)
+      (org-supertag-tag-get-id-by-name to-tag)
+      rel-type 
+      1.0)))
   ;; Check if the tags are valid
   (cond
    ((not from-tag)
@@ -106,25 +110,40 @@ STRENGTH: Relation strength (optional, default is 1.0)"
     (user-error "Target tag cannot be empty"))
    ((equal from-tag to-tag)
     (user-error "Source tag and target tag cannot be the same")))
-  (let* ((from-name (if (org-supertag-db-exists-p from-tag)
-                       ;; if the input is an ID, get its name
-                       (or (org-supertag-tag-get-name-by-id from-tag) from-tag)
-                     ;; otherwise, assume the input is a tag name
-                     from-tag))
-         (to-name (if (org-supertag-db-exists-p to-tag)
-                     ;; if the input is an ID, get its name
-                     (or (org-supertag-tag-get-name-by-id to-tag) to-tag)
-                   ;; otherwise, assume the input is a tag name
-                   to-tag))
+  
+  (let* ((from-id (if (org-supertag-db-exists-p from-tag)
+                      from-tag
+                    (org-supertag-tag-get-id-by-name from-tag)))
+         (to-id (if (org-supertag-db-exists-p to-tag)
+                   to-tag
+                 (org-supertag-tag-get-id-by-name to-tag)))
          ;; Include rel-type in the relation ID to support multiple relations
-         (rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type))
-         (props (list :from from-tag
-                     :to to-tag
-                     :type rel-type
-                     :strength (or strength 1.0)
-                     :created-at (current-time))))
-    (puthash rel-id props org-supertag-db--link)
-    (message "Add relation: %s -[%s]-> %s" from-name rel-type to-name)))
+         (rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
+    
+    ;; Check if relation already exists
+    (when (gethash rel-id org-supertag-db--link)
+      (user-error "Relation already exists: %s -[%s]-> %s"
+                  (org-supertag-tag-get-name-by-id from-id)
+                  rel-type
+                  (org-supertag-tag-get-name-by-id to-id)))
+    
+    ;; Add the relation
+    (let ((props (list :from from-id
+                      :to to-id
+                      :type rel-type
+                      :strength (or strength 1.0)
+                      :created-at (current-time))))
+      (puthash rel-id props org-supertag-db--link)
+      ;; 触发 link:created 事件
+      (org-supertag-db-emit 'link:created :tag-relation from-id to-id props)
+      ;; 标记数据库为脏
+      (org-supertag-db--mark-dirty)
+      ;; 调度保存
+      (org-supertag-db--schedule-save)
+      (message "Added relation: %s -[%s]-> %s" 
+               (org-supertag-tag-get-name-by-id from-id)
+               rel-type 
+               (org-supertag-tag-get-name-by-id to-id)))))
 
 (defun org-supertag-relation-remove-relation (from-tag to-tag &optional rel-type)
   "Remove the relation between FROM-TAG and TO-TAG.
@@ -141,24 +160,39 @@ otherwise remove all relations between the tags."
      (list from-tag to-tag)))
   
   (when (and from-tag to-tag)
-    (let* ((from-name (if (org-supertag-db-exists-p from-tag)
-                         (or (org-supertag-tag-get-name-by-id from-tag) from-tag)
-                       from-tag))
-           (to-name (if (org-supertag-db-exists-p to-tag)
-                       (or (org-supertag-tag-get-name-by-id to-tag) to-tag)
-                     to-tag)))
+    (let* ((from-id (if (org-supertag-db-exists-p from-tag)
+                       from-tag
+                     (org-supertag-tag-get-id-by-name from-tag)))
+           (to-id (if (org-supertag-db-exists-p to-tag)
+                     to-tag
+                   (org-supertag-tag-get-id-by-name to-tag)))
+           (from-name (org-supertag-tag-get-name-by-id from-id))
+           (to-name (org-supertag-tag-get-name-by-id to-id)))
+
       ;; If rel-type is provided, only remove that specific relation
       (if rel-type
-          (let ((rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type)))
-            (remhash rel-id org-supertag-db--link))
+          (let ((rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
+            (when (gethash rel-id org-supertag-db--link)
+              (remhash rel-id org-supertag-db--link)
+              ;; 触发 link:removed 事件
+              (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)))
         ;; Otherwise, remove all relations between these tags
-        (maphash
-         (lambda (key _)
-           (when (and (string-prefix-p ":tag-relation:" key)
-                     (string-match (format ":tag-relation:%s->%s:" from-tag to-tag) key))
-             (remhash key org-supertag-db--link)))
-         org-supertag-db--link))
-      (message "Remove relation: %s -> %s" from-name to-name))))
+        (let ((removed-count 0))
+          (maphash
+           (lambda (key _)
+             (when (and (string-prefix-p ":tag-relation:" key)
+                       (string-match (format ":tag-relation:%s->%s:" from-id to-id) key))
+               (remhash key org-supertag-db--link)
+               ;; 触发 link:removed 事件
+               (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)
+               (cl-incf removed-count)))
+           org-supertag-db--link)))
+      
+      ;; 标记数据库为脏
+      (org-supertag-db--mark-dirty)
+      ;; 调度保存
+      (org-supertag-db--schedule-save)
+      (message "Removed relation: %s -> %s" from-name to-name))))
 
 (defun org-supertag-relation-get (from-tag to-tag &optional rel-type)
   "Get the relation data between FROM-TAG and TO-TAG.
@@ -166,11 +200,17 @@ If REL-TYPE is provided, get the specific relation type,
 otherwise return all relations between the tags.
 Returns a list of relation property lists."
   (when (and from-tag to-tag)
-    (let ((result nil))
+    (let ((result nil)
+          (from-id (if (org-supertag-db-exists-p from-tag)
+                      from-tag
+                    (org-supertag-tag-get-id-by-name from-tag)))
+          (to-id (if (org-supertag-db-exists-p to-tag)
+                    to-tag
+                  (org-supertag-tag-get-id-by-name to-tag))))
       (maphash
        (lambda (key props)
          (when (and (string-prefix-p ":tag-relation:" key)
-                   (string-match (format ":tag-relation:%s->%s:\\(.+\\)" from-tag to-tag) key))
+                   (string-match (format ":tag-relation:%s->%s:\\(.+\\)" from-id to-id) key))
            (when (or (null rel-type)
                     (eq rel-type (plist-get props :type)))
              (push props result))))
@@ -211,14 +251,15 @@ Return the list of (other-tag . rel-type)."
 
 (defun org-supertag-relation-get-all (tag-id)
   "Get all relations involving the TAG-ID.
-Return the list of relations, each relation is a plist with :from, :to and :type keys."
+Return the list of relations, each relation is a plist with :from, :to and :type keys.
+Only returns outgoing relations (where TAG-ID is the :from tag)."
   (if (null tag-id)
       nil
     (let (result)
       (maphash
        (lambda (rel-id props)
          (when (and (string-prefix-p ":tag-relation:" rel-id)
-                   (equal (plist-get props :from) tag-id))
+                   (equal (plist-get props :from) tag-id))  
            (push props result)))
        org-supertag-db--link)
       result)))
@@ -244,9 +285,27 @@ Return the number of nodes associated with this tag."
 (defvar org-supertag-relation--current-tag nil
   "The ID of the current tag being edited.")
 
+(defvar org-supertag-relation--recommendations-cache (make-hash-table :test 'equal)
+  "缓存每个标签的推荐结果。key 是标签 ID，value 是推荐列表。")
+
+(defvar org-supertag-relation--updating-recommendations nil
+  "标记是否正在更新推荐列表，用于防止重复调用.")
+
+(defvar org-supertag-relation-manage--buffer-name "*Org-Supertag Relation*"
+  "关系管理界面的缓冲区名称.")
+
+(defvar org-supertag-relation--current-section 'existing
+  "Current section in the relation management buffer.
+Can be 'existing, 'cooccurrence, or 'recommended.")
+
+(defvar org-supertag-relation--current-item-index 0
+  "Current item index in the current section.")
+
 (defun org-supertag-relation-manage ()
   "Manage tag relations interface entry point."
   (interactive)
+  ;; 清除推荐缓存
+  (clrhash org-supertag-relation--recommendations-cache)
   (let* ((tags (org-supertag-get-all-tags))
          (tag-name (completing-read "Select a tag to manage relations: " tags nil t)))
     (if (or (null tag-name) (string-empty-p tag-name))
@@ -272,116 +331,134 @@ TAG-NAME: Tag name."
 (defun org-supertag-relation--show-management-interface (tag-id)
   "Show the tag relations management interface.
 TAG-ID: The ID of the current tag being edited."
-  (let ((buffer-name "*Org-Supertag Relation*"))
-    (when (get-buffer buffer-name)
-      (kill-buffer buffer-name))
-    
-    (with-current-buffer (get-buffer-create buffer-name)
-      (org-supertag-relation-mode)
-      (setq-local org-supertag-relation--current-tag tag-id)
-      (org-supertag-relation--refresh-display))
-    
-    (let ((display-buffer-alist
-           '(("\\*Org-Supertag Relation\\*"
-              (display-buffer-in-side-window)
-              (side . right)
-              (window-width . 0.5)
-              (slot . 0)))))
-      (pop-to-buffer buffer-name))))
+  (when (get-buffer org-supertag-relation-manage--buffer-name)
+    (kill-buffer org-supertag-relation-manage--buffer-name))
+  
+  (with-current-buffer (get-buffer-create org-supertag-relation-manage--buffer-name)
+    (org-supertag-relation-mode)
+    (setq-local org-supertag-relation--current-tag tag-id)
+    (org-supertag-relation--refresh-display))
+  
+  (let ((display-buffer-alist
+         '(("\\*Org-Supertag Relation\\*"
+            (display-buffer-in-side-window)
+            (side . right)
+            (window-width . 0.5)
+            (slot . 0)))))
+    (pop-to-buffer org-supertag-relation-manage--buffer-name)))
 
 (defun org-supertag-relation--refresh-display ()
-  "Refresh the tag relations management interface display."
-  (let ((inhibit-read-only t)
-        (tag-id org-supertag-relation--current-tag))
-    (unless tag-id
-      (user-error "Current tag is not set, please select a tag"))
-    
-    (erase-buffer)
-    (let ((tag-name (org-supertag-tag-get-name-by-id tag-id)))
-      (insert (propertize (format "Tag Relation - %s\n\n" tag-name)
-                         'face '(:height 1.5 :weight bold))))
+  "Refresh the relation management interface display."
+  (when (get-buffer org-supertag-relation-manage--buffer-name)
+    (with-current-buffer org-supertag-relation-manage--buffer-name
+      (let ((inhibit-read-only t)
+            (current-point (point)))
+        (erase-buffer)
+        (let ((tag-name (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag)))
+          (insert (propertize (format "Tag Relation - %s\n\n" tag-name)
+                             'face '(:height 1.5 :weight bold))))
 
-    (insert (propertize "Operations:\n" 'face '(:weight bold)))
-    (insert " [a] - Add     [d] - Remove    [r] - Refresh    [q] - Quit\n")
-    (insert " [g] - Find By Relation Group    [f] - Find By Relation\n")
+        (insert (propertize "Key Bindings:\n" 'face '(:weight bold)))
+        (insert " Navigation:\n")
+        (insert "   [n] - Next item    [p] - Previous item\n")
+        (insert " Actions:\n")
+        (insert "   [RET] - Select/Remove item\n")
+        (insert "   [q] - Quit    [r] - Refresh\n")
+        (insert "   [g] - Find By Group    [f] - Find By Relation\n\n")
 
-    (insert (propertize "\nCo-occurrence Tags:\n" 'face '(:weight bold)))
-    (let* ((relations (cl-remove-if-not
-                      (lambda (rel) (eq (plist-get rel :type) 'cooccurrence))
-                      (org-supertag-relation-get-all tag-id))))
-      (if relations
-          (dolist (rel relations)
-            (let* ((other-tag-id (plist-get rel :to))
-                   (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
-                   (strength (or (plist-get rel :strength) 0.0))
-                   (strength-display (format " %.2f" strength))
-                   (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
-              ;; create clickable remove button
-              (insert " ")
-              (insert-text-button remove-button-text
-                                 'action 'org-supertag-relation--remove-button-action
-                                 'other-tag-id other-tag-id
-                                 'follow-link t
-                                 'help-echo "click to remove this relation")
-              (insert (format " %s " 
-                             (propertize "cooccurrence" 'face '(:foreground "white" :background "black"))))
-              (insert (format " %s%s\n" 
-                             other-tag-name
-                             (propertize strength-display 'face '(:foreground "gray50"))))))
-        (insert "  (no cooccurrence relations)\n")))
+        (insert (propertize "\nCo-occurrence Tags:\n" 'face '(:weight bold)))
+        (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
+               ;; 过滤掉自引用关系，并对关系进行去重
+               (relations (cl-remove-duplicates
+                         (cl-remove-if
+                          (lambda (rel)
+                            (or (not (eq (plist-get rel :type) 'cooccurrence))
+                                ;; 移除自引用关系
+                                (equal (plist-get rel :to) org-supertag-relation--current-tag)))
+                          all-relations)
+                         :test (lambda (a b)
+                                (and (equal (plist-get a :to) (plist-get b :to))
+                                     (eq (plist-get a :type) (plist-get b :type)))))))
+          (if relations
+              (dolist (rel relations)
+                (let* ((other-tag-id (plist-get rel :to))
+                       (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
+                       (strength (or (plist-get rel :strength) 0.0))
+                       (strength-display (format " %.2f" strength))
+                       (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
+                  (insert " ")
+                  (insert-text-button remove-button-text
+                                    'action 'org-supertag-relation--remove-button-action
+                                    'other-tag-id other-tag-id
+                                    'follow-link t
+                                    'help-echo "click to remove this relation")
+                  (insert (format " %s " 
+                                (propertize "cooccurrence" 'face '(:foreground "white" :background "black"))))
+                  (insert (format " %s%s\n" 
+                                other-tag-name
+                                (propertize strength-display 'face '(:foreground "gray50"))))))
+            (insert "  (no cooccurrence relations)\n")))
 
-    (insert (propertize "\nExisting Relations:\n" 'face '(:weight bold)))
-    (let ((relations (cl-remove-if
-                     (lambda (rel) (eq (plist-get rel :type) 'cooccurrence))
-                     (org-supertag-relation-get-all tag-id))))
-      (if relations
-          (dolist (rel relations)
-            (let* ((other-tag-id (plist-get rel :to))
-                   (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
-                   (rel-type (plist-get rel :type))
-                   (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
-              (insert " ")
-              (insert-text-button remove-button-text
-                                 'action 'org-supertag-relation--remove-button-action
-                                 'other-tag-id other-tag-id
-                                 'follow-link t
-                                 'help-echo "click to remove this relation")
-              (insert (format " %s " 
-                             (propertize (format "%s" rel-type) 'face '(:foreground "white" :background "black"))))
-              (insert (format " %s\n" other-tag-name))))
-        (insert "  (no existing relations)\n")))
-    
-    (insert "\n")
-    (insert (propertize "Recommended Relations:\n" 'face '(:weight bold)))
-    (let* ((all-tags (org-supertag-get-all-tags))
-           (other-tag-ids (mapcar #'org-supertag-tag-get-id-by-name 
-                                (remove (org-supertag-tag-get-name-by-id tag-id) all-tags)))
-           (recommendations 
-            (org-supertag-relation--get-recommendations tag-id other-tag-ids)))
-      (if recommendations
+        (insert (propertize "\nExisting Relations:\n" 'face '(:weight bold)))
+        (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
+               ;; 过滤掉自引用关系，并对关系进行去重
+               (relations (cl-remove-duplicates
+                         (cl-remove-if
+                          (lambda (rel)
+                            (or (eq (plist-get rel :type) 'cooccurrence)
+                                ;; 移除自引用关系
+                                (equal (plist-get rel :to) org-supertag-relation--current-tag)))
+                          all-relations)
+                         :test (lambda (a b)
+                                (and (equal (plist-get a :to) (plist-get b :to))
+                                     (eq (plist-get a :type) (plist-get b :type)))))))
+          (if relations
+              (dolist (rel relations)
+                (let* ((other-tag-id (plist-get rel :to))
+                       (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
+                       (rel-type (plist-get rel :type))
+                       (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
+                  (insert " ")
+                  (insert-text-button remove-button-text
+                                    'action 'org-supertag-relation--remove-button-action
+                                    'other-tag-id other-tag-id
+                                    'follow-link t
+                                    'help-echo "click to remove this relation")
+                  (insert (format " %s " 
+                                (propertize (format "%s" rel-type) 'face '(:foreground "white" :background "black"))))
+                  (insert (format " %s\n" other-tag-name))))
+            (insert "  (no existing relations)\n")))
+        
+        (insert "\n")
+        (insert (propertize "Recommended Similar Tags:\n" 'face '(:weight bold)))
+        (if (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache)
+            (progn
+              (dolist (rec (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache))
+                (let* ((tag-name (car rec))
+                       (similarity (cdr rec)))
+                  (insert " ")
+                  (insert-text-button (propertize "[Select]" 'face '(:foreground "green"))
+                                    'action 'org-supertag-relation--select-tag-action
+                                    'other-tag-id (org-supertag-tag-get-id-by-name tag-name)
+                                    'follow-link t
+                                    'help-echo "Click to select this tag for relation")
+                  (insert (format " %s (%.2f)\n" tag-name similarity)))))
+          ;; If there are no recommendations, trigger a recommendation search
           (progn
-            (dolist (rec recommendations)
-              (let* ((rec-tag-id (car rec))
-                     (rec-tag-name (org-supertag-tag-get-name-by-id rec-tag-id))
-                     (suggested-rel-type (org-supertag-relation--suggest-relation-type 
-                                         tag-id rec-tag-id))
-                     (add-button-text (propertize "[+]" 'face '(:foreground "green"))))
-
-                (insert " ")
-                (insert-text-button add-button-text
-                                   'action 'org-supertag-relation--add-button-action
-                                   'other-tag-id rec-tag-id
-                                   'rel-type suggested-rel-type
-                                   'follow-link t
-                                   'help-echo "click to add this relation")
-                (insert (format " %s " 
-                               (propertize (format "%s" suggested-rel-type) 'face '(:foreground "white" :background "black"))))
-                (insert (format " %s\n" rec-tag-name)))))
-        (insert "  (no recommended relations)\n")))
-    
-    (insert "\n")
-    (insert (propertize "Note: " 'face '(:weight bold)))
-    (insert "Click [+] to add recommended relations, click [-] to remove existing relations\n")))
+            (insert "  (Getting similar tags...)\n")
+            (let* ((all-tags (org-supertag-get-all-tags))
+                   (other-tag-ids (mapcar #'org-supertag-tag-get-id-by-name 
+                                        (remove (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag) all-tags))))
+              (run-with-timer 0 nil  ; 使用定时器避免递归
+                            (lambda ()
+                              (org-supertag-relation--get-recommendations 
+                               org-supertag-relation--current-tag other-tag-ids))))))
+        
+        (insert "\n")
+        (insert (propertize "Note: " 'face '(:weight bold)))
+        (insert "Click [+] to add recommended relations, click [-] to remove existing relations\n")
+        
+        (goto-char current-point)))))
 
 ;;----------------------------------------------------------------------
 ;; Helper Functions
@@ -494,6 +571,10 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
     (define-key map (kbd "q") 'org-supertag-relation-quit)
     (define-key map (kbd "g") 'org-supertag-relation-find-by-group)
     (define-key map (kbd "f") 'org-supertag-relation-find-related-tags)
+    ;; Navigation keys (Emacs style)
+    (define-key map (kbd "n") 'org-supertag-relation--next-line)
+    (define-key map (kbd "p") 'org-supertag-relation--prev-line)
+    (define-key map (kbd "RET") 'org-supertag-relation--select-current-line)
     map))
 
 (define-derived-mode org-supertag-relation-mode special-mode "Org-Supertag-Relation"
@@ -540,14 +621,16 @@ If VOID-OK is non-nil, allow missing tag IDs."
              (rel-to-id-map (make-hash-table :test 'equal)))        
         ;; Create choices and build mapping
         (dolist (rel relations)
-          (let ((other-tag-id (plist-get rel :to)))
-            (when other-tag-id
-              (let ((other-tag-name (or (org-supertag-tag-get-name-by-id other-tag-id)
-                                       "(Unnamed Tag)")))
-                    (rel-type (plist-get rel :type)))
-                (let ((choice (format "%s (%s)" other-tag-name rel-type)))
-                  (push choice rel-choices)
-                  (puthash choice other-tag-id rel-to-id-map))))))
+          (let* ((other-tag-id (plist-get rel :to))
+                 (other-tag-name (when other-tag-id
+                                 (or (org-supertag-tag-get-name-by-id other-tag-id)
+                                     "(Unnamed Tag)")))
+                 (rel-type (plist-get rel :type))
+                 (choice (when (and other-tag-name rel-type)
+                          (format "%s (%s)" other-tag-name rel-type))))
+            (when choice
+              (push choice rel-choices)
+              (puthash choice other-tag-id rel-to-id-map))))
         ;; Make sure the choices are in reverse order to make it easier to navigate
         (setq rel-choices (nreverse rel-choices))
         (if (null rel-choices)
@@ -561,7 +644,7 @@ If VOID-OK is non-nil, allow missing tag IDs."
                   (message "Removed relation: %s <-> %s" 
                            (or (org-supertag-tag-get-name-by-id tag-id) tag-id)
                            (or (org-supertag-tag-get-name-by-id other-tag-id) other-tag-id)))
-              (message "Can't find target tag ID. Please try again.")))))))
+              (message "Can't find target tag ID. Please try again."))))))))
 
 (defun org-supertag-relation-refresh ()
   (interactive)
@@ -576,25 +659,57 @@ If VOID-OK is non-nil, allow missing tag IDs."
 ;;------------------------------------------------------------------------
 
 (defun org-supertag-relation--get-recommendations (tag-id other-tags)
-  "Get tag relation recommendations.
-TAG-ID: The current tag ID
-OTHER-TAGS: The list of other possible related tags"
-  (if (or (null tag-id) (null other-tags))
-      nil
-    (let (recommendations
-          (existing-relations (mapcar 
-                              (lambda (rel) (plist-get rel :to))
-                              (org-supertag-relation-get-all tag-id))))
-      (dolist (other-tag other-tags)
-        (when (and other-tag 
-                  (not (equal other-tag tag-id))
-                  (not (member other-tag existing-relations)))
-          (push (cons other-tag 0.5) recommendations)))
-      
-      (setq recommendations 
-            (sort (seq-take recommendations 10) 
-                  (lambda (a b) (string< (car a) (car b)))))
-      recommendations)))
+  "获取标签关系推荐.
+TAG-ID: 当前标签 ID
+OTHER-TAGS: 其他可能相关的标签列表"
+  (if (or (null tag-id)
+          (null other-tags)
+          org-supertag-relation--updating-recommendations)  ; 防止重复调用
+      (gethash tag-id org-supertag-relation--recommendations-cache)  ; 返回缓存的推荐列表
+    (let ((tag-name (org-supertag-tag-get-name-by-id tag-id)))
+      (when (and tag-name (fboundp 'org-supertag-sim-find-similar))
+        (setq org-supertag-relation--updating-recommendations t)
+        ;; 使用相似度搜索获取推荐
+        (org-supertag-sim-find-similar
+         tag-name
+         10  ; 获取前10个相似标签
+         (lambda (similar-tags)
+           ;; 过滤掉已存在的关系
+           (let* ((existing-relations (mapcar 
+                                     (lambda (rel) (plist-get rel :to))
+                                     (org-supertag-relation-get-all tag-id)))
+                  (recommendations
+                   (cl-remove-if
+                    (lambda (tag)
+                      (let ((other-id (org-supertag-tag-get-id-by-name (car tag))))
+                        (or (null other-id)  ; 忽略不存在的标签
+                            (equal other-id tag-id)  ; 忽略自身
+                            (member other-id existing-relations))))  ; 忽略已有关系
+                    similar-tags)))
+             ;; 更新推荐缓存
+             (puthash tag-id recommendations org-supertag-relation--recommendations-cache)
+             (setq org-supertag-relation--updating-recommendations nil)
+             ;; 使用 run-with-timer 延迟刷新显示，避免递归
+             (run-with-timer 0.1 nil
+                            (lambda ()
+                              (when (get-buffer org-supertag-relation-manage--buffer-name)
+                                (with-current-buffer org-supertag-relation-manage--buffer-name
+                                  (let ((inhibit-read-only t))
+                                    (org-supertag-relation--refresh-display))))))))))
+      ;; 返回缓存的推荐列表
+      (gethash tag-id org-supertag-relation--recommendations-cache))))
+
+(defun org-supertag-relation--format-recommendations ()
+  "Format the recommendation list for display.
+Only show similar tags without suggesting relation types."
+  (when (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache)
+    (mapconcat
+     (lambda (rec)
+       (let* ((tag-name (car rec))
+              (similarity (cdr rec)))
+         (format "%-30s (%.2f)" tag-name similarity)))
+     (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache)
+     "\n")))
 
 (defun org-supertag-relation--suggest-relation-type (tag1 tag2)
   "Recommend appropriate relation types for TAG1 and TAG2 based on tag characteristics."
@@ -762,7 +877,7 @@ This is an incremental update feature that only updates affected relations."
 (defun org-supertag-relation-get-strength (tag1 tag2)
   "Get the strength of the relationship between TAG1 and TAG2.
 If the relation does not exist, return nil."
-  (let ((rel (car (cl-remove-if-not
+  (let ((rel (car (cl-remove-if
                   (lambda (r) (equal (plist-get r :to) tag2))
                   (org-supertag-relation-get-all tag1)))))
     (when rel
@@ -805,7 +920,7 @@ If the relation does not exist, return nil."
     (when (and tag-id other-tag-id rel-type)
       (org-supertag-relation-add-relation tag-id other-tag-id rel-type)
       (org-supertag-relation--refresh-display)
-      (message "Relation added: %s ->[%s]-> %s" 
+      (message "Relation added: %s -[%s]-> %s" 
                (org-supertag-tag-get-name-by-id tag-id)
                rel-type
                (org-supertag-tag-get-name-by-id other-tag-id)))))
@@ -813,13 +928,110 @@ If the relation does not exist, return nil."
 (defun org-supertag-relation--remove-button-action (button)
   "Handle the action of clicking the remove relation button."
   (let* ((tag-id org-supertag-relation--current-tag)
-         (other-tag-id (button-get button 'other-tag-id)))
-    (when (and tag-id other-tag-id)
-      (org-supertag-relation-remove-relation tag-id other-tag-id)
+         (other-tag-id (button-get button 'other-tag-id))
+         ;; Get the relation type from the existing relation
+         (rel (car (org-supertag-relation-get tag-id other-tag-id)))
+         (rel-type (and rel (plist-get rel :type))))
+    (when (and tag-id other-tag-id rel-type)
+      (org-supertag-relation-remove-relation tag-id other-tag-id rel-type)
       (org-supertag-relation--refresh-display)
-      (message "Relation removed: %s -> %s" 
+      (message "Relation removed: %s -[%s]-> %s" 
                (org-supertag-tag-get-name-by-id tag-id)
+               rel-type
                (org-supertag-tag-get-name-by-id other-tag-id)))))
+
+(defun org-supertag-relation--select-tag-action (button)
+  "Handle the action of selecting a similar tag.
+This will prompt user to choose a relation type for the selected tag."
+  (let* ((tag-id org-supertag-relation--current-tag)
+         (other-tag-id (button-get button 'other-tag-id))
+         (rel-choices (org-supertag-relation--get-relation-type-choices))
+         (choice (completing-read "Select relation type: " rel-choices nil t))
+         (rel-type (org-supertag-relation--get-type-from-choice choice)))
+    (when (and tag-id other-tag-id rel-type)
+      (org-supertag-relation-add-relation tag-id other-tag-id rel-type)
+      (org-supertag-relation--refresh-display)
+      (message "Added relation: %s -[%s]-> %s" 
+               (org-supertag-tag-get-name-by-id tag-id)
+               rel-type
+               (org-supertag-tag-get-name-by-id other-tag-id)))))
+
+(defun org-supertag-relation--next-line ()
+  "Move to the next line."
+  (interactive)
+  (with-current-buffer org-supertag-relation-manage--buffer-name
+    (forward-line)
+    (beginning-of-line)))
+
+(defun org-supertag-relation--prev-line ()
+  "Move to the previous line."
+  (interactive)
+  (with-current-buffer org-supertag-relation-manage--buffer-name
+    (forward-line -1)
+    (beginning-of-line)))
+
+(defun org-supertag-relation--select-current-line ()
+  "Select the button on the current line."
+  (interactive)
+  (with-current-buffer org-supertag-relation-manage--buffer-name
+    (save-excursion
+      (beginning-of-line)
+      (when (re-search-forward "\\(\\[-\\]\\|\\[Select\\]\\)" (line-end-position) t)
+        (let ((button (button-at (match-beginning 0))))
+          (when button
+            (push-button button)))))))
+
+(defun org-supertag-relation--highlight-current-item ()
+  "Highlight the current item in the buffer."
+  (with-current-buffer org-supertag-relation-manage--buffer-name
+    (let ((inhibit-read-only t))
+      (remove-overlays (point-min) (point-max) 'org-supertag-relation-highlight t)
+      (let* ((all-items (org-supertag-relation--get-all-items))
+             (current-item (nth org-supertag-relation--current-item-index all-items)))
+        (when current-item
+          (let ((tag-name (cond
+                          ((eq (car current-item) 'recommended)
+                           (car (cdr current-item)))
+                          (t
+                           (org-supertag-tag-get-name-by-id 
+                            (plist-get (cdr current-item) :to))))))
+            (save-excursion
+              (goto-char (point-min))
+              (let ((found nil))
+                (while (and (not found)
+                           (search-forward tag-name nil t))
+                  (save-excursion
+                    (beginning-of-line)
+                    (when (looking-at ".*\\(\\[-\\]\\|\\[Select\\]\\).*")
+                      (setq found t)
+                      (let* ((line-start (line-beginning-position))
+                             (line-end (line-end-position))
+                             (ov (make-overlay line-start line-end)))
+                        (overlay-put ov 'face 'highlight)
+                        (overlay-put ov 'org-supertag-relation-highlight t)))))))))))))  
+
+(defun org-supertag-relation--get-all-items ()
+  "Get all items from all sections in display order."
+  (let ((items nil))
+    ;; Co-occurrence section
+    (dolist (rel (cl-remove-if-not
+                 (lambda (rel) (eq (plist-get rel :type) 'cooccurrence))
+                 (org-supertag-relation-get-all org-supertag-relation--current-tag)))
+      (push (cons 'cooccurrence rel) items))
+    
+    ;; Existing relations section
+    (dolist (rel (cl-remove-if
+                 (lambda (rel) (eq (plist-get rel :type) 'cooccurrence))
+                 (org-supertag-relation-get-all org-supertag-relation--current-tag)))
+      (push (cons 'existing rel) items))
+    
+    ;; Recommended section
+    (when-let ((recommendations (gethash org-supertag-relation--current-tag
+                                       org-supertag-relation--recommendations-cache)))
+      (dolist (rec recommendations)
+        (push (cons 'recommended rec) items)))
+    
+    (nreverse items)))
 
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here

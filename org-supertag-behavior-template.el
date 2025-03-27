@@ -154,7 +154,7 @@ Supports:
 (org-supertag-behavior-template-register
  "prop"
  (lambda (prop-name ctx)
-   (when-let ((pos (org-supertag-db-get-pos 
+   (when-let* ((pos (org-supertag-db-get-pos 
                     (org-supertag-behavior-context-node-id ctx))))
      (org-with-point-at pos
        (org-entry-get nil prop-name)))))

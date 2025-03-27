@@ -58,7 +58,7 @@ PROPS is a plist with:
     (puthash behavior-name behavior org-supertag-behavior-registry)
     
     ;; Process hooks
-    (when-let ((hooks (plist-get props :hooks)))
+    (when-let* ((hooks (plist-get props :hooks)))
       (dolist (hook-spec hooks)
         (add-hook (car hook-spec) (cdr hook-spec))))
     
@@ -281,7 +281,7 @@ PATTERN is the validation pattern"
 (defun org-supertag-cron-valid-p (cron-string)
   "Check if cron expression is valid.
 CRON-STRING is the complete cron expression"
-  (when-let ((fields (org-supertag-parse-cron cron-string)))
+  (when-let* ((fields (org-supertag-parse-cron cron-string)))
     (and
      ;; Minutes (0-59)
      (org-supertag-validate-cron-field 
@@ -407,9 +407,9 @@ BEHAVIOR is the behavior definition with:
                  (progn
                    (message "Executing scheduled task %s for node %s" id node-id)
                    (save-excursion
-                     (when-let ((pos (org-supertag-db-get-pos node-id)))
+                     (when-let* ((pos (org-supertag-db-get-pos node-id)))
                        (org-with-point-at pos
-                         (if-let ((behavior-list (plist-get task :list)))
+                         (if-let* ((behavior-list (plist-get task :list)))
                              ;; Execute behavior list
                              (dolist (sub-behavior behavior-list)
                                (let* ((parts (split-string sub-behavior "="))
@@ -494,7 +494,7 @@ BEHAVIOR is the behavior definition with:
 (defun org-supertag-behavior--validate-node (node-id)
   "Validate if NODE-ID represents a valid org node.
 Returns t if valid, nil otherwise."
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (cond
        ((markerp pos) (set-buffer (marker-buffer pos)))
@@ -531,7 +531,7 @@ Returns t if valid, nil otherwise."
                         tag-id (error-message-string err)))))
         ;; Remove scheduled task when tag is removed
         (when (eq action :remove)
-          (when-let ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
+          (when-let* ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
             (org-supertag-schedule-remove-task behavior-name)))))
      
      ;; Handle regular behaviors
@@ -584,7 +584,7 @@ Returns t if valid, nil otherwise."
       (save-excursion
         (org-with-point-at pos
           ;; Check for behavior list
-          (if-let ((behavior-list (plist-get behavior-spec :list)))
+          (if-let* ((behavior-list (plist-get behavior-spec :list)))
               ;; Execute behavior list
               (dolist (sub-behavior behavior-list)
                 (let* ((parts (split-string sub-behavior "="))
@@ -601,7 +601,7 @@ Returns t if valid, nil otherwise."
    
    ;; function: direct execution
    ((functionp behavior-spec)
-    (when-let ((pos (org-supertag-db-get-pos node-id)))
+    (when-let* ((pos (org-supertag-db-get-pos node-id)))
       (save-excursion
         (org-with-point-at pos
           (if params
@@ -809,7 +809,7 @@ Example:
           (message "Debug execute-behavior - node=%s behavior=%s action=%S list=%S"
                   node-id behavior-name action behavior-list)
           ;; 2. Execute based on behavior type
-          (when-let ((pos (org-supertag-db-get-pos node-id)))
+          (when-let* ((pos (org-supertag-db-get-pos node-id)))
             (save-excursion
               (org-with-point-at pos
                 (cond
@@ -1143,7 +1143,7 @@ Returns t if valid, signals error if invalid."
 
 (defun org-supertag-behavior-get (tag-id)
   "Get behavior definition for TAG-ID."
-  (when-let ((tag (org-supertag-tag-get tag-id)))
+  (when-let* ((tag (org-supertag-tag-get tag-id)))
     (org-supertag-tag-get-field-value tag "_behavior")))
 
 (defun org-supertag-behavior-refresh-node (node-id)
@@ -1191,7 +1191,7 @@ Returns t if valid, signals error if invalid."
              (derived-mode-p 'org-mode)
              (org-at-heading-p))
     (save-excursion
-      (when-let ((node-id (org-id-get)))
+      (when-let* ((node-id (org-id-get)))
         ;; Clear overlays for current line
         (remove-overlays (line-beginning-position)
                         (line-end-position)

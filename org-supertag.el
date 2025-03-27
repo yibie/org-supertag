@@ -77,7 +77,7 @@
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
 (require 'org-supertag-sim)
-(require 'org-supertag-sim-epc)
+(require 'org-supertag-sim-epc) 
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."

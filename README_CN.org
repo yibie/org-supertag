@@ -50,6 +50,7 @@ Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
     - 使用同样强大的查询系统根据行内标签查询节点
     - 特殊字体效果使行内标签在视觉上更加突出
 
+
 ** 增强的标签系统
 让你的 org-mode 标签成为强大的元数据控制器：
 
@@ -172,6 +173,57 @@ M-x org-supertag-behavior-attach
 #+end_src
 
 为标签附加自动化行为。
+
+** 使用行内标签
+#+begin_src
+M-x org-supertag-inline-insert-tag
+#+end_src
+
+在您的内容中插入哈希标签风格的行内标签。这些标签：
+- 可以在您的文本中的任何位置使用 `C-c t i` 添加
+- 会自动链接到当前节点
+- 支持现有标签的完成
+- 允许通过添加 '#' 后缀即时创建新标签
+- 以独特的样式显示，以便更好地阅读
+
+[[./picture/figure10.gif]]
+*** 自定义选项
+
+
+您可以自定义行内标签的外观和行为：
+
+#+begin_src emacs-lisp
+;; 启用或禁用标签高亮
+(setq org-supertag-inline-enable-fontification t)
+
+;; 自定义浅色主题的颜色
+(setq org-supertag-inline-light-theme-colors
+      '(:box (:line-width -1 :color "#d0d0d0")
+        :background "#f8f8f8"
+        :foreground "#2a2a2a"))
+
+;; 自定义深色主题的颜色
+(setq org-supertag-inline-dark-theme-colors
+      '(:box (:line-width -1 :color "#505050")
+        :background "#383838"
+        :foreground "#e8e8e8"))
+
+;; 自定义文本属性
+(setq org-supertag-inline-text-properties
+      '(:height 0.95
+        :weight normal
+        :spacing 0.2))
+
+;; 控制是否隐藏 # 前缀
+(setq org-supertag-inline-hide-hash t)
+
+;; 自定义匹配标签的正则表达式模式
+(setq org-supertag-inline-tag-regexp "#\\([[:alnum:]_-]+\\)")
+
+;; 指定不应高亮显示标签的上下文
+(setq org-supertag-inline-excluded-contexts
+      '(src-block comment example-block export-block))
+#+end_src
 
 * 基本安装
 

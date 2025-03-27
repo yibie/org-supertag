@@ -63,20 +63,21 @@ NODE-ID is the target node ID
 TAG-ID is the tag ID"
   (condition-case err
       (let* ((field-name (plist-get field-def :name))
+             (sanitized-name (org-supertag--sanitize-field-name field-name))
              (field-type (plist-get field-def :type))
              (type-def (org-supertag-get-field-type field-type))
              (processed-value
               (progn
                 (message "Debug - Setting field: name=%S, type=%S, initial-value=%S" 
-                         field-name field-type value)
+                         sanitized-name field-type value)
                 (if (and type-def value)
                     (progn
                       (message "Debug - Processing value with type-def: %S" type-def)
-                      (when-let ((validator (plist-get type-def :validator)))
+                      (when-let* ((validator (plist-get type-def :validator)))
                         (message "Debug - Validating with %S" validator)
                         (unless (funcall validator value)
-                          (error "Value validation failed for %s: %S" field-name value)))
-                      (if-let ((formatter (plist-get type-def :formatter)))
+                          (error "Value validation failed for %s: %S" sanitized-name value)))
+                      (if-let* ((formatter (plist-get type-def :formatter)))
                           (progn
                             (message "Debug - Formatting with %S" formatter)
                             (funcall formatter value field-def))
@@ -85,19 +86,25 @@ TAG-ID is the tag ID"
                     (message "Debug - Using raw value (no processing): %S" value)
                     value)))))
         
+        ;; Use sanitized name for all operations
+        (unless (string= field-name sanitized-name)
+          (setq field-name sanitized-name)
+          (setq field-def (copy-sequence field-def))
+          (setf (plist-get field-def :name) sanitized-name))
+        
         (message "Debug - Final processed value: %S" processed-value)
         
         (when (eq field-type 'tag-reference)
           (message "Debug - Processing tag-reference: value=%S, processed=%S" 
                    value processed-value)
-          (when-let ((old-value (org-supertag-field-get-value field-def node-id tag-id)))
+          (when-let* ((old-value (org-supertag-field-get-value field-def node-id tag-id)))
             (org-supertag-node-db-remove-reference node-id old-value))
           (when processed-value
             (org-supertag-node-db-add-reference node-id processed-value)))
         
         (org-supertag-field-db-set-value node-id field-name processed-value tag-id)
         
-        (when-let ((pos (condition-case nil
+        (when-let* ((pos (condition-case nil
                            (org-id-find node-id t)
                          (error nil))))
           (org-with-point-at pos
@@ -392,11 +399,11 @@ VALUE should be a node ID (string) or nil, or an org-mode link format."
                           ((string-match "\\[\\[id:\\([^]]+\\)\\]" value)
                            (match-string 1 value))
                           ;; 纯 ID
-                          (t value))))
+                          (t value)))
              (message "Debug - Checking if node exists: %S" node-id)
              (let ((exists (org-supertag-node-db-exists-p node-id)))
                (message "Debug - Node exists? %S" exists)
-               exists)))))
+               exists))))))
 
 
 (defun org-supertag-field-get-reference-value (node-id tag-id field)
@@ -506,20 +513,6 @@ VALUE should be in 'min-max' format."
                (< min max)))            ; Min must be less than max
       (error nil))))
 
-(defun org-supertag-format-range (value field-def)
-  "Format range value.
-VALUE is the range value.
-FIELD-DEF is the field definition."
-  value)  ; Return value as-is
-
-(defun org-supertag-read-range-field (field-def)
-  "Read range value.
-FIELD-DEF is the field definition."
-  (let ((value (read-string 
-                (format "Enter range (format: min-max): "))))
-    (if (org-supertag-validate-range value)
-        value
-      (error "Invalid range format, use 'min-max' format like '1-10'"))))
 
 ;;---------------------------------------------------------------------------
 ;; Get Field Initial Value
@@ -574,7 +567,7 @@ Format example:
 - Behavior[:always +action]"
   (cond
    ((stringp value)
-    (if-let ((behavior (gethash value org-supertag-behavior-registry)))
+    (if-let* ((behavior (gethash value org-supertag-behavior-registry)))
         (let ((trigger (plist-get behavior :trigger))
               (has-action (plist-get behavior :action))
               (style (plist-get behavior :style)))
@@ -692,7 +685,7 @@ VALUE: Value to convert."
           ;; If the node is not found, return the original ID
           node-id)))
      (t
-      (if-let ((formatter (plist-get type-spec :formatter)))
+      (if-let* ((formatter (plist-get type-spec :formatter)))
           (progn
             (message "Debug - Using formatter: %S" formatter)
             (funcall formatter value nil))
@@ -859,6 +852,8 @@ This will clear all existing values of this field across all nodes."
         
         (message "Field '%s' modified. You may now set new values." 
                  new-name)))))
+
+
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here
