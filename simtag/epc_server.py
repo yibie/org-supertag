@@ -55,6 +55,8 @@ class SimTagServer:
             ('initialize', self.initialize),
             ('find_similar', self.find_similar),
             ('suggest_tags', self.suggest_tags),
+            ('suggest_tags_base64', self.suggest_tags_base64),
+            ('suggest_tags_json', self.suggest_tags_json),
             ('extract_entities', self.extract_entities),
             ('check_imports', self.check_imports),
             ('get_config', self.get_config),
@@ -405,6 +407,89 @@ class SimTagServer:
             trace = traceback.format_exc()
             self.logger.error(f"{error_message}\n{trace}")
             return normalize_response(None, "error", error_message)
+
+    def suggest_tags_base64(self, base64_text: str, limit: int = 5) -> Dict[str, Any]:
+        """处理Base64编码的文本并生成标签建议
+        
+        Args:
+            base64_text: Base64编码的文本
+            limit: 返回结果数量限制
+            
+        Returns:
+            标签列表
+        """
+        try:
+            # 记录接收到的Base64文本长度
+            self.logger.info(f"收到Base64编码文本，长度: {len(base64_text)}")
+            
+            # 解码Base64文本
+            import base64
+            try:
+                decoded_text = base64.b64decode(base64_text).decode('utf-8')
+                self.logger.info(f"Base64解码成功，解码后文本长度: {len(decoded_text)}")
+                
+                # 添加文本预览日志
+                if decoded_text:
+                    preview = decoded_text[:200] + "..." if len(decoded_text) > 200 else decoded_text
+                    self.logger.info(f"解码后文本预览: {preview}")
+            except Exception as e:
+                self.logger.error(f"Base64解码失败: {e}")
+                return normalize_response(None, "error", f"Base64解码失败: {e}")
+            
+            # 调用常规的标签生成方法处理解码后的文本
+            return self.suggest_tags(decoded_text, limit)
+            
+        except Exception as e:
+            self.logger.error(f"Base64文本处理失败: {e}")
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", str(e))
+            
+    def suggest_tags_json(self, json_data: str, limit: int = 5) -> Dict[str, Any]:
+        """使用JSON格式处理标签生成请求
+        
+        Args:
+            json_data: JSON格式的请求数据，包含要分析的文本内容
+            limit: 返回结果数量限制
+            
+        Returns:
+            标签列表
+        """
+        try:
+            # 记录接收到的JSON数据长度
+            self.logger.info(f"收到JSON格式请求，长度: {len(json_data)}")
+            
+            # 解析JSON数据
+            try:
+                import json
+                request = json.loads(json_data)
+                
+                # 确保JSON格式正确，包含content字段
+                if not isinstance(request, dict):
+                    self.logger.error(f"JSON数据不是字典格式: {type(request)}")
+                    return normalize_response(None, "error", "无效的请求格式，应为JSON对象")
+                
+                text = request.get("content")
+                
+                if not text:
+                    self.logger.error("请求中缺少content字段或为空")
+                    return normalize_response(None, "error", "请求中缺少文本内容")
+                
+                self.logger.info(f"从JSON提取的文本长度: {len(text)}")
+                text_preview = text[:100] + "..." if len(text) > 100 else text
+                self.logger.info(f"文本预览: {text_preview}")
+                
+            except json.JSONDecodeError as e:
+                self.logger.error(f"JSON解析失败: {e}")
+                self.logger.error(f"接收到的JSON数据: {json_data[:200]}..." if len(json_data) > 200 else json_data)
+                return normalize_response(None, "error", f"JSON解析失败: {e}")
+            
+            # 使用标准的suggest_tags方法处理文本
+            return self.suggest_tags(text, limit)
+            
+        except Exception as e:
+            self.logger.error(f"JSON请求处理失败: {e}")
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", str(e))
 
 def run_ollama_model(text, model_name="gemma-3b-it"):
     """直接运行ollama命令"""
