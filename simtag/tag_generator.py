@@ -258,6 +258,11 @@ Guidelines:
                     clean_tag = re.sub(r'[\'"`\(\)\[\]\{\}]', '', clean_tag)
                     # 移除开头的数字和点
                     clean_tag = re.sub(r'^[\d\.\-\s]+', '', clean_tag)
+                    # 移除反斜杠字符
+                    clean_tag = clean_tag.replace('\\', '')
+                    # 将内部空格替换为下划线
+                    clean_tag = re.sub(r'\s+', '_', clean_tag)
+                    # 不再截断标签长度
                     
                     if clean_tag and clean_tag not in valid_tags:
                         valid_tags.append(clean_tag)
