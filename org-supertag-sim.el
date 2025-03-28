@@ -321,7 +321,7 @@ Optional CALLBACK will be called with the results."
         :catch
         (lambda (err)
           (message "生成标签建议出错: %s" (error-message-string err))
-          (when callback (funcall callback nil)))))))
+          (when callback (funcall callback nil))))))))
 
 (defun org-supertag-sim-auto-tag-node ()
   "Automatically suggest and apply tags for current node based on its content."
