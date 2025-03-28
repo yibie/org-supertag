@@ -43,6 +43,14 @@ class OllamaBridge:
                 self.logger.error("模型名称未设置")
                 raise Exception("模型名称未设置")
             
+            # 确保 prompt 是 UTF-8 编码的有效字符串
+            if not isinstance(prompt, str):
+                prompt = str(prompt)
+            
+            # 确保系统提示也是有效字符串
+            if system and not isinstance(system, str):
+                system = str(system)
+                
             self.logger.debug(f"使用模型: {self.model}")
             self.logger.debug(f"系统提示: {system}")
             self.logger.debug(f"用户提示: {prompt[:100]}...")
@@ -51,34 +59,58 @@ class OllamaBridge:
             data = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False  # 不使用流式响应
+                "stream": False,  # 不使用流式响应
+                "options": {
+                    "temperature": 0.7,  # 控制输出的随机性
+                    "num_predict": 1024,  # 最大输出长度
+                    "stop": []  # 停止标记
+                }
             }
+            
+            # 添加系统提示
             if system:
                 data["system"] = system
             
-            self.logger.info("发送 API 请求...")
-            response = requests.post(
-                "http://127.0.0.1:11434/api/generate",
-                json=data
-            )
+            # 记录生成的请求数据（不包含敏感内容）
+            self.logger.info(f"发送 API 请求到模型: {self.model}")
             
+            # 发送请求
+            try:
+                response = requests.post(
+                    "http://127.0.0.1:11434/api/generate",
+                    json=data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=60  # 添加超时设置
+                )
+            except requests.RequestException as e:
+                self.logger.error(f"请求异常: {e}")
+                raise Exception(f"请求异常: {e}")
+            
+            # 检查响应状态码
             if response.status_code == 200:
-                response_data = response.json()
-                result = response_data.get('response', '').strip()
-                
-                # 记录生成统计信息
-                if 'eval_duration' in response_data:
-                    eval_duration = response_data['eval_duration']
-                    eval_count = response_data.get('eval_count', 0)
-                    tokens_per_second = eval_count / (eval_duration / 1e9) if eval_duration > 0 else 0
-                    self.logger.info(f"生成速度: {tokens_per_second:.2f} tokens/s")
-                
-                self.logger.info("Ollama API 调用成功")
-                self.logger.debug(f"响应结果: {result[:100]}...")  # 只记录前100个字符
-                return result
-                
+                try:
+                    response_data = response.json()
+                    result = response_data.get('response', '').strip()
+                    
+                    # 记录生成统计信息
+                    if 'eval_duration' in response_data:
+                        eval_duration = response_data['eval_duration']
+                        eval_count = response_data.get('eval_count', 0)
+                        tokens_per_second = eval_count / (eval_duration / 1e9) if eval_duration > 0 else 0
+                        self.logger.info(f"生成速度: {tokens_per_second:.2f} tokens/s")
+                    
+                    if not result:
+                        self.logger.warning("Ollama 返回了空响应")
+                        
+                    self.logger.info("Ollama API 调用成功")
+                    self.logger.debug(f"响应结果: {result[:100]}..." if len(result) > 100 else f"响应结果: {result}")
+                    return result
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"解析 JSON 响应失败: {e}")
+                    self.logger.error(f"原始响应内容: {response.text[:200]}...")
+                    raise Exception(f"解析 JSON 响应失败: {e}")
             else:
-                error_msg = f"Ollama API 调用失败: {response.text}"
+                error_msg = f"Ollama API 调用失败: HTTP {response.status_code} - {response.text}"
                 self.logger.error(error_msg)
                 raise Exception(error_msg)
                 
