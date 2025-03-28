@@ -55,7 +55,6 @@ class SimTagServer:
             ('initialize', self.initialize),
             ('find_similar', self.find_similar),
             ('suggest_tags', self.suggest_tags),
-            ('suggest_tags_base64', self.suggest_tags_base64),
             ('suggest_tags_json', self.suggest_tags_json),
             ('extract_entities', self.extract_entities),
             ('check_imports', self.check_imports),
@@ -407,42 +406,6 @@ class SimTagServer:
             trace = traceback.format_exc()
             self.logger.error(f"{error_message}\n{trace}")
             return normalize_response(None, "error", error_message)
-
-    def suggest_tags_base64(self, base64_text: str, limit: int = 5) -> Dict[str, Any]:
-        """处理Base64编码的文本并生成标签建议
-        
-        Args:
-            base64_text: Base64编码的文本
-            limit: 返回结果数量限制
-            
-        Returns:
-            标签列表
-        """
-        try:
-            # 记录接收到的Base64文本长度
-            self.logger.info(f"收到Base64编码文本，长度: {len(base64_text)}")
-            
-            # 解码Base64文本
-            import base64
-            try:
-                decoded_text = base64.b64decode(base64_text).decode('utf-8')
-                self.logger.info(f"Base64解码成功，解码后文本长度: {len(decoded_text)}")
-                
-                # 添加文本预览日志
-                if decoded_text:
-                    preview = decoded_text[:200] + "..." if len(decoded_text) > 200 else decoded_text
-                    self.logger.info(f"解码后文本预览: {preview}")
-            except Exception as e:
-                self.logger.error(f"Base64解码失败: {e}")
-                return normalize_response(None, "error", f"Base64解码失败: {e}")
-            
-            # 调用常规的标签生成方法处理解码后的文本
-            return self.suggest_tags(decoded_text, limit)
-            
-        except Exception as e:
-            self.logger.error(f"Base64文本处理失败: {e}")
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", str(e))
             
     def suggest_tags_json(self, json_data: str, limit: int = 5) -> Dict[str, Any]:
         """使用JSON格式处理标签生成请求
