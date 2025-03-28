@@ -35,6 +35,25 @@
 (defvar org-supertag-sim--sync-timer nil
   "Timer for periodic synchronization.")
 
+(defvar org-supertag-sim-tag-select-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; 基本导航
+    (define-key map (kbd "n") #'next-line)
+    (define-key map (kbd "p") #'previous-line)
+    (define-key map (kbd "SPC") #'org-supertag-sim-toggle-tag-selection)
+    (define-key map (kbd "RET") #'org-supertag-sim-toggle-tag-selection)
+    (define-key map (kbd "C-c C-c") #'org-supertag-sim-apply-selected-tags)
+    (define-key map (kbd "C-c C-k") #'org-supertag-sim-cancel-tag-selection)
+    (define-key map (kbd "q") #'org-supertag-sim-cancel-tag-selection)
+    (define-key map (kbd "a") #'org-supertag-sim-select-all-tags)
+    (define-key map (kbd "A") #'org-supertag-sim-unselect-all-tags)
+    map)
+  "标签选择模式的键盘映射.")
+
+(define-derived-mode org-supertag-sim-tag-select-mode special-mode "OrgSuperTag-TagSelect"
+  "为自动标签建议提供标签选择的主模式."
+  (setq-local buffer-read-only t))
+
 (defun org-supertag-sim--get-all-tags ()
   "Get the names and IDs of all tags."
   (let ((tags '()))
@@ -285,60 +304,140 @@ Optional CALLBACK will be called with the results."
 可选的 CALLBACK 将在获取到标签后被调用."
   (let ((buffer (current-buffer)))
     (message "正在分析文本内容...")
-    (deferred:$
-      (deferred:try
-        (deferred:$
-          ;; 首先确保系统已初始化
-          (org-supertag-sim--ensure-initialized)
-          (deferred:nextc it
-            (lambda (_)
-              ;; 确保文本不为空
-              (if (string-empty-p text)
-                  (error "文本内容为空")
-                ;; 记录发送的文本内容
-                (message "发送文本长度: %d" (length text))
-                (epc:call-deferred org-supertag-sim-epc-manager
-                                'suggest_tags
-                                (list text)))))
-          (deferred:nextc it
-            (lambda (response)
-              (when (buffer-live-p buffer)
-                (with-current-buffer buffer
-                  (let ((status (plist-get response :status))
-                        (result (plist-get response :result))
-                        (error-msg (plist-get response :message)))
-                    (cond
-                     ;; 成功情况
-                     ((string= status "success")
-                      (if callback
-                          (funcall callback result)
-                        (message "找到 %d 个相关标签" (length result))))
-                     ;; 错误情况
-                     (t
-                      (message "生成标签建议失败: %s" 
-                               (or error-msg "未知错误"))
-                      (if callback (funcall callback nil)))))))))
-        :catch
-        (lambda (err)
-          (message "生成标签建议出错: %s" (error-message-string err))
-          (when callback (funcall callback nil))))))))
+    
+    ;; 构建JSON格式的请求数据
+    (let ((request-data (list :content text)))
+      
+      ;; 记录请求信息
+      (message "发送文本长度: %d" (length text))
+      
+      (deferred:$
+        (deferred:try
+          (deferred:$
+            ;; 首先确保系统已初始化
+            (org-supertag-sim--ensure-initialized)
+            (deferred:nextc it
+              (lambda (_)
+                ;; 确保文本不为空
+                (if (string-empty-p text)
+                    (error "文本内容为空")
+                  ;; 使用JSON格式发送请求
+                  (epc:call-deferred org-supertag-sim-epc-manager
+                                  'suggest_tags_json
+                                  (list (json-encode request-data))))))
+            (deferred:nextc it
+              (lambda (response)
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (let ((status (plist-get response :status))
+                          (result (plist-get response :result))
+                          (error-msg (plist-get response :message)))
+                      (cond
+                       ;; 成功情况
+                       ((string= status "success")
+                        (if callback
+                            (funcall callback result)
+                          (message "找到 %d 个相关标签" (length result))))
+                       ;; 错误情况
+                       (t
+                        (message "生成标签建议失败: %s" 
+                                 (or error-msg "未知错误"))
+                        (if callback (funcall callback nil)))))))))
+          :catch
+          (lambda (err)
+            (message "生成标签建议出错: %s" (error-message-string err))
+            (when callback (funcall callback nil)))))))))
+
+(defun org-supertag-sim-toggle-tag-selection ()
+  "切换当前标签的选择状态."
+  (interactive)
+  (let ((inhibit-read-only t))
+    (beginning-of-line)
+    (when (looking-at "^\\([[:space:]]*\\)\\(\\[[ X]\\]\\) \\(.*\\)$")
+      (let* ((tag-name (match-string-no-properties 3))
+             (current-state (match-string-no-properties 2))
+             (new-state (if (string= current-state "[X]") "[ ]" "[X]")))
+        (replace-match (concat (match-string 1) new-state " " tag-name))
+        (forward-line 1)))))
+
+(defun org-supertag-sim-apply-selected-tags ()
+  "应用所有已选择的标签."
+  (interactive)
+  (let* ((context (buffer-local-value 'org-supertag-sim--select-context (current-buffer)))
+         (source-buffer (plist-get context :source-buffer))
+         (node-id (plist-get context :node-id))
+         (selected-tags '()))
+
+    ;; 收集选中的标签
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[X\\]\\) \\(.*\\)$" nil t)
+        (push (match-string-no-properties 3) selected-tags)))
+
+    ;; 没有选择任何标签时提示
+    (if (null selected-tags)
+        (message "未选择任何标签")
+      ;; 应用标签
+      (message "正在应用 %d 个选中的标签..." (length selected-tags))
+      (with-current-buffer source-buffer
+        (dolist (tag selected-tags)
+          (unless (org-supertag-tag-exists-p tag)
+            (org-supertag-tag-create tag))
+          (org-supertag-tag-apply tag))
+        (message "成功应用 %d 个标签: %s" 
+                 (length selected-tags)
+                 (mapconcat (lambda (tag)
+                              (propertize tag 'face 'font-lock-keyword-face))
+                            selected-tags ", "))))
+    
+    ;; 关闭选择窗口
+    (quit-window t)))
+
+(defun org-supertag-sim-cancel-tag-selection ()
+  "取消标签选择操作."
+  (interactive)
+  (message "已取消标签选择")
+  (quit-window t))
+
+(defun org-supertag-sim-select-all-tags ()
+  "选择所有标签."
+  (interactive)
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[[ X]\\]\\) \\(.*\\)$" nil t)
+        (replace-match (concat (match-string 1) "[X] " (match-string 3))))
+      (message "已选择所有标签"))))
+
+(defun org-supertag-sim-unselect-all-tags ()
+  "取消选择所有标签."
+  (interactive)
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[[ X]\\]\\) \\(.*\\)$" nil t)
+        (replace-match (concat (match-string 1) "[ ] " (match-string 3))))
+      (message "已取消选择所有标签"))))
 
 (defun org-supertag-sim-auto-tag-node ()
-  "Automatically suggest and apply tags for current node based on its content."
+  "根据当前节点内容自动建议并应用标签.
+使用语义分析从节点内容中提取相关标签,并在专用缓冲区中显示,
+允许用户通过空格键选择需要应用的标签."
   (interactive)
   (let* ((content (org-get-entry))
          (node-id (org-id-get-create))
-         (progress-reporter (make-progress-reporter "Analyzing content..." 0 100)))
+         (node-title (org-get-heading t t t t))
+         (progress-reporter (make-progress-reporter "正在分析内容..." 0 100)))
     
     ;; 显示初始进度
     (progress-reporter-update progress-reporter 10)
     
-    ;; 临时显示提示，但不阻塞界面
+    ;; 临时显示提示
     (run-with-timer 0.5 nil (lambda () 
                              (progress-reporter-update progress-reporter 30)
                              (message "正在生成标签建议...")))
     
-    ;; 标签生成是异步的，不会阻塞界面
+    ;; 标签生成是异步的
     (org-supertag-sim-suggest-tags-from-text
      content
      (lambda (suggested-tags)
@@ -347,24 +446,49 @@ Optional CALLBACK will be called with the results."
        (progress-reporter-done progress-reporter)
        
        (if suggested-tags
-           ;; 使用自定义minibuffer显示，带有更多上下文信息
-           (let* ((header (format "为节点建议了%d个标签:" (length suggested-tags)))
-                  (tag-list (mapconcat (lambda (tag) (propertize tag 'face 'font-lock-keyword-face))
-                                      suggested-tags ", "))
-                  (prompt (format "%s\n%s\n\n选择要应用的标签: " 
-                                 header tag-list))
-                  (selected-tags
-                   (completing-read-multiple prompt suggested-tags nil t)))
+           ;; 在专用缓冲区中显示标签选择界面
+           (let* ((select-buffer (get-buffer-create "*Org SuperTag Selection*"))
+                  (source-buffer (current-buffer)))
              
-             ;; 应用已选标签
-             (when selected-tags
-               (message "正在应用标签...")
-               ;; 创建并应用标签
-               (dolist (tag selected-tags)
-                 (unless (org-supertag-tag-exists-p tag)
-                   (org-supertag-tag-create tag))
-                 (org-supertag-tag-apply tag))
-               (message "成功应用%d个标签" (length selected-tags))))
+             (with-current-buffer select-buffer
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (org-supertag-sim-tag-select-mode)
+                 
+                 ;; 存储上下文信息
+                 (setq-local org-supertag-sim--select-context
+                             (list :node-id node-id
+                                   :node-title node-title
+                                   :source-buffer source-buffer))
+                 
+                 ;; 添加标题和说明
+                 (insert (format "为节点建议了 %d 个标签:\n" (length suggested-tags)))
+                 (insert "──────────────────────────────────────────────\n")
+                 (insert (format "节点: %s\n\n" node-title))
+                 
+                 ;; 插入标签列表
+                 (dolist (tag suggested-tags)
+                   (insert (format "[ ] %s\n" tag)))
+                 
+                 ;; 添加帮助信息
+                 (insert "\n操作说明:\n")
+                 (insert "空格/回车: 选择/取消选择标签  n/p: 上下移动\n")
+                 (insert "a: 全选  A: 全不选\n")
+                 (insert "C-c C-c: 应用选中标签  C-c C-k/q: 取消\n")))
+             
+             ;; 显示缓冲区
+             (select-window 
+              (display-buffer select-buffer
+                              '((display-buffer-below-selected)
+                                (window-height . fit-window-to-buffer)
+                                (preserve-size . (nil . t))
+                                (select . t))))
+             
+             ;; 移动到第一个标签
+             (with-current-buffer select-buffer
+               (goto-char (point-min))
+               (re-search-forward "^\\[ \\]" nil t)
+               (beginning-of-line)))
          (message "未找到合适的标签建议"))))))
 
 (provide 'org-supertag-sim)
