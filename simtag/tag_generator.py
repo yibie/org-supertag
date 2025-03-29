@@ -12,80 +12,71 @@ import traceback
 _generator_instance = None
 
 def suggest_tags(text: str, limit: int = 5) -> List[str]:
-    """从文本中提取标签的全局函数，供EPC服务器调用
+    """Extract tags from text.
     
     Args:
-        text: 需要分析的文本内容
-        limit: 返回的标签数量限制（默认5个）
+        text: The text to analyze
+        limit: The maximum number of tags to return (default 5)
         
     Returns:
-        提取的标签列表
+        A list of tags
     """
     global _generator_instance
     
     if _generator_instance is None:
         _generator_instance = TagGenerator(None)
     
-    # 固定使用5个标签    
-    return _generator_instance.suggest_tags(text)  # 不传递 limit 参数
+    
+    return _generator_instance.suggest_tags(text)  # Don't pass limit parameter
 
 class TagGenerator:
-    """标签生成器类"""
-    
+    """Tag generator class"""
+
     def __init__(self, ollama_bridge):
-        """初始化标签生成器
+        """Initialize tag generator
         
         Args:
-            ollama_bridge: LLM接口对象
+            ollama_bridge: LLM interface object
         """
         self.logger = logging.getLogger("simtag.tag_generator")
         self.ollama = ollama_bridge
         
     def suggest_tags(self, text: str, limit: int = 5) -> List[str]:
-        """生成标签建议"""
+        """Generate tag suggestions"""
         try:
             self.logger.debug(f"开始生成标签建议，文本长度: {len(text)}")
             
-            # 如果文本为空，返回空列表
             if not text or len(text.strip()) == 0:
-                self.logger.warning("输入文本为空或只包含空白字符")
+                self.logger.warning("The input text is empty or only contains whitespace")
                 return []
             
-            # 检查文本编码，确保是有效的UTF-8编码
             try:
-                # 尝试编码/解码文本，确保文本是有效的 UTF-8
                 if isinstance(text, str):
                     text_bytes = text.encode('utf-8')
                     text = text_bytes.decode('utf-8')
             except UnicodeError as e:
                 self.logger.warning(f"文本编码有问题: {e}")
-                # 尝试修复编码问题
                 try:
                     if isinstance(text, str):
                         text = text.encode('utf-8', errors='replace').decode('utf-8')
                 except Exception as e:
-                    self.logger.error(f"无法修复文本编码: {e}")
+                    self.logger.error(f"I can't fix the text encoding: {e}")
                     return []
             
-            # 显示文本内容以便调试
             preview = text[:100] + "..." if len(text) > 100 else text
-            self.logger.debug(f"文本预览: {preview}")
+            self.logger.debug(f"Preview: {preview}")
             
-            # 检查 Ollama 是否初始化
             if not self.ollama:
-                self.logger.error("Ollama 客户端未初始化")
+                self.logger.error("Ollama client not initialized")
                 return []
 
-            # 确保文本是一个有效的字符串，并删除可能导致问题的特殊字符
             cleaned_text = text.strip()
-            if len(cleaned_text) < 10:  # 如果文本太短，可能不足以提取有用的标签
-                self.logger.warning(f"文本内容太短: '{cleaned_text}'")
-                # 对于短文本，直接返回其本身作为标签
+            if len(cleaned_text) < 10:
+                self.logger.warning(f"The text is too short: '{cleaned_text}'")
                 if cleaned_text:
                     return [cleaned_text]
                 return []
 
-            # 修改提示，确保文本内容被明确标记
             prompt = f"""Extract 5 significant tags from the following text:
 
 TEXT START
