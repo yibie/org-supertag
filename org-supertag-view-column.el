@@ -1,6 +1,6 @@
 ;;; org-supertag-view-column.el --- Multi-column tag comparison view for org-supertag -*- lexical-binding: t -*-
 
-(require 'org-supertag-view)
+(require 'org-supertag-view-utils)
 
 ;;----------------------------------------------------------------------
 ;; Multi-column Tag Comparison View
@@ -19,27 +19,6 @@
     (when starting-tag
       (setq org-supertag-view--current-columns (list (list starting-tag)))
       (org-supertag-view--refresh-column-view))))
-
-(defun org-supertag-tag-columns (&optional initial-tag)
-  "Show multi-column tag comparison interface.
-Optional INITIAL-TAG can be provided to initialize the first column."
-  (interactive)
-  (message "Starting multi-column tag view...")
-  ;; Check if database is initialized
-  (if (not (and (boundp 'org-supertag-db--object)
-                org-supertag-db--object
-                (> (hash-table-count org-supertag-db--object) 0)))
-      (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
-          (progn
-            (call-interactively 'org-supertag-db-update)
-            ;; After update db, check if database is initialized
-            (if (and (boundp 'org-supertag-db--object)
-                     (> (hash-table-count org-supertag-db--object) 0))
-                (org-supertag-view--show-tag-columns initial-tag)
-              (message "Database still empty after update. Cannot proceed.")))
-        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))    
-    ;; Db is initialized
-    (org-supertag-view--show-tag-columns initial-tag)))
 
 (defun org-supertag-view--show-content (tag)
   "Show content related to TAG in multi-column view.
@@ -544,5 +523,51 @@ If database is empty, offers to update it."
     (if current-tag
         (org-supertag-tag-columns current-tag)
       (call-interactively 'org-supertag-tag-columns))))
+
+;;----------------------------------------------------------------------
+;; Multi-column view functions
+;;----------------------------------------------------------------------
+
+(defvar org-supertag-view-column-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view--update-column-view)
+    (define-key map (kbd "a") 'org-supertag-view-add-column)
+    (define-key map (kbd "A") 'org-supertag-view-add-related-column)
+    (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
+    (define-key map (kbd "d") 'org-supertag-view-remove-column)
+    (define-key map (kbd "R") 'org-supertag-view-reset-columns)
+    (define-key map (kbd "v") 'org-supertag-view-view-node-at-point)
+    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
+    (define-key map (kbd "S") 'org-supertag-view-save-current-columns)
+    (define-key map (kbd "L") 'org-supertag-view-load-saved-columns)
+    (define-key map (kbd "1") 'org-supertag-view-switch-to-tag-only)
+    (define-key map (kbd "2") 'org-supertag-view-switch-to-discover)
+    (define-key map (kbd "n") 'next-line)  
+    (define-key map (kbd "p") 'previous-line)  
+    map)
+  "Keymap for multi-column tag view mode.")
+  
+;;;###autoload
+(defun org-supertag-view-column (&optional initial-tag)
+  "Show multi-column tag comparison interface.
+Optional INITIAL-TAG can be provided to initialize the first column."
+  (interactive)
+  (message "Starting multi-column tag view...")
+  ;; Check if database is initialized
+  (if (not (and (boundp 'org-supertag-db--object)
+                org-supertag-db--object
+                (> (hash-table-count org-supertag-db--object) 0)))
+      (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
+          (progn
+            (call-interactively 'org-supertag-db-update)
+            ;; After update db, check if database is initialized
+            (if (and (boundp 'org-supertag-db--object)
+                     (> (hash-table-count org-supertag-db--object) 0))
+                (org-supertag-view--show-tag-columns initial-tag)
+              (message "Database still empty after update. Cannot proceed.")))
+        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))    
+    ;; Db is initialized
+    (org-supertag-view--show-tag-columns initial-tag)))
 
 (provide 'org-supertag-view-column)

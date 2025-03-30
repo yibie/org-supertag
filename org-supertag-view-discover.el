@@ -1,6 +1,6 @@
 ;;; org-supertag-view-discover.el --- Tag discovery view for org-supertag -*- lexical-binding: t -*-
 
-(require 'org-supertag-view)
+(require 'org-supertag-view-utils)
 
 ;;----------------------------------------------------------------------
 ;; Tag Discover Mode - Progressive tag filtering
@@ -401,9 +401,27 @@ Returns list of (tag-name . count) pairs."
   (when (eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--show-tag-discover-buffer)))
 
+;;----------------------------------------------------------------------
+;; Main functions
+;;----------------------------------------------------------------------
+(defvar org-supertag-discover-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view--refresh-discover)
+    (define-key map (kbd "r") 'org-supertag-view--reset-filters)
+    (define-key map (kbd "a") 'org-supertag-view--add-filter)
+    (define-key map (kbd "d") 'org-supertag-view--remove-filter)
+    (define-key map (kbd "v") 'org-supertag-view--view-node)
+    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
+    (define-key map (kbd "1") 'org-supertag-view-switch-to-tag-only)
+    (define-key map (kbd "3") 'org-supertag-view-switch-to-columns)
+    (define-key map (kbd "n") 'next-line)  
+    (define-key map (kbd "p") 'previous-line)  
+    map)
+  "Keymap for `org-supertag-discover-mode'.")   
 
 ;;;###autoload
-(defun org-supertag-tag-discover (&optional filter-tags)
+(defun org-supertag-view-discover (&optional filter-tags)
   "Show tag discovery interface for progressive filtering.
 Optional FILTER-TAGS can be provided to initialize the filter."
   (interactive)
@@ -427,5 +445,6 @@ Optional FILTER-TAGS can be provided to initialize the filter."
         (unless (get-buffer "*Org SuperTag Discover*")
           (message "Failed to create discovery buffer, restoring window configuration")
           (set-window-configuration window-config))))))
+
 
 (provide 'org-supertag-view-discover)

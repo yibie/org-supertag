@@ -5,7 +5,7 @@
 ;; Package-Requires: ((emacs "28.1") (org-supertag "0.1"))
 
 ;;; Commentary:
-;; Provides semantic similarity support for org-supertag.
+;; Provides semantic 1similarity support for org-supertag.
 ;; Uses sim-tag.py as the backend to provide tag similarity calculation and recommendation functionality.
 
 ;;; Code:
