@@ -132,6 +132,42 @@ Returns one of:
             :needs-update))     
       :missing)))              
 
+(defun org-supertag-node-locate (node-id)
+  "Locate node by NODE-ID in all monitored files.
+Returns (file . pos) if found, nil if not found."
+  (let ((debug-on-error t)
+        (files (org-supertag-get-all-files)))
+    (message "Looking for node %s in %d files" node-id (length files))
+    (catch 'found
+      (dolist (file files)
+        (when (file-exists-p file)
+          (message "Searching in file: %s" file)
+          (condition-case err
+              (with-current-buffer (find-file-noselect file)
+                ;; 禁用可能导致冲突的功能
+                (setq-local org-element-use-cache nil)
+                ;; 展开所有折叠
+                (org-show-all)
+                ;; 确保缓冲区状态正确
+                (org-with-wide-buffer
+                 (let ((headings 0)
+                       (with-id 0))
+                   (goto-char (point-min))
+                   (while (re-search-forward org-heading-regexp nil t)
+                     (cl-incf headings)
+                     (when-let ((id (org-id-get)))
+                       (cl-incf with-id)
+                       (when (string= id node-id)
+                         (message "Found node %s in %s at %d (after checking %d headings, %d with IDs)"
+                                node-id file (point) headings with-id)
+                         (throw 'found (cons file (point))))))
+                   (message "File %s: checked %d headings, %d with IDs" 
+                          file headings with-id))))
+            (error
+             (message "Error searching file %s: %s" file (error-message-string err))))))
+      (message "Node %s not found in any file (checked %d files)" node-id (length files))
+      nil)))
+
 ;;-------------------------------------------------------------------
 ;; Buffer Monitoring
 ;;-------------------------------------------------------------------
@@ -266,6 +302,49 @@ Returns a plist containing files grouped by their sync state:
           :missing (nreverse missing)
           :unknown (nreverse unknown))))
 
+(defun org-supertag-check-nodes ()
+  "Check all nodes in database and handle missing ones."
+  (interactive)
+  (let ((missing 0)
+        (moved 0)
+        (total 0))
+    ;; 检查数据库状态
+    (message "Database file: %s" org-supertag-db-file)
+    (message "Database file exists: %s" (file-exists-p org-supertag-db-file))
+    (message "Database size: %d" (hash-table-count org-supertag-db--object))
+    
+    ;; 首先检查数据库状态
+    (if (hash-table-empty-p org-supertag-db--object)
+        (progn
+          (message "Database is empty, trying to load...")
+          (org-supertag-db-load)
+          (message "After load attempt - Database size: %d" (hash-table-count org-supertag-db--object)))
+      ;; 只处理类型为 :node 的实体
+      (maphash
+       (lambda (id props)
+         (when (eq (plist-get props :type) :node)
+           (cl-incf total)
+           (if-let ((new-loc (org-supertag-node-locate id)))
+               ;; 节点存在，检查是否移动了
+               (let ((old-file (plist-get props :file-path))
+                     (old-pos (plist-get props :pos))
+                     (new-file (car new-loc))
+                     (new-pos (cdr new-loc)))
+                 (unless (and (string= old-file new-file)
+                            (= old-pos new-pos))
+                   ;; 位置变了，更新信息
+                   (with-current-buffer (find-file-noselect new-file)
+                     (goto-char new-pos)
+                     (org-supertag-node-update)
+                     (cl-incf moved))))
+             ;; 节点不存在，处理它
+             (org-supertag-handle-missing-node id)
+             (cl-incf missing))))
+       org-supertag-db--object))
+    (when (> total 0)
+      (message "Checked %d nodes: %d moved, %d missing" 
+               total moved missing))))
+
 (defun org-supertag-sync--check-and-sync ()
   "Check and sync files based on their consistency state."
   (let* ((states (org-supertag-sync-check-all))
@@ -281,6 +360,9 @@ Returns a plist containing files grouped by their sync state:
               (push file updated-files))
           (error
            (message "Error updating %s: %s" file (error-message-string err))))))
+    
+    ;; 添加节点检查
+    (org-supertag-check-nodes)
     
     ;; Report remaining issues
     (let* ((final-states (org-supertag-sync-check-all))
@@ -337,20 +419,43 @@ Returns a plist containing files grouped by their sync state:
 
 (defun org-supertag-sync-init ()
   "Initialize sync system."
-  ;; Ensure data directory exists
-  (unless (file-exists-p org-supertag-data-directory)
-    (make-directory org-supertag-data-directory t))
-  
-  ;; Load saved state if exists
-  (org-supertag-sync-load-state)
-  ;; Setup buffer hooks
-  (org-supertag-sync-setup-buffer-watch)
-  ;; Initial state for all files
-  (dolist (file (org-supertag-get-all-files))
-    (when (file-exists-p file)
-      (org-supertag-sync-update-state file)))
-  ;; Start auto-sync
-  (org-supertag-sync-start-auto-sync))
+  (condition-case err
+      (progn
+        ;; Ensure data directory exists
+        (unless (file-exists-p org-supertag-data-directory)
+          (make-directory org-supertag-data-directory t))
+        
+        ;; Load saved state if exists
+        (org-supertag-sync-load-state)
+        
+        ;; Setup buffer hooks
+        (org-supertag-sync-setup-buffer-watch)
+        
+        ;; Initial state for all files
+        (let ((total-files 0)
+              (processed-files 0))
+          (dolist (file (org-supertag-get-all-files))
+            (cl-incf total-files)
+            (when (file-exists-p file)
+              (condition-case file-err
+                  (progn
+                    (org-supertag-sync-update-state file)
+                    (cl-incf processed-files))
+                (error
+                 (message "Error processing file %s: %s" 
+                         file (error-message-string file-err))))))
+          (message "Initialized sync state for %d/%d files" 
+                  processed-files total-files))
+        
+        ;; Start auto-sync
+        (org-supertag-sync-start-auto-sync)
+        (message "Org-supertag sync system initialized successfully"))
+    (error
+     (message "Error during sync initialization: %s" 
+              (error-message-string err))
+     (when org-supertag-sync--timer
+       (cancel-timer org-supertag-sync--timer)
+       (setq org-supertag-sync--timer nil)))))
 
 ;;; Manual Operations
 
@@ -571,6 +676,112 @@ Returns t if file should be synchronized based on configured directories."
       (dolist (dir org-supertag-sync-exclude-directories)
         (insert (format "- %s\n" dir))))
     (display-buffer (current-buffer))))
+
+(defun org-supertag-handle-missing-node (node-id)
+  "Handle a missing node with NODE-ID.
+Prompts user to restore or remove the node."
+  (when-let* ((node (org-supertag-db-get node-id))
+              (title (plist-get node :title)))
+    (if (yes-or-no-p 
+         (format "Node '%s' (%s) not found. Restore it? " 
+                title node-id))
+        ;; 还原节点到文件
+        (org-supertag-node-restore node-id)
+      ;; 从数据库中移除
+      (org-supertag-db-remove-object node-id))))
+
+(defun org-supertag-node-restore (node-id)
+  "Restore node with NODE-ID to its file.
+If original file doesn't exist, prompts for new location."
+  (when-let* ((node (org-supertag-db-get node-id))
+              (file (plist-get node :file-path))
+              (title (plist-get node :title))
+              (content (plist-get node :content))
+              (properties (plist-get node :properties)))
+    (unless (file-exists-p file)
+      (setq file 
+            (read-file-name 
+             (format "File for node '%s': " title)
+             (file-name-directory file))))
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-min))
+      (insert "* " title "\n"
+              ":PROPERTIES:\n"
+              ":ID: " node-id "\n")
+      (when properties
+        (dolist (prop properties)
+          (unless (string= (car prop) "ID") ; 跳过 ID 属性，因为已经插入了
+            (insert ":" (car prop) ": " (cdr prop) "\n"))))
+      (insert ":END:\n")
+      (when content
+        (insert content "\n"))
+      (save-buffer)
+      (goto-char (point-min))
+      (when (re-search-forward (format ":ID: %s" node-id) nil t)
+        (org-back-to-heading t)
+        (let ((new-props (org-supertag-db--parse-node-at-point)))
+          (when new-props
+            (setq new-props
+                  (append new-props
+                          (list :ref-to (plist-get node :ref-to)
+                                :ref-from (plist-get node :ref-from)
+                                :ref-count (plist-get node :ref-count)))))
+          (org-supertag-db-add node-id new-props)
+          (message "Node restored and updated in %s" file))))))
+
+(defun org-supertag-sync-show-status ()
+  "Display current synchronization status."
+  (interactive)
+  (with-current-buffer (get-buffer-create "*Org Supertag Sync Status*")
+    (erase-buffer)
+    (insert "=== Org Supertag Sync Status ===\n\n")
+    
+    ;; 显示自动同步状态
+    (insert "Auto Sync: ")
+    (insert (if org-supertag-sync--timer
+                "Active\n"
+              "Inactive\n"))
+    (when org-supertag-sync--timer
+      (insert (format "Sync Interval: %d seconds\n\n" 
+                     org-supertag-sync-auto-interval)))
+    
+    ;; 显示监控目录
+    (insert "=== Monitored Directories ===\n")
+    (if org-supertag-sync-directories
+        (dolist (dir org-supertag-sync-directories)
+          (insert (format "- %s\n" dir)))
+      (insert "All directories (no specific directories set)\n"))
+    
+    ;; 显示排除目录
+    (when org-supertag-sync-exclude-directories
+      (insert "\n=== Excluded Directories ===\n")
+      (dolist (dir org-supertag-sync-exclude-directories)
+        (insert (format "- %s\n" dir))))
+    
+    ;; 显示监控的缓冲区
+    (insert "\n=== Monitored Buffers ===\n")
+    (let ((monitored-count 0))
+      (dolist (buf (buffer-list))
+        (with-current-buffer buf
+          (when (and buffer-file-name
+                     (org-supertag-sync--in-sync-scope-p buffer-file-name))
+            (cl-incf monitored-count)
+            (insert (format "- %s\n" buffer-file-name)))))
+      (insert (format "\nTotal monitored buffers: %d\n" monitored-count)))
+    
+    (display-buffer (current-buffer))))
+
+(defun org-supertag-sync-toggle ()
+  "Toggle automatic synchronization."
+  (interactive)
+  (if org-supertag-sync--timer
+      (progn
+        (cancel-timer org-supertag-sync--timer)
+        (setq org-supertag-sync--timer nil)
+        (message "Automatic synchronization disabled"))
+    (org-supertag-sync-start-auto-sync)
+    (message "Automatic synchronization enabled with %d second interval" 
+             org-supertag-sync-auto-interval)))
 
 (provide 'org-supertag-sync)
 
