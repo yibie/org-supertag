@@ -834,16 +834,18 @@ Returns a list of node IDs."
     nodes))
 
 (defun org-supertag-get-all-files ()
-  "Get list of all org files in database.
+  "Get list of all org files to monitor.
 Returns:
 - List of absolute file paths
 - nil if no files found
 
 Notes:
-1. Only returns files associated with nodes
-2. Removes duplicates
-3. Ensures paths exist"
+1. Returns files from configured directories
+2. Includes files associated with nodes
+3. Removes duplicates
+4. Ensures paths exist"
   (let ((files nil))
+    ;; 1. 从数据库中获取文件
     (maphash
      (lambda (id props)
        (when (and (eq (plist-get props :type) :node)
@@ -852,7 +854,23 @@ Notes:
            (when (file-exists-p file-path)
              (push file-path files)))))
      org-supertag-db--object)
+    
+    ;; 2. 从配置目录中获取文件
+    (dolist (dir org-supertag-sync-directories)
+      (when (file-directory-p dir)
+        (dolist (file (directory-files-recursively 
+                      dir org-supertag-sync-file-pattern))
+          (unless (cl-some (lambda (exclude)
+                            (string-prefix-p 
+                             (expand-file-name exclude)
+                             (expand-file-name file)))
+                          org-supertag-sync-exclude-directories)
+            (when (file-exists-p file)
+              (push file files))))))
+    
+    ;; 3. 删除重复并返回
     (delete-dups (nreverse files))))
+
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
 ;;---------------------------------------------------------------------------------

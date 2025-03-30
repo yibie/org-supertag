@@ -647,41 +647,34 @@ Returns:
         (let* ((node (org-supertag-db-get node-id))
                (tags (org-supertag-node-get-tags node-id))
                (ref-from (plist-get node :ref-from)))
-        ;; 2. Remove all tags
-        (dolist (tag-id tags)
-          (org-supertag-tag--remove tag-id node-id))
-        ;; 3. Remove all references to this node
-        (dolist (ref-node-id ref-from)
-          (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
-            (with-current-buffer (find-file-noselect ref-file)
-              (save-excursion
-                (goto-char (point-min))
-                (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
-                  (delete-region (match-beginning 0) (match-end 0)))
-                (save-buffer)))))
-        ;; 4. Delete the headline content including properties
-        (org-back-to-heading t)
-        (let* ((element (org-element-at-point))
-               (begin (org-element-property :begin element))
-               (end (org-element-property :end element)))
-          ;; Delete the entire heading including properties
-          (delete-region begin end)
-          (when (looking-at "\n") (delete-char 1)))
-        ;; 5. Remove from database
-        (remhash node-id org-supertag-db--object)
-        ;; 6. Clear database caches
-        (org-supertag-db--cache-remove 'entity node-id)
-        (org-supertag-db--cache-remove 'query (format "type:%s" :node))
-        (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
-        (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
-        (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
-        ;; 7. Save changes
-        (save-buffer)
-        (org-supertag-db-save)
-        ;; 8. Run hooks
-        (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
-        (message "Node deleted: %s" node-id))
-    (user-error "No node found at current position"))))
+          ;; 2. Remove all tags
+          (dolist (tag-id tags)
+            (org-supertag-tag--remove tag-id node-id))
+          ;; 3. Remove all references to this node
+          (dolist (ref-node-id ref-from)
+            (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
+              (with-current-buffer (find-file-noselect ref-file)
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
+                    (delete-region (match-beginning 0) (match-end 0)))
+                  (save-buffer)))))
+          ;; 4. Delete the headline content including properties
+          (org-back-to-heading t)
+          (let* ((element (org-element-at-point))
+                 (begin (org-element-property :begin element))
+                 (end (org-element-property :end element)))
+            ;; Delete the entire heading including properties
+            (delete-region begin end)
+            (when (looking-at "\n") (delete-char 1)))
+          ;; 5. Remove from database using proper function
+          (org-supertag-db-remove-object node-id)
+          ;; 6. Save changes
+          (save-buffer)
+          ;; 7. Run hooks
+          (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
+          (message "Node deleted: %s" node-id)))
+    (user-error "No node found at current position")))
 
 (defun org-supertag-node--ensure-id-system ()
   "Ensure org-id system is properly initialized."
