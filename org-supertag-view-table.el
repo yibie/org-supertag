@@ -1,8 +1,7 @@
 ;;; org-supertag-view-table.el --- Table view for org-supertag -*- lexical-binding: t -*-
 
-
-(require 'org-supertag-view)
 (require 'cl-lib)
+(require 'org-supertag-view-utils)
 
 ;;----------------------------------------------------------------------
 ;; Helpful functions
@@ -147,19 +146,6 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
 ;;----------------------------------------------------------------------
 ;; Single Tag View Mode (Table View)
 ;;----------------------------------------------------------------------
-(define-derived-mode org-supertag-view-table-mode org-mode "SuperTag Table"
-  "Major mode for viewing org-supertag data in table format.
-
-\\{org-supertag-view-table-mode-map}"
-  ;; 禁用某些干扰功能
-  (setq-local org-hide-emphasis-markers nil)
-  (setq-local org-pretty-entities nil)
-  
-  ;; 设置只读，直到编辑模式被激活
-  (setq buffer-read-only t)
-  
-  ;; 在模式行显示操作提示
-  (setq mode-name "SuperTag Table"))
 
 (defun org-supertag-view--show-content-table (tag)
   "Show content table for TAG in a dedicated full-screen buffer."
@@ -189,6 +175,15 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
     (switch-to-buffer buffer)
     (delete-other-windows)))
 
+(defun org-supertag-view--get-field-value-from-db (node-id field-name)
+  "从数据库获取字段值。
+NODE-ID 是节点ID。
+FIELD-NAME 是字段名称。
+返回字段值，如果未找到则返回空字符串。"
+  (let* ((link-id (format ":node-field:%s->%s" node-id field-name))
+         (field-link (gethash link-id org-supertag-db--link)))
+    (or (plist-get field-link :value) "")))
+
 (defun org-supertag-view--insert-content-table-with-button (tag)
   "Insert content related to TAG in current buffer using org table format with buttons.
 每行节点前添加[v]按钮，点击可直接查看节点内容。"
@@ -216,25 +211,24 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
                (node-props (gethash node-id org-supertag-db--object))
                (node-title (plist-get item :node))
                (org-id (plist-get node-props :id))
-               (file-path (plist-get node-props :file-path))
-               (field-values (plist-get item :fields))) ;; 获取字段值列表
+               (file-path (plist-get node-props :file-path)))
           
           ;; 插入节点列（带按钮）
           (insert "|")
           (if (and file-path org-id)
               (progn
                 (insert-text-button "[v]"
-                                   'face 'link
-                                   'follow-link t
-                                   'file-path file-path
-                                   'org-id org-id
-                                   'node-title node-title
-                                   'action (lambda (button)
-                                           (let ((file (button-get button 'file-path))
-                                                 (org-id (button-get button 'org-id))
-                                                 (title (button-get button 'node-title)))
-                                             (when (org-supertag-view--find-node-by-id file org-id)
-                                               (message "成功打开节点: %s" title)))))
+                                  'face 'link
+                                  'follow-link t
+                                  'file-path file-path
+                                  'org-id org-id
+                                  'node-title node-title
+                                  'action (lambda (button)
+                                          (let ((file (button-get button 'file-path))
+                                                (org-id (button-get button 'org-id))
+                                                (title (button-get button 'node-title)))
+                                            (when (org-supertag-view--find-node-by-id file org-id)
+                                              (message "成功打开节点: %s" title)))))
                 (insert " "))
             (insert "[N/A] "))
           
@@ -247,8 +241,7 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
           ;; 插入字段值
           (dolist (field fields)
             (let* ((field-name (plist-get field :name))
-                   ;; 从field-values中获取值，field-values是一个alist
-                   (value (or (cdr (assoc field-name field-values)) "")))
+                   (value (org-supertag-view--get-field-value-from-db node-id field-name)))
               (insert (format "|%s" value))))
           (insert "|\n")))
       
@@ -630,6 +623,52 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
 ;; Mode definitions
 ;;----------------------------------------------------------------------
 
+(define-derived-mode org-supertag-view-table-mode org-mode "SuperTag-Table"
+  "Major mode for displaying tag content in table format.
+This mode is based on org-mode to ensure compatibility with org table functions.
+\\{org-supertag-view-table-mode-map}"
+  :group 'org-supertag
+  (setq-local org-element-use-cache nil)
+  (setq truncate-lines t)
+  (setq buffer-read-only t)
+  (setq header-line-format 
+        (propertize " Org-Supertag Table View" 'face '(:weight bold)))
+  (let ((map (make-sparse-keymap)))
+    ;; 先定义最关键的编辑按键，确保它们有最高优先级
+    (define-key map (kbd "e") (lambda () 
+                               (interactive)
+                               (let ((inhibit-read-only t))
+                                 (call-interactively 'org-supertag-view-smart-edit))))
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "g") 'org-supertag-view-refresh)
+    (define-key map (kbd "v") 'org-supertag-view-table-node-at-point)
+    (define-key map (kbd "V") 'org-supertag-view-table-view-all-nodes)
+    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
+    (dolist (key '("d" "o" "r" "l" "a" "t"))
+      (define-key map (kbd key) 
+                 (lambda () 
+                   (interactive)
+                   (let ((inhibit-read-only t))
+                     (call-interactively 
+                      (intern (format "org-supertag-view-edit-%s-field"
+                                     (pcase key
+                                       ("d" "date")
+                                       ("o" "options")
+                                       ("r" "reference")
+                                       ("l" "list")
+                                       ("a" "range")
+                                       ("t" "timestamp")))))))))
+    (define-key map (kbd "C-c C-k") 'org-supertag-view-cancel-edit)
+    (define-key map (kbd "C-c '") 'org-supertag-view-edit-table)
+    (define-key map (kbd "<tab>") 'org-table-next-field)
+    (define-key map (kbd "<backtab>") 'org-table-previous-field)
+    (define-key map (kbd "M-p") 'org-table-copy-down)
+    (define-key map (kbd "n") 'next-line)
+    (define-key map (kbd "p") 'previous-line)
+    (define-key map (kbd "2") 'org-supertag-view-switch-to-discover)
+    (define-key map (kbd "3") 'org-supertag-view-switch-to-columns)
+    (set-keymap-parent map org-mode-map)
+    (use-local-map map)))
 
 (defun org-supertag-view-table-setup-keys ()
   "设置表格视图模式的按键绑定。"
@@ -647,9 +686,11 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
   (define-key org-supertag-view-table-mode-map (kbd "q") 
               'quit-window))
 
+
 ;;;###autoload
-(defun org-supertag-view-table ()
+(defun org-supertag-view-table (&optional tag)
   "Show content related to a tag in table view format.
+If TAG is provided, show content for that tag.
 If point is on a tag, show content for that tag.
 Otherwise, prompt for a tag using completion.
 
@@ -658,16 +699,17 @@ The table view displays:
 - A table of related nodes with their properties
 - Operation instructions for navigation and management"
   (interactive)
-  (let ((tag-at-point (org-supertag-view--get-tag-name)))
-    (if tag-at-point
-        ;; If point is on a tag, show content for that tag
-        (org-supertag-view--show-content-table tag-at-point)
-      ;; If point is not on a tag, prompt for a tag using completion
-      (let ((tag (completing-read "View tag in table format: "
-                                (org-supertag-view--get-all-tags)
-                                nil t)))
-        (org-supertag-view--show-content-table tag)))))
+  (let ((tag-to-use (or tag 
+                       (org-supertag-view--get-tag-name)
+                       (completing-read "View tag in table format: "
+                                      (org-supertag-view--get-all-tags)
+                                      nil t))))
+    (org-supertag-view--show-content-table tag-to-use)))
 
 (define-obsolete-function-alias 'org-supertag-view-tag-only 'org-supertag-view-table "1.0")
 
+
+
 (provide 'org-supertag-view-table)
+
+
