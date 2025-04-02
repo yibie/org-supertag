@@ -7,6 +7,9 @@
   "Regexp to match the prefix for company completion.
 Only allows alphanumeric characters, underscore and hyphen after #.")
 
+(defvar org-supertag-company-new-tag-candidate "[New Tag]"
+  "Special candidate text for creating new tag.")
+
 (defun org-supertag-company--make-candidate (tag-name)
   "Create a company candidate from TAG-NAME."
   (let* ((tag (org-supertag-tag-get tag-name))
@@ -20,39 +23,43 @@ Only allows alphanumeric characters, underscore and hyphen after #.")
             (format "Base tag with %d field(s)" field-count))))
     (propertize tag-name
                 'tag tag
+                'is-new-tag nil
                 'help-echo (format "SuperTag with %d field(s)" field-count))))
+
+(defun org-supertag-company--make-new-tag-candidate ()
+  "Create a special candidate for creating new tag."
+  (propertize org-supertag-company-new-tag-candidate
+              'is-new-tag t
+              'help-echo "Create a new tag"))
 
 (defun org-supertag-company--candidates (prefix)
   "Get completion candidates for PREFIX."
   (let* ((prefix-no-hash (if (> (length prefix) 1)
                             (org-supertag-sanitize-tag-name (substring prefix 1))
                           ""))
-         (all-tags (org-supertag-get-all-tags)))
-    (cl-loop for tag-name in all-tags
-             when (string-prefix-p prefix-no-hash tag-name t)
-             collect (org-supertag-company--make-candidate tag-name))))
+         (all-tags (org-supertag-get-all-tags))
+         (candidates (cl-loop for tag-name in all-tags
+                            when (string-prefix-p prefix-no-hash tag-name t)
+                            collect (org-supertag-company--make-candidate tag-name))))
+    ;; Always add the new tag option at the end
+    (append candidates (list (org-supertag-company--make-new-tag-candidate)))))
 
 (defun org-supertag-company--post-completion (candidate)
   "Handle post-completion actions for CANDIDATE.
 If CANDIDATE is a non-existent tag name, create it directly."
-  (let* ((tag-name (if (get-text-property 0 'tag candidate)
-                       (plist-get (get-text-property 0 'tag candidate) :name)
-                     ;; For non-existent tags, use candidate directly
-                     candidate))
-         (node-id (org-id-get))
-         (current-tags (and node-id (org-supertag-node-get-tags node-id))))
+  (let* ((is-new-tag (get-text-property 0 'is-new-tag candidate))
+         (tag-name (cond
+                   (is-new-tag
+                    (read-string "Enter new tag name: "))
+                   ((get-text-property 0 'tag candidate)
+                    (plist-get (get-text-property 0 'tag candidate) :name))
+                   (t candidate))))
     
     ;; Delete the completion prefix including #
     (delete-region (- (point) (length candidate) 1) (point))
     
-    ;; Only proceed if tag not already applied
-    (if (and node-id (member tag-name current-tags))
-        (message "Tag '%s' is already applied to this node" tag-name)
-      ;; Create tag if it doesn't exist
-      (unless (org-supertag-tag-exists-p tag-name)
-        (org-supertag-tag-create tag-name))
-      ;; Apply tag
-      (org-supertag-tag-apply tag-name))))
+    ;; Use inline tag system to insert and apply tag
+    (org-supertag-inline-insert-tag tag-name)))
 
 ;;;###autoload
 (defun org-supertag-company-backend (command &optional arg &rest ignored)
@@ -62,8 +69,6 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
   (cl-case command
     (interactive (company-begin-backend 'org-supertag-company-backend))
     (prefix (and (eq major-mode 'org-mode)
-                 (or (org-at-heading-p)  
-                     (org-at-property-p)) 
                  (save-excursion
                    (when (looking-back org-supertag-company-prefix-regexp
                                      (line-beginning-position))
@@ -71,15 +76,18 @@ COMMAND, ARG and IGNORED are standard arguments for company backends."
     (candidates (org-supertag-company--candidates arg))
     (post-completion (org-supertag-company--post-completion arg))
     (annotation (let* ((tag (get-text-property 0 'tag arg))
-                      (fields (and tag (plist-get tag :fields)))
-                      (base-tag (and tag (org-supertag-tag-get-base (plist-get tag :id)))))
-                 (when fields
-                   (if base-tag
-                       (format " [%d fields, extends %s]"
-                               (length fields)
-                               base-tag)
-                     (format " [%d fields]" (length fields)))))
-    (t nil))))
+                      (is-new-tag (get-text-property 0 'is-new-tag arg)))
+                 (cond
+                  (is-new-tag " [Create new tag]")
+                  (tag
+                   (let* ((fields (plist-get tag :fields))
+                          (base-tag (org-supertag-tag-get-base (plist-get tag :id))))
+                     (if base-tag
+                         (format " [%d fields, extends %s]"
+                                 (length fields)
+                                 base-tag)
+                       (format " [%d fields]" (length fields))))))))
+    (t nil)))
 
 ;;;###autoload
 (defun org-supertag-setup-completion ()

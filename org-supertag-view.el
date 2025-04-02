@@ -22,7 +22,7 @@ Available views:
 - Columns view: Multi-column view for comparing nodes"
   (interactive)
   (let* ((tag-at-point (org-supertag-view--get-tag-name))
-         (view-options '(("Tag-only view" . tag-only)
+         (view-options '(("Table view" . tag-only)
                         ("Discover view" . discover)
                         ("Columns view" . columns)))
          (view-choice (completing-read "Select view mode: "
@@ -38,12 +38,6 @@ Available views:
         ('discover (org-supertag-view-discover (list tag)))
         ('columns  (org-supertag-view-column tag))
         (_ (error "Invalid view type"))))))
-
-
-
-   
-
-
 
 (define-derived-mode org-supertag-discover-mode special-mode "Org-ST-Discover"
   "Major mode for progressive tag discovery in org-supertag."

@@ -554,20 +554,6 @@ If database is empty, offers to update it."
 Optional INITIAL-TAG can be provided to initialize the first column."
   (interactive)
   (message "Starting multi-column tag view...")
-  ;; Check if database is initialized
-  (if (not (and (boundp 'org-supertag-db--object)
-                org-supertag-db--object
-                (> (hash-table-count org-supertag-db--object) 0)))
-      (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
-          (progn
-            (call-interactively 'org-supertag-db-update)
-            ;; After update db, check if database is initialized
-            (if (and (boundp 'org-supertag-db--object)
-                     (> (hash-table-count org-supertag-db--object) 0))
-                (org-supertag-view--show-tag-columns initial-tag)
-              (message "Database still empty after update. Cannot proceed.")))
-        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))    
-    ;; Db is initialized
-    (org-supertag-view--show-tag-columns initial-tag)))
+  (org-supertag-view--show-tag-columns initial-tag))
 
 (provide 'org-supertag-view-column)

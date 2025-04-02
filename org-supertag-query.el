@@ -535,18 +535,46 @@ Returns t if node was found and visited successfully, nil otherwise."
               (file-path (plist-get props :file-path))
               ((file-exists-p file-path))
               (buffer (find-file-noselect file-path)))
+    (message "Finding node %s in file %s" node-id file-path)
     (with-current-buffer buffer
       ;; make sure in org-mode buffer, avoid conflict with org-supertag-view.el
       (when (derived-mode-p 'org-mode)
+        (message "Buffer is in org-mode")
         (widen)
-        (when-let* ((marker (org-id-find-id-in-file node-id file-path)))
-          (goto-char (cdr marker))
-          (org-show-entry)
-          (org-show-children)
-          ;; Switch to buffer before recentering
-          (switch-to-buffer buffer)
-          (recenter)
-          t)))))
+        (let ((marker (org-id-find-id-in-file node-id file-path)))
+          (if marker
+              (progn
+                (message "Found node at position %s" (cdr marker))
+                (goto-char (cdr marker))
+                (org-show-entry)
+                (org-show-children)
+                ;; Switch to buffer before recentering
+                (switch-to-buffer buffer)
+                (recenter)
+                t)
+            (message "org-id-find-id-in-file returned nil for node %s in file %s" 
+                     node-id file-path)
+            ;; Try alternative method using org-map-entries
+            (message "Trying alternative method...")
+            (save-excursion
+              (goto-char (point-min))
+              (let ((found nil))
+                (org-map-entries
+                 (lambda ()
+                   (when (equal (org-entry-get nil "ID") node-id)
+                     (setq found (point))))
+                 t nil)
+                (if found
+                    (progn
+                      (message "Found node using alternative method at position %s" found)
+                      (goto-char found)
+                      (org-show-entry)
+                      (org-show-children)
+                      (switch-to-buffer buffer)
+                      (recenter)
+                      t)
+                  (message "Node not found using alternative method either")
+                  nil)))))))))
 
 (defun org-supertag-query-visit-node ()
   "Visit current selected node."

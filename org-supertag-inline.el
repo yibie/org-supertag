@@ -23,168 +23,182 @@
 (require 'org-supertag-node)
 (require 'org-supertag-tag)
 
-(defgroup org-supertag-inline nil
-  "Customization options for org-supertag inline tags."
+(defgroup org-supertag-inline-style nil
+  "Customization options for org-supertag inline tag styling."
   :group 'org-supertag)
 
-(defcustom org-supertag-inline-enable-fontification t
-  "Whether to enable highlighting of inline tags.
-When non-nil, inline tags will be highlighted with a special face."
+(defcustom org-supertag-inline-style-hide-prefix t
+  "Whether to hide the '#' prefix of inline tags."
   :type 'boolean
-  :group 'org-supertag-inline)
+  :group 'org-supertag-inline-style)
 
-(defcustom org-supertag-inline-light-theme-colors
-  '(:box (:line-width -1 :color "#d0d0d0")
-    :background "#f8f8f8"
-    :foreground "#2a2a2a")
-  "Color settings for inline tags in light theme.
-You can customize :box, :background and :foreground colors."
-  :type '(plist :key-type symbol :value-type sexp)
-  :group 'org-supertag-inline)
+(defcustom org-supertag-inline-background 'unspecified
+  "Background color for inline tags.
+Can be:
+- A color string (e.g. \"#e8f0ff\")
+- 'unspecified for transparent
+- nil for transparent"
+  :type '(choice
+          (const :tag "Transparent" unspecified)
+          (const :tag "None" nil)
+          (color :tag "Color"))
+  :group 'org-supertag-inline-style)
 
-(defcustom org-supertag-inline-dark-theme-colors
-  '(:box (:line-width 2 :color "#C9C9C7")
-    :background "#383838"
-    :foreground "#e8e8e8")
-  "Color settings for inline tags in dark theme.
-You can customize :box, :background and :foreground colors."
-  :type '(plist :key-type symbol :value-type sexp)
-  :group 'org-supertag-inline)
+(defcustom org-supertag-inline-foreground 'unspecified
+  "Foreground color for inline tags.
+Can be:
+- A color string (e.g. \"#0066cc\")
+- 'unspecified for transparent
+- nil for transparent"
+  :type '(choice
+          (const :tag "Transparent" unspecified)
+          (const :tag "None" nil)
+          (color :tag "Color"))
+  :group 'org-supertag-inline-style)
 
-(defcustom org-supertag-inline-text-properties
-  '(:height 0.95
-    :weight normal
-    :spacing 0.2)
-  "Text properties for inline tags.
-You can customize :height (relative to default font size),
-:weight (bold, normal, etc.), and :spacing between characters."
-  :type '(plist :key-type symbol :value-type sexp)
-  :group 'org-supertag-inline)
+(defcustom org-supertag-inline-box '(:line-width 1 :color "#b0b0b0" :style nil)
+  "Box properties for inline tags.
+Can be t for a simple box, nil for no box, or a property list with
+:line-width, :color and :style attributes.
 
-(defface org-supertag-inline-tag-face
-  `((((class color) (background light))
-     :inherit org-tag
-     ,@org-supertag-inline-light-theme-colors
-     ,@org-supertag-inline-text-properties)
-    (((class color) (background dark))
-     :inherit org-tag
-     ,@org-supertag-inline-dark-theme-colors
-     ,@org-supertag-inline-text-properties))
-  "Face used for inline tags in org-supertag-mode.
-You can customize this face through:
-`org-supertag-inline-light-theme-colors' - Colors for light theme
-`org-supertag-inline-dark-theme-colors' - Colors for dark theme
-`org-supertag-inline-text-properties' - Text properties like height and spacing"
-  :group 'org-supertag-inline)
+The :line-width can be a positive or negative number:
+- Positive: draws the box around the text (increases text height)
+- Negative: draws the box within the text area (preserves text height)
 
-(defcustom org-supertag-inline-excluded-contexts
-  '(src-block comment example-block export-block verse-block
-    quote-block comment-block center-block special-block
-    headline property-drawer keyword)
-  "List of org element types where inline tags should not be highlighted.
-This prevents highlighting tags in places where they should be treated as literal text."
-  :type '(repeat symbol)
-  :group 'org-supertag-inline)
+The :line-width can also be a cons cell (VWIDTH . HWIDTH) to specify
+different widths for vertical and horizontal lines.
 
-(defcustom org-supertag-inline-tag-regexp "#\\([[:alnum:]_-]+\\)\\(?:[^:]\\|$\\)"
-  "Regular expression pattern to match inline tags.
-The first capture group should match the tag name without the '#' prefix.
-Supports alphanumeric characters, underscores and hyphens.
-The pattern ensures we don't match org-mode's native tag format like :tag:.
+The :style can be:
+- released-button (3D button that is not pressed)
+- pressed-button (3D button that is being pressed)
+- nil (a simple 2D box, the default)"
+  :type '(choice
+          (const :tag "No box" nil)
+          (const :tag "Simple box" t)
+          (list :tag "Custom box"
+                :value (:line-width 1 :color "#b0b0b0")
+                (choice :tag "Line width"
+                       (cons :tag "Width as cons"
+                             :format "%t: %v"
+                             :value (:line-width (1 . 1))
+                             (const :format "" :line-width)
+                             (cons (number :tag "Vertical") (number :tag "Horizontal")))
+                       (cons :tag "Width as number"
+                             :format "%t: %v"
+                             :value (:line-width 1)
+                             (const :format "" :line-width)
+                             (number :format "%v")))
+                (cons :tag "Color" :format "%t: %v"
+                      :value (:color "#b0b0b0")
+                      (const :format "" :color)
+                      (color :format "%v"))
+                (cons :tag "Style" :format "%t: %v"
+                      :value (:style nil)
+                      (const :format "" :style)
+                      (choice :format "%v"
+                              (const :tag "None (regular 2D box)" nil)
+                              (const :tag "Released button" released-button)
+                              (const :tag "Pressed button" pressed-button)))))
+  :group 'org-supertag-inline-style)
 
-Examples of valid tags:
-- #tag
-- #tag_with_underscore
-- #tag-with-hyphen
-- #tag123
+(defcustom org-supertag-inline-weight 'semi-bold
+  "Font weight for inline tags."
+  :type '(choice
+          (const :tag "Normal" normal)
+          (const :tag "Bold" bold)
+          (const :tag "Semi-bold" semi-bold))
+  :group 'org-supertag-inline-style)
 
-Invalid matches (will be ignored):
-- :tag:
-- #tag:
-- :#tag:"
-  :type 'regexp
-  :group 'org-supertag-inline)
+(defcustom org-supertag-inline-border-radius 3
+  "Border radius for inline tags (only works in GUI Emacs with CSS support)."
+  :type 'integer
+  :group 'org-supertag-inline-style)
 
-(defcustom org-supertag-inline-hide-hash t
-  "Whether to hide the # symbol in inline tags.
-When non-nil, the # prefix will be hidden for cleaner display."
-  :type 'boolean
-  :group 'org-supertag-inline)
+;; Define the face for inline tags
+(defface org-supertag-inline-face
+  `((t (:background ,org-supertag-inline-background
+        :foreground ,org-supertag-inline-foreground
+        :box ,org-supertag-inline-box
+        :weight ,org-supertag-inline-weight)))
+  "Face for org-supertag inline tags."
+  :group 'org-supertag-inline-style)
 
-(defvar org-supertag-inline-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c t i") 'org-supertag-inline-insert-tag)
-    map)
-  "Keymap for `org-supertag-inline-mode'.")
+;; Function to create the display property for hiding the # prefix
+(defun org-supertag-inline-display-property (tag-name)
+  "Create a display property to hide the # prefix for TAG-NAME."
+  (when org-supertag-inline-style-hide-prefix
+    (let ((len (length tag-name)))
+      (propertize (substring tag-name 1) 
+                 'face 'org-supertag-inline-face
+                 'org-supertag-inline t))))
 
-(defun org-supertag-inline--fontify-tag (limit)
-  "Font-lock function to highlight inline tags up to LIMIT."
-  (when (re-search-forward org-supertag-inline-tag-regexp limit t)
-    (let* ((begin (match-beginning 0))  ; start of #
-           (tag-begin (match-beginning 1))  ; start of tag name
-           (end (match-end 1))  ; end of tag name only
-           (element-type (org-element-type (org-element-context))))
-      (when (and (not (memq element-type org-supertag-inline-excluded-contexts))
-                 ;; Additional check to avoid org-mode native tags
-                 (not (save-excursion
-                        (goto-char begin)
-                        (looking-at-p ":[^:]*#\\|#[^:]*:"))))
-        ;; Apply face to the tag text only (not the #)
-        (put-text-property tag-begin end 'face 'org-supertag-inline-tag-face)
-        
-        ;; Create a distinctive visual effect for the # symbol
-        (when org-supertag-inline-hide-hash
-          (compose-region begin tag-begin " "))        
-        ;; Apply display properties to entire tag
-        (put-text-property begin end 'display 
-                          (list 'raise 0.1))  ;; 轻微升高标签
-        ;; Add space after tag if needed
-        (when (and (< end (point-max))
-                   (not (eq (char-after end) ? )))
-          (put-text-property end (1+ end) 'display " "))
-        t))))
-
-(defvar org-supertag-inline--keywords
-  '((org-supertag-inline--fontify-tag))
-  "Font-lock keywords for `org-supertag-inline-mode'.")
-
-(defun org-supertag-inline--setup-font-lock ()
-  "Setup font-lock for inline tags."
-  (if org-supertag-inline-enable-fontification
-      (font-lock-add-keywords nil org-supertag-inline--keywords t)
-    (font-lock-remove-keywords nil org-supertag-inline--keywords))
-  (if (fboundp 'font-lock-flush)
-      (font-lock-flush)
-    (with-no-warnings (font-lock-fontify-buffer))))
-
-(defun org-supertag-inline-refresh ()
-  "Refresh inline tag highlighting in the current buffer."
-  (interactive)
-  (when org-supertag-inline-mode
-    (if (fboundp 'font-lock-flush)
-        (font-lock-flush)
-      (with-no-warnings (font-lock-fontify-buffer)))
-    (message "Refreshed inline tag highlighting using font-lock")))
+;; Compose font-lock keywords for highlighting inline tags
+(defvar org-supertag-inline-font-lock-keywords
+  `((,(rx (group "#" (+ (any alnum "-_"))))
+      (0 (let* ((tag-name (match-string-no-properties 1))
+                (prefix "#")
+                (tag-text (substring tag-name 1)))
+           ;; Apply different properties to the prefix and the tag text
+           (when org-supertag-inline-style-hide-prefix
+             (add-text-properties
+              (match-beginning 0) (+ (match-beginning 0) 1)
+              '(invisible org-supertag-prefix display "")))
+           ;; Apply face to the entire tag including prefix if not hidden
+           (add-text-properties
+            (if org-supertag-inline-style-hide-prefix
+                (+ (match-beginning 0) 1)
+              (match-beginning 0))
+            (match-end 0)
+            `(face org-supertag-inline-face
+                  help-echo ,(format "Tag: %s" tag-text)
+                  org-supertag-inline t))
+           ;; Return nil to allow other fontification
+           nil))
+      ;; Don't apply in org src blocks, code blocks, or verbatim sections
+      (0 'org-supertag-inline-face nil
+         (and (not (org-in-src-block-p))
+              (not (org-at-table-p))
+              (not (org-at-commented-p))
+              (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim))))))
+  "Font-lock keywords for highlighting inline tags.")
 
 ;;;###autoload
-(define-minor-mode org-supertag-inline-mode
-  "Toggle org-supertag inline tag mode.
-When enabled, inline tags (prefixed with #) can be inserted and highlighted."
-  :init-value nil
-  :lighter " OrgST-Inline"
-  :keymap org-supertag-inline-mode-map
-  (if org-supertag-inline-mode
+(define-minor-mode org-supertag-inline-style-mode
+  "Minor mode for styling org-supertag inline tags."
+  :lighter " Tag-Style"
+  (if org-supertag-inline-style-mode
       (progn
-        ;; Setup font-lock for highlighting
-        (org-supertag-inline--setup-font-lock)
-        ;; Keep hook for compatibility, but our implementation uses font-lock
-        (add-hook 'after-change-functions #'org-supertag-inline--after-change nil t))
-    ;; Disable
-    (font-lock-remove-keywords nil org-supertag-inline--keywords)
-    (remove-hook 'after-change-functions #'org-supertag-inline--after-change t)
+        (font-lock-add-keywords nil org-supertag-inline-font-lock-keywords t)
+        (if (fboundp 'font-lock-flush)
+            (font-lock-flush)
+          (font-lock-fontify-buffer)))
+    (font-lock-remove-keywords nil org-supertag-inline-font-lock-keywords)
     (if (fboundp 'font-lock-flush)
         (font-lock-flush)
-      (with-no-warnings (font-lock-fontify-buffer)))))
+      (font-lock-fontify-buffer))))
+
+;; Enable the minor mode in org buffers
+(add-hook 'org-mode-hook 'org-supertag-inline-style-mode)
+
+;; Refresh styling when customizations change
+(defun org-supertag-inline-style-update ()
+  "Update the org-supertag-inline face based on current customizations."
+  (custom-set-faces
+   `(org-supertag-inline-face
+     ((t (:background ,org-supertag-inline-background
+          :foreground ,org-supertag-inline-foreground
+          :box ,org-supertag-inline-box
+          :weight ,org-supertag-inline-weight))))))
+
+(advice-add 'customize-save-variable :after
+            (lambda (&rest _)
+              (when (boundp 'org-supertag-inline-style-mode)
+                (org-supertag-inline-style-update))))
+
+;; Override the tag insertion function to apply styling immediately
+(advice-add 'org-supertag-inline-insert-tag :after
+            (lambda (&rest _)
+              (font-lock-flush)))
 
 ;;;###autoload
 (defun org-supertag-inline-insert-tag (tag-name)
@@ -225,8 +239,12 @@ TAG-NAME is the name of the tag to insert."
                              (substring tag-name 0 -1)
                            tag-name))
            (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
-           ;; Ensure current node exists
-           (node-id (org-id-get-create)))      
+           ;; Try to get current node ID
+           (node-id (org-id-get))
+           ;; If no ID exists, create a new node
+           (node-id (or node-id
+                       (when (org-at-heading-p)
+                         (org-supertag-node-create)))))
       ;; Get or create tag
       (let ((tag-id
              (cond
@@ -250,47 +268,16 @@ TAG-NAME is the name of the tag to insert."
         ;; Add space after tag if needed
         (unless (or (eobp) (eq (char-after) ? ))
           (insert " "))
-        ;; Use org-supertag-tag-apply to apply the tag
-        (save-excursion
-          (org-back-to-heading t)
+        ;; Apply tag if we have a valid node ID
+        (when node-id
           (let ((org-supertag-tag-apply-skip-headline t))
             (org-supertag-tag-apply tag-id)))
         
-        (message "Inserted inline tag #%s" tag-id)))))
-
-(defun org-supertag-inline--after-change (_beg _end _len)
-  "Compatibility function for after-change hooks.
-Updates inline tag highlighting between BEG and END.
-Now delegates to font-lock."
-  (when org-supertag-inline-enable-fontification
-    (if (fboundp 'font-lock-flush)
-        (font-lock-flush)
-      (with-no-warnings (font-lock-fontify-buffer)))))
-
-;;;###autoload
-(defun org-supertag-inline-setup ()
-  "Set up the inline tag system."
-  (interactive)
-  (add-hook 'org-supertag-mode-hook
-            (lambda ()
-              (org-supertag-inline-mode (if org-supertag-mode 1 -1))))
-  (message "Inline tag support enabled. Use C-c t i to insert tags."))
-
-(defun org-supertag-inline--highlight-buffer ()
-  "Highlight all inline tags in the current buffer using font-lock.
-Compatibility function for existing code."
-  (if (fboundp 'font-lock-flush)
-      (font-lock-flush)
-    (with-no-warnings (font-lock-fontify-buffer))))
-
-(defun org-supertag-inline--clear-overlays ()
-  "Compatibility function for old overlay-based code.
-This is now a no-op as we use font-lock."
-  (when font-lock-mode
-    (font-lock-remove-keywords nil org-supertag-inline--keywords)
-    (if (fboundp 'font-lock-flush)
-        (font-lock-flush)
-      (with-no-warnings (font-lock-fontify-buffer)))))
+        (message "Inserted inline tag #%s%s" 
+                tag-id
+                (if node-id
+                    (format " and linked to node %s" node-id)
+                  ""))))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

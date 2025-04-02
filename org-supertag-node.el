@@ -614,13 +614,20 @@ Returns:
   (interactive)
   (let ((at-heading (org-at-heading-p)))
     (cond
-     ;; Case 1: At existing heading
+     ;; Case 1: At existing heading with ID
      ((and at-heading (org-id-get))
       (user-error "Heading already has a node"))
      
      ;; Case 2: At existing heading without ID
      (at-heading
-      (org-supertag-node-sync-at-point))
+      (let* ((node-id (org-id-get-create))
+             (props (org-supertag-db--parse-node-at-point)))
+        (unless props
+          (error "Failed to parse node properties"))
+        ;; Add node to database
+        (org-supertag-db-add node-id props)
+        ;; Return node ID
+        node-id))
      
      ;; Case 3: At blank position
      (t
@@ -636,7 +643,14 @@ Returns:
         ;; Move back to heading
         (forward-line -1)
         ;; Create node
-        (org-supertag-node-sync-at-point))))))
+        (let* ((node-id (org-id-get-create))
+               (props (org-supertag-db--parse-node-at-point)))
+          (unless props
+            (error "Failed to parse node properties"))
+          ;; Add node to database
+          (org-supertag-db-add node-id props)
+          ;; Return node ID
+          node-id))))))
 
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data."
@@ -685,31 +699,24 @@ Returns:
     (when (file-exists-p org-id-locations-file)
       (org-id-locations-load))))
 
-(defun org-supertag--create-node (node-id)
-  "Create a new node with NODE-ID."
-  (org-supertag-node--ensure-id-system)
-  (save-excursion
-    (unless (org-at-heading-p)
-      (org-back-to-heading t))
-    (let ((current-id (org-id-get)))
-      (when (and current-id (not (equal current-id node-id)))
-        (error "Position mismatch in create-node: Expected %s but at %s" 
-               node-id current-id)))
-    (let ((props (org-supertag-db--parse-node-at-point)))
-      (unless props
-        (error "Failed to parse node properties at point"))
-      (org-supertag-db-add node-id props))))
-
 
 (defun org-supertag-node-update ()
   "Update node at current position.
 Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
   (interactive)
-  (if-let* ((node-id (org-supertag-node--ensure-sync)))
-      (progn
-        (message "Node updated successfully: %s" node-id)
-        node-id)
-    (user-error "Cannot find or create node at current position")))
+  (unless (org-at-heading-p)
+    (user-error "Must be on a heading to update node"))
+  
+  (let ((node-id (org-id-get)))
+    (unless node-id
+      (message "No node ID found, creating new node...")
+      (setq node-id (org-id-get-create)))
+    
+    (if-let* ((sync-result (org-supertag-node--ensure-sync)))
+        (progn
+          (message "Node updated successfully: %s" node-id)
+          node-id)
+      (user-error "Failed to sync node. Please ensure:\n1. You're on a valid heading\n2. The heading is not archived or commented\n3. The node ID is valid"))))
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
   "Remove tag association from a node.
@@ -743,25 +750,33 @@ Returns t if:
                (if (org-in-archived-heading-p) "yes" "no")))
     at-heading))
 
-(defun org-supertag-node--format-path (file-path olp title)
+(defun org-supertag-node--format-path (file-path olp title &optional props)
   "Format node path for display.
 FILE-PATH is the path to the file
 OLP is the outline path list
-TITLE is the node title"
+TITLE is the node title
+PROPS is optional property list for additional info"
   (let* ((file-name (if file-path 
                         (file-name-nondirectory file-path)
-                      "<no file>"))  
-         (path-parts (append (list file-name) 
-                           (or olp nil)  
-                           (list (or title "<no title>")))))  
+                      "<no file>"))
+         (clean-title (or title "<no title>"))
+         ;; 如果最后一个 olp 和标题相同，则不重复显示
+         (filtered-olp (if (and olp (string= (car (last olp)) clean-title))
+                          (butlast olp)
+                        olp))
+         (path-parts (append (list file-name)
+                           filtered-olp
+                           (list clean-title))))
     (mapconcat #'identity 
-               (remove nil path-parts)  
+               (remove nil path-parts)
                " / ")))
 
 (defun org-supertag-node--collect-nodes ()
   "Collect all nodes with their paths.
 Returns a list of (node-id . display-string) pairs."
-  (let (nodes)
+  (let ((nodes '())
+        (display-counts (make-hash-table :test 'equal)))
+    ;; First pass: count occurrences of each display string
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
@@ -772,9 +787,31 @@ Returns a list of (node-id . display-string) pairs."
                 (clean-title (if (stringp title)
                                (substring-no-properties title)
                              "<invalid title>"))
-                (display (org-supertag-node--format-path file-path olp clean-title)))
+                (display (org-supertag-node--format-path file-path olp clean-title props)))
+           (puthash display
+                    (1+ (gethash display display-counts 0))
+                    display-counts))))
+     org-supertag-db--object)
+    
+    ;; Second pass: create nodes list with unique display strings
+    (maphash
+     (lambda (id props)
+       (when (eq (plist-get props :type) :node)
+         (let* ((file-path (plist-get props :file-path))
+                (title (or (plist-get props :title) "<untitled>"))
+                (olp (plist-get props :olp))
+                ;; 确保所有字符串属性都是纯文本
+                (clean-title (if (stringp title)
+                               (substring-no-properties title)
+                             "<invalid title>"))
+                (base-display (org-supertag-node--format-path file-path olp clean-title props))
+                ;; If display string is not unique, append node ID
+                (display (if (> (gethash base-display display-counts) 1)
+                           (format "%s [%s]" base-display id)
+                         base-display)))
            (push (cons id display) nodes))))
      org-supertag-db--object)
+    
     ;; 按显示字符串排序
     (sort nodes (lambda (a b) 
                  (string< (cdr a) (cdr b))))))

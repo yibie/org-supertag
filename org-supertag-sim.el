@@ -12,7 +12,7 @@
 
 (require 'json)
 (require 'org-supertag-db)
-(require 'org-supertag-sim-epc)  ; 引入EPC基础功能
+(require 'org-supertag-sim-epc)  
 
 (defgroup org-supertag-sim nil
   "Semantic similarity support for org-supertag."
@@ -37,7 +37,6 @@
 
 (defvar org-supertag-sim-tag-select-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; 基本导航
     (define-key map (kbd "n") #'next-line)
     (define-key map (kbd "p") #'previous-line)
     (define-key map (kbd "SPC") #'org-supertag-sim-toggle-tag-selection)
@@ -48,10 +47,11 @@
     (define-key map (kbd "a") #'org-supertag-sim-select-all-tags)
     (define-key map (kbd "A") #'org-supertag-sim-unselect-all-tags)
     map)
-  "标签选择模式的键盘映射.")
+  "Tag select mode keybindings.")
 
 (define-derived-mode org-supertag-sim-tag-select-mode special-mode "OrgSuperTag-TagSelect"
-  "为自动标签建议提供标签选择的主模式."
+  "Major mode for tag selection in org-supertag."
+  :group 'org-supertag
   (setq-local buffer-read-only t))
 
 (defun org-supertag-sim--get-all-tags ()
@@ -92,37 +92,28 @@
     vector-dir))
 
 (defun org-supertag-sim-init ()
-  "初始化标签相似度引擎，包括EPC服务器和Ollama服务.
-作为统一的入口点，会初始化整个系统，包括底层EPC服务和相似度引擎。"
+  "Initialize the tag similarity engine, including EPC server and Ollama service.
+As a unified entry point, it will initialize the entire system, including the underlying EPC service and similarity engine."
   (interactive)
-  (message "正在初始化标签相似度系统...")
-  
-  ;; 首先初始化EPC服务和Ollama
+  (message "Initializing tag similarity system...")
   (condition-case err
       (progn
         (unless (org-supertag-sim-epc-server-running-p)
           (org-supertag-sim-epc-start-server)
-          (sit-for 1)) ;; 给服务器启动一点时间
-        
+          (sit-for 1))
         (when (org-supertag-sim-epc-server-running-p)
-          ;; 调用EPC服务初始化
           (org-supertag-sim-epc-init)
-          
-          ;; 检查EPC初始化是否成功
+
           (unless org-supertag-sim-epc-initialized
-            (error "EPC服务初始化失败"))
-          
-          ;; 设置事件监听和同步定时器
+            (error "EPC service initialization failed"))
           (org-supertag-db-on 'entity:created #'org-supertag-sim--on-tag-created)
           (org-supertag-db-on 'entity:removed #'org-supertag-sim--on-tag-removed)
           (org-supertag-sim--start-sync-timer)
-          
-          ;; 设置初始化完成标志
           (setq org-supertag-sim--initialized t)
-          (message "标签相似度系统初始化完成")))
+          (message "Tag similarity system initialized"))
     (error
-     (message "标签相似度系统初始化失败: %s" (error-message-string err))
-     nil)))
+     (message "Tag similarity system initialization failed: %s" (error-message-string err))
+     nil))))
 
 (defun org-supertag-sim--update-tag (tag)
   "Update the vector of a single tag.
@@ -135,7 +126,7 @@ TAG is the tag information."
                             (list (list (cons "id" tag)
                                       (cons "name" (plist-get tag-props :name)))))
         (error
-         (message "更新标签向量出错: %s" (error-message-string err)))))))
+         (message "Update tag vector error: %s" (error-message-string err)))))))
 
 (defun org-supertag-sim--remove-tag (tag-id)
   "Remove a tag from the vector library.
@@ -146,7 +137,7 @@ TAG-ID is the tag ID."
                           'remove_tag
                           (list tag-id))
       (error
-       (message "删除标签向量出错: %s" (error-message-string err))))))
+       (message "Delete tag vector error: %s" (error-message-string err))))))
 
 (defun org-supertag-sim--on-tag-created (tag)
   "Handle tag creation events.

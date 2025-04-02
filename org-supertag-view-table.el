@@ -176,13 +176,13 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
     (delete-other-windows)))
 
 (defun org-supertag-view--get-field-value-from-db (node-id field-name)
-  "从数据库获取字段值。
-NODE-ID 是节点ID。
-FIELD-NAME 是字段名称。
-返回字段值，如果未找到则返回空字符串。"
+  "Get field value from database.
+NODE-ID is the node identifier
+FIELD-NAME is the field name"
   (let* ((link-id (format ":node-field:%s->%s" node-id field-name))
-         (field-link (gethash link-id org-supertag-db--link)))
-    (or (plist-get field-link :value) "")))
+         (link (gethash link-id org-supertag-db--link)))
+    (when link
+      (plist-get link :value))))
 
 (defun org-supertag-view--insert-content-table-with-button (tag)
   "Insert content related to TAG in current buffer using org table format with buttons.
@@ -242,7 +242,7 @@ FIELD-NAME 是字段名称。
           (dolist (field fields)
             (let* ((field-name (plist-get field :name))
                    (value (org-supertag-view--get-field-value-from-db node-id field-name)))
-              (insert (format "|%s" value))))
+              (insert (format "|%s" (or value "")))))
           (insert "|\n")))
       
       ;; 对齐表格
@@ -317,35 +317,46 @@ NODE-TITLE 是节点的标题。
       ;; 使用通用的节点查找函数
       (org-supertag-view--find-node-by-title clean-title))))
 
-(defun org-supertag-view-table-update-field (tag-id node-id field-name field-value)
-  "更新节点的字段值。
-TAG-ID 是标签ID。
-NODE-ID 是节点ID。
-FIELD-NAME 是字段名称。
-FIELD-VALUE 是字段值，如果为nil或空字符串则移除该字段。
-返回t表示更新成功，nil表示失败。"
+(defun org-supertag-view-table-update-field (node-id field-name field-value tag-id)
+  "Update field value in database and file.
+NODE-ID is the node identifier
+FIELD-NAME is the field name
+FIELD-VALUE is the new value
+TAG-ID is the tag identifier
+Returns t if update successful, nil if failed."
   (condition-case err
       (progn
-        (let ((tag-def (org-supertag-tag-get tag-id))
-              (field-def nil))
-          ;; 获取字段定义
-          (when tag-def
-            (setq field-def (cl-find field-name (plist-get tag-def :fields)
-                                   :key (lambda (f) (plist-get f :name))
-                                   :test #'equal)))
-          
-          (if (and field-def field-value (not (string-empty-p field-value)))
-              ;; 有值，仅更新数据库中的值，不尝试修改文件
-              (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
-                (puthash link-id (list :from node-id :to field-name :value field-value) 
-                         org-supertag-db--link))
+        ;; 1. 更新数据库
+        (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
+          (if (and field-value (not (string-empty-p field-value)))
+              ;; 有值，更新数据库
+              (puthash link-id 
+                       (list :from node-id 
+                             :to field-name 
+                             :tag-id tag-id
+                             :value field-value
+                             :created-at (current-time))
+                       org-supertag-db--link)
             ;; 值为空，移除字段
-            (when field-def
-              (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
-                (remhash link-id org-supertag-db--link)))))
+            (remhash link-id org-supertag-db--link)))
+        
+        ;; 2. 更新文件
+        (when-let* ((node-props (gethash node-id org-supertag-db--object))
+                    (file-path (plist-get node-props :file-path))
+                    (pos (plist-get node-props :pos)))
+          (with-current-buffer (find-file-noselect file-path)
+            (save-excursion
+              (goto-char pos)
+              (if (and field-value (not (string-empty-p field-value)))
+                  (org-set-property field-name field-value)
+                (org-delete-property field-name)))))
+        
+        ;; 3. 标记数据库为脏并安排保存
+        (org-supertag-db--mark-dirty)
+        (org-supertag-db--schedule-save)
         t)  ;; 返回成功
     (error
-     (message "更新字段 %s 出错: %s" field-name (error-message-string err))
+     (message "Error updating field %s: %s" field-name (error-message-string err))
      nil)))
 
 (defun org-supertag-view-cancel-edit ()
@@ -520,7 +531,7 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
         (when (and success new-value)
           ;; 更新数据库（如果是自定义字段）
           (when (and node-id field-name (> col 3))
-            (org-supertag-view-table-update-field tag node-id field-name new-value))
+            (org-supertag-view-table-update-field node-id field-name new-value tag))
           
           ;; 更新表格显示
           (org-table-put nil col new-value)
