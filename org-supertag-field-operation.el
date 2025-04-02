@@ -159,9 +159,9 @@ Returns a list of nodes that match the criteria."
 ;; Field Edit Interface 
 ;;----------------------------------------------------------------------
 (defvar-local org-supertag--pending-operations nil
-  "存储待执行的操作。
-格式为 ((operation . args) ...)
-operation 可以是 'remove-field, 'add-field, 'edit-field 等。")
+  "Store pending operations.
+Format: ((operation . args) ...)
+operation can be 'remove-field, 'add-field, 'edit-field, etc.")
 
 (defun org-supertag-tag--refresh-field-table (context)
   "Refresh the field table display.
@@ -175,7 +175,6 @@ CONTEXT is the edit context plist containing:
         (current-point (point))
         (current-values (org-supertag-tag--collect-current-values)))
     (erase-buffer)
-    ;; 显示待执行操作的提示
     (when org-supertag--pending-operations
       (insert "Pending operations:\n")
       (dolist (op org-supertag--pending-operations)
@@ -185,21 +184,16 @@ CONTEXT is the edit context plist containing:
           (_ (insert (format "  - Unknown operation: %S\n" op)))))
       (insert "\n"))
     
-    ;; 插入常规内容
     (insert (format "Fields for Node: %s\n" 
                     (plist-get context :node-title)))
-    ;; 插入字段表
     (dolist (tag-id (plist-get context :tags))
       (org-supertag-tag--insert-tag-fields tag-id
                                           (plist-get context :source-buffer)
                                           (plist-get context :source-point)))
     
-    ;; 帮助文本
     (insert "\nCommands:\n")
     (insert "n: Next field    p: Previous field    RET: Edit field\n")
     (insert "C-c C-c: Save and apply changes    C-c C-k: Cancel\n")
-    
-    ;; 恢复字段值和光标位置
     (org-supertag-tag--restore-field-values current-values)
     (goto-char (min current-point (point-max)))))
 
@@ -246,7 +240,6 @@ TAG-ID: The tag identifier
 FIELD-DEF: The field definition plist"
   (let* ((tag (org-supertag-db-get tag-id))
          (fields (plist-get tag :fields))
-         ;; 标准化字段名
          (sanitized-field-def 
           (let ((field-name (plist-get field-def :name)))
             (setq field-def 

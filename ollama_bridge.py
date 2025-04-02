@@ -10,33 +10,33 @@ import time
 import re
 
 class OllamaServiceManager:
-    """管理 Ollama 服务的类"""
+    """Manage Ollama services"""
     
-    # 添加类变量记录已验证的模型
+    # Add class variables to record verified models
     _verified_models = set()
     
     def __init__(self):
-        """初始化服务管理器"""
+        """Initialize the service manager"""
         self.model = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"
-        # 默认静默模式
+        # Default silent mode
         self.quiet = os.environ.get("OLLAMA_SKIP_OUTPUT", "1") == "1"
     
     def ensure_service_ready(self) -> bool:
-        """确保 Ollama 服务已准备就绪
+        """Ensure Ollama service is ready
         
         Returns:
-            服务是否就绪
+            Whether the service is ready
         """
-        # 如果模型已验证过，直接返回成功
+        # If the model has been verified, return success directly
         if self.model in OllamaServiceManager._verified_models:
-            # 不再输出验证消息
+            # No longer output verification messages
             return True
             
         try:
             if not self.quiet:
                 print(f"正在下载模型 {self.model}...")
                 
-            # 尝试下载模型
+            # Try to download the model
             response = requests.post(
                 "http://localhost:11434/api/pull",
                 json={"name": self.model},
@@ -54,10 +54,10 @@ class OllamaServiceManager:
                         print(f"\nError: {data['error']}")
                         return False
             
-            # 添加到已验证模型集合
+            # Add to the verified model set
             OllamaServiceManager._verified_models.add(self.model)
             if not self.quiet:
-                print("Ollama 服务就绪")
+                print("Ollama service ready")
             return True
             
         except Exception as e:
@@ -67,9 +67,9 @@ class OllamaServiceManager:
     
     @staticmethod
     def check_ollama_installed() -> bool:
-        """检查 Ollama 是否已安装"""
+        """Check if Ollama is installed"""
         if platform.system() == "Windows":
-            # Windows 下检查多个可能的位置
+            # Check multiple possible locations under Windows
             possible_paths = [
                 r"C:\Program Files\Ollama\ollama.exe",
                 r"C:\Program Files (x86)\Ollama\ollama.exe",
@@ -77,15 +77,15 @@ class OllamaServiceManager:
                 os.path.expanduser("~\\scoop\\apps\\ollama\\current\\ollama.exe"),
             ]
             
-            # 通过 PATH 环境变量查找
+            # Find through the PATH environment variable
             if os.environ.get("PATH"):
                 for path in os.environ["PATH"].split(os.pathsep):
                     possible_paths.append(os.path.join(path, "ollama.exe"))
                     
-            # 检查所有可能的路径
+            # Check all possible paths
             return any(os.path.exists(path) for path in possible_paths)
         else:
-            # Unix 系统检查 PATH
+            # Unix system check PATH
             return bool(subprocess.run(
                 ["which", "ollama"], 
                 capture_output=True
@@ -93,30 +93,30 @@ class OllamaServiceManager:
     
     @staticmethod
     def get_install_command() -> str:
-        """获取安装命令"""
+        """Get the installation command"""
         system = platform.system().lower()
         if system == "darwin":  # macOS
             return "curl -fsSL https://ollama.com/install.sh | sh"
         elif system == "linux":
             return "curl -fsSL https://ollama.com/install.sh | sh"
         elif system == "windows":
-            return """Windows 安装选项:
-1. 使用 winget (推荐):
+            return """Windows installation options:
+1. Use winget (recommended):
    winget install Ollama.Ollama
 
-2. 使用 Scoop:
+2. Use Scoop:
    scoop bucket add main
    scoop install ollama
 
-3. 直接下载安装包:
-   访问 https://ollama.com/download
+3. Directly download the installation package:
+   Visit https://ollama.com/download
 """
         else:
             raise NotImplementedError(f"Unsupported system: {system}")
             
     @staticmethod
     def is_service_running() -> bool:
-        """检查 Ollama 服务是否运行"""
+        """Check if the Ollama service is running"""
         try:
             response = requests.get("http://127.0.0.1:11434/api/tags")
             return response.status_code == 200
@@ -125,7 +125,7 @@ class OllamaServiceManager:
             
     @staticmethod
     def start_service():
-        """启动 Ollama 服务"""
+        """Start the Ollama service"""
         system = platform.system().lower()
         if system in ["darwin", "linux"]:
             subprocess.Popen(
@@ -142,8 +142,8 @@ class OllamaServiceManager:
             
     @staticmethod
     def ensure_model_exists(model_name: str) -> bool:
-        """确保模型已下载"""
-        # 如果模型已验证过，直接返回成功
+        """Ensure the model is downloaded"""
+        # If the model has been verified, return success directly
         if model_name in OllamaServiceManager._verified_models:
             return True
             
@@ -161,82 +161,82 @@ class OllamaServiceManager:
             
     @staticmethod
     def pull_model(model_name: str):
-        """下载模型"""
+        """Download the model"""
         subprocess.run(["ollama", "pull", model_name], check=True)
 
 class OllamaBridge:
-    """Ollama API 集成，用于标签推荐"""
+    """Ollama API integration, used for tag recommendation"""
     
-    # 添加类变量用于缓存初始化状态
+    # Add class variables to cache initialization status
     _initialized = False
     
     def __init__(self, model: str = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest", host: str = "http://127.0.0.1:11434"):
-        """初始化 Ollama 客户端
+        """Initialize the Ollama client
         
         Args:
-            model: 使用的模型名称
-            host: Ollama 服务地址
+            model: The name of the model used
+            host: Ollama Service Address
         """
         self.model = model
         self.host = host
-        # 默认静默模式
+        # Default quiet mode
         self.quiet = os.environ.get("OLLAMA_SKIP_OUTPUT", "1") == "1"
         
-        # 仅在首次初始化时检查服务
+        # Only check the service when first initialized
         if not OllamaBridge._initialized:
             self._ensure_service()
             OllamaBridge._initialized = True
         
     def _ensure_service(self):
-        """确保 Ollama 服务可用"""
+        """Ensure the Ollama service is available"""
         service_mgr = OllamaServiceManager()
-        service_mgr.quiet = self.quiet  # 传递静默设置
-        service_mgr.model = self.model  # 设置相同的模型
+        service_mgr.quiet = self.quiet  # Pass the silent settings
+        service_mgr.model = self.model  # Set the same model
         
-        # 检查是否已安装
+        # Check if it is installed
         if not service_mgr.check_ollama_installed():
             install_cmd = service_mgr.get_install_command()
-            print(f"Ollama 未安装，请运行以下命令安装:\n{install_cmd}")
-            raise RuntimeError(f"Ollama 未安装，请运行以下命令安装:\n{install_cmd}")
+            print(f"Ollama is not installed, please run the following command to install:\n{install_cmd}")
+            raise RuntimeError(f"Ollama is not installed, please run the following command to install:\n{install_cmd}")
             
-        # 检查服务是否运行
+        # Check if the service is running
         if not service_mgr.is_service_running():
-            print("Ollama 服务未运行，正在启动...")
+            print("Ollama service is not running, starting...")
             service_mgr.start_service()
-            # 等待服务启动
+            # Wait for the service to start
             for i in range(5):
-                print(f"等待服务启动... 尝试 {i+1}/5")
+                print(f"Waiting for the service to start... Try {i+1}/5")
                 time.sleep(2)
                 if service_mgr.is_service_running():
-                    print("服务已启动")
+                    print("Service started")
                     break
             else:
-                print("服务启动失败")
-                raise RuntimeError("Ollama 服务启动失败")
+                print("Service startup failed")
+                raise RuntimeError("Ollama service failed to start")
                 
-        # 检查模型是否存在 - 使用优化后的快速检查
-        print(f"检查模型 {self.model} 是否存在...")
+        # Check if the model exists - use the optimized fast check
+        print(f"Check the model {self.model} Does it exist...")
         if not service_mgr.ensure_model_exists(self.model):
-            print(f"模型 {self.model} 不存在，正在下载...")
+            print(f"Model {self.model} Doesn't exist, downloading...")
             try:
                 service_mgr.ensure_service_ready()
-                print(f"模型 {self.model} 已准备就绪")
+                print(f"Model {self.model} is ready")
             except Exception as e:
-                print(f"模型准备失败: {e}")
-                raise RuntimeError(f"模型准备失败: {e}")
+                print(f"Model preparation failed: {e}")
+                raise RuntimeError(f"Model preparation failed: {e}")
                 
-        print("Ollama 服务就绪")
+        print("Ollama service is ready")
             
     def generate(self, prompt: str, system: str = "", **kwargs) -> str:
-        """生成文本
+        """Generate text
         
         Args:
-            prompt: 提示词
-            system: 系统提示词
-            **kwargs: 其他参数
+            prompt: Prompt
+            system: System prompt
+            **kwargs: Other parameters
             
         Returns:
-            生成的文本
+            Generated text
         """
         url = f"{self.host}/api/generate"
         data = {
@@ -250,7 +250,7 @@ class OllamaBridge:
             response = requests.post(url, json=data, stream=True)
             response.raise_for_status()
             
-            # 收集所有响应
+            # Collect all responses
             full_response = ""
             for line in response.iter_lines():
                 if line:
@@ -269,13 +269,13 @@ class OllamaBridge:
             return ""
             
     def suggest_tags(self, text: str) -> List[str]:
-        """根据文本内容提取关键词作为标签
+        """Extract keywords from text content as tags
         
         Args:
-            text: 需要分析的文本内容
+            text: Text content to analyze
             
         Returns:
-            提取的标签列表
+            Extracted tag list
         """
         system = """You are a professional book indexer with expertise in extracting meaningful concepts from text. Your task is to identify the most significant concepts and terms from the given text that readers would likely search for.
 
@@ -311,57 +311,50 @@ Remember:
         try:
             response = self.generate(prompt, system)
             
-            # 清理和格式化标签
+            # Clean and format tags
             tags = []
             for tag in response.strip().split(','):
-                # 清理标签
                 tag = tag.strip().lower()
-                # 移除特殊字符（保留下划线）
                 tag = re.sub(r'[^\w\s_]', '', tag)
-                # 将空格和连字符替换为下划线
                 tag = re.sub(r'[\s-]+', '_', tag)
-                # 移除多余的下划线
                 tag = re.sub(r'_+', '_', tag)
-                # 移除首尾的下划线
                 tag = tag.strip('_')
-                
-                # 验证标签长度和格式
                 if tag and len(tag) <= 50 and re.match(r'^[a-z0-9_]+$', tag):
                     tags.append(tag)
             
-            # 如果没有有效标签，重试一次
+            # If no valid tags are found, retry once
             if not tags:
                 print("No valid tags found, retrying...")
                 return self.suggest_tags(text)
                 
-            return list(set(tags))  # 移除重复
+            return list(set(tags))  # Remove duplicates
             
         except Exception as e:
             print(f"Error suggesting tags: {e}")
             return []
         
     def analyze_tag_relations(self, tag: str, tags: List[str]) -> List[Dict[str, Any]]:
-        """分析标签间的关系
+        """Analyze the relationship between tags
         
         Args:
-            tag: 目标标签
-            tags: 待分析的标签列表
+            tag: Target tag
+            tags: List of tags to analyze
             
         Returns:
-            标签关系列表，每个元素包含标签名和关系类型
+            List of tag relationships, each element contains tag name and relationship type
         """
-        # 预定义关系类型
+        # Predefined relationship types
         RELATIONS = {
-            "CONTRAST": "比较或对比关系",
-            "RELATE": "一般关联关系",
-            "INFLUENCE": "影响关系",
-            "CONTAIN": "包含关系(父)",
-            "BELONG": "从属关系(子)",
-            "PARALLEL": "并行关系",
-            "DEPENDENCY": "依赖关系",
-            "CAUSE": "因果关系(因)",
-            "EFFECT": "因果关系(果)",
-            "COOCCURRENCE": "共现关系"
+            "CONTRAST": "Comparative or contrasting relationship",
+            "RELATE": "General association relationship",
+            "INFLUENCE": "Influence relationship",
+            "CONTAIN": "Parent-child relationship",
+            "BELONG": "Subordinate relationship",
+            "PARALLEL": "Parallel relationship",
+            "DEPENDENCY": "Dependency relationship",
+            "CAUSE": "Causal relationship",
+            "EFFECT": "Causal relationship",
+            "COOCCURRENCE": "Co-occurrence relationship"
         }
         
         system = """You are a tag relationship analyzer. Your task is to determine the relationship between two tags.
@@ -405,35 +398,29 @@ REASON: <explanation>"""
             response = self.generate(prompt, system)
             
             try:
-                # 清理响应
                 response = response.strip()
                 
-                # 检查格式
                 if not ('\nREASON:' in response and response.startswith('RELATION:')):
                     print(f"Warning: Invalid response format for tag '{related_tag}', retrying...")
-                    # 重试一次
                     response = self.generate(prompt, system)
                     if not ('\nREASON:' in response and response.startswith('RELATION:')):
                         print(f"Warning: Still invalid format after retry, skipping tag '{related_tag}'")
                         continue
                 
-                # 解析响应
                 lines = response.strip().split('\n')
                 relation_line = next(line for line in lines if line.startswith('RELATION:'))
                 reason_line = next(line for line in lines if line.startswith('REASON:'))
                 
-                # 提取关系类型和原因
                 relation = relation_line.split(':', 1)[1].strip().upper()
                 reason = reason_line.split(':', 1)[1].strip()
                 
-                # 验证关系类型
                 if relation not in RELATIONS:
                     print(f"Warning: Invalid relation type '{relation}' for tag '{related_tag}', retrying...")
                     continue
                 
                 results.append({
                     'tag': related_tag,
-                    'relation': relation.lower(),  # 转换为小写以匹配 Emacs 中的符号
+                    'relation': relation.lower(),  # Convert to lowercase to match Emacs symbols
                     'reason': reason
                 })
             except Exception as e:
@@ -444,65 +431,59 @@ REASON: <explanation>"""
         return results
         
     def direct_tag_generation(self, text: str) -> List[str]:
-        """直接使用LLM为文本生成标签，优化中文处理
+        """Direct use of LLM to generate tags for text, optimized for Chinese processing
         
         Args:
-            text: 待分析文本
+            text: Text to analyze
             
         Returns:
-            标签列表
+            Tag list
         """
         if not self._initialized:
             return []
             
         try:
-            # 更新提示，增强关键概念识别能力
-            system = """你是一位专业的索引编纂专家，擅长为学术文献和技术文档创建精确的主题索引。你的任务是识别文本中最重要的关键术语、概念和主题，特别注意以下几点：
+            system = """You are a professional indexer, good at creating precise topic indexes for academic literature and technical documents. Your task is to identify the most important key terms, concepts, and themes in the text, especially pay attention to the following points:
 
-1. 识别专业领域的核心术语和概念，尤其是标题或章节标题中出现的关键术语
-2. 提取完整的技术术语和专业概念，保持其完整性
-3. 捕捉具有特定领域意义的名词短语
-4. 识别文本讨论的主要对象、工具、方法和理论
-5. 不要漏掉文本中明确出现的关键术语，尤其是重复出现的专业术语
+1. Identify core terms and concepts in the professional field, especially key terms in titles or chapter titles
+2. Extract complete technical terms and professional concepts, maintaining their completeness
+3. Capture specific domain-specific noun phrases
+4. Identify the main objects, tools, methods, and theories discussed in the text
+5. Do not miss key terms that are clearly mentioned in the text, especially repeated professional terms
 
-提取标准：
-1. 从文本中提取3-5个最关键的术语或概念
-2. 准确提取原文中实际出现的完整术语
-3. 保持专业术语的完整性和准确性
-4. 如果是中文术语，转换为对应的英文术语，保持专业准确性
-5. 重点关注标题、小标题中出现的术语，这些通常是文档的核心概念
+Extraction standards:
+1. Extract 3-5 of the most critical terms or concepts from the text
+2. Accurately extract the complete terms that appear in the original text
+3. Maintain the completeness and accuracy of professional terms
+4. If the term is Chinese, convert it to the corresponding English term, maintaining professionalism and accuracy
+5. Focus on terms appearing in titles and subtitles, which are usually the core concepts of the document
 
-输出格式：
-- 仅返回逗号分隔的标签列表
-- 多词概念用下划线连接
-- 不要包含其他文本或解释
-- 示例: search_engine, search_intent, information_retrieval"""
+Output format:
+- Return ONLY a comma-separated list of tags
+- Use underscores to connect multi-word concepts
+- Do not include any other text or explanations
+- Example: search_engine, search_intent, information_retrieval"""
 
-            prompt = f"""作为专业索引编纂专家，从以下文本中提取3-5个最重要的专业术语或概念作为检索标签：
+            prompt = f"""As a professional indexer, extract 3-5 of the most critical terms or concepts from the following text as retrieval tags:
 
 {text}
 
-请特别注意：
-1. 准确提取标题或文本中明确出现的关键术语和专业概念
-2. 保持术语的完整性，不要简化专业术语
-3. 将多词概念用下划线连接
-4. 只返回逗号分隔的标签列表，不要有其他文本"""
+Please pay special attention to:
+1. Accurately extract the key terms and professional concepts that are clearly mentioned in the titles or text
+2. Maintain the completeness of the terms, do not simplify professional terms
+3. Use underscores to connect multi-word concepts
+4. Return ONLY a comma-separated list of tags, do not include any other text"""
 
             response = self.generate(prompt, system)
             
-            # 解析响应
+            # Parse the response
             tags = []
             if response:
-                # 分割并清理标签
                 for tag in response.strip().split(','):
                     tag = tag.strip().lower()
-                    # 清理标签，只保留字母、数字和下划线
                     tag = re.sub(r'[^\w\s_]', '', tag)
-                    # 将空格和连字符替换为下划线
                     tag = re.sub(r'[\s-]+', '_', tag)
-                    # 将连续多个下划线替换为单个
                     tag = re.sub(r'_+', '_', tag)
-                    # 移除首尾下划线
                     tag = tag.strip('_')
                     if tag:
                         tags.append(tag)
@@ -515,31 +496,31 @@ REASON: <explanation>"""
             return []
             
     def generate_tags(self, text: str) -> List[str]:
-        """综合方法：从文本中提取关键词作为标签
+        """hybrid method: extract keywords as tags from text
         
         Args:
-            text: 待分析文本
+            text: Text to analyze
             
         Returns:
-            标签列表
+            Tag list
         """
-        # 首先使用中文优化的标签提取
+        # First use the Chinese-optimized tag extraction
         chinese_tags = self.direct_tag_generation(text)
         
-        # 如果标签数量足够，则直接返回
-        if len(chinese_tags) >= 3:  # 最少需要3个标签
+        # If the number of tags is sufficient, return directly
+        if len(chinese_tags) >= 3:  # At least 3 tags are needed
             return chinese_tags
             
-        # 如果标签数量不足，使用英文方法补充
+        # If the number of tags is insufficient, use the English method to supplement
         try:
             standard_tags = self.suggest_tags(text)
             
-            # 合并去重
+            # Merge and remove duplicates
             all_tags = list(set(chinese_tags + standard_tags))
             
-            # 如果合并后的标签数量仍然不足3个，则保留所有标签
-            # 否则，限制最多返回5个标签
-            if len(all_tags) > 5:  # 最多返回5个标签
+            # If the number of tags is still insufficient, keep all tags
+            # Otherwise, limit the maximum return to 5 tags
+            if len(all_tags) > 5:  # Maximum return 5 tags
                 return all_tags[:5]
             else:
                 return all_tags
@@ -547,17 +528,17 @@ REASON: <explanation>"""
         except Exception as e:
             if not self.quiet:
                 print(f"Error getting standard tags: {e}")
-            # 如果补充标签失败，则返回原有标签
+            # If the tag supplement fails, return the original tags
             return chinese_tags
 
     def extract_entities(self, text: str) -> List[Dict[str, Any]]:
-        """从文本中提取命名实体
+        """Extract named entities from text
         
         Args:
-            text: 待分析文本
+            text: Text to analyze
             
         Returns:
-            实体列表，每个实体包含文本、类型和置信度
+            Entity list, each entity contains text, type, and confidence
         """
         system = """You are an expert in Named Entity Recognition (NER). Your task is to identify and classify named entities in the given text. Focus on these entity types:
 
@@ -597,27 +578,22 @@ Remember:
         try:
             response = self.generate(prompt, system)
             
-            # 尝试解析JSON响应
             try:
                 entities = json.loads(response)
                 if not isinstance(entities, list):
                     raise ValueError("Response is not a list")
                     
-                # 验证和清理每个实体
                 valid_entities = []
                 for entity in entities:
                     if not isinstance(entity, dict):
                         continue
                         
-                    # 确保所需字段存在
                     if not all(k in entity for k in ['text', 'type', 'confidence']):
                         continue
                         
-                    # 验证类型
                     if entity['type'] not in ['PERSON', 'ORG', 'PRODUCT', 'CONCEPT', 'TECH']:
                         continue
                         
-                    # 验证置信度
                     try:
                         conf = float(entity['confidence'])
                         if not (0 <= conf <= 1):
@@ -636,25 +612,22 @@ Remember:
                 
         except Exception as e:
             print(f"Error extracting entities: {e}")
-# 文件操作函数，用于与 sim_tag.py 集成
+
 def extract_entities_from_file(input_file, output_file, quiet=True):
-    """从文件提取命名实体（为兼容性保留，但返回空结果）
+    """Extract named entities from file (for compatibility, but returns empty results)
     
     Args:
-        input_file: 输入文件路径（包含文本）
-        output_file: 输出文件路径
-        quiet: 是否静默模式
+        input_file: input file path (including text)
+        output_file: output file path
+        quiet: Whether to silent mode
     """
     try:
-        # 读取输入文件
         if not quiet:
             print(f"Reading input file: {input_file}")
         with open(input_file, 'r') as f:
             input_data = json.load(f)
             
-        # 解析输入数据
         if isinstance(input_data, list) and len(input_data) >= 1:
-            # 保存空结果（此功能已弃用）
             with open(output_file, 'w') as f:
                 json.dump([], f)
             if not quiet:
@@ -667,7 +640,6 @@ def extract_entities_from_file(input_file, output_file, quiet=True):
     except Exception as e:
         if not quiet:
             print(f"Error in file processing: {e}")
-        # 确保创建输出文件，即使发生错误
         try:
             with open(output_file, 'w') as f:
                 json.dump([], f)
@@ -675,30 +647,26 @@ def extract_entities_from_file(input_file, output_file, quiet=True):
             pass
 
 def suggest_tags_from_file(input_file, output_file, quiet=True):
-    """从文件生成标签建议
+    """Generate tag suggestions from files
     
     Args:
-        input_file: 输入文件路径（包含文本）
-        output_file: 输出文件路径
-        quiet: 是否静默模式
+        input_file: input file path (including text)
+        output_file: output file path
+        quiet: Whether to silent mode
     """
     try:
-        # 读取输入文件
         if not quiet:
             print(f"Reading input file: {input_file}")
         with open(input_file, 'r') as f:
             input_data = json.load(f)
             
-        # 解析输入数据
         if isinstance(input_data, list) and len(input_data) >= 1:
-            text = input_data[0]  # 待分析文本
+            text = input_data[0]  # text to analyze
             
-            # 生成标签
             bridge = OllamaBridge()
             bridge.quiet = quiet
             tags = bridge.generate_tags(text)
             
-            # 保存结果
             with open(output_file, 'w') as f:
                 json.dump(tags, f, indent=2)
             if not quiet:
@@ -711,7 +679,6 @@ def suggest_tags_from_file(input_file, output_file, quiet=True):
     except Exception as e:
         if not quiet:
             print(f"Error suggesting tags: {e}")
-        # 确保创建输出文件，即使发生错误
         try:
             with open(output_file, 'w') as f:
                 json.dump([], f)
@@ -719,14 +686,11 @@ def suggest_tags_from_file(input_file, output_file, quiet=True):
             pass
 
 def main():
-    """测试 Ollama 集成"""
+    """Test Ollama integration"""
     try:
-        # 设置静默模式
         quiet_mode = os.environ.get("OLLAMA_SKIP_OUTPUT", "1") == "1"
-        
-        # 处理命令行参数
+
         if len(sys.argv) > 1:
-            # 直接从命令行获取测试文本并生成标签
             test_text = sys.argv[1]
             bridge = OllamaBridge()
             bridge.quiet = quiet_mode
@@ -734,55 +698,51 @@ def main():
             print(", ".join(tags))
             return
         
-        # 初始化 Ollama 服务
+
         service = OllamaServiceManager()
         service.quiet = quiet_mode
         if not service.ensure_service_ready():
-            print("无法启动 Ollama 服务")
+            print("Failed to start Ollama service")
             sys.exit(1)
         
-        # 创建 bridge 实例
+
         bridge = OllamaBridge()
         bridge.quiet = quiet_mode
         
-        # 测试示例 1：技术内容
         tech_text = """Python is a popular programming language for machine learning projects.
         TensorFlow and PyTorch are two common frameworks used by data scientists."""
         
-        print("\n=== 测试示例 1: 技术内容 ===")
-        print(f"输入: {tech_text}")
+        print("\n=== Test example 1: Technical content ===")
+        print(f"Input: {tech_text}")
         tech_tags = bridge.generate_tags(tech_text)
-        print(f"提取标签: {tech_tags}")
+        print(f"Extracted tags: {tech_tags}")
         
-        # 测试示例 2：中文内容
-        chinese_text = "输入任何关键词，只要能够在 Google 趋势里，12 月内找到它的起始点，就是新词"
-        print("\n=== 测试示例 2: 中文内容 ===")
-        print(f"输入: {chinese_text}")
+        chinese_text = "Input any keyword, as long as it can be found in Google Trends within 12 months, it is a new word"
+        print("\n=== Test example 2: Chinese content ===")
+        print(f"Input: {chinese_text}")
         chinese_tags = bridge.generate_tags(chinese_text)
-        print(f"提取标签: {chinese_tags}")
+        print(f"Extracted tags: {chinese_tags}")
         
-        # 测试示例 3：具有明显名词的句子
         entity_text = "Tesla CEO Elon Musk announced that SpaceX will launch Starship to Mars by 2026."
-        print("\n=== 测试示例 3: 包含专有名词的内容 ===")
-        print(f"输入: {entity_text}")
+        print("\n=== Test example 3: Content with obvious proper nouns ===")
+        print(f"Input: {entity_text}")
         entity_tags = bridge.generate_tags(entity_text)
-        print(f"提取标签: {entity_tags}")
+        print(f"Extracted tags: {entity_tags}")
         
-        # 测试标签关系分析
         if not quiet_mode:
-            print("\n=== 测试标签关系分析 ===")
+            print("\n=== Test example 4: Tag relation analysis ===")
             main_tag = "python"
             related_tags = ["machine_learning", "tensorflow", "programming"]
-            print(f"主标签: {main_tag}")
-            print(f"相关标签: {related_tags}")
+            print(f"Main tag: {main_tag}")
+            print(f"Related tags: {related_tags}")
             
             relations = bridge.analyze_tag_relations(main_tag, related_tags)
             if relations:
-                print("\n分析结果:")
+                print("\nAnalysis results:")
                 for relation in relations:
                     print(f"- {relation['tag']}: {relation['relation']} ({relation['reason']})")
             else:
-                print("无法获取标签关系分析结果")
+                print("Failed to get tag relation analysis results")
         
     except Exception as e:
         print(f"Error: {e}")
