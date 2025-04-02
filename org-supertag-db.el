@@ -1229,13 +1229,13 @@ Returns a clean string without any text properties."
                (type (org-element-type element)))
           (message "Parsing node at point: type=%s" type)
           (when (and (eq type 'headline)
-                     ;; 只处理已有 ID 的节点
+                     ;; Only process nodes with existing ID
                      (org-entry-get nil "ID"))
             ;; Parse headline
             (let* ((title (org-supertag-db--get-node-title))
                    (level (org-element-property :level element))
                    (id (org-entry-get nil "ID"))
-                   ;; Task properties - 使用更可靠的获取方式
+                   ;; Task properties - Use more reliable retrieval methods
                    (todo-state (org-entry-get nil "TODO"))
                    (priority (org-entry-get nil "PRIORITY"))
                    (scheduled (condition-case nil

@@ -46,6 +46,7 @@
     (define-key map (kbd "q") #'org-supertag-sim-cancel-tag-selection)
     (define-key map (kbd "a") #'org-supertag-sim-select-all-tags)
     (define-key map (kbd "A") #'org-supertag-sim-unselect-all-tags)
+    (define-key map (kbd "r") #'org-supertag-sim-regenerate-tags)
     map)
   "Tag select mode keybindings.")
 
@@ -110,10 +111,10 @@ As a unified entry point, it will initialize the entire system, including the un
           (org-supertag-db-on 'entity:removed #'org-supertag-sim--on-tag-removed)
           (org-supertag-sim--start-sync-timer)
           (setq org-supertag-sim--initialized t)
-          (message "Tag similarity system initialized"))
+          (message "Tag similarity system initialized")))
     (error
      (message "Tag similarity system initialization failed: %s" (error-message-string err))
-     nil))))
+     nil)))
 
 (defun org-supertag-sim--update-tag (tag)
   "Update the vector of a single tag.
@@ -143,7 +144,9 @@ TAG-ID is the tag ID."
   "Handle tag creation events.
 TAG is the created tag information."
   (when org-supertag-sim--initialized
-    (org-supertag-sim--update-tag tag)))
+    (let ((tag-props (org-supertag-db-get tag)))
+      (when (eq (plist-get tag-props :type) :tag)
+        (org-supertag-sim--update-tag tag)))))
 
 (defun org-supertag-sim--on-tag-removed (tag-id)
   "Handle tag removal events.
@@ -175,12 +178,16 @@ TAG-ID is the removed tag ID."
          #'org-supertag-sim--sync-library)))
 
 (defun org-supertag-sim--ensure-initialized ()
-  "确保系统已初始化，返回一个 deferred 对象.
-如果系统未初始化，会自动尝试初始化。"
+  "Ensure the system is initialized, return a deferred object.
+If the system is not initialized, it will try to initialize automatically.
+
+Returns:
+- A deferred object that will be resolved when the system is initialized
+- nil if the system is already initialized"
   (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
-      ;; 如果两个系统都已初始化，直接返回成功
+      ;; If both systems are initialized, return success directly
       (deferred:next (lambda () t))
-    ;; 否则，尝试初始化
+    ;; Otherwise, try to initialize
     (deferred:$
       (deferred:next
         (lambda ()
@@ -188,10 +195,10 @@ TAG-ID is the removed tag ID."
           (org-supertag-sim-init)))
       (deferred:nextc it
         (lambda (_)
-          ;; 再次检查初始化状态
+          ;; Check initialization status again
           (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
               t
-            (error "系统初始化失败")))))))
+            (error "System initialization failed")))))))
 
 (defun org-supertag-sim-find-similar (tag-name &optional top-k callback)
   "Find tags similar to the specified tag.
@@ -200,7 +207,7 @@ TOP-K is the number of similar tags to return, default is 5.
 CALLBACK is an optional callback function that receives the result as a parameter."
   (let ((buffer (current-buffer))
         (limit (or top-k 5)))
-    (message "正在查找相似标签...")
+    (message "Searching for similar tags...")
     (deferred:$
       (deferred:try
         (deferred:$
@@ -226,14 +233,14 @@ CALLBACK is an optional callback function that receives the result as a paramete
                                      result)))
                           (if callback
                               (funcall callback formatted-result)
-                            ;; 只在没有回调时显示结果
-                            (message "找到 %d 个相似标签" (length formatted-result)))
+                            ;; Display results only when there is no callback
+                            (message "Found %d similar tags" (length formatted-result)))
                           formatted-result)))
-                  (error "查找相似标签失败: %s" 
-                         (or (plist-get response :message) "未知错误")))))))
+                  (error "Failed to find similar tags: %s" 
+                         (or (plist-get response :message) "Unknown error")))))))
         :catch
         (lambda (err)
-          (message "查找相似标签出错: %s" (error-message-string err))
+          (message "Failed to find similar tags: %s" (error-message-string err))
           nil)))))
 
 (defun org-supertag-sim-search-tags (query-tags &optional weights callback)
@@ -243,7 +250,7 @@ WEIGHTS is the weight list.
 CALLBACK is an optional callback function that receives the result as a parameter."
   (org-supertag-sim--ensure-initialized)
   (let ((buffer (current-buffer)))
-    (message "正在搜索标签组合...")
+    (message "Searching for tag combinations...")
     (condition-case err
         (epc:call-deferred org-supertag-sim-epc-manager
                           'search_tags
@@ -254,9 +261,9 @@ CALLBACK is an optional callback function that receives the result as a paramete
             (with-current-buffer buffer
               (if callback
                   (funcall callback result)
-                (message "找到 %d 个相关标签" (length result)))))))
+                (message "Found %d related tags" (length result)))))))
       (error
-       (message "搜索标签出错: %s" (error-message-string err))
+       (message "Failed to search tags: %s" (error-message-string err))
        nil))))
 
 (defun org-supertag-sim-extract-entities (text &optional callback)
@@ -264,7 +271,7 @@ CALLBACK is an optional callback function that receives the result as a paramete
 Optional CALLBACK will be called with the results."
   (org-supertag-sim--ensure-initialized)
   (let ((buffer (current-buffer)))
-    (message "正在分析实体...")
+    (message "Analyzing entities...")
     (condition-case err
         (epc:call-deferred org-supertag-sim-epc-manager
                           'extract_entities
@@ -278,41 +285,41 @@ Optional CALLBACK will be called with the results."
                 ;; 默认处理
                 (if result
                     (progn
-                      (message "找到 %d 个实体:" (length result))
+                      (message "Found %d entities:" (length result))
                       (dolist (entity result)
                         (let ((entity-text (cdr (assoc 'entity entity)))
                               (type (cdr (assoc 'type entity)))
                               (start (cdr (assoc 'start entity)))
                               (end (cdr (assoc 'end entity))))
                           (message "  %s [%s] (%d-%d)" entity-text type start end))))
-                  (message "未找到实体")))))))
+                  (message "No entities found")))))))
       (error
-       (message "提取实体出错: %s" (error-message-string err))
+       (message "Failed to extract entities: %s" (error-message-string err))
        nil))))
 
 (defun org-supertag-sim-suggest-tags-from-text (text &optional callback)
-  "根据文本内容生成标签建议.
-可选的 CALLBACK 将在获取到标签后被调用."
+  "According to the text content, generate tag suggestions.
+Optional CALLBACK will be called with the results."
   (let ((buffer (current-buffer)))
-    (message "正在分析文本内容...")
+    (message "Analyzing text content...")
     
-    ;; 构建JSON格式的请求数据
+    ;; Build JSON request data
     (let ((request-data (list :content text)))
       
-      ;; 记录请求信息
-      (message "发送文本长度: %d" (length text))
+      ;; Record request information
+      (message "Text length: %d" (length text))
       
       (deferred:$
         (deferred:try
           (deferred:$
-            ;; 首先确保系统已初始化
+            ;; Ensure the system is initialized first
             (org-supertag-sim--ensure-initialized)
             (deferred:nextc it
               (lambda (_)
-                ;; 确保文本不为空
+                ;; Ensure the text is not empty
                 (if (string-empty-p text)
-                    (error "文本内容为空")
-                  ;; 使用JSON格式发送请求
+                    (error "Text content is empty")
+                  ;; Use JSON format to send the request
                   (epc:call-deferred org-supertag-sim-epc-manager
                                   'suggest_tags_json
                                   (list (json-encode request-data))))))
@@ -324,23 +331,23 @@ Optional CALLBACK will be called with the results."
                           (result (plist-get response :result))
                           (error-msg (plist-get response :message)))
                       (cond
-                       ;; 成功情况
+                       ;; Success case
                        ((string= status "success")
                         (if callback
                             (funcall callback result)
-                          (message "找到 %d 个相关标签" (length result))))
-                       ;; 错误情况
+                          (message "Found %d related tags" (length result))))
+                       ;; Error case
                        (t
-                        (message "生成标签建议失败: %s" 
-                                 (or error-msg "未知错误"))
+                        (message "Failed to generate tag suggestions: %s" 
+                                 (or error-msg "Unknown error"))
                         (if callback (funcall callback nil)))))))))
           :catch
           (lambda (err)
-            (message "生成标签建议出错: %s" (error-message-string err))
+            (message "Failed to generate tag suggestions: %s" (error-message-string err))
             (when callback (funcall callback nil)))))))))
 
 (defun org-supertag-sim-toggle-tag-selection ()
-  "切换当前标签的选择状态."
+  "Toggle the selection state of the current tag."
   (interactive)
   (let ((inhibit-read-only t))
     (beginning-of-line)
@@ -352,92 +359,97 @@ Optional CALLBACK will be called with the results."
         (forward-line 1)))))
 
 (defun org-supertag-sim-apply-selected-tags ()
-  "应用所有已选择的标签."
+  "Apply all selected tags to the current node.
+This function will:
+1. Collect selected tags from the selection buffer
+2. Move to the correct position in the source buffer
+3. Insert tags in inline format (#tag) after the properties drawer
+4. Ensure proper spacing between tags"
   (interactive)
   (let* ((context (buffer-local-value 'org-supertag-sim--select-context (current-buffer)))
          (source-buffer (plist-get context :source-buffer))
          (node-id (plist-get context :node-id))
          (selected-tags '()))
-
-    ;; 收集选中的标签
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[X\\]\\) \\(.*\\)$" nil t)
         (push (match-string-no-properties 3) selected-tags)))
-
-    ;; 没有选择任何标签时提示
     (if (null selected-tags)
-        (message "未选择任何标签")
-      ;; 应用标签
-      (message "正在应用 %d 个选中的标签..." (length selected-tags))
+        (message "No tags selected")
+      ;; Apply tags
+      (message "Applying %d selected tags..." (length selected-tags))
       (with-current-buffer source-buffer
-        (dolist (tag selected-tags)
-          (unless (org-supertag-tag-exists-p tag)
-            (org-supertag-tag-create tag))
-          (org-supertag-tag-apply tag))
-        (message "成功应用 %d 个标签: %s" 
-                 (length selected-tags)
-                 (mapconcat (lambda (tag)
-                              (propertize tag 'face 'font-lock-keyword-face))
-                            selected-tags ", "))))
-    
-    ;; 关闭选择窗口
+        (save-excursion
+          ;; 1. Move to the correct position
+          (org-back-to-heading t)
+          (org-end-of-meta-data t)
+          ;; 2. Insert tags with proper spacing
+          (dolist (tag selected-tags)
+            (insert "#" tag " "))
+          (message "Successfully applied %d tags: %s" 
+                   (length selected-tags)
+                   (mapconcat (lambda (tag)
+                              (propertize (concat "#" tag) 'face 'font-lock-keyword-face))
+                            selected-tags " ")))))
     (quit-window t)))
 
 (defun org-supertag-sim-cancel-tag-selection ()
-  "取消标签选择操作."
+  "Cancel the tag selection operation."
   (interactive)
-  (message "已取消标签选择")
+  (message "Tag selection canceled")
   (quit-window t))
 
 (defun org-supertag-sim-select-all-tags ()
-  "选择所有标签."
+  "Select all tags."
   (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[[ X]\\]\\) \\(.*\\)$" nil t)
         (replace-match (concat (match-string 1) "[X] " (match-string 3))))
-      (message "已选择所有标签"))))
+      (message "All tags selected"))))
 
 (defun org-supertag-sim-unselect-all-tags ()
-  "取消选择所有标签."
+  "Unselect all tags."
   (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[[ X]\\]\\) \\(.*\\)$" nil t)
         (replace-match (concat (match-string 1) "[ ] " (match-string 3))))
-      (message "已取消选择所有标签"))))
+      (message "All tags unselected"))))
 
 (defun org-supertag-sim-auto-tag-node ()
-  "根据当前节点内容自动建议并应用标签.
-使用语义分析从节点内容中提取相关标签,并在专用缓冲区中显示,
-允许用户通过空格键选择需要应用的标签."
+  "According to the content of the current node, automatically suggest and apply tags.
+Use semantic analysis to extract relevant tags from the node content, and display them in a dedicated buffer,
+allowing users to select and apply the tags they need by pressing the space key."
   (interactive)
-  (let* ((content (org-get-entry))
+  (require 'org-supertag-inline)
+  (let* ((node-title (org-get-heading t t t t))
+         (content (org-get-entry))
          (node-id (org-id-get-create))
-         (node-title (org-get-heading t t t t))
-         (progress-reporter (make-progress-reporter "正在分析内容..." 0 100)))
+         ;; Combine title and content for better semantic understanding
+         (full-text (concat node-title "\n\n" content))
+         (progress-reporter (make-progress-reporter "Analyzing content..." 0 100)))
     
-    ;; 显示初始进度
+    ;; Display initial progress
     (progress-reporter-update progress-reporter 10)
     
-    ;; 临时显示提示
+    ;; Temporarily display a prompt
     (run-with-timer 0.5 nil (lambda () 
                              (progress-reporter-update progress-reporter 30)
-                             (message "正在生成标签建议...")))
+                             (message "Generating tag suggestions...")))
     
-    ;; 标签生成是异步的
+    ;; Tag generation is asynchronous
     (org-supertag-sim-suggest-tags-from-text
-     content
+     full-text
      (lambda (suggested-tags)
-       ;; 更新进度
+       ;; Update progress
        (progress-reporter-update progress-reporter 80)
        (progress-reporter-done progress-reporter)
        
        (if suggested-tags
-           ;; 在专用缓冲区中显示标签选择界面
+           ;; Display the tag selection interface in a dedicated buffer
            (let* ((select-buffer (get-buffer-create "*Org SuperTag Selection*"))
                   (source-buffer (current-buffer)))
              
@@ -446,40 +458,44 @@ Optional CALLBACK will be called with the results."
                  (erase-buffer)
                  (org-supertag-sim-tag-select-mode)
                  
-                 ;; 存储上下文信息
+                 ;; Store context information
                  (setq-local org-supertag-sim--select-context
                              (list :node-id node-id
                                    :node-title node-title
                                    :source-buffer source-buffer))
-                 
-                 ;; 添加标题和说明
-                 (insert (format "为节点建议了 %d 个标签:\n" (length suggested-tags)))
+
+                 (insert (format "Suggested %d tags for the node:\n" (length suggested-tags)))
                  (insert "──────────────────────────────────────────────\n")
-                 (insert (format "节点: %s\n\n" node-title))
-                 
-                 ;; 插入标签列表
+                 (insert (format "Node: %s\n\n" node-title))
                  (dolist (tag suggested-tags)
                    (insert (format "[ ] %s\n" tag)))
-                 
-                 ;; 添加帮助信息
-                 (insert "\n操作说明:\n")
-                 (insert "空格/回车: 选择/取消选择标签  n/p: 上下移动\n")
-                 (insert "a: 全选  A: 全不选\n")
-                 (insert "C-c C-c: 应用选中标签  C-c C-k/q: 取消\n")))
-             
-             ;; 显示缓冲区
+                 (insert "\nOperation instructions:\n")
+                 (insert "Space/Enter: Select/Unselect tag  n/p: Move up/down\n")
+                 (insert "a: Select all  A: Unselect all\n")
+                 (insert "C-c C-c: Apply selected tags  C-c C-k/q: Cancel\n")))
              (select-window 
               (display-buffer select-buffer
                               '((display-buffer-below-selected)
                                 (window-height . fit-window-to-buffer)
                                 (preserve-size . (nil . t))
                                 (select . t))))
-             
-             ;; 移动到第一个标签
              (with-current-buffer select-buffer
                (goto-char (point-min))
                (re-search-forward "^\\[ \\]" nil t)
                (beginning-of-line)))
-         (message "未找到合适的标签建议"))))))
+         (message "No suitable tag suggestions found"))))))
+
+(defun org-supertag-sim-regenerate-tags ()
+  "Regenerate tag suggestions for the current node."
+  (interactive)
+  (let* ((context (buffer-local-value 'org-supertag-sim--select-context (current-buffer)))
+         (source-buffer (plist-get context :source-buffer))
+         (select-buffer (current-buffer)))
+    (when source-buffer
+      ;; First close the current selection buffer
+      (quit-window)
+      ;; Then regenerate tags in the source buffer
+      (with-current-buffer source-buffer
+        (org-supertag-sim-auto-tag-node)))))
 
 (provide 'org-supertag-sim)

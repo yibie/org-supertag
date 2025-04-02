@@ -385,14 +385,14 @@ Example:
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 插入抽屉
+        ;; Insert drawer
         (condition-case err
             (progn
               (if region
                   (org-insert-drawer)
                 (insert ":" name ":\n:END:\n")
                 (forward-line -2))
-              ;; 如果有内容，插入内容
+              ;; If there is content, insert it
               (when content
                 (forward-line 1)
                 (insert content "\n")))
@@ -488,13 +488,10 @@ Example:
     (save-excursion
       (org-with-point-at pos
         (let ((old-state (org-get-todo-state)))
-          ;; 添加临时钩子
           (add-hook 'org-todo-state-change-hook
                    (lambda ()
                      (apply hook-fn hook-args)))
-          ;; 设置状态
           (org-todo state)
-          ;; 移除临时钩子
           (remove-hook 'org-todo-state-change-hook
                       (lambda ()
                         (apply hook-fn hook-args))))))))   
