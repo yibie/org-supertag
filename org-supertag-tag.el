@@ -186,7 +186,7 @@ otherwise returns nil."
     (unless (eq (plist-get tag :type) :tag)
       (error "Invalid tag type for %s" tag-id))
     (unless (org-supertag-db-get node-id)
-      (org-supertag--create-node node-id))
+      (org-supertag-node-sync-at-point))
     
     ;; Link node and tag
     (org-supertag-node-db-add-tag node-id tag-id)

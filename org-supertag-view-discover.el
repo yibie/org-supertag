@@ -11,24 +11,20 @@
 If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
   (message "Preparing tag discovery view...")
   (let* ((all-tags (org-supertag-view--get-all-tags)))
-    (unwind-protect)
-    (progn
-
-      (cond
-
-       (filter-tags
-        (setq org-supertag-view--current-filters filter-tags))
-
-       ((null org-supertag-view--current-filters)
-        (let ((starting-tag (completing-read "Start tag discovery with: "
-                                           (org-supertag-view--get-all-tags)
-                                           nil t)))
-          (when starting-tag
-            (setq org-supertag-view--current-filters (list starting-tag))))))
-      
-      (t nil))
+    (cond
+     (filter-tags
+      (setq org-supertag-view--current-filters
+            (delete-dups (append org-supertag-view--current-filters filter-tags))))
+     
+     ((null org-supertag-view--current-filters)
+      (let ((starting-tag (completing-read "Start tag discovery with: "
+                                         (org-supertag-view--get-all-tags)
+                                         nil t)))
+        (when starting-tag
+          (setq org-supertag-view--current-filters (list starting-tag))))))
+    
     (when org-supertag-view--current-filters
-          (org-supertag-view--show-tag-discover-buffer))))
+      (org-supertag-view--show-tag-discover-buffer))))
 
       
 
@@ -38,7 +34,18 @@ Returns a list of (tag . similarity) pairs, or nil if there's an error."
   (when (and (featurep 'org-supertag-sim)
              (bound-and-true-p org-supertag-sim--initialized))
     (condition-case err
-        (org-supertag-sim-find-similar tag-id 5)
+        (let ((result nil))
+          (deferred:$
+            (org-supertag-sim-find-similar tag-id 5)
+            (deferred:nextc it
+              (lambda (similar-tags)
+                (setq result similar-tags)
+                (org-supertag-view--show-tag-discover-buffer)))
+            (deferred:error it
+              (lambda (err)
+                (message "Failed to get similar tags: %s" (error-message-string err))
+                nil)))
+          result)
       (error
        (message "Failed to get similar tags: %s" (error-message-string err))
        nil))))
@@ -129,30 +136,34 @@ Returns a list of (tag . similarity) pairs, or nil if there's an error."
           (insert "\n"))
         
         ;; Matching nodes section 
-        (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
-          (message "Displaying %d matching nodes" (length nodes))
-          (insert (propertize (format "Matching Nodes (%d):\n" (length nodes))
-                             'face '(:weight bold)))
-          (if nodes
-              (let ((node-index 0))
-                (dolist (node-id nodes)
-                  (let* ((props (gethash node-id org-supertag-db--object))
-                         (title (or (plist-get props :title) "无标题"))
-                         (type (or (plist-get props :todo-state) ""))
-                         (date (format-time-string "%Y-%m-%d" 
-                                                  (or (plist-get props :created-at) 
-                                                     (current-time))))
-                         (view-button-text (propertize "[view]" 'face 'link)))
-                    (insert (format " %d. " (setq node-index (1+ node-index))))
-                    (insert-text-button view-button-text
-                                       'action 'org-supertag-view--view-node-button-action
-                                       'node-id node-id
-                                       'follow-link t
-                                       'help-echo "View this node")
-                    (if (string-empty-p type)
-                        (insert (format " %s (%s)\n" title date))
-                      (insert (format " %s [%s] (%s)\n" title type date))))))
-            (insert "  No nodes found with these tags.\n\n")))
+        (if org-supertag-view--current-filters
+            (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
+              (message "Displaying %d matching nodes" (length nodes))
+              (insert (propertize (format "Matching Nodes (%d):\n" (length nodes))
+                                'face '(:weight bold)))
+              (if nodes
+                  (let ((node-index 0))
+                    (dolist (node-id nodes)
+                      (let* ((props (gethash node-id org-supertag-db--object))
+                             (title (or (plist-get props :title) "无标题"))
+                             (type (or (plist-get props :todo-state) ""))
+                             (date (format-time-string "%Y-%m-%d" 
+                                                      (or (plist-get props :created-at) 
+                                                         (current-time))))
+                             (view-button-text (propertize "[view]" 'face 'link)))
+                        (insert (format " %d. " (setq node-index (1+ node-index))))
+                        (insert-text-button view-button-text
+                                           'action 'org-supertag-view--view-node-button-action
+                                           'node-id node-id
+                                           'follow-link t
+                                           'help-echo "View this node")
+                        (if (string-empty-p type)
+                            (insert (format " %s (%s)\n" title date))
+                          (insert (format " %s [%s] (%s)\n" title type date))))))
+                (insert "  No nodes found with these tags.\n\n")))
+          (progn
+            (insert (propertize "Matching Nodes:\n" 'face '(:weight bold)))
+            (insert "  (select a filter first)\n\n")))
         
         (insert "\n")
         (insert (propertize "Note: " 'face '(:weight bold)))
@@ -163,6 +174,8 @@ Returns a list of (tag . similarity) pairs, or nil if there's an error."
       (condition-case err
           (progn
             (org-supertag-view--display-buffer-right buffer)
+            (select-window (get-buffer-window buffer))
+            (goto-char (point-min))
             (message "Tag discovery buffer displayed successfully"))
         (error
          (message "Error displaying tag discovery buffer: %s" (error-message-string err)))))))
@@ -227,7 +240,9 @@ Uses multiple fallback strategies if direct location fails."
   "Remove TAG from the current filter tags."
   (setq org-supertag-view--current-filters 
         (delete tag org-supertag-view--current-filters))
-  (org-supertag-view--show-tag-discover-buffer))
+  (if org-supertag-view--current-filters
+      (org-supertag-view--show-tag-discover-buffer)
+    (org-supertag-view--show-tag-discover nil)))
 
 (defun org-supertag-view--add-filter ()
   "Interactively add a tag to the current filters."
@@ -352,18 +367,19 @@ for backward compatibility."
 
 (defun org-supertag-view--get-nodes-with-tags (tags)
   "Get all nodes that contain all TAGS.
+If TAGS is nil, returns all nodes.
 Returns a list of node IDs."
-  (unless (and tags (listp tags))
-    (error "Invalid tags argument: %S" tags))
   (let ((result nil))
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
-         (let ((node-tags (org-supertag-node-get-tags id)))
-           (when (cl-every (lambda (tag) 
-                            (member tag node-tags))
-                         tags)
-             (push id result)))))
+         (if tags
+             (let ((node-tags (org-supertag-node-get-tags id)))
+               (when (cl-every (lambda (tag) 
+                                (member tag node-tags))
+                             tags)
+                 (push id result)))
+           (push id result))))
      org-supertag-db--object)
     (nreverse result)))
 
@@ -385,8 +401,9 @@ Returns list of (tag-name . count) pairs."
 
 (defun org-supertag-view--add-filter-tag (tag)
   "Add TAG to the current filter tags."
-  (push tag org-supertag-view--current-filters)
-  (setq org-supertag-view--current-filters (delete-dups org-supertag-view--current-filters))
+  (unless (member tag org-supertag-view--current-filters)
+    (push tag org-supertag-view--current-filters)
+    (setq org-supertag-view--current-filters (delete-dups org-supertag-view--current-filters)))
   (org-supertag-view--show-tag-discover-buffer))
 
 (defun org-supertag-view--reset-filters ()
@@ -435,13 +452,19 @@ Optional FILTER-TAGS can be provided to initialize the filter."
 
             (if (and (boundp 'org-supertag-db--object)
                      (> (hash-table-count org-supertag-db--object) 0))
-                (org-supertag-view--show-tag-discover filter-tags)
+                (progn
+                  (unless filter-tags
+                    (setq org-supertag-view--current-filters nil))
+                  (org-supertag-view--show-tag-discover filter-tags))
               (message "Database still empty after update. Cannot proceed.")))
         (message "SuperTag database not initialized. Please run org-supertag-db-update first."))
 
     (let ((window-config (current-window-configuration)))
       (unwind-protect
-          (org-supertag-view--show-tag-discover filter-tags)
+          (progn
+            (unless filter-tags
+              (setq org-supertag-view--current-filters nil))
+            (org-supertag-view--show-tag-discover filter-tags))
         (unless (get-buffer "*Org SuperTag Discover*")
           (message "Failed to create discovery buffer, restoring window configuration")
           (set-window-configuration window-config))))))

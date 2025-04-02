@@ -65,6 +65,7 @@
 
 (require 'org)
 (require 'org-id)
+(require 'deferred)
 (require 'org-supertag-db)
 (require 'org-supertag-node)
 (require 'org-supertag-relation)
@@ -135,13 +136,9 @@
     (org-supertag-db-init)
     ;; 4. Setup auto-save
     (org-supertag-db--setup-auto-save)
-    ;; 5. Initialize inline system
-    (when (featurep 'org-supertag-inline)
-      (org-supertag-inline-setup)
-      (org-supertag-inline-mode 1))
-    ;; 6. Initialize sync system
+    ;; 5. Initialize sync system
     (org-supertag-sync-init)
-    ;; 7. Initialize EPC server for similarity features
+    ;; 6. Initialize EPC server for similarity features
     (when (featurep 'org-supertag-sim-epc)
       (condition-case err
           (progn
@@ -149,7 +146,7 @@
             (org-supertag-sim-init))
         (error
          (message "Failed to start EPC server: %s" (error-message-string err)))))
-    ;; 8. Add hooks
+    ;; 7. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
     (setq org-supertag--initialized t)))

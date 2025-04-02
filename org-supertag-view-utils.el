@@ -41,9 +41,12 @@ Returns non-nil if the database has been loaded and contains data."
 ;; Load saved column configurations
 (defun org-supertag-view--ensure-columns-file ()
   "Ensure the columns configuration file exists."
-  (unless (file-exists-p org-supertag-view-columns-file)
-    (with-temp-file org-supertag-view-columns-file
-      (insert ";; org-supertag column view configurations\n\nnil\n"))))
+  (let ((dir (file-name-directory org-supertag-view-columns-file)))
+    (unless (file-exists-p dir)
+      (make-directory dir t))
+    (unless (file-exists-p org-supertag-view-columns-file)
+      (with-temp-file org-supertag-view-columns-file
+        (insert ";; org-supertag column view configurations\n\nnil\n")))))
 
 
 
