@@ -9,9 +9,11 @@
 
 
 # developing
-developing/
+.developing/
+
 # venv
 .venv/
+
 # Backup files
 *~
 \#*\#
