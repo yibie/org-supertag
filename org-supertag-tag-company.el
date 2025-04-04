@@ -54,11 +54,8 @@ If CANDIDATE is a non-existent tag name, create it directly."
                    ((get-text-property 0 'tag candidate)
                     (plist-get (get-text-property 0 'tag candidate) :name))
                    (t candidate))))
-    
-    ;; Delete the completion prefix including #
     (delete-region (- (point) (length candidate) 1) (point))
     
-    ;; Use inline tag system to insert and apply tag
     (org-supertag-inline-insert-tag tag-name)))
 
 ;;;###autoload

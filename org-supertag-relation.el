@@ -794,9 +794,17 @@ Only show similar tags without suggesting relation types."
 
 ;; Co-occurrence relation management
 (defun org-supertag-relation-record-cooccurrence (node-id tag-id)
-  "Record the co-occurrence relationship of TAG-ID on NODE-ID.
-This will create a bidirectional relationship between TAG-ID and all other tags on the node."
-  (let ((existing-tags (org-supertag-node-get-tags node-id)))
+  "Record the co-occurrence relationship of tags, unidirectionally propagated from parent node to child node.
+NODE-ID: Node ID
+TAG-ID: Tag ID
+
+This function will:
+1. Record the co-occurrence relationship between tags on the same node
+2. Record the unidirectional co-occurrence relationship from parent node tags"
+  (let ((existing-tags (org-supertag-node-get-tags node-id))
+        (parent-tags (org-supertag-node-get-parent-tags node-id)))
+    
+    ;; 1. Process co-occurrence between same-level tags
     (dolist (other-tag existing-tags)
       (unless (equal other-tag tag-id)
         ;; Compute the co-occurrence relationship strength based on frequency
@@ -809,7 +817,20 @@ This will create a bidirectional relationship between TAG-ID and all other tags 
           (org-supertag-relation--set-cooccurrence-count tag-id other-tag new-freq)
           ;; Create a bidirectional relationship with the calculated strength
           (org-supertag-relation-add-relation tag-id other-tag 'cooccurrence)
-          (org-supertag-relation-add-relation other-tag tag-id 'cooccurrence))))))
+          (org-supertag-relation-add-relation other-tag tag-id 'cooccurrence))))
+    
+    ;; 2. Process unidirectional co-occurrence from parent node tags
+    (when parent-tags
+      (dolist (parent-tag parent-tags)
+        (unless (equal parent-tag tag-id)
+          ;; Only create a unidirectional co-occurrence relationship from parent tag to child tag
+          (let* ((freq (org-supertag-relation--get-cooccurrence-count parent-tag tag-id))
+                 (new-freq (+ freq 0.5))  ; The co-occurrence weight from parent to child is 0.5
+                 (norm-factor org-supertag-relation-cooccurrence-normalization-factor)
+                 (strength (/ new-freq (+ new-freq norm-factor))))
+            (org-supertag-relation--set-cooccurrence-count parent-tag tag-id new-freq)
+            ;; Only add a unidirectional relationship from parent to child
+            (org-supertag-relation-add-relation parent-tag tag-id 'cooccurrence)))))))
 
 (defun org-supertag-relation--get-cooccurrence-count (tag1 tag2)
   "Get the number of co-occurrences between TAG1 and TAG2.
@@ -1176,43 +1197,43 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
     isolated-tags))
 
 (defun org-supertag-relation-show-isolated-tags ()
-  "显示所有孤立标签的列表，并提供处理选项。"
+  "Show a list of all isolated tags and provide processing options."
   (interactive)
   (let* ((isolated-tags (org-supertag-relation-find-isolated-tags))
          (tags-with-names nil))
     
-    ;; 收集标签名称
+    ;; Collect tag names
     (dolist (tag-id isolated-tags)
       (let ((tag-name (org-supertag-tag-get-name-by-id tag-id)))
         (when tag-name
           (push (cons tag-id tag-name) tags-with-names))))
     
     (if (null tags-with-names)
-        (message "没有找到孤立标签")
-      ;; 创建孤立标签浏览缓冲区
+        (message "No isolated tags found")
+      ;; Create isolated tags browsing buffer
       (with-current-buffer (get-buffer-create "*Org-Supertag Isolated Tags*")
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (org-supertag-relation-mode) ;; 使用相同的模式
+          (org-supertag-relation-mode) ;; Use the same mode
           
-          ;; 标题
-          (insert (propertize "孤立标签列表（没有任何关系的标签）\n\n" 
+          ;; Title
+          (insert (propertize "List of Isolated Tags (Tags with no relations)\n\n" 
                              'face '(:height 1.5 :weight bold)))
           
-          ;; 帮助信息
-          (insert "操作说明:\n")
-          (insert " [m] - 选择/取消选择标签\n")
-          (insert " [M] - 选择所有标签    [u] - 取消选择所有标签\n")
-          (insert " [RET] - 管理选中标签的关系\n")
-          (insert " [b] - 对选中标签批量添加关系\n")
-          (insert " [r] - 刷新列表\n")
-          (insert " [q] - 退出\n\n")
+          ;; Help information
+          (insert "Instructions:\n")
+          (insert " [m] - Select/Unselect tag\n")
+          (insert " [M] - Select all tags    [u] - Unselect all tags\n")
+          (insert " [RET] - Manage relations of selected tag\n")
+          (insert " [b] - Batch add relations to selected tags\n")
+          (insert " [r] - Refresh list\n")
+          (insert " [q] - Quit\n\n")
           
-          ;; 显示孤立标签列表
-          (insert (propertize (format "找到 %d 个孤立标签:\n" (length tags-with-names))
+          ;; Display the list of isolated tags
+          (insert (propertize (format "Found %d isolated tags:\n" (length tags-with-names))
                              'face '(:weight bold)))
           
-          ;; 排序标签并插入
+          ;; Sort tags and insert
           (let ((sorted-tags (sort tags-with-names 
                                   (lambda (a b) 
                                     (string< (cdr a) (cdr b))))))
@@ -1226,20 +1247,20 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
                 (insert " ")
                 (insert selection-mark)
                 (insert " ")
-                (insert-text-button (propertize "[管理]" 'face '(:foreground "green"))
+                (insert-text-button (propertize "[Manage]" 'face '(:foreground "green"))
                                    'action 'org-supertag-relation--manage-isolated-tag-action
                                    'tag-id tag-id
                                    'follow-link t
-                                   'help-echo (format "管理 %s 标签的关系" tag-name))
+                                   'help-echo (format "Manage relations for %s tag" tag-name))
                 (insert " ")
-                (insert-text-button (propertize "[标记]" 'face '(:foreground "blue"))
+                (insert-text-button (propertize "[Mark]" 'face '(:foreground "blue"))
                                    'action 'org-supertag-relation-toggle-isolated-tag-selection
                                    'tag-id tag-id
                                    'follow-link t
-                                   'help-echo "标记/取消标记此标签用于批量操作")
+                                   'help-echo "Mark/Unmark this tag for batch operations")
                 (insert (format " %s\n" tag-name))))))
         
-        ;; 绑定特殊按键
+        ;; Bind special keys
         (local-set-key (kbd "m") 'org-supertag-relation-toggle-isolated-tag-at-point)
         (local-set-key (kbd "M") 'org-supertag-relation-select-all-isolated-tags)
         (local-set-key (kbd "u") 'org-supertag-relation-unselect-all-tags)
@@ -1252,75 +1273,75 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
         (local-set-key (kbd "k") 'previous-line)
         (local-set-key (kbd "b") 'org-supertag-relation-batch-relate-isolated-tags)
         
-        ;; 显示缓冲区
+        ;; Show buffer
         (pop-to-buffer (current-buffer))))))
 
 (defun org-supertag-relation--manage-isolated-tag-action (button)
-  "响应点击孤立标签列表中的[管理]按钮。"
+  "Respond to clicks on the [Manage] button in the isolated tags list."
   (let ((tag-id (button-get button 'tag-id)))
     (when tag-id
       (org-supertag-relation--show-management-interface tag-id))))
 
 (defun org-supertag-relation-toggle-isolated-tag-selection (button)
-  "切换孤立标签的选中状态，用于批量操作。"
+  "Toggle the selection state of an isolated tag for batch operations."
   (let ((tag-id (button-get button 'tag-id)))
     (when tag-id
       (if (member tag-id org-supertag-relation--selected-tags)
-          ;; 取消选择
+          ;; Unselect
           (setq org-supertag-relation--selected-tags
                 (delete tag-id org-supertag-relation--selected-tags))
-        ;; 添加选择
+        ;; Add selection
         (push tag-id org-supertag-relation--selected-tags))
       
-      ;; 刷新显示以更新选择状态
+      ;; Refresh display to update selection status
       (org-supertag-relation-refresh-isolated-tags)
       
-      ;; 显示当前选中数量
-      (message "已选择 %d 个标签" 
+      ;; Show current selection count
+      (message "Selected %d tags" 
                (length org-supertag-relation--selected-tags)))))
 
 (defun org-supertag-relation-toggle-isolated-tag-at-point ()
-  "切换当前行孤立标签的选中状态。"
+  "Toggle the selection state of the isolated tag at the current line."
   (interactive)
   (let ((button (save-excursion 
                  (beginning-of-line)
-                 (re-search-forward "\\[标记\\]" (line-end-position) t)
+                 (re-search-forward "\\[Mark\\]" (line-end-position) t)
                  (button-at (match-beginning 0)))))
     (when button
       (org-supertag-relation-toggle-isolated-tag-selection button))))
 
 (defun org-supertag-relation-select-all-isolated-tags ()
-  "选择所有显示的孤立标签。"
+  "Select all displayed isolated tags."
   (interactive)
-  (setq org-supertag-relation--selected-tags nil) ;先清空
+  (setq org-supertag-relation--selected-tags nil) ; First clear
   
-  ;; 收集所有孤立标签
+  ;; Collect all isolated tags
   (with-current-buffer "*Org-Supertag Isolated Tags*"
     (save-excursion
       (goto-char (point-min))
-      (while (re-search-forward "\\[管理\\]" nil t)
+      (while (re-search-forward "\\[Manage\\]" nil t)
         (let ((button (button-at (match-beginning 0))))
           (when button
             (push (button-get button 'tag-id) 
                   org-supertag-relation--selected-tags))))))
   
-  ;; 刷新显示并提示
+  ;; Refresh display and prompt
   (org-supertag-relation-refresh-isolated-tags)
-  (message "已选择所有孤立标签 (%d 个)" 
+  (message "Selected all isolated tags (%d tags)" 
            (length org-supertag-relation--selected-tags)))
 
 (defun org-supertag-relation-manage-selected-isolated-tag ()
-  "管理当前行的孤立标签关系。"
+  "Manage the relations of the isolated tag on the current line."
   (interactive)
   (let ((button (save-excursion 
                  (beginning-of-line)
-                 (re-search-forward "\\[管理\\]" (line-end-position) t)
+                 (re-search-forward "\\[Manage\\]" (line-end-position) t)
                  (button-at (match-beginning 0)))))
     (when button
       (org-supertag-relation--manage-isolated-tag-action button))))
 
 (defun org-supertag-relation-refresh-isolated-tags ()
-  "刷新孤立标签列表的显示。"
+  "Refresh the display of the isolated tags list."
   (interactive)
   (when (get-buffer "*Org-Supertag Isolated Tags*")
     (let ((point (point)))
@@ -1328,43 +1349,43 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
       (goto-char (min point (point-max))))))
 
 (defun org-supertag-relation-batch-relate-isolated-tags ()
-  "批量为选中的孤立标签建立关系。"
+  "Batch create relations for the selected isolated tags."
   (interactive)
   (let ((selected-tags org-supertag-relation--selected-tags))
     (if (< (length selected-tags) 2)
-        (message "需要选择至少两个标签才能建立批量关系")
+        (message "Need to select at least two tags to create batch relations")
       
-      ;; 选择中心标签
+      ;; Select the central tag
       (let* ((tag-names (mapcar (lambda (id) 
                                (cons id (org-supertag-tag-get-name-by-id id)))
                              selected-tags))
-             (choice (completing-read "选择中心标签（所有其他标签将与之建立关系）: " 
+             (choice (completing-read "Select the central tag (all other tags will be related to it): " 
                                      (mapcar #'cdr tag-names) nil t))
              (center-tag-id (car (rassoc choice tag-names)))
              (other-tags (remove center-tag-id selected-tags)))
         
-        ;; 选择关系类型
+        ;; Select the relation type
         (let* ((rel-choices (org-supertag-relation--get-relation-type-choices))
-               (choice (completing-read "选择要应用的关系类型: " rel-choices nil t))
+               (choice (completing-read "Select the relation type to apply: " rel-choices nil t))
                (rel-type (org-supertag-relation--get-type-from-choice choice))
                (added-count 0))
           
-          ;; 批量应用关系
+          ;; Apply relations in batch
           (dolist (other-tag-id other-tags)
             (if (org-supertag-relation-has-complement-p rel-type)
                 (org-supertag-relation-add-with-complement center-tag-id other-tag-id rel-type)
               (org-supertag-relation-add-relation center-tag-id other-tag-id rel-type))
             (cl-incf added-count))
           
-          ;; 清空选择并刷新显示
+          ;; Clear selection and refresh display
           (setq org-supertag-relation--selected-tags nil)
           (org-supertag-relation-refresh-isolated-tags)
-          (message "已添加 %d 个关系（中心标签：%s）" 
+          (message "Added %d relations (central tag: %s)" 
                    added-count (org-supertag-tag-get-name-by-id center-tag-id)))))))
 
 (defun org-supertag-relation-toggle-tag-selection (button)
-  "切换标签的选中状态，用于批量操作。
-这个函数用于在标准关系管理界面中标记/取消标记标签。"
+  "Toggle the selection state of a tag for batch operations.
+This function is used to mark/unmark tags in the standard relation management interface."
   (interactive)
   (when (or button (get-text-property (point) 'button))
     (let* ((btn (or button (button-at (point))))
@@ -1373,55 +1394,55 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
       
       (when (and tag-id (not (equal tag-id current-tag)))
         (if (member tag-id org-supertag-relation--selected-tags)
-            ;; 取消选择
+            ;; Unselect
             (setq org-supertag-relation--selected-tags
                   (delete tag-id org-supertag-relation--selected-tags))
-          ;; 添加选择
+          ;; Add selection
           (push tag-id org-supertag-relation--selected-tags))
         
-        ;; 刷新显示以更新选择状态
+        ;; Refresh display to update selection status
         (org-supertag-relation--refresh-display)
         
-        ;; 显示当前选中数量
-        (message "已选择 %d 个标签" 
+        ;; Show current selection count
+        (message "Selected %d tags" 
                  (length org-supertag-relation--selected-tags))))))
 
 (defun org-supertag-relation-batch-add-selected ()
-  "对所有选中的标签批量添加关系。
-用于在标准关系管理界面中批量添加关系。"
+  "Batch add relations to all selected tags.
+Used to batch add relations in the standard relation management interface."
   (interactive)
   (let* ((tag-id org-supertag-relation--current-tag)
          (selected-tags org-supertag-relation--selected-tags))
     
     (if (null selected-tags)
-        (message "未选择任何标签")
+        (message "No tags selected")
       
-      ;; 有选中的标签时，选择关系类型
+      ;; When there are selected tags, select the relation type
       (let* ((rel-choices (org-supertag-relation--get-relation-type-choices))
-             (choice (completing-read "选择要应用的关系类型: " rel-choices nil t))
+             (choice (completing-read "Select the relation type to apply: " rel-choices nil t))
              (rel-type (org-supertag-relation--get-type-from-choice choice))
              (added-count 0))
         
-        ;; 批量应用关系
+        ;; Apply relations in batch
         (dolist (other-tag-id selected-tags)
-          ;; 避免自己与自己建立关系
+          ;; Avoid creating relations with itself
           (unless (equal tag-id other-tag-id)
             (if (org-supertag-relation-has-complement-p rel-type)
                 (org-supertag-relation-add-with-complement tag-id other-tag-id rel-type)
               (org-supertag-relation-add-relation tag-id other-tag-id rel-type))
             (cl-incf added-count)))
         
-        ;; 清空选择并刷新显示
+        ;; Clear selection and refresh display
         (setq org-supertag-relation--selected-tags nil)
         (org-supertag-relation--refresh-display)
-        (message "已添加 %d 个关系" added-count)))))
+        (message "Added %d relations" added-count)))))
 
 (defun org-supertag-relation-select-all-tags ()
-  "选择当前显示的所有推荐标签。"
+  "Select all recommended tags currently displayed."
   (interactive)
-  (setq org-supertag-relation--selected-tags nil) ;先清空
+  (setq org-supertag-relation--selected-tags nil) ; First clear
   
-  ;; 收集推荐区域的标签
+  ;; Collect tags from the recommendation area
   (when (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache)
     (dolist (rec (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache))
       (let* ((tag-name (car rec))
@@ -1429,29 +1450,28 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
         (when tag-id
           (push tag-id org-supertag-relation--selected-tags)))))
   
-  ;; 刷新显示并提示
+  ;; Refresh display and prompt
   (org-supertag-relation--refresh-display)
-  (message "已选择所有推荐标签 (%d 个)" 
+  (message "Selected all recommended tags (%d tags)" 
            (length org-supertag-relation--selected-tags)))
 
 (defun org-supertag-relation-unselect-all-tags ()
-  "取消选择所有标签。"
+  "Unselect all tags."
   (interactive)
   (setq org-supertag-relation--selected-tags nil)
   (org-supertag-relation--refresh-display)
-  (message "已取消选择所有标签"))
+  (message "Unselected all tags"))
 
 ;;;###autoload
 (defun org-supertag-relation-manage-isolated-tags ()
-  "查找并管理所有没有关系的孤立标签。
-此函数作为独立入口点，直接显示孤立标签管理界面。"
+  "Find and manage all isolated tags that have no relations.
+This function serves as an independent entry point, directly displaying the isolated tag management interface."
   (interactive)
   (org-supertag-relation-show-isolated-tags))
 
 (defun org-supertag-relation-quit-isolated-tags ()
-  "关闭孤立标签缓冲区。"
+  "Close the isolated tags buffer."
   (interactive)
   (kill-buffer "*Org-Supertag Isolated Tags*"))
-
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here

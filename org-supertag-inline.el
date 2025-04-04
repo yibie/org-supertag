@@ -232,52 +232,88 @@ TAG-NAME is the name of the tag to insert."
            (if (string-prefix-p "[P] " input)
                (substring input 4)
              input))))
-  (when tag-name
-    (let* (;; Check if input ends with #, if so, create new tag directly
-           (direct-create (string-suffix-p "#" tag-name))
-           (tag-name-clean (if direct-create
-                             (substring tag-name 0 -1)
-                           tag-name))
-           (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
-           ;; Try to get current node ID
-           (node-id (org-id-get))
-           ;; If no ID exists, create a new node
-           (node-id (or node-id
-                       (when (org-at-heading-p)
-                         (org-supertag-node-create)))))
-      ;; Get or create tag
-      (let ((tag-id
-             (cond
-              ;; If tag exists, use it directly
-              ((org-supertag-tag-exists-p sanitized-name)
-               sanitized-name)
-              ;; Otherwise, create new tag
-              (t
-               (if (or direct-create
-                       (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
-                   (org-supertag-tag-create sanitized-name)
-                 (user-error "Tag creation cancelled"))))))
-        ;; Delete region if active
-        (when (use-region-p)
-          (delete-region (region-beginning) (region-end)))
-        ;; Add space before tag if needed
-        (unless (or (bobp) (eq (char-before) ? ))
-          (insert " "))
-        ;; Insert inline tag
-        (insert (concat "#" tag-id))
-        ;; Add space after tag if needed
-        (unless (or (eobp) (eq (char-after) ? ))
-          (insert " "))
-        ;; Apply tag if we have a valid node ID
-        (when node-id
-          (let ((org-supertag-tag-apply-skip-headline t))
-            (org-supertag-tag-apply tag-id)))
-        
-        (message "Inserted inline tag #%s%s" 
-                tag-id
-                (if node-id
-                    (format " and linked to node %s" node-id)
-                  ""))))))
+  
+  ;; 保存原始位置，便于后续分析上下文
+  (let* ((original-pos (point-marker))
+         ;; 基本参数处理
+         (direct-create (string-suffix-p "#" tag-name))
+         (tag-name-clean (if direct-create
+                           (substring tag-name 0 -1)
+                         tag-name))
+         (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
+         ;; 对上下文的分析，检查是否在drawer内等
+         (context (org-element-context))
+         (context-type (org-element-type context))
+         (in-drawer (or (eq context-type 'drawer)
+                        (eq context-type 'property-drawer)
+                        (eq context-type 'node-property)
+                        (and (eq context-type 'keyword)
+                             (string= (org-element-property :key context) "END"))))
+         ;; ID 查找逻辑 - 优先使用强制 ID，其次查找现有 ID
+         (force-id (and (boundp 'org-supertag-force-node-id)
+                      org-supertag-force-node-id))
+         ;; 可靠地获取节点 ID - 先尝试直接获取，如果失败则尝试定位到标题
+         (existing-id (or force-id
+                         (org-entry-get nil "ID")
+                         (save-excursion
+                           (ignore-errors 
+                             (org-back-to-heading t)
+                             (org-entry-get nil "ID")))))
+         ;; 如果没有现有 ID 且在标题上，则创建新 ID
+         (node-id (or existing-id
+                     (save-excursion
+                       (when (ignore-errors (org-back-to-heading t))
+                         (org-supertag-node-create))))))
+      
+    ;; 调试信息
+    (message "inline-insert-tag: ID=%s force=%s drawer=%s ctx=%s pos=%d" 
+             node-id force-id in-drawer context-type (marker-position original-pos))
+    
+    ;; 处理标签创建
+    (let ((tag-id
+           (cond
+            ;; 如果标签存在，直接使用
+            ((org-supertag-tag-exists-p sanitized-name)
+             sanitized-name)
+            ;; 否则创建新标签
+            (t
+             (if (or direct-create
+                     (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
+                 (org-supertag-tag-create sanitized-name)
+               (user-error "Tag creation cancelled"))))))
+      
+      ;; 删除选区（如果有）
+      (when (use-region-p)
+        (delete-region (region-beginning) (region-end)))
+      
+      ;; 处理光标位置 - 如果在 drawer 中，移到 drawer 后面
+      (when in-drawer
+        (let ((end-pos (org-element-property :end context)))
+          (when end-pos
+            (goto-char end-pos))))
+      
+      ;; 插入标签文本
+      (unless (or (bobp) (eq (char-before) ? ))
+        (insert " "))
+      (insert (concat "#" tag-id))
+      (unless (or (eobp) (eq (char-after) ? ))
+        (insert " "))
+      
+      ;; 应用标签关系
+      (when node-id
+        (let ((org-supertag-tag-apply-skip-headline t)
+              (org-supertag-force-node-id node-id))
+          (org-supertag-tag-apply tag-id)))
+      
+      ;; 清理
+      (set-marker original-pos nil)
+      
+      ;; 返回消息
+      (message "Inserted inline tag #%s%s" 
+              tag-id
+              (if node-id
+                  (format " and linked to node %s" node-id)
+                "")))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

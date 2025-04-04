@@ -4,7 +4,11 @@
 # Packaging
 .cask
 
+# pytest
+.pytest_cache/
 
+# venv
+.venv/
 # Backup files
 *~
 \#*\#
