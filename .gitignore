@@ -7,6 +7,9 @@
 # pytest
 .pytest_cache/
 
+
+# developing
+.developing/
 # venv
 .venv/
 # Backup files
