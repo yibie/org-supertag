@@ -1,6 +1,8 @@
 ;;; org-supertag-view-discover.el --- Tag discovery view for org-supertag -*- lexical-binding: t -*-
 
 (require 'org-supertag-view-utils)
+(require 'org-supertag-db)
+(require 'org-supertag-relation)
 
 ;;----------------------------------------------------------------------
 ;; Tag Discover Mode - Progressive tag filtering
@@ -25,30 +27,6 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
     
     (when org-supertag-view--current-filters
       (org-supertag-view--show-tag-discover-buffer))))
-
-      
-
-(defun org-supertag-view--get-similar-tags (tag-id)
-  "Get similar tags for TAG-ID.
-Returns a list of (tag . similarity) pairs, or nil if there's an error."
-  (when (and (featurep 'org-supertag-sim)
-             (bound-and-true-p org-supertag-sim--initialized))
-    (condition-case err
-        (let ((result nil))
-          (deferred:$
-            (org-supertag-sim-find-similar tag-id 5)
-            (deferred:nextc it
-              (lambda (similar-tags)
-                (setq result similar-tags)
-                (org-supertag-view--show-tag-discover-buffer)))
-            (deferred:error it
-              (lambda (err)
-                (message "Failed to get similar tags: %s" (error-message-string err))
-                nil)))
-          result)
-      (error
-       (message "Failed to get similar tags: %s" (error-message-string err))
-       nil))))
 
 (defun org-supertag-view--show-tag-discover-buffer ()
   "Show the tag discover buffer with current filters."
@@ -112,28 +90,6 @@ Returns a list of (tag . similarity) pairs, or nil if there's an error."
                   (insert "  (no co-occurring tags found)\n"))))
           (insert "  (select a filter first)\n"))
         (insert "\n")
-        
-        ;; Add semantically similar tags section
-        (when (and org-supertag-view--current-filters
-                   (= (length org-supertag-view--current-filters) 1))
-          (insert (propertize "Semantically Similar Tags:\n" 'face '(:weight bold)))
-          (let* ((current-tag (car org-supertag-view--current-filters))
-                 (similar-tags (org-supertag-view--get-similar-tags current-tag)))
-            (if similar-tags
-                (dolist (item similar-tags)
-                  (let* ((similar-tag (car item))
-                         (similarity (cdr item))
-                         (add-button-text (propertize "[+]" 'face '(:foreground "green"))))
-                    (insert " ")
-                    (insert-text-button add-button-text
-                                     'action 'org-supertag-view--add-filter-button-action
-                                     'tag similar-tag
-                                     'follow-link t
-                                     'help-echo "Add this tag to filters")
-                    (insert (format " %s (similarity: %.2f)\n" 
-                                   similar-tag similarity))))
-              (insert "  (no similar tags found)\n")))
-          (insert "\n"))
         
         ;; Matching nodes section 
         (if org-supertag-view--current-filters

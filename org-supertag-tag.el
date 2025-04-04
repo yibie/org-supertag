@@ -11,8 +11,6 @@
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
-
-
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert
@@ -35,6 +33,15 @@ TAG-NAME is the name of the tag to check"
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     (org-supertag-tag-get sanitized-name)))
 
+(defun org-supertag-node-get-parent-tags (node-id)
+  "Get the parent tags of the node.
+NODE-ID: The ID of the current node"
+  (save-excursion
+    (when-let* ((pos (org-id-find node-id t)))
+      (goto-char pos)
+      (when (org-up-heading-safe)  
+        (when-let ((parent-id (org-id-get)))  
+          (org-supertag-node-get-tags parent-id))))))
 ;;----------------------------------------------------------------------
 ;; Tag Base Operation
 ;;----------------------------------------------------------------------
@@ -175,10 +182,31 @@ otherwise returns nil."
 (defvar org-supertag-tag-apply-skip-headline nil
   "When non-nil, `org-supertag-tag-apply' will not add the tag to headline tags.")
 
+(defvar org-supertag-tag-apply-skip-duplicate-id nil
+  "When non-nil, `org-supertag-tag-apply' will be extra careful not to create duplicate IDs.")
+
+(defvar org-supertag-force-node-id nil
+  "When non-nil, force `org-supertag-tag-apply' to use this specific node ID instead of creating one.")
+
+(defvar org-supertag-skip-text-insertion nil
+  "When non-nil, skip text insertion when applying tags, only establish the relationship.")
+
 (defun org-supertag-tag-apply (tag-id)
   "Apply tag to the node at current position."
   (let* ((tag (org-supertag-db-get tag-id))
-         (node-id (org-id-get-create)))
+         ;; Use forced ID if provided
+         (node-id (or org-supertag-force-node-id 
+                      ;; Otherwise check ID in headline properties
+                      (org-entry-get nil "ID"))))
+    
+    ;; Only log debug info when debugging variable is set
+    (when org-supertag-tag-apply-skip-duplicate-id
+      (message "org-supertag-tag-apply: Initial node-id=%s (forced=%s)" 
+               node-id org-supertag-force-node-id))
+    
+    ;; Only create new ID if none exists and we're not forcing a specific ID
+    (setq node-id (or node-id (org-id-get-create)))
+    
     (message "Applying tag: %s to node: %s" tag-id node-id)
     ;; Validation
     (unless tag
@@ -190,30 +218,33 @@ otherwise returns nil."
     
     ;; Link node and tag
     (org-supertag-node-db-add-tag node-id tag-id)
-    ;; Apply fields
-    (when-let* ((fields (plist-get tag :fields)))
-      (message "Processing fields for tag %s: %S" tag-id fields)
-      (dolist (field fields)
-        (let* ((field-name (plist-get field :name))
-               (field-type (plist-get field :type))
-               (type-def (org-supertag-get-field-type field-type))
-               (initial-value (org-supertag-field-get-initial-value field)))
-          (message "Processing field: name=%s type=%s initial=%S" 
-                   field-name field-type initial-value)
-          (unless type-def
-            (error "Invalid field type: %s" field-type))
+    
+    ;; Apply fields (skip if we're only establishing the relationship)
+    (unless org-supertag-skip-text-insertion
+      (when-let* ((fields (plist-get tag :fields)))
+        (message "Processing fields for tag %s: %S" tag-id fields)
+        (dolist (field fields)
+          (let* ((field-name (plist-get field :name))
+                 (field-type (plist-get field :type))
+                 (type-def (org-supertag-get-field-type field-type))
+                 (initial-value (org-supertag-field-get-initial-value field)))
+            (message "Processing field: name=%s type=%s initial=%S" 
+                     field-name field-type initial-value)
+            (unless type-def
+              (error "Invalid field type: %s" field-type))
 
-          (when-let* ((formatter (plist-get type-def :formatter))
-                      (formatted-value (if formatter
-                                         (funcall formatter initial-value field)
-                                       (format "%s" initial-value))))
-            (message "Setting field %s = %s" field-name formatted-value)
-            (org-set-property field-name formatted-value)
-            (org-supertag-tag--set-field-value 
-             tag-id node-id field-name initial-value)))))
+            (when-let* ((formatter (plist-get type-def :formatter))
+                        (formatted-value (if formatter
+                                           (funcall formatter initial-value field)
+                                         (format "%s" initial-value))))
+              (message "Setting field %s = %s" field-name formatted-value)
+              (org-set-property field-name formatted-value)
+              (org-supertag-tag--set-field-value 
+               tag-id node-id field-name initial-value))))))
     
     ;; Add tag to node tags (unless skipped for inline tags)
-    (unless org-supertag-tag-apply-skip-headline
+    (unless (or org-supertag-tag-apply-skip-headline 
+                org-supertag-skip-text-insertion)
       (let ((tags (org-get-tags)))
         (org-set-tags (cons (concat "#" tag-id) tags))))
     
@@ -675,5 +706,7 @@ Example return value:
 
 
 (defalias 'org-supertag-set-field-and-value 'org-supertag-tag-edit-fields)
+
+
 
 (provide 'org-supertag-tag)

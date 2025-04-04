@@ -46,7 +46,7 @@
   :type 'file
   :group 'org-supertag-sync)
 
-(defcustom org-supertag-sync-auto-interval 1800
+(defcustom org-supertag-sync-auto-interval 300
   "Interval in seconds for automatic synchronization."
   :type 'integer
   :group 'org-supertag-sync)
@@ -277,7 +277,7 @@ Uses a two-pass approach:
         (message "Buffer sync: %d updated, %d deleted, %d moved"
                  updated deleted moved)))))
 
-(defun org-supertag-node-sync-at-point ()
+(defun org-supertag--sync-at-point ()
   "Synchronize node at point with database."
   (when-let* ((id (org-id-get))
               (props (org-supertag-extract-node-props)))
@@ -314,13 +314,13 @@ Uses a two-pass approach:
                   nil t)
         ;; 添加新的监听
         (add-hook 'org-after-promote-entry-hook
-                  #'org-supertag-node-sync-at-point
+                  #'org-supertag--sync-at-point
                   nil t)
         (add-hook 'org-after-demote-entry-hook
-                  #'org-supertag-node-sync-at-point
+                  #'org-supertag--sync-at-point
                   nil t)
         (add-hook 'org-after-refile-insert-hook
-                  #'org-supertag-node-sync-at-point
+                  #'org-supertag--sync-at-point
                   nil t)))))
 
 (defun org-supertag-sync--handle-save ()
@@ -340,7 +340,7 @@ Uses a two-pass approach:
       (goto-char beg)
       (when (and (org-at-heading-p)
                  (not (org-id-get)))
-        (org-supertag-node-sync-at-point)))
+        (org-supertag--sync-at-point)))
     (let ((state (gethash buffer-file-name org-supertag-sync--state)))
       (when state
         (setcar state (current-time))))))
@@ -359,7 +359,7 @@ Ensures node has ID and is properly registered in database."
           (unless id
             (org-id-get-create)
             (setq id (org-element-property :ID element)))
-          (org-supertag-node-sync-at-point))))))
+          (org-supertag--sync-at-point))))))
 
 ;;-------------------------------------------------------------------
 ;; State Management
