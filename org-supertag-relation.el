@@ -1124,7 +1124,7 @@ This will prompt user to choose a relation type for the selected tag."
       (push (cons 'existing rel) items))
     
     ;; Recommended section
-    (when-let ((recommendations (gethash org-supertag-relation--current-tag
+    (when-let* ((recommendations (gethash org-supertag-relation--current-tag
                                        org-supertag-relation--recommendations-cache)))
       (dolist (rec recommendations)
         (push (cons 'recommended rec) items)))
@@ -1467,6 +1467,6 @@ This function serves as an independent entry point, directly displaying the isol
   "Close the isolated tags buffer."
   (interactive)
   (kill-buffer "*Org-Supertag Isolated Tags*"))
-  
+
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here
