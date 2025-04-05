@@ -1,5 +1,7 @@
 [[./README_CN.org][Chinese Version]]
 
+* TL;DR
+Org-supertag is a note-taking tool, an alternative to org-roam, based on org-mode but with a database for speed and query capabilities and support for inline #tags, views...and more.
 * Introduction
 
 org-supertag is a package that enhances the tag function of org-mode. It allows tags not only to set properties for nodes, but also to operate nodes directly, and can automatically perform certain actions based on time, providing a more flexible way of managing information.
@@ -174,7 +176,7 @@ Related commands ~M-x org-supertag-tag-discover~
 
 Related commands ~M-x org-supertag-tag-columns~
 
-** 🧩 Intelligent management of tag relationships, revealing hidden associations
+** 🖇️ Intelligent management of tag relationships, revealing hidden associations
 Related commands ~M-x org-supertag-relation-manage~
 **** ↔️Supports one-way and two-way relationship types, saving operation steps
 ***** Predefined relationship types
