@@ -342,6 +342,12 @@ I think "co-occurrence" is the most wonderful phenomenon in the world. This allo
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-04-05 3.0.0 release
+  - feat AI backend for tag auto suggestion
+  - feat Bidirectional tag relation management
+  - feat Table View
+  - refactor sync-mechanism
+
 - 2025-01-13 2.0.0 release
   - Added behavior scheduling system
   - Added behavior template variables
