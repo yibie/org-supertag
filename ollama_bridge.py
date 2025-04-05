@@ -34,25 +34,44 @@ class OllamaServiceManager:
             
         try:
             if not self.quiet:
-                print(f"正在下载模型 {self.model}...")
+                print(f"Checking model {self.model}...")
                 
-            # Try to download the model
-            response = requests.post(
-                "http://localhost:11434/api/pull",
-                json={"name": self.model},
-                stream=True
+            # First check if model already exists
+            response = requests.get(
+                "http://localhost:11434/api/tags",
+                timeout=10
             )
             
-            for line in response.iter_lines():
-                if line and not self.quiet:
-                    data = json.loads(line)
-                    if "status" in data:
-                        print(data["status"], end=" ")
-                        if "completed" in data:
-                            print()
-                    if "error" in data:
-                        print(f"\nError: {data['error']}")
-                        return False
+            model_exists = False
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                model_exists = any(m.get('name') == self.model for m in models)
+            
+            # If model doesn't exist, download it
+            if not model_exists:
+                if not self.quiet:
+                    print(f"Downloading model {self.model}...")
+                    
+                # Try to download the model
+                response = requests.post(
+                    "http://localhost:11434/api/pull",
+                    json={"name": self.model},
+                    stream=True
+                )
+                
+                for line in response.iter_lines():
+                    if line and not self.quiet:
+                        data = json.loads(line)
+                        if "status" in data:
+                            print(data["status"], end=" ")
+                            if "completed" in data:
+                                print()
+                        if "error" in data:
+                            print(f"\nError: {data['error']}")
+                            return False
+            else:
+                if not self.quiet:
+                    print(f"Model {self.model} already exists")
             
             # Add to the verified model set
             OllamaServiceManager._verified_models.add(self.model)
@@ -96,11 +115,28 @@ class OllamaServiceManager:
         """Get the installation command"""
         system = platform.system().lower()
         if system == "darwin":  # macOS
-            return "curl -fsSL https://ollama.com/install.sh | sh"
+            return """Please install Ollama using the following secure method:
+
+1. Visit the official website to download: https://ollama.com/download
+2. Use Homebrew: brew install ollama
+3. Manual installation:
+   - Download the installation script to local: curl -fsSL https://ollama.com/install.sh -o ollama_install.sh
+   - Check the script content: cat ollama_install.sh
+   - Confirm security and execute: sh ollama_install.sh
+"""
         elif system == "linux":
-            return "curl -fsSL https://ollama.com/install.sh | sh"
+            return """Please install Ollama using the following secure method:
+
+1. Visit the official website: https://ollama.com/download
+2. Use package manager (if available): apt install ollama or dnf install ollama
+3. Manual installation:
+   - Download the installation script to local: curl -fsSL https://ollama.com/install.sh -o ollama_install.sh
+   - Check the script content: cat ollama_install.sh
+   - Confirm security and execute: sh ollama_install.sh
+"""
         elif system == "windows":
             return """Windows installation options:
+
 1. Use winget (recommended):
    winget install Ollama.Ollama
 
@@ -196,8 +232,10 @@ class OllamaBridge:
         # Check if it is installed
         if not service_mgr.check_ollama_installed():
             install_cmd = service_mgr.get_install_command()
-            print(f"Ollama is not installed, please run the following command to install:\n{install_cmd}")
-            raise RuntimeError(f"Ollama is not installed, please run the following command to install:\n{install_cmd}")
+            print(f"Ollama is not installed. Please install Ollama first:")
+            print(install_cmd)
+            print("\nOllama can be downloaded from: https://ollama.com/download")
+            raise RuntimeError("Ollama is not installed")
             
         # Check if the service is running
         if not service_mgr.is_service_running():
