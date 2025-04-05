@@ -8,23 +8,23 @@
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-view-table-get-field-info ()
-  "获取当前表格单元格的相关信息。
-返回一个属性列表，包含以下信息：
-- :col - 当前列号
-- :row-data - 当前行数据
-- :tag - 当前标签
-- :tag-def - 标签定义
-- :fields - 字段定义列表
-- :field-idx - 字段索引（相对于字段列表）
-- :field - 当前字段定义
-- :value - 当前单元格的值"
+  "Get field information of the current table cell.
+Returns a property list containing the following information:
+- :col - Current column number
+- :row-data - Current row data
+- :tag - Current tag
+- :tag-def - Tag definition
+- :fields - List of field definitions
+- :field-idx - Field index (relative to the field list)
+- :field - Current field definition
+- :value - Value of the current cell"
   (when (org-at-table-p)
     (let* ((col (org-table-current-column))
            (row-data (org-supertag-view-table-get-line))
            (tag (org-supertag-view--get-current-tag))
            (tag-def (org-supertag-tag-get tag))
            (fields (plist-get tag-def :fields))
-           (field-idx (- col 4))  ;; 调整列索引计算，现在有Node、Type和Date三个固定列
+           (field-idx (- col 4))  ;; Adjust column index calculation, now there are three fixed columns: Node, Type, and Date
            (field (when (and (>= field-idx 0) (< field-idx (length fields)))
                     (nth field-idx fields)))
            (value (org-table-get nil col)))
@@ -45,50 +45,50 @@ Returns a list where each element is the content of a cell in the current row."
                  (line-beginning-position)
                  (line-end-position)))
           (fields '()))
-      ;; 确保我们在表格行上
+      ;; Ensure we are on a table row
       (when (string-match "^[ \t]*|" line)
-        ;; 移除开头和结尾的 |
+        ;; Remove leading and trailing |
         (setq line (replace-regexp-in-string "^[ \t]*|" "" line))
         (setq line (replace-regexp-in-string "|[ \t]*$" "" line))
-        ;; 分割字段并删除前后空白
+        ;; Split fields and remove leading/trailing whitespace
         (setq fields (mapcar #'string-trim (split-string line "|"))))
       fields)))
 
 (defun org-supertag-view--find-node-by-title (title)
-  "通过标题查找节点ID。
-TITLE是节点的标题。
-返回找到的节点ID，如果未找到则返回nil。
-进行精确匹配和模糊匹配，优先返回精确匹配结果。"
+  "Find node ID by title.
+TITLE is the title of the node.
+Returns the found node ID, or nil if not found.
+Performs exact and fuzzy matching, prioritizing exact matches."
   (when (and title (not (string-empty-p title)))
     (let ((cleaned-title (string-trim title))
           (exact-match nil)
           (fuzzy-matches '()))
       
-      ;; 规范化标题（去除多余空格）
+      ;; Normalize title (remove extra spaces)
       (setq cleaned-title (replace-regexp-in-string "\\s-+" " " cleaned-title))
       
-      ;; 搜索数据库中的所有节点
+      ;; Search all nodes in the database
       (maphash
        (lambda (id props)
          (when (eq (plist-get props :type) :node)
            (let ((node-title (plist-get props :title))
                  (node-org-id (plist-get props :id)))
              (when node-title
-               ;; 规范化节点标题
+               ;; Normalize node title
                (setq node-title (replace-regexp-in-string "\\s-+" " " (string-trim node-title)))
                
-               ;; 检查精确匹配
+               ;; Check for exact match
                (if (string= cleaned-title node-title)
                    (setq exact-match id)
-                 ;; 检查模糊匹配（包含关系）
+                 ;; Check for fuzzy match (containment relationship)
                  (when (or (string-match-p (regexp-quote cleaned-title) node-title)
                            (string-match-p (regexp-quote node-title) cleaned-title))
                    (push (cons id (length node-title)) fuzzy-matches)))))))
        org-supertag-db--object)
       
-      ;; 优先返回精确匹配
+      ;; Prioritize exact match
       (or exact-match
-          ;; 否则返回最接近的模糊匹配（选择标题长度最接近的）
+          ;; Otherwise, return the closest fuzzy match (choose the one with the closest title length)
           (when fuzzy-matches
             (caar (sort fuzzy-matches
                         (lambda (a b)
@@ -96,19 +96,19 @@ TITLE是节点的标题。
                              (abs (- (cdr b) (length cleaned-title))))))))))))
 
 (defun org-supertag-view--find-node-by-id (file-path org-id)
-  "通过ID定位到文件中的节点。
-FILE-PATH 是文件路径，ORG-ID 是节点的ID。
-返回是否成功找到节点。"
+  "Locate the node in the file by ID.
+FILE-PATH is the file path, ORG-ID is the ID of the node.
+Returns t if the node is successfully found."
   (when (and file-path (file-exists-p file-path) org-id)
     (find-file file-path)
     (widen)
-    ;; 禁用org-element-cache以避免解析错误
+    ;; Disable org-element-cache to avoid parsing errors
     (when (boundp 'org-element-use-cache)
       (setq-local org-element-use-cache nil))
     
     (goto-char (point-min))
-    ;; 通过ID属性定位节点
-    (when (re-search-forward (format ":ID:\\s-*%s\\s-*$" 
+    ;; Locate node by ID property
+    (when (re-search-forward (format ":ID:\\s-*%s\\s-*$"
                                     (regexp-quote org-id))
                             nil t)
       (org-back-to-heading t)
@@ -119,18 +119,18 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
 
 (defun org-supertag-view-table-node-at-point ()
   "View the node at point in the SuperTag table view.
-策略:
-1. 从表格行获取节点标题
-2. 通过标题在数据库中查找节点ID和文件位置
-3. 通过ID定位到节点"
+Strategy:
+1. Get node title from the table row
+2. Find node ID and file location in the database by title
+3. Locate the node by ID"
   (interactive)
   (when (org-at-table-p)
     (let* ((row-data (org-supertag-view-table-get-line))
            (node-text (nth 0 row-data))
-           ;; 清理节点标题（移除[v]和[N/A]标记）
+           ;; Clean up node title (remove [v] and [N/A] markers)
            (node-title (when node-text
                         (string-trim
-                         (replace-regexp-in-string "\\[\\(v\\|N/A\\)\\]\\s-*" "" 
+                         (replace-regexp-in-string "\\[\\(v\\|N/A\\)\\]\\s-*" ""
                                                  node-text))))
            (node-id (org-supertag-view--find-node-by-title node-title)))
       
@@ -139,9 +139,9 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
                  (file-path (plist-get node-props :file-path))
                  (org-id (plist-get node-props :id)))
             (if (org-supertag-view--find-node-by-id file-path org-id)
-                (message "成功定位到节点: %s" node-title)
-              (message "无法在文件中找到节点: %s" node-title)))
-        (message "找不到节点: %s" node-title)))))
+                (message "Successfully located node: %s" node-title)
+              (message "Could not find node in file: %s" node-title)))
+        (message "Node not found: %s" node-title)))))
 
 ;;----------------------------------------------------------------------
 ;; Single Tag View Mode (Table View)
@@ -151,27 +151,27 @@ FILE-PATH 是文件路径，ORG-ID 是节点的ID。
   "Show content table for TAG in a dedicated full-screen buffer."
   (let ((buffer (get-buffer-create (format "*Org SuperTag Table View: %s*" tag))))
     (with-current-buffer buffer
-      (org-mode)  
-      (org-supertag-view-table-mode)  
+      (org-mode)
+      (org-supertag-view-table-mode)
       (setq-local org-supertag-view-current-tag tag)
 
       (let ((inhibit-read-only t))
         (erase-buffer)
-        ;; 使用普通文本而非org标题
-        (insert (format "标签: #%s\n\n" tag))
-        (insert "操作说明:\n")
-        (insert " [q] - 退出    [g] - 刷新    [v] - 查看节点    [m] - 管理关系\n")
-        (insert " [e] - 智能编辑    [C-c '] - 切换编辑/只读模式\n")
-        (insert " [Tab] - 下一字段    [S-Tab] - 上一字段    [n/p] - 上下移动\n")
-        (insert " 点击节点前的[v]按钮可直接查看节点内容\n")
-        (insert " 编辑字段时会自动保存修改\n\n")
-        ;; 插入表格内容
+        ;; Use plain text instead of org heading
+        (insert (format "Tag: #%s\n\n" tag))
+        (insert "Instructions:\n")
+        (insert " [q] - Quit    [g] - Refresh    [v] - View Node    [m] - Manage Relations\n")
+        (insert " [e] - Smart Edit    [C-c '] - Toggle Edit/Read-only Mode\n")
+        (insert " [Tab] - Next Field    [S-Tab] - Previous Field    [n/p] - Move Up/Down\n")
+        (insert " Click the [v] button before a node to directly view its content\n")
+        (insert " Editing fields will automatically save changes\n\n")
+        ;; Insert table content
         (org-supertag-view--insert-content-table-with-button tag))
 
       (setq buffer-read-only t)
       (goto-char (point-min)))
-    
-    ;; 使用全屏显示，而非侧边窗口
+
+    ;; Use full-screen display instead of sidebar window
     (switch-to-buffer buffer)
     (delete-other-windows)))
 
@@ -186,26 +186,26 @@ FIELD-NAME is the field name"
 
 (defun org-supertag-view--insert-content-table-with-button (tag)
   "Insert content related to TAG in current buffer using org table format with buttons.
-每行节点前添加[v]按钮，点击可直接查看节点内容。"
-  (insert "相关节点:\n\n")
+Add a [v] button before each node in each row, clicking it will directly view the node content."
+  (insert "Related Nodes:\n\n")
   (let* ((content (org-supertag-view--get-related-nodes tag))
          (tag-def (org-supertag-tag-get tag))
          (fields (plist-get tag-def :fields)))
     
     (if (not content)
-        (insert (format "未找到与标签 #%s 相关的内容" tag))
-      ;; 插入表头
+        (insert (format "No content found related to tag #%s" tag))
+      ;; Insert table header
       (insert "|Node|Type|Date")
       (dolist (field fields)
         (insert (format "|%s" (plist-get field :name))))
       (insert "|\n")
       
-      ;; 插入分隔线
+      ;; Insert separator line
       (insert "|------|------|----")
       (dolist (_ fields) (insert "|-----"))
       (insert "|\n")
       
-      ;; 插入数据行
+      ;; Insert data rows
       (dolist (item content)
         (let* ((node-id (plist-get item :id))
                (node-props (gethash node-id org-supertag-db--object))
@@ -213,7 +213,7 @@ FIELD-NAME is the field name"
                (org-id (plist-get node-props :id))
                (file-path (plist-get node-props :file-path)))
           
-          ;; 插入节点列（带按钮）
+          ;; Insert node column (with button)
           (insert "|")
           (if (and file-path org-id)
               (progn
@@ -228,24 +228,24 @@ FIELD-NAME is the field name"
                                                 (org-id (button-get button 'org-id))
                                                 (title (button-get button 'node-title)))
                                             (when (org-supertag-view--find-node-by-id file org-id)
-                                              (message "成功打开节点: %s" title)))))
+                                              (message "Successfully opened node: %s" title)))))
                 (insert " "))
             (insert "[N/A] "))
           
-          ;; 插入基本信息
+          ;; Insert basic information
           (insert (format "%s|%s|%s"
                          node-title
                          (or (plist-get item :type) "")
                          (plist-get item :date)))
           
-          ;; 插入字段值
+          ;; Insert field values
           (dolist (field fields)
             (let* ((field-name (plist-get field :name))
                    (value (org-supertag-view--get-field-value-from-db node-id field-name)))
               (insert (format "|%s" (or value "")))))
           (insert "|\n")))
       
-      ;; 对齐表格
+      ;; Align table
       (save-excursion
         (backward-char)
         (org-table-align)))))
@@ -263,39 +263,39 @@ FIELD-NAME is the field name"
 (defun org-supertag-view--get-current-tag ()
   "Get current tag from buffer name or buffer local variable."
   (if (boundp 'org-supertag-view-current-tag)
-      ;; 首先尝试从局部变量获取
+      ;; First try to get from local variable
       org-supertag-view-current-tag
-    ;; 其次尝试从缓冲区名称提取
+    ;; Then try to extract from buffer name
     (when (string-match "\\*Org SuperTag Table View: \\([^*]+\\)\\*" (buffer-name))
       (match-string 1 (buffer-name)))))
-        
+
 (defun org-supertag-view--update-field-value (node-id field-name value)
   "Update VALUE of FIELD-NAME for NODE-ID.
 Returns t if update was successful, nil otherwise."
   (when (and node-id field-name)
     (if (not value)
-        ;; 如果值为空，移除字段
+        ;; If value is empty, remove field
         (org-supertag-node-remove-field node-id field-name)
-      ;; 否则更新字段值
+      ;; Otherwise, update field value
       (org-supertag-node-set-field node-id field-name value))))
 
 (defun org-supertag-view--get-field-value (node-id field-name)
   "Get value of FIELD-NAME for NODE-ID."
   (let* ((tag (org-supertag-view--get-current-tag))
          (tag-def (org-supertag-tag-get tag)))
-    ;; 使用 org-supertag-tag-get-field-value 获取字段值
+    ;; Use org-supertag-tag-get-field-value to get field value
     (org-supertag-tag-get-field-value tag-def field-name)))
 
 (defun org-supertag-view-table-get-all-rows ()
-  "获取表格中的所有数据行。
-返回一个列表，每个元素是一行数据的列表。"
+  "Get all data rows in the table.
+Returns a list, each element is a list of row data."
   (let ((rows '()))
     (save-excursion
       (goto-char (point-min))
       (when (search-forward "|Node|Type|Date" nil t)
-        (forward-line 2) ;; 跳过表头和分隔线
+        (forward-line 2) ;; Skip header and separator line
         
-        ;; 收集每一行
+        ;; Collect each row
         (while (org-at-table-p)
           (let ((row-data (org-supertag-view-table-get-line)))
             (when row-data
@@ -304,17 +304,17 @@ Returns t if update was successful, nil otherwise."
     (nreverse rows)))
 
 (defun org-supertag-view-table-find-node-id (node-title)
-  "根据节点标题查找节点ID。
-NODE-TITLE 是节点的标题。
-返回找到的节点ID，如果未找到则返回nil。"
+  "Find node ID based on node title.
+NODE-TITLE is the title of the node.
+Returns the found node ID, or nil if not found."
   (when (and node-title (not (string-empty-p node-title)))
-    ;; 清理标题（去除按钮文本和空白）
+    ;; Clean up title (remove button text and whitespace)
     (let ((clean-title node-title))
       (setq clean-title (replace-regexp-in-string "\\[v\\]\\s-*" "" clean-title))
       (setq clean-title (replace-regexp-in-string "\\[N/A\\]\\s-*" "" clean-title))
       (setq clean-title (string-trim clean-title))
       
-      ;; 使用通用的节点查找函数
+      ;; Use the common node finding function
       (org-supertag-view--find-node-by-title clean-title))))
 
 (defun org-supertag-view-table-update-field (node-id field-name field-value tag-id)
@@ -326,21 +326,21 @@ TAG-ID is the tag identifier
 Returns t if update successful, nil if failed."
   (condition-case err
       (progn
-        ;; 1. 更新数据库
+        ;; 1. Update database
         (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
           (if (and field-value (not (string-empty-p field-value)))
-              ;; 有值，更新数据库
-              (puthash link-id 
-                       (list :from node-id 
-                             :to field-name 
+              ;; If there is a value, update the database
+              (puthash link-id
+                       (list :from node-id
+                             :to field-name
                              :tag-id tag-id
                              :value field-value
                              :created-at (current-time))
                        org-supertag-db--link)
-            ;; 值为空，移除字段
+            ;; If value is empty, remove field
             (remhash link-id org-supertag-db--link)))
         
-        ;; 2. 更新文件
+        ;; 2. Update file
         (when-let* ((node-props (gethash node-id org-supertag-db--object))
                     (file-path (plist-get node-props :file-path))
                     (pos (plist-get node-props :pos)))
@@ -351,10 +351,10 @@ Returns t if update successful, nil if failed."
                   (org-set-property field-name field-value)
                 (org-delete-property field-name)))))
         
-        ;; 3. 标记数据库为脏并安排保存
+        ;; 3. Mark database as dirty and schedule save
         (org-supertag-db--mark-dirty)
         (org-supertag-db--schedule-save)
-        t)  ;; 返回成功
+        t)  ;; Return success
     (error
      (message "Error updating field %s: %s" field-name (error-message-string err))
      nil)))
@@ -381,30 +381,30 @@ Returns a list of plists with properties :node, :type, :date and field values."
          (fields (plist-get tag-def :fields)))
     (maphash
      (lambda (link-id link-props)
-       ;; 首先找到与该标签相关的所有节点
+       ;; First find all nodes related to this tag
        (when (and (string-match ":node-tag:\\(.+\\)->\\(.+\\)$" link-id)
                   (equal (match-string 2 link-id) tag))
          (when-let* ((node-id (plist-get link-props :from))
                     (node-props (gethash node-id org-supertag-db--object)))
-           ;; 对每个节点，获取其所有字段的值
+           ;; For each node, get the values of all its fields
            (let ((field-values
                   (mapcar
                    (lambda (field)
                      (let* ((field-name (plist-get field :name))
-                            ;; 查询字段值从link哈希表中
+                            ;; Query field value from link hash table
                             (link-id (format ":node-field:%s->%s" node-id field-name))
                             (field-link (gethash link-id org-supertag-db--link))
-                            (value (when field-link 
+                            (value (when field-link
                                     (plist-get field-link :value))))
                        (message "DEBUG: Node %s Field %s Value %s" node-id field-name value)
                        (cons field-name value)))
                    fields)))
              
-             ;; 构建节点信息
+             ;; Build node information
              (push (list :node (or (plist-get node-props :title)
                                   (format "Node %s" node-id))
                         :type (or (plist-get node-props :todo-state) "Node")
-                        :date (format-time-string 
+                        :date (format-time-string
                               "%Y-%m-%d"
                               (or (plist-get node-props :created-at)
                                   (current-time)))
@@ -415,9 +415,9 @@ Returns a list of plists with properties :node, :type, :date and field values."
     (nreverse nodes)))
 
 (defun org-supertag-view--edit-field-value (field-info)
-  "编辑字段值的核心函数。
-FIELD-INFO 是包含当前字段所有信息的属性列表。
-返回 (success . new-value) 的cons对，success为t表示编辑成功。"
+  "Core function to edit field values.
+FIELD-INFO is a property list containing all information about the current field.
+Returns a cons pair of (success . new-value), where success is t if editing is successful."
   (let* ((field (plist-get field-info :field))
          (field-type (when field (plist-get field :type)))
          (field-name (when field (plist-get field :name)))
@@ -427,36 +427,36 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
     
     (setq new-value
           (cond
-           ;; Date列或date类型
+           ;; Date column or date type
            ((or (= col 3) (eq field-type 'date))
-            (let ((date (org-read-date nil t nil "Enter date" 
-                                      (when (and current-value 
+            (let ((date (org-read-date nil t nil "Enter date"
+                                      (when (and current-value
                                                 (not (string-empty-p current-value)))
                                         current-value))))
               (format-time-string "<%Y-%m-%d %a>" date)))
            
-           ;; timestamp类型
+           ;; timestamp type
            ((eq field-type 'timestamp)
-            (let ((date-time (org-read-date t t nil "Enter date and time" 
-                                          (when (and current-value 
+            (let ((date-time (org-read-date t t nil "Enter date and time"
+                                          (when (and current-value
                                                     (not (string-empty-p current-value)))
                                             current-value))))
               (format-time-string "[%Y-%m-%d %a %H:%M]" date-time)))
            
-           ;; options类型
+           ;; options type
            ((eq field-type 'options)
             (let ((options (or (plist-get field :options) '("Option1" "Option2"))))
               (completing-read
                (format "Select option for %s: " field-name)
                options nil t current-value)))
            
-           ;; tag-reference类型
+           ;; tag-reference type
            ((eq field-type 'tag-reference)
             (let ((nodes (list)))
               (maphash
                (lambda (id props)
                  (when (eq (plist-get props :type) :node)
-                   (let ((title (or (plist-get props :title) 
+                   (let ((title (or (plist-get props :title)
                                    (format "Node %s" id))))
                      (push (cons title id) nodes))))
                org-supertag-db--object)
@@ -468,137 +468,137 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
                   (let ((node-id (cdr (assoc selected nodes))))
                     (format "[[%s][%s]]" node-id selected))))))
            
-           ;; list类型
+           ;; list type
            ((eq field-type 'list)
-            (read-string 
+            (read-string
              (format "Enter values for %s (comma-separated): " field-name)
              current-value))
            
-           ;; range类型
+           ;; range type
            ((eq field-type 'range)
-            (read-string 
+            (read-string
              (format "Enter range for %s (N-M or N..M): " field-name)
              current-value))
            
-           ;; 默认使用简单的字符串输入
+           ;; Default to simple string input
            (t
-            (read-string (format "Edit%s: " 
-                                (if field-name 
+            (read-string (format "Edit%s: "
+                                (if field-name
                                     (format " %s" field-name)
                                   (format " column %d" col)))
                         current-value))))
     
     (when new-value
-      ;; 验证新值
-      (let ((validated-value (org-supertag-view-validate-field 
+      ;; Validate new value
+      (let ((validated-value (org-supertag-view-validate-field
                             new-value field-type field)))
         (when validated-value
           (cons t validated-value))))))
 
 (defun org-supertag-view-smart-edit ()
-  "智能编辑功能 - 根据当前字段类型选择合适的编辑方式。
-编辑完成后立即保存字段值到数据库。"
+  "Smart edit function - selects the appropriate editing method based on the current field type.
+Immediately saves the field value to the database after editing."
   (interactive)
   (if (not (org-at-table-p))
-      ;; 不在表格上，切换整体编辑模式
-      (progn 
+      ;; Not on a table, switch to overall edit mode
+      (progn
         (setq buffer-read-only nil)
-        (message "表格已解锁，进入编辑模式"))
+        (message "Table unlocked, entering edit mode"))
     
-    ;; 在表格上，获取字段信息并进行编辑
+    ;; On a table, get field information and edit
     (let* ((field-info (org-supertag-view-table-get-field-info))
            (col (plist-get field-info :col))
            (tag (plist-get field-info :tag))
            (row-data (plist-get field-info :row-data))
-           (node-title (when row-data 
+           (node-title (when row-data
                         (string-trim
-                         (replace-regexp-in-string "\\[\\(v\\|N/A\\)\\]\\s-*" "" 
+                         (replace-regexp-in-string "\\[\\(v\\|N/A\\)\\]\\s-*" ""
                                                  (nth 0 row-data)))))
-           (node-id (when node-title 
+           (node-id (when node-title
                      (org-supertag-view-table-find-node-id node-title)))
            (field (plist-get field-info :field))
            (field-name (when field (plist-get field :name))))
       
-      ;; 确保编辑前解除只读状态
+      ;; Ensure read-only status is removed before editing
       (when buffer-read-only
         (setq buffer-read-only nil))
       
-      ;; 编辑字段值
+      ;; Edit field value
       (let* ((edit-result (org-supertag-view--edit-field-value field-info))
              (success (car edit-result))
              (new-value (cdr edit-result)))
         
         (when (and success new-value)
-          ;; 更新数据库（如果是自定义字段）
+          ;; Update database (if it is a custom field)
           (when (and node-id field-name (> col 3))
             (org-supertag-view-table-update-field node-id field-name new-value tag))
           
-          ;; 更新表格显示
+          ;; Update table display
           (org-table-put nil col new-value)
           (org-table-align)
           
-          (message "字段已更新: %s" new-value))))))
+          (message "Field updated: %s" new-value))))))
 
 (defun org-supertag-view-validate-field (value field-type field-props)
-  "根据字段类型验证并格式化输入值的有效性。
-对输入的VALUE根据FIELD-TYPE和FIELD-PROPS验证并返回格式化后的值。
-如果值无效，返回nil并显示错误信息。"
+  "Validate and format the validity of input values based on field type.
+Validates the input VALUE based on FIELD-TYPE and FIELD-PROPS and returns the formatted value.
+If the value is invalid, returns nil and displays an error message."
   (cond
-   ;; 日期字段验证 - 确保格式为 <YYYY-MM-DD XXX>
+   ;; Date field validation - ensure format is <YYYY-MM-DD XXX>
    ((eq field-type 'date)
     (if (string-match-p "^<[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\( [A-Za-z]\\{3\\}\\)?>$" value)
         value
-      (message "无效的日期格式。请使用 <YYYY-MM-DD> 格式")
+      (message "Invalid date format. Please use <YYYY-MM-DD> format")
       nil))
    
-   ;; 时间戳字段验证 - 确保格式为 [YYYY-MM-DD XXX HH:MM]
+   ;; Timestamp field validation - ensure format is [YYYY-MM-DD XXX HH:MM]
    ((eq field-type 'timestamp)
     (if (string-match-p "^\\[[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\( [A-Za-z]\\{3\\}\\)?\\( [0-9]\\{2\\}:[0-9]\\{2\\}\\)?\\]$" value)
         value
-      (message "无效的时间戳格式。请使用 [YYYY-MM-DD HH:MM] 格式")
+      (message "Invalid timestamp format. Please use [YYYY-MM-DD HH:MM] format")
       nil))
    
-   ;; 数字字段验证
+   ;; Number field validation
    ((eq field-type 'number)
     (if (string-match-p "^[+-]?[0-9]*\\.?[0-9]+$" value)
         value
-      (message "无效的数字格式")
+      (message "Invalid number format")
       nil))
    
-   ;; 范围字段验证 - 确保格式为 N-M 或 N..M
+   ;; Range field validation - ensure format is N-M or N..M
    ((eq field-type 'range)
     (if (string-match-p "^[0-9]+\\(\\.\\.|[-~]\\)[0-9]+$" value)
         value
-      (message "无效的范围格式。请使用 N-M 或 N..M 格式")
+      (message "Invalid range format. Please use N-M or N..M format")
       nil))
    
-   ;; 列表字段验证 - 确保格式为逗号分隔的项目
+   ;; List field validation - ensure format is comma-separated items
    ((eq field-type 'list)
     (if (or (string-empty-p value)
             (string-match-p "^[^,]+\\(,[^,]+\\)*$" value))
         value
-      (message "无效的列表格式。请使用逗号分隔项目")
+      (message "Invalid list format. Please use comma-separated items")
       nil))
    
-   ;; 选项字段验证 - 确保值在允许的选项列表中
+   ;; Options field validation - ensure value is in the allowed options list
    ((eq field-type 'options)
     (let ((allowed-options (plist-get field-props :options)))
       (if (or (string-empty-p value)
               (member value allowed-options))
           value
-        (message "无效的选项值。允许的选项: %s" 
+        (message "Invalid option value. Allowed options: %s"
                  (mapconcat #'identity allowed-options ", "))
         nil)))
    
-   ;; 标签引用字段验证 - 确保引用的标签存在
+   ;; Tag reference field validation - ensure referenced tag exists
    ((eq field-type 'tag-reference)
     (if (or (string-empty-p value)
             (org-supertag-node-exists-p value))
         value
-      (message "引用的节点不存在: %s" value)
+      (message "Referenced node does not exist: %s" value)
       nil))
    
-   ;; 默认情况下接受任何值
+   ;; Accept any value by default
    (t value)))
 
 ;;----------------------------------------------------------------------
@@ -616,7 +616,7 @@ FIELD-INFO 是包含当前字段所有信息的属性列表。
    ((eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--refresh-discover))
    ;; in tag-only view mode
-   ((and (eq major-mode 'org-mode) 
+   ((and (eq major-mode 'org-mode)
          (bound-and-true-p org-supertag-view-mode)
          (string-match-p "\\*Org SuperTag Table View:" (buffer-name)))
     (let ((tag (progn
@@ -642,11 +642,11 @@ This mode is based on org-mode to ensure compatibility with org table functions.
   (setq-local org-element-use-cache nil)
   (setq truncate-lines t)
   (setq buffer-read-only t)
-  (setq header-line-format 
+  (setq header-line-format
         (propertize " Org-Supertag Table View" 'face '(:weight bold)))
   (let ((map (make-sparse-keymap)))
-    ;; 先定义最关键的编辑按键，确保它们有最高优先级
-    (define-key map (kbd "e") (lambda () 
+    ;; Define the most critical editing keys first to ensure they have the highest priority
+    (define-key map (kbd "e") (lambda ()
                                (interactive)
                                (let ((inhibit-read-only t))
                                  (call-interactively 'org-supertag-view-smart-edit))))
@@ -656,11 +656,11 @@ This mode is based on org-mode to ensure compatibility with org table functions.
     (define-key map (kbd "V") 'org-supertag-view-table-view-all-nodes)
     (define-key map (kbd "m") 'org-supertag-view-manage-relations)
     (dolist (key '("d" "o" "r" "l" "a" "t"))
-      (define-key map (kbd key) 
-                 (lambda () 
+      (define-key map (kbd key)
+                 (lambda ()
                    (interactive)
                    (let ((inhibit-read-only t))
-                     (call-interactively 
+                     (call-interactively
                       (intern (format "org-supertag-view-edit-%s-field"
                                      (pcase key
                                        ("d" "date")
@@ -682,19 +682,19 @@ This mode is based on org-mode to ensure compatibility with org table functions.
     (use-local-map map)))
 
 (defun org-supertag-view-table-setup-keys ()
-  "设置表格视图模式的按键绑定。"
+  "Set up key bindings for table view mode."
   (interactive)
-  ;; 设置表格查看和编辑功能
+  ;; Set up table view and edit functions
   (define-key org-supertag-view-table-mode-map (kbd "e")
-              (lambda () 
+              (lambda ()
                 (interactive)
                 (let ((inhibit-read-only t))
                   (call-interactively 'org-supertag-view-smart-edit))))
-  (define-key org-supertag-view-table-mode-map (kbd "v") 
+  (define-key org-supertag-view-table-mode-map (kbd "v")
               'org-supertag-view-table-node-at-point)
-  (define-key org-supertag-view-table-mode-map (kbd "g") 
+  (define-key org-supertag-view-table-mode-map (kbd "g")
               'org-supertag-view-refresh)
-  (define-key org-supertag-view-table-mode-map (kbd "q") 
+  (define-key org-supertag-view-table-mode-map (kbd "q")
               'quit-window))
 
 
@@ -710,7 +710,7 @@ The table view displays:
 - A table of related nodes with their properties
 - Operation instructions for navigation and management"
   (interactive)
-  (let ((tag-to-use (or tag 
+  (let ((tag-to-use (or tag
                        (org-supertag-view--get-tag-name)
                        (completing-read "View tag in table format: "
                                       (org-supertag-view--get-all-tags)
@@ -722,5 +722,4 @@ The table view displays:
 
 
 (provide 'org-supertag-view-table)
-
 

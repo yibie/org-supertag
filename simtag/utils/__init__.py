@@ -1,6 +1,6 @@
 """
-SimTag 工具包
-提供日志、序列化等通用功能
+SimTag Toolkit
+Provides logging and serialization utilities
 """
 
 from .logging import setup_logging, get_logger
@@ -22,4 +22,4 @@ __all__ = [
     'normalize_response'
 ]
 
-"""SimTag 工具模块"""
+"""SimTag Toolkit Module"""

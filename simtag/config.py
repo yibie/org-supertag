@@ -1,6 +1,6 @@
 """
-SimTag 配置管理模块
-处理所有SimTag相关的配置选项和环境设置
+SimTag Configuration Management Module
+Handles all SimTag related configuration options and environment settings
 """
 
 import os
@@ -12,10 +12,10 @@ from typing import Dict, Any, Optional
 from .utils.logging import setup_logging
 
 def check_dependencies() -> bool:
-    """检查必要的依赖是否已安装
+    """Check if necessary dependencies are installed
     
     Returns:
-        bool: 是否满足依赖要求
+        bool: Whether the dependencies are met
     """
     try:
         import torch
@@ -25,38 +25,38 @@ def check_dependencies() -> bool:
         import numpy
         import urllib3
         
-        # 记录依赖版本信息
-        logging.info(f"Python版本: {sys.version.split()[0]}")
-        logging.info(f"PyTorch版本: {torch.__version__}")
-        logging.info(f"Sentence-Transformers版本: {sentence_transformers.__version__}")
-        logging.info(f"Urllib3版本: {urllib3.__version__}")
+        # Log dependency version information
+        logging.info(f"Python version: {sys.version.split()[0]}")
+        logging.info(f"PyTorch version: {torch.__version__}")
+        logging.info(f"Sentence-Transformers version: {sentence_transformers.__version__}")
+        logging.info(f"Urllib3 version: {urllib3.__version__}")
         
         return True
     except ImportError as e:
-        logging.error(f"缺少必要的依赖: {e}")
+        logging.error(f"Missing necessary dependencies: {e}")
         return False
 
 def check_environment() -> bool:
-    """检查运行环境是否满足要求
+    """Check if the running environment meets the requirements
     
     Returns:
-        bool: 是否在正确的环境中
+        bool: Whether it is in the correct environment
     """
-    # 检查Python版本
-    if sys.version_info < (3, 9):  # 放宽版本要求到 3.9
-        logging.warning(f"当前Python版本 {sys.version_info.major}.{sys.version_info.minor} 可能过低")
+    # Check Python version
+    if sys.version_info < (3, 9):  # Relax version requirement to 3.9
+        logging.warning(f"Current Python version {sys.version_info.major}.{sys.version_info.minor} may be too low")
         return False
         
-    # 检查依赖
+    # Check dependencies
     return check_dependencies()
 
 def ensure_environment():
-    """确保运行环境满足要求"""
+    """Ensure that the running environment meets the requirements"""
     if not check_environment():
         msg = """
-运行环境不满足要求:
-1. 需要 Python 3.9 或更高版本
-2. 需要安装以下依赖:
+The running environment does not meet the requirements:
+1. Requires Python 3.9 or higher
+2. Requires the installation of the following dependencies:
    - torch
    - sentence-transformers
    - requests
@@ -64,13 +64,13 @@ def ensure_environment():
    - numpy
    - urllib3
 
-如果缺少依赖，可以使用以下命令安装:
+If there is a lack of dependencies, they can be installed using the following command:
 uv pip install torch sentence-transformers requests epc numpy urllib3
 """
         raise RuntimeError(msg)
 
 class Config:
-    """SimTag 配置管理类"""
+    """SimTag Configuration Management Class"""
     
     DEFAULT_MODEL_NAME = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"
     
@@ -82,76 +82,76 @@ class Config:
                  log_file: str = None,
                  host: str = '127.0.0.1',
                  port: int = 0):
-        """初始化配置
+        """Initialize the configuration
         
         Args:
-            vector_file: 向量文件路径 (由 org-supertag-sim-epc-vector-file 指定)
-            db_file: 数据库文件路径 (由 org-supertag-db-file 指定)
-            model_name: Ollama模型名称
-            debug: 是否启用调试模式
-            log_file: 日志文件路径
-            host: 服务器地址
-            port: 服务器端口
+            vector_file: Vector file path (specified by org-supertag-sim-epc-vector-file)
+            db_file: Database file path (specified by org-supertag-db-file)
+            model_name: Ollama model name
+            debug: Whether to enable debug mode
+            log_file: Log file path
+            host: Server address
+            port: Server port
         """
-        # 检查环境
+        # Check the environment
         ensure_environment()
         
-        # 直接使用传入的文件路径
+        # Use the file paths passed directly
         self.vector_file = vector_file
         self.db_file = db_file
         
-        # 验证文件路径
+        # Validate the file paths
         if not self.vector_file:
-            raise ValueError("向量文件路径未指定")
+            raise ValueError("Vector file path not specified")
         if not self.db_file:
-            raise ValueError("数据库文件路径未指定")
+            raise ValueError("Database file path not specified")
             
-        # 日志文件路径 - 使用向量文件所在目录
+        # Log file path - use the directory where the vector file is located
         log_dir = os.path.dirname(self.vector_file)
         self.log_file = log_file or os.path.join(log_dir, "simtag_epc.log")
         
-        # 其他设置
+        # Other settings
         self.model_name = model_name
         self.debug = debug
         self.log_level = logging.DEBUG if debug else logging.INFO
         self.host = host
         self.port = port
         
-        # 创建日志目录
+        # Create the log directory
         if self.log_file:
             os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
             
-        # 记录路径信息
-        logging.info(f"配置初始化完成:")
-        logging.info(f"向量文件: {self.vector_file}")
-        logging.info(f"数据库文件: {self.db_file}")
-        logging.info(f"日志文件: {self.log_file}")
+        # Log the path information
+        logging.info(f"Configuration initialized:")
+        logging.info(f"Vector file: {self.vector_file}")
+        logging.info(f"Database file: {self.db_file}")
+        logging.info(f"Log file: {self.log_file}")
 
     def ensure_ollama(self) -> bool:
-        """确保Ollama可用"""
+        """Ensure Ollama is available"""
         try:
-            # 简单检查ollama命令是否可用
+            # Simple check if the ollama command is available
             subprocess.run(["ollama", "--version"], capture_output=True, check=True)
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            logging.error("Ollama未安装或不可用")
+            logging.error("Ollama is not installed or not available")
             return False
 
     def initialize_server(self) -> bool:
-        """初始化服务器环境"""
+        """Initialize the server environment"""
         try:
-            # 确保环境满足要求
+            # Ensure the environment meets the requirements
             ensure_environment()
             
-            # 确保Ollama可用
+            # Ensure Ollama is available
             if not self.ensure_ollama():
-                raise RuntimeError("Ollama未安装或不可用")
+                raise RuntimeError("Ollama is not installed or not available")
             
-            # 创建必要的目录
+            # Create the necessary directories
             os.makedirs(os.path.dirname(self.vector_file), exist_ok=True)
             os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
             
-            # 设置日志，传递具体的参数而不是self
+            # Set up the logging, passing specific parameters instead of self
             setup_logging(
                 log_file=self.log_file,
                 log_level=self.log_level,
@@ -161,15 +161,15 @@ class Config:
             return True
             
         except Exception as e:
-            logging.error(f"初始化服务器环境失败: {e}")
+            logging.error(f"Failed to initialize the server environment: {e}")
             return False
 
     def setup(self):
-        """设置运行环境"""
-        # 应用环境变量
+        """Set up the running environment"""
+        # Apply environment variables
         for key, value in self.env_vars.items():
             if key == "PYTHONPATH":
-                # 对于PYTHONPATH，我们需要追加而不是覆盖
+                # For PYTHONPATH, we need to append instead of overwrite
                 current_path = os.environ.get("PYTHONPATH", "")
                 if current_path:
                     os.environ["PYTHONPATH"] = f"{value}:{current_path}"
@@ -178,12 +178,12 @@ class Config:
             else:
                 os.environ[key] = value
         
-        # 创建必要的目录
+        # Create the necessary directories
         os.makedirs(os.path.dirname(self.vector_file), exist_ok=True)
         os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
         
     def to_dict(self) -> Dict[str, Any]:
-        """转换配置为字典"""
+        """Convert the configuration to a dictionary"""
         return {
             "vector_file": self.vector_file,
             "db_file": self.db_file,
@@ -197,13 +197,13 @@ class Config:
         }
         
     def save(self, filepath: str) -> None:
-        """保存配置到文件"""
+        """Save the configuration to a file"""
         with open(filepath, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
             
     @classmethod
     def load(cls, filepath: str) -> 'Config':
-        """从文件加载配置"""
+        """Load the configuration from a file"""
         if not os.path.exists(filepath):
             return cls()
             

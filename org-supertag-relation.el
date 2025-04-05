@@ -108,7 +108,7 @@ Return the formatted option list."
     (nreverse choices)))
 
 (defun org-supertag-relation--get-type-from-choice (choice)
-  "从格式化的选项CHOICE中提取关系类型。"
+  "Extract relation type from formatted choice."
   (let ((selected-type (car (split-string choice " - "))))
     (intern selected-type)))
 
@@ -198,7 +198,6 @@ otherwise remove all relations between the tags."
           (let ((rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
             (when (gethash rel-id org-supertag-db--link)
               (remhash rel-id org-supertag-db--link)
-              ;; 触发 link:removed 事件
               (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)))
         ;; Otherwise, remove all relations between these tags
         (let ((removed-count 0))
@@ -207,14 +206,11 @@ otherwise remove all relations between the tags."
              (when (and (string-prefix-p ":tag-relation:" key)
                        (string-match (format ":tag-relation:%s->%s:" from-id to-id) key))
                (remhash key org-supertag-db--link)
-               ;; 触发 link:removed 事件
                (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)
                (cl-incf removed-count)))
            org-supertag-db--link)))
-      
-      ;; 标记数据库为脏
+ 
       (org-supertag-db--mark-dirty)
-      ;; 调度保存
       (org-supertag-db--schedule-save)
       (message "Removed relation: %s -> %s" from-name to-name))))
 
@@ -375,7 +371,7 @@ TAG-ID: The ID of the current tag being edited."
     (pop-to-buffer org-supertag-relation-manage--buffer-name)))
 
 (defun org-supertag-relation--refresh-display ()
-  "刷新关系管理界面显示。"
+  "Refresh the relation management interface display."
   (when (get-buffer org-supertag-relation-manage--buffer-name)
     (with-current-buffer org-supertag-relation-manage--buffer-name
       (let ((inhibit-read-only t)
@@ -432,10 +428,10 @@ TAG-ID: The ID of the current tag being edited."
                                 (propertize strength-display 'face '(:foreground "gray50"))))))
             (insert "  (No cooccurrence relations)\n")))
 
-        ;; 显示现有关系
-        (insert (propertize "\n现有关系:\n" 'face '(:weight bold)))
+        ;; Display existing relations
+        (insert (propertize "\nExisting relations:\n" 'face '(:weight bold)))
         (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
-               ;; 过滤非共现关系
+               ;; Filter non-cooccurrence relations
                (relations (cl-remove-duplicates
                          (cl-remove-if
                           (lambda (rel)
@@ -632,11 +628,9 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
     (define-key map (kbd "g") 'org-supertag-relation-find-by-group)
     (define-key map (kbd "f") 'org-supertag-relation-find-related-tags)
     (define-key map (kbd "i") 'org-supertag-relation-show-isolated-tags)
-    ;; Navigation keys (Emacs style)
     (define-key map (kbd "n") 'org-supertag-relation--next-line)
     (define-key map (kbd "p") 'org-supertag-relation--prev-line)
     (define-key map (kbd "RET") 'org-supertag-relation--select-current-line)
-    ;; 批量操作键绑定
     (define-key map (kbd "m") 'org-supertag-relation-toggle-tag-selection)
     (define-key map (kbd "M") 'org-supertag-relation-select-all-tags)
     (define-key map (kbd "u") 'org-supertag-relation-unselect-all-tags)
@@ -720,7 +714,7 @@ If VOID-OK is non-nil, allow missing tag IDs."
   (org-supertag-relation--refresh-display))
 
 (defun org-supertag-relation-quit ()
-  "关闭关系管理缓冲区。"
+  "Close the relation management buffer."
   (interactive)
   (kill-buffer org-supertag-relation-manage--buffer-name))
 
@@ -729,22 +723,22 @@ If VOID-OK is non-nil, allow missing tag IDs."
 ;;------------------------------------------------------------------------
 
 (defun org-supertag-relation--get-recommendations (tag-id other-tags)
-  "获取标签关系推荐.
-TAG-ID: 当前标签 ID
-OTHER-TAGS: 其他可能相关的标签列表"
+  "Get tag relation recommendations.
+TAG-ID: Current tag ID
+OTHER-TAGS: List of other possible related tags"
   (if (or (null tag-id)
           (null other-tags)
-          org-supertag-relation--updating-recommendations)  ; 防止重复调用
-      (gethash tag-id org-supertag-relation--recommendations-cache)  ; 返回缓存的推荐列表
+          org-supertag-relation--updating-recommendations)  ; Prevent duplicate calls
+      (gethash tag-id org-supertag-relation--recommendations-cache)  ; Return cached recommendations
     (let ((tag-name (org-supertag-tag-get-name-by-id tag-id)))
       (when (and tag-name (fboundp 'org-supertag-sim-find-similar))
         (setq org-supertag-relation--updating-recommendations t)
-        ;; 使用相似度搜索获取推荐
+        ;; Use similarity search to get recommendations
         (org-supertag-sim-find-similar
          tag-name
-         10  ; 获取前10个相似标签
+         10  ; Get the top 10 similar tags
          (lambda (similar-tags)
-           ;; 过滤掉已存在的关系
+           ;; Filter out existing relations
            (let* ((existing-relations (mapcar 
                                      (lambda (rel) (plist-get rel :to))
                                      (org-supertag-relation-get-all tag-id)))
@@ -752,21 +746,21 @@ OTHER-TAGS: 其他可能相关的标签列表"
                    (cl-remove-if
                     (lambda (tag)
                       (let ((other-id (org-supertag-tag-get-id-by-name (car tag))))
-                        (or (null other-id)  ; 忽略不存在的标签
-                            (equal other-id tag-id)  ; 忽略自身
-                            (member other-id existing-relations))))  ; 忽略已有关系
+                        (or (null other-id)  ; Ignore non-existent tags
+                            (equal other-id tag-id)  ; Ignore self
+                            (member other-id existing-relations))))  ; Ignore existing relations
                     similar-tags)))
-             ;; 更新推荐缓存
+             ;; Update the recommendation cache
              (puthash tag-id recommendations org-supertag-relation--recommendations-cache)
              (setq org-supertag-relation--updating-recommendations nil)
-             ;; 使用 run-with-timer 延迟刷新显示，避免递归
+             ;; Use run-with-timer to delay refreshing the display, avoiding recursion
              (run-with-timer 0.1 nil
                             (lambda ()
                               (when (get-buffer org-supertag-relation-manage--buffer-name)
                                 (with-current-buffer org-supertag-relation-manage--buffer-name
                                   (let ((inhibit-read-only t))
                                     (org-supertag-relation--refresh-display))))))))))
-      ;; 返回缓存的推荐列表
+      ;; Return cached recommendations
       (gethash tag-id org-supertag-relation--recommendations-cache))))
 
 (defun org-supertag-relation--format-recommendations ()
@@ -1039,7 +1033,7 @@ This will prompt user to choose a relation type for the selected tag."
   (let* ((tag-id org-supertag-relation--current-tag)
          (other-tag-id (button-get button 'other-tag-id))
          (rel-choices (org-supertag-relation--get-relation-type-choices))
-         (choice (completing-read "选择关系类型: " rel-choices nil t))
+         (choice (completing-read "Select relation type: " rel-choices nil t))
          (rel-type (org-supertag-relation--get-type-from-choice choice)))
     (when (and tag-id other-tag-id rel-type)
       (if (org-supertag-relation-has-complement-p rel-type)
@@ -1173,16 +1167,16 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-relation-find-isolated-tags ()
-  "查找所有没有任何关系的孤立标签。
-返回标签ID列表。"
+  "Find all tags with no relations.
+Returns a list of tag IDs."
   (let ((all-tags (org-supertag-db-find-by-type :tag))
         (isolated-tags nil))
     (dolist (tag-id all-tags)
-      ;; 检查是否有从该标签出发的关系
+      ;; Check if there are outgoing relations from this tag
       (let ((outgoing-relations (org-supertag-relation-get-all tag-id))
             (incoming-relations nil))
         
-        ;; 检查是否有指向该标签的关系
+        ;; Check if there are incoming relations to this tag
         (maphash
          (lambda (rel-id props)
            (when (and (string-prefix-p ":tag-relation:" rel-id)
@@ -1190,7 +1184,7 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
              (push props incoming-relations)))
          org-supertag-db--link)
         
-        ;; 如果既没有出发的关系也没有指向的关系，则为孤立标签
+        ;; If there are no outgoing or incoming relations, it is an isolated tag
         (when (and (null outgoing-relations) (null incoming-relations))
           (push tag-id isolated-tags))))
     
@@ -1473,5 +1467,6 @@ This function serves as an independent entry point, directly displaying the isol
   "Close the isolated tags buffer."
   (interactive)
   (kill-buffer "*Org-Supertag Isolated Tags*"))
+  
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here

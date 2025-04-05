@@ -1,205 +1,293 @@
-[[file:README_CN.org][中文版说明]]
+[[file:README.org][Chinese Version]]
 
 * Introduction
 
-Org-supertag is a package that enhances org-mode's tag functionality. It enables tags to not only set properties for nodes, but also directly manipulate nodes and automatically execute certain behaviors based on time, providing a more flexible way of information management.
+org-supertag is a package that enhances the tag function of org-mode. It allows tags not only to set properties for nodes, but also to operate nodes directly, and can automatically perform certain actions based on time, providing a more flexible way of managing information.
 
-Org-supertag offers high degrees of freedom, flexibility, and convenience. Through it, you can customize your own behaviors to achieve more complex functionalities - its potential is essentially limitless.
+org-supertag brings a more modern note experience to org-mode, which is reflected in various visual interfaces and more convenient interactions. Please try ~M-x org-supertag-view-tag~, ~M-x org-supertag-tag-edit-fields~ and other commands.
 
-Org-supertag adopts a non-intrusive design, coexisting harmoniously with org-mode's original features while providing more possibilities.
+org-supertag adopts a non-intrusive design, harmoniously coexisting with the original functions of org-mode, while providing more possibilities.
 
 * Features
-
-** Feature Overview
-
-- Enhanced Tag Functionality
-    - Set properties for org-headlines, add multiple org-properties at once and batch fill corresponding values
-    - Transform regular org-headlines into searchable and referenceable nodes
-    - Add behaviors to tags that can complete multiple operations at once
-- Convenient Search Functionality
-    - Search with multiple keywords at once (using AND logic)
-    - Beautified search results page showing both titles and content beneath
-    - Multiple search result export methods for easy organization
-      - Export search results to another file
-      - Export search results to a new file (location and filename customizable)
-      - Export search results directly to current cursor position
-- Tag Relationship Management
-    - Automatic discovery of relationships between tags based on usage patterns
-    - Statistical analysis of tag co-occurrences and mutual information
-    - Real-time incremental updates when tags are added or removed
-    - Intelligent tag recommendations based on contextual relevance( the more tags a node has, the more relevant it is to the user)
-- Metadata Storage System
-    - Flexible key-value storage for tags, nodes, and application-level data
-    - Support for storing and retrieving arbitrary metadata with tags and nodes
-    - Persistent storage across sessions with automated backup
-- Automatic Synchronization
-    - Automatically sync position and changes of org-headlines converted to Nodes, saving manual operations
-    - Provides manual command to sync all Nodes
-- Integrated Behavior System for Automation
-    - Behavior system makes tags "smart", automatically triggering preset actions when adding/removing tags (like changing styles, setting states, etc.)
-    - One tag can trigger multiple actions, e.g., adding @urgent tag can simultaneously "turn red", "set priority", "add deadline", etc.
-    - Behaviors can be scheduled, combined, and parameterized, making your org-mode workflow more automated and efficient
-    - Behavior system includes a behavior library - you can use predefined common behaviors or create your own custom ones. This modular design makes behaviors easily shareable, reusable, and extensible between different org files or users
-    - Customizable Behavior Commands
-      + Simple configuration syntax
-      + Parameterized configuration
-      + Can combine multiple Behaviors together
-- Inline Tag Support
-    - Recognize and process #hashtag style inline tags within regular text content
-    - Associate inline tags with their containing nodes for easy reference
-    - Query nodes by their inline tags using the same powerful query system
-    - Special fontification to make inline tags visually distinct
-
-** Enhanced Tag System
-Make your org-mode tags powerful metadata controllers:
-
-*** Adding Tags/Setting Properties
-- Set multiple properties at once when adding tags
-- Batch fill property values
-- Type validation for property values
+** 🏷️ Bring a more modern note experience to org-mode
+*** 🔖 Synchronize tags and properties, improve organizational efficiency
+While adding tags to Org headlines, *set multiple properties at the same time*, reduce repetitive operations, and make information organization more efficient.
 
 [[./picture/figure4.gif]]
 
-~M-x org-supertag-tag-add-tag~
+~M-x org-supertag-tag-add-tag~              Add tag
+~M-x org-supertag-tag-set-field-and-value~  Set org-properites 
 
-~M-x org-supertag-tag-set-field-and-value~
+*** 🧠 Upgrade the title to a searchable and referable node
+Convert ordinary Org headlines into searchable and referable nodes, *enhance the accessibility and relevance of content*.
 
-*** Node System
-- Automatic node creation, no manual creation needed
+- Automatically create nodes, no need to create manually
 - Establish reference relationships between nodes
 
 [[./picture/figure5.gif]]
 
-~M-x org-supertag-node-add-reference~
+Related commands ~M-x org-supertag-node-add-reference~ Key binding ~C-c t r~. The reference relationship of the node will be automatically recorded in the database.
 
-If a node isn't automatically created, you can directly run ~M-x org-supertag-node-create~ command to convert the current heading into a node.
+If the node fails to be created automatically, you can directly run the ~M-x org-supertag-node-create~ command to convert the current headline into a node.
 
-*** Behavior System
-Make tags "smart", enabling:
-- Trigger actions when adding/removing tags
-- Combine multiple actions into workflows
-- Set scheduled behaviors
-- Customize tag styles
+To avoid some situations where the node cannot be synchronized to the database, you can use ~M-x org-supertag-node-update~ to update all the information of the node to the database.
 
-[[./picture/figure6.gif]]
+*** 🪢 Inline tags, enhance the tagging of the body content
 
-~M-x org-supertag-behavior-attach~
+[[./picture/figure11.gif]]
 
-~M-x org-supertag-behavior-detach~
+- You can directly enter #inline tags, breaking through the limitations of org-mode's native
+- You can customize the style of inline tags to distinguish them from normal body text
+- Allow to complete tags by adding '#' suffix, and create new tags (currently only support Company as the backend)
 
-** Powerful Search
-Efficiently find and organize your nodes:
+Related commands ~M-x org-supertag-inline-insert-tag~ Enter inline tags
 
-*** Multi-keyword Search
-- Support multiple keyword combination search (AND logic)
-- Aesthetic search results interface
-- Preview content under headings
+Note: The input of inline tags should comply with the requirements of org-mode, only accept "numbers", "English", "@", "underscore". Do not use - as a connector.
+**** Configure the style of inline tags
+#+BEGIN_SRC emacs-lisp
+;; Whether to hide the '#' symbol in front of the tag
+(setq org-supertag-inline-style-hide-prefix t)
+
+;; Background and foreground colors of the tag
+(setq org-supertag-inline-background "#e8f0ff")  ;; Light blue background
+(setq org-supertag-inline-foreground "#0066cc")  ;; Dark blue text
+
+;; Border style setting - choose one of your favorite configurations:
+
+;; 1. Simple thin border
+(setq org-supertag-inline-box '(:line-width 1 :color "#b0b0b0" :style nil))
+
+;; 2. No border (comment out the above and use this one)
+;; (setq org-supertag-inline-box nil)
+
+;; 3. Raised button effect (comment out the above and use this one)
+;; (setq org-supertag-inline-box '(:line-width 1 :color "#808080" :style released-button))
+
+;; 4. Use different vertical and horizontal line widths (comment out the above and use this one)
+;; (setq org-supertag-inline-box '(:line-width (1 . 2) :color "#a0a0a0" :style nil))
+
+;; 5. Thin border inside the text, does not increase the height of the tag (comment out the above and use this one)
+;; (setq org-supertag-inline-box '(:line-width -1 :color "#b0b0b0" :style nil))
+
+;; Font weight setting
+(setq org-supertag-inline-weight 'semi-bold)  ;; Optional values: 'normal, 'bold, 'semi-bold
+
+;; Apply style update
+(when (fboundp 'org-supertag-inline-style-update)
+  (org-supertag-inline-style-update))
+#+END_SRC
+
+
+** 🔍 Powerful search function, quickly locate the required information
+Related commands ~M-x org-supertag-query~
+**** 🔎 Multi-keyword AND logic search
+Supports entering multiple keywords at once, uses AND logic for search, *accurately locates the required content*.
 
 [[./picture/figure8.gif]]
 
-~M-x org-supertag-query~
+**** 🖼️ Optimized search results display
+The search results page has been optimized for easy browsing.
 
-*** Flexible Export Options
-Multiple ways to organize search results:
-- Export to existing files
-- Create new files to save results
-- Insert at current position
+To improve search speed, the content is temporarily not searched.
 
-[[./picture/figure9.gif]]
+**** 📤 Diversified search result export methods
+- Export search results to another file
+- Export search results to a newly created file (can customize the location and file name)
+- Insert the search results directly at the current cursor position (in the form of a reference)
 
-** Automatic Synchronization
-Automatically maintain node organization:
-- Track node position changes
-- Automatically update reference relationships
-- Provide manual sync commands
+[[./picture/figure9.gif]] 
+
+  
+*Convenient for users to organize and sort search results*.
+
+** ⚙️ Integrated behavior system for automated operations, improving workflow intelligence
+
+By integrating multiple operations into one tag, *achieve one-click completion of complex operations*, improve work efficiency.
+
+[[./picture/figure6.gif]]
+
+- 🚀 Tag triggers preset actions, achieving automation
+The behavior system makes tags "smart", *automatically triggers preset actions when adding/deleting tags* (such as changing styles, setting status, etc.).
+
+- 🧩 Behaviors can be scheduled, combined, and with parameters
+Behaviors can be scheduled, used in combination, and with parameters, *making the workflow of Org-mode more automated and efficient*.
+
+- 🧱 Built-in behavior library and custom support
+Built-in behavior library, users can use predefined common behaviors, and can also create custom behaviors. *The modular design makes it easy to share, reuse and extend behaviors between different Org files or users*.
+
+Related commands
+~M-x org-supertag-behavior-attach~ Add behavior to the current tag
+~M-x org-supertag-behavior-detach~ Detach behavior from the current tag
+
+*** Advanced usage of the behavior system
+Create custom behaviors, edit the ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el file:
+
+Here is an example
+
+#+begin_src emacs-lisp
+;; Register a behavior named "@urgent"
+;; Parameter description:
+;;   - @urgent: The name of the behavior, used to identify and reference this behavior
+;;   - :trigger: Trigger condition, :on-add means trigger when adding a tag
+;;   - :list: List of actions to be executed, each action is a command string
+;;   - :style: Tag display style, including font and prefix icon settings
+(org-supertag-behavior-register "@urgent"                 ;; Register a behavior named "@urgent"
+  :trigger :on-add                                        ;; Trigger when adding a tag
+  :list '("@todo=TODO"                                    ;; Set the TODO status
+         "@priority=A"                                    ;; Set the priority to A
+         "@deadline=today")                               ;; Set the deadline to today
+  :style '(:face (:foreground "red" :weight bold)         ;; Set the tag to display in red and bold
+          :prefix "🔥"))                                  ;; Display a flame icon in front of the tag
+#+end_src
+
+For more examples, please refer to [[./DEMO.org][DEMO.org]].
+
+For more usage, please refer to [[https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide][Org‐supertag Advance Usage]]
+
+
+** 🏷️ Multiple views, providing multi-dimensional discovery and comparison
+*** 🔖 Tag table view: At a glance, quickly edit
+- ​Display the title and property values of nodes (Node) at the same time, the information is clear at a glance.​
+- Directly modify the property values in the table, saving cumbersome steps.​
+- Support full keyboard operation, improve operation efficiency.​
+
+[[./picture/figure12.gif]]
+​
+Related commands ~M-x org-supertag-view-table~
+
+*** 🧲 Tag discovery view: Explore the co-occurrence of tags, accurately filter
+- ​In-depth exploration of the co-occurrence relationship between tags, revealing potential connections.​
+- Dynamically add or remove filters, adjust the view in real time.​
+- ​Real-time display of matching nodes, quickly locate the target information.​
 
 [[./picture/figure7.gif]]
 
-~M-x org-supertag-sync-force-all~
+Related commands ~M-x org-supertag-tag-discover~
 
-If some nodes need synchronization but haven't auto-synced, you can directly run ~M-x org-supertag-sync-force-all~ command to sync all node information to the database.
+*** 🧩 Multi-column tag comparison view: Parallel comparison, insight into differences
+- ​Simultaneously compare nodes under different tag combinations, intuitively analyze differences.​
+- ​Dynamically add or remove comparison columns, meet diverse needs.​
+- Support adding additional tags to the column, deepening the comparison dimension.​
+- ​Full keyboard support​
 
-* Basic Usage
+[[./picture/figure15.gif]]
 
-** Adding Tags
+Related commands ~M-x org-supertag-tag-columns~
 
-#+begin_src
-M-x org-supertag-tag-add-tag
+** 🧩 Intelligent management of tag relationships, revealing hidden associations
+Related commands ~M-x org-supertag-relation-manage~
+**** ↔️Supports one-way and two-way relationship types, saving operation steps
+***** Predefined relationship types
+
+#+begin_src 
+(defcustom org-supertag-relation-types
+  '((contrast . "A ⋮ B, A compare with B")    ; contrast relationship
+    (relate . "A ~ B, A relate to B")          ; general relation
+    (influence . "A → B, A influence B")      ; influence relationship
+    (contain . "A ⊃ B, A contain B")           ; containment (parent)
+    (belong . "A ⊂ B, A belong to B")          ; belonging (child)
+    (parallel . "A ∥ B, A parallel with B")    ; parallel relationship
+    (dependency . "A ⇒ B, A depend on B")     ; dependency relationship
+    (prerequisite . "A ⊃ B, A prerequisite B") ; prerequisite relationship
+    (cause . "A ⤳ B, A cause B")              ; causal relationship
+    (effect . "A ⤝ B, A effect B")            ; effect relationship
+    (cooccurrence . "A ⋈ B, A co-occur with B")) ; co-occurrence relationship
+  "Predefined relation types.
+Each relation type contains a symbol and a description text."
+  :type '(alist :key-type symbol :value-type string)
+  :group 'org-supertag-relation)
 #+end_src
 
-Add tags to current heading, can set properties simultaneously.
+When applying two-way relationships, the corresponding relationship will be automatically set in the two tags. For example:
 
-** Creating References
-#+begin_src
-M-x org-supertag-node-add-reference
+If there are two tags #climate_change and #glacier_melting, and you want to express the causal relationship between them.
+
+#+begin_src 
+;; Select through the relationship management interface
+(org-supertag-relation-manage) ;; Open the relationship management interface
+;; Select the "climate_change" tag
+;; Click the [Select] button to select the "glacier_melting" tag
+;; Select "cause - A ⤳ B, A cause B" in the relationship type prompt
+;; The system will automatically create:
+;; 1. climate_change cause glacier_melting
+;; 2. glacier_melting effect climate_change
 #+end_src
 
-Add references to other nodes.
+***** Custom relationship types：
 
-** Searching
-#+begin_src
-M-x org-supertag-query
+#+begin_src 
+;; Custom relationship types
+(setq org-supertag-relation-types
+      '((contrast . "A ⋮ B, A compare with B") 
+        (relate . "A ~ B, A relate to B")   
+        (influence . "A → B, A influence B") 
+        (contain . "A ⊃ B, A contain B")  
+        (belong . "A ⊂ B, A belong to B")   
+        (parallel . "A ∥ B, A parallel with B") 
+        (dependency . "A ⇒ B, A depend on B") 
+        (prerequisite . "A ⊃ B, A prerequisite B") 
+        (cause . "A ⤳ B, A cause B")    
+        (effect . "A ⤝ B, A effect B")
+        (cooccurrence . "A ⋈ B, A co-occur with B")
+        ;; Add custom types
+        (is-part-of . "A ◐ B, A is part of B")
+        (leads-to . "A ⟿ B, A leads to B")))
+
+;; Custom complementary relationship pairs
+(setq org-supertag-relation-complementary-pairs
+      '((contain . belong)
+        (cause . effect)
+        (dependency . prerequisite)
+        ;; Add custom complementary relationships
+        (is-part-of . contains-part)))
 #+end_src
 
-Search nodes using multiple keywords.
+**** 🧬 Automatically record the co-occurrence relationship between tags
+When different tags are applied to the same object, there is a "co-occurrence" relationship between these tags, which is abbreviated as "co-occurrence".
 
-** Adding Behaviors
-#+begin_src
-M-x org-supertag-behavior-attach
-#+end_src
+*org-supertag automatically recognizes the co-occurrence relationship between tags*, helps users understand the relationship between tags, and simplifies the operation of tag relationships.
 
-Attach automated behaviors to tags.
+It will be displayed in the Tag Discovery panel, when you click the [+] in front, it will add one more layer of filtering:
 
-** Using Inline Tags
-#+begin_src
-M-x org-supertag-inline-insert-tag
-#+end_src
+[[./picture/figure13.png]]
 
-Insert hashtag-style inline tags within your content. These tags:
-- Can be added anywhere in your text with `C-c t i`
-- Are automatically linked to the current node
-- Support completion of existing tags
-- Allow creation of new tags on-the-fly by adding '#' suffix
-- Are displayed with distinctive styling for better readability
+**** 📊 Real-time statistical analysis and update
+Statistical analysis of the co-occurrence and mutual information of tags, *real-time update of relationships when adding or deleting tags*, ensuring the accuracy of the information.
 
-[[./picture/figure10.gif]]
-*** Customization Options
+Based on the context, *intelligently recommend related tags*, improving the convenience of tag management.
 
+[[./picture/figure14.gif]]  
 
-You can customize the appearance and behavior of inline tags:
+Related commands ~M-x org-supertag-sim-auto-tag-node~ 
 
-#+begin_src emacs-lisp
-;; Enable or disable tag highlighting
-(setq org-supertag-inline-enable-fontification t)
+** 🔄 Automatic synchronization, reducing manual maintenance
 
-;; Customize colors for light theme
-(setq org-supertag-inline-light-theme-colors
-      '(:box (:line-width -1 :color "#d0d0d0")
-        :background "#f8f8f8"
-        :foreground "#2a2a2a"))
+- *Automatic synchronization* of the position and changes of the Org headline that has been converted to a node, reducing manual operations.
+- Automatic synchronization will check the situation of adding, modifying, moving, and deleting nodes, *automatically maintain the database*.
+- Provide a manual command to synchronize all nodes, *ensure the consistency of the data*.
+  
+[[./picture/figure7.gif]]
 
-;; Customize colors for dark theme
-(setq org-supertag-inline-dark-theme-colors
-      '(:box (:line-width -1 :color "#505050")
-        :background "#383838"
-        :foreground "#e8e8e8"))
+If some nodes need to be synchronized, but cannot be synchronized automatically, you can directly run the ~M-x org-supertag-sync-force-all~ command to synchronize all node information to the database.
 
-;; Customize text properties
-(setq org-supertag-inline-text-properties
-      '(:height 0.95
-        :weight normal
-        :spacing 0.2))
+** 🖥️ Invisible artificial intelligence
+In some functions of org-supertag, AI/NLP is used as the backend, providing more dimensions of tag performance and reducing the pressure of operations. Since AI/NLP is only used as the backend, users only need to call the corresponding command, and will not feel the existence of AI/NLP in daily use.
 
-;; Control whether to hide the # prefix
-(setq org-supertag-inline-hide-hash t)
+In org-supertag, artificial intelligence is seen as a supporting function, not a direct front-end function, to prevent people from getting caught in the whirlpool of dialogue (while also avoiding redundant implementation, because Emacs already has a large number of assistant AI tools, such as gptel, chatgpt-shell, Ellama, Ollama-buddy......
 
-;; Customize the regexp pattern for matching tags
-(setq org-supertag-inline-tag-regexp "#\\([[:alnum:]_-]+\\)")
+Currently, the following commands use AI/NLP support:
 
-;; Specify contexts where tags should not be highlighted
-(setq org-supertag-inline-excluded-contexts
-      '(src-block comment example-block export-block))
-#+end_src
+~M-x org-supertag-sim-auto-tag-node~ This command will analyze all the content (title and content) in the current Node, and automatically provide several tag suggestions.
+
+ATTENTION: AI function requires installation of dependencies, the installation method has been described in the "Basic Installation" section.
+*** Further explanation
+org-supertag's artificial intelligence function architecture:
+
+- The backend is Ollama
+- The communication framework is epc
+- The large model is hf.co/unsloth/gemma-3-4b-it-GGUF:latest
+
+The tag suggestions of ~org-supertag-sim-auto-tag-node~ are provided by ~tag_generator.py~, if you are not satisfied with the tag suggestion effect, you can directly modify the Prompt in the file.
 
 * Basic Installation
 
@@ -209,78 +297,93 @@ You can customize the appearance and behavior of inline tags:
   :after org
   :config
   (org-supertag-setup))
+
+(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; Configure sync folders
 #+end_src
 
-* Advanced Usage
+*org-supertag requires some Python dependencies, including `torch`, `sentence-transformers`, `epc` and `ollama`*:
 
-** Behavior System Configuration
-Create custom behaviors by editing ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el file:
+- Use the automated script to install dependencies
+  
+#+begin_src 
+cd /path/to/org-supertag
 
-Here's an example
-
-#+begin_src emacs-lisp
-;; Register a behavior named "@urgent"
-;; Parameter explanation:
-;;   - @urgent: behavior name, used to identify and reference this behavior
-;;   - :trigger: trigger condition, :on-add means trigger when adding tag
-;;   - :list: list of actions to execute, each action is a command string
-;;   - :style: tag display style, including font and prefix icon settings
-(org-supertag-behavior-register "@urgent"                 <= Register a behavior named "@urgent"
-  :trigger :on-add                                        <= Trigger when adding tag
-  :list '("@todo=TODO"                                    <= Set TODO state
-         "@priority=A"                                    <= Set priority to A
-         "@deadline=today")                               <= Set deadline to today
-  :style '(:face (:foreground "red" :weight bold)         <= Set tag display to red and bold
-          :prefix "🔥"))                                  <= Show fire icon before tag
+sh ./setup_venv.sh
 #+end_src
 
-For more examples, please refer to [[./DEMO.org][DEMO.org]].
+* Usage Suggestions
+** Mix use of inline tags (#tag) and normal tags (:#tag:)
+Normal tags are suitable for classification. For example: :project:, :issue:, etc.
+Inline tags are suitable for directly using semantics. For example: #org_supertag.
 
-For more usage details, please refer to [[https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide][Org‐supertag Advance Usage]]
+* FAQ
+** What is a Node? What is a Field? Why distinguish them from org-headline, org-properties?
+Node represents the org-headline that has been converted by org-supertag, indicating that it has been recorded by org-supertag and can be operated by it.
+
+Conceptually, Node is equivalent to a note block in general note-taking software. It includes: an org-headline with an ID + the content contained below the org-headline.
+
+When org-supertag operates on a Node, it actually operates on the entire note block. For example: M-x org-supertag-node-delete, will directly delete the entire Node, clean up the ID, Node and Node reference relationships recorded in the database, the Link relationship of the Tag, etc., clean up the related Field Value.
+
+Field is roughly equivalent to org-properties, and like Node, it represents the org-properites converted and recorded by org-supertag.
+
+This conceptual distinction is to let users know clearly the state of the notes, whether they have been recorded in the database.
+
+** Why set "co-occurrence relationship" for tags?
+When a tag, and another tag, are applied to the same Node, there is a relationship between them, called "co-occurrence".
+
+The "co-occurrence" relationship is the most basic relationship among all tag relationships. But what is its use?
+
+1. When you are in the "tag discovery view", you can filter layer by layer through co-occurrence tags
+2. When you are managing "tag relationships", you can quickly find tags that have relationships behind them through "co-occurrence relationships"
+3. ......
+
+I think "co-occurrence" is the most wonderful phenomenon in the world. This allows us to automatically obtain meaningful connections when adding tags.
 
 * Changelog
+For details, see [[./CHANGELOG.org][CHANGELOG]]
 
 - 2025-01-13 2.0.0 release
   - Added behavior scheduling system
   - Added behavior template variables
-  - Added automatic sync system
-  - And many improvements
-  See details in [[./CHANGELOG.org][CHANGELOG]]
+  - Added automatic synchronization system
+  - And many other improvements
 
 - 2024-12-31 1.0.0 release
-  - feat behavior-system: Complete behavior system implementation, forming automated workflow
-    - Three-layer behavior architecture (basic/derived/composite)
+  - feat behavior-system: Complete implementation of behavior system, forming an automatic workflow
+    - Three-layer behavior architecture (basic/derived/combined)
     - Complete trigger system
     - Rich behavior library functions
     - Style system support
-  - docs: Provide interactive demo document DEMO.org
+  - docs: Provide interactive demo document DEMO.org 
   - refactor: Core refactoring
-    - Optimized data structures
-    - Improved error handling
-    - Enhanced performance
+    - Optimize data structure
+    - Improve error handling
+    - Improve performance
 
 - 2024-12-20 0.0.2 release
-  - fix org-supertag-remove: Fixed issue where removing tags wasn't effective
-  - fix org-supertag-tag-add-tag: Fixed issue where duplicate tags could be added to org-headline
+  - fix org-supertag-remove: Fixed the problem that removing tags does not take effect
+  - fix org-supertag-tag-add-tag: Fixed the problem that duplicate tags can be added to org-headline when adding tags
   - feat org-supertag-tag-edit-preset: Edit preset tags
-  - feat org-supertag-query-in-buffer: Query in current buffer
+  - feat org-supertag-query-in-buffer: Query in the current buffer
   - feat org-supertag-query-in-files: Query in specified files, can specify multiple files
 - 2024-12-19 0.0.1 release
 
 * Future Plans
 
-- ✅ Provide more query scopes, like querying against one or multiple files
-- ✅ Initially implement a command system where tags automatically trigger commands, e.g., when a node is tagged as Task, it automatically sets TODO, priority A, and changes node background to yellow
-- ✅ Implement a task scheduling system to combine multiple nodes for completing a series of tasks, e.g., automatically setting daily review at 9 PM and automatically inserting review results into review nodes (experimental feature, may not be implemented)
-- AI integration, different tags associated with different Prompts, e.g., when a node is marked as "task", automatically trigger AI commands to generate a task list
-- Like Tana, provide more views (experimental feature, may not be implemented)
+- ✅Provide a wider range of queries, such as queries for a single file or multiple files
+- ✅Preliminary implementation of a command system, let tags automatically trigger commands, such as when a node is tagged with a tag named Task, it will automatically be set to TODO, and automatically set the priority to A, and automatically change the background color of the node to yellow
+- ✅Implement a task scheduling system, let multiple nodes combine to complete a series of tasks, such as automatically set the daily review to 9 PM, and automatically insert the review results into the review node (experimental feature, may not be implemented)
+- ✅Combine with AI, different tags are associated with different Prompts, such as when a node is marked as "task", it automatically triggers an AI command to make the node generate a task list
+- ✅Like Tana, provide more views (experimental feature, may not be implemented)
 
 * Acknowledgments
 
-Thanks to Tana for inspiration, and thanks to org-mode and Emacs for their power.
+org-supertag is deeply influenced by Tana, especially its core concept of "treating nodes as the operation objects of tags", which brings a lot of inspiration.
 
-I sincerely hope you'll like this package and benefit from it.
+org-supertag is also deeply influenced by ekg and org-node:
+- [[https://github.com/ahyatt/ekg/commits/develop/][ekg]] is the first note-taking tool in my eyes that is centered on tags. I once used it to record many days of diaries
+- [[https://github.com/meedstrom/org-node][org-node]] deeply influenced the basic working mechanism of org-supertag with its parsing of org-mode files and the application of hash tables
 
-* Contributing
+* Contribution
 
-Contributions welcome! Please check our [[file:.github/CONTRIBUTING.org][contribution guidelines]].
+Contributions are welcome! Please see [[file:.github/CONTRIBUTING.org][Contribution Guide]].

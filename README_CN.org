@@ -2,242 +2,124 @@
 
 * 简介
 
-Org-supertag 是一个增强 org-mode 标签功能的包。它让标签不仅能够为节点设置属性，还能够直接操作节点，还可以根据时间自动执行某些行为，从而提供更灵活的信息管理方式。
+org-supertag 是一个增强 org-mode 标签功能的包。它让标签不仅能够为节点设置属性，还能够直接操作节点，还可以根据时间自动执行某些行为，从而提供更灵活的信息管理方式。
 
-Org-supertag 具备高度自由和灵活性，和便利性，你通过它可以定制自己的行为，以实现更加复杂的功能，基本上它的空间是无限的。
+org-supertag 为 org-mode 带来更加现代化的笔记体验，这体现在各种可视化界面与更加方便的交互上，请尝试 ~M-x org-supertag-view-tag~，~M-x org-supertag-tag-edit-fields~ 等命令。
 
-Org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存，同时提供更多可能性。
+org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存，同时提供更多可能性。
 
 * 功能
-
-** 功能概述
-
-- 增强的标签功能
-    - 为 org-headline 设置属性，可一次性添加多个 org-property，并批量填写对应的值
-    - 将常规的 org-headline 转变成可检索、可引用的 node
-    - 将一次完成多个操作的 behavior 添加到标签
-- 方便的检索功能
-    - 一次性输入多个关键词进行检索（使用 AND 逻辑）
-    - 经过美化后的搜索结果页，除了显示标题外，还可显示标题下的内容
-    - 多种搜索结果导出方式，方便组织与整理
-      - 将搜索结果导出到另外一个文件
-      - 将搜索结果导出到新建的文件（位置，文件名由你设置）
-      - 将搜索结果直接导出到现在光标所在的位置
-- 标签关系管理
-    - 基于使用模式自动发现标签之间的关系
-    - 对标签共现和互信息进行统计分析
-    - 添加或删除标签时实时增量更新关系
-    - 基于上下文相关性的智能标签推荐
-- 元数据存储系统
-    - 为标签、节点和应用级数据提供灵活的键值存储
-    - 支持存储和检索与标签和节点相关的任意元数据
-    - 跨会话持久存储并自动备份
-- 自动同步
-    - 自动同步转换为 Node 的 org-headline 的位置和变化，节约手动操作
-    - 提供了同步全部 Node 的手动命令
-- 集成自动化操作的 Behavior 系统
-    - 行为系统让标签变得"智能"，可以在添加/删除标签时自动触发预设的动作（如改变样式、设置状态等）
-    - 一个标签可以触发多个动作，比如添加 @urgent 标签可以同时完成"变红色"、"设优先级"、"加截止日期"等操作
-    - 行为可以定时执行、组合使用、带参数，让你的 org-mode 工作流程更自动化、更高效
-    - 行为系统内置了行为库，你既可以使用预定义的常用行为，也可以创建自己的自定义行为。这种模块化设计使得行为可以在不同的 org 文件之间或用户之间轻松共享、重用和扩展
-    - 可自定义的 Behavior 命令
-      + 简明的配置语法
-      + 参数化配置
-      + 可将多个 Behavior 组合在一起
-- 行内标签支持
-    - 识别和处理正文内容中的 #话题标签 风格的行内标签
-    - 将行内标签与其所在节点关联起来以便引用
-    - 使用同样强大的查询系统根据行内标签查询节点
-    - 特殊字体效果使行内标签在视觉上更加突出
-
-
-** 增强的标签系统
-让你的 org-mode 标签成为强大的元数据控制器：
-
-*** 添加标签/设置属性
-- 添加标签时一次性设置多个属性
-- 批量填写属性值
-- 对属性值进行类型验证
+** 🏷️ 为 org-mode 带来更加现代化的笔记体验
+*** 🔖 标签与属性同步设置，提升组织效率
+在为 Org 标题添加标签的同时，*一并设置多个属性*，减少重复操作，使信息组织更加高效。
 
 [[./picture/figure4.gif]]
 
-~M-x org-supertag-tag-add-tag~
-~M-x org-supertag-tag-set-field-and-value~
+~M-x org-supertag-tag-add-tag~              添加标签
+~M-x org-supertag-tag-set-field-and-value~  设置 org-properites 
 
-*** 节点系统
+*** 🧠 标题升级为可检索、可引用的节点
+将普通的 Org 标题转换为可检索、可引用的节点，*增强内容的可访问性和关联性*。
+
 - 自动创建节点，无需手动创建
 - 在节点间建立引用关系
 
 [[./picture/figure5.gif]]
 
-~M-x org-supertag-node-add-reference~
+相关命令 ~M-x org-supertag-node-add-reference~ 键绑定 ~C-c t r~。节点的引用关系将自动记录在数据库里。
 
 如果节点未能自动创建，你可以直接运行 ~M-x org-supertag-node-create~ 命令，将当前标题转换为节点。
 
-*** 行为系统
-让标签变得"智能"，可以：
-- 在添加/删除标签时触发动作
-- 将多个动作组合成工作流
-- 设置定时执行的行为
-- 自定义标签样式
+为避免一些无法同步到数据库的情形，你可以使用 ~M-x org-supertag-node-update~，将节点所有的信息更新到数据库中。
 
-[[./picture/figure6.gif]]
+*** 🪢 行内标签，增强正文内容的标签化
 
-~M-x org-supertag-behavior-attach~
-~M-x org-supertag-behavior-detach~
+[[./picture/figure11.gif]]
 
-** 强大的搜索
-高效查找和组织你的节点：
+- 可直接输入 #行内标签， 突破 org-mode 原生的局限
+- 可为行内标签自定义样式，让它与普通正文有所区分
+- 允许通过添加 '#' 后缀补全标签，和新建标签（暂时只支持 Company 作为后端）
 
-*** 多关键词搜索
-- 支持多个关键词组合搜索（AND 逻辑）
-- 美观的搜索结果界面
-- 预览标题下的内容
+相关命令 ~M-x org-supertag-inline-insert-tag~ 输入行内标签
+
+注意：行内标签的输入要符合 org-mode 的要求，仅接受「数字」、「英文」、「@」、「下划线」。不要使用 - 作为连接符。
+**** 配置行内标签的样式
+#+BEGIN_SRC emacs-lisp
+;; 是否隐藏标签前的 '#' 符号
+(setq org-supertag-inline-style-hide-prefix t)
+
+;; 标签的背景和前景颜色
+(setq org-supertag-inline-background "#e8f0ff")  ;; 浅蓝色背景
+(setq org-supertag-inline-foreground "#0066cc")  ;; 深蓝色文字
+
+;; 边框样式设置 - 选择你喜欢的一种配置：
+
+;; 1. 简单的细边框
+(setq org-supertag-inline-box '(:line-width 1 :color "#b0b0b0" :style nil))
+
+;; 2. 无边框（注释掉上面的，使用这个）
+;; (setq org-supertag-inline-box nil)
+
+;; 3. 凸起按钮效果（注释掉上面的，使用这个）
+;; (setq org-supertag-inline-box '(:line-width 1 :color "#808080" :style released-button))
+
+;; 4. 使用不同的垂直和水平线宽（注释掉上面的，使用这个）
+;; (setq org-supertag-inline-box '(:line-width (1 . 2) :color "#a0a0a0" :style nil))
+
+;; 5. 文本内部的细边框，不增加标签高度（注释掉上面的，使用这个）
+;; (setq org-supertag-inline-box '(:line-width -1 :color "#b0b0b0" :style nil))
+
+;; 字体粗细设置
+(setq org-supertag-inline-weight 'semi-bold)  ;; 可选值: 'normal, 'bold, 'semi-bold
+
+;; 应用样式更新
+(when (fboundp 'org-supertag-inline-style-update)
+  (org-supertag-inline-style-update))
+#+END_SRC
+
+
+** 🔍 强大的检索功能，快速定位所需信息
+相关命令 ~M-x org-supertag-query~
+**** 🔎 多关键词 AND 逻辑搜索
+支持一次输入多个关键词，使用 AND 逻辑进行检索，*精准定位所需内容*。
 
 [[./picture/figure8.gif]]
 
-~M-x org-supertag-query~
+**** 🖼️ 优化的检索结果展示
+搜索结果页面经过优化，方便快速浏览。
 
-*** 灵活的导出选项
-多种方式组织搜索结果：
-- 导出到已有文件
-- 创建新文件保存结果
-- 在当前位置插入
+为了提升检索速度，暂时不对内容进行检索。
+
+**** 📤 多样化的搜索结果导出方式
+- 将搜索结果导出到另一个文件
+- 将搜索结果导出到新建的文件（可自定义位置和文件名）
+- 将搜索结果直接插入到当前光标所在的位置（以引用的形式）
 
 [[./picture/figure9.gif]] 
 
-** 自动同步
-自动保持节点的组织：
-- 追踪节点位置变化
-- 自动更新引用关系
-- 提供手动同步命令
+  
+*方便用户对搜索结果进行组织与整理*。
 
-[[./picture/figure7.gif]]
+** ⚙️ 集成自动化操作的行为系统，提升工作流程智能化
 
-如果有的节点需要同步，但未能自动同步，你可以直接运行 ~M-x org-supertag-sync-force-all~ 命令，将所有节点的信息同步到数据库。
+通过将多个操作整合到一个标签中，*实现一键完成复杂操作*，提高工作效率。
 
-** 标签浏览与对比系统
-高效管理和比较标签关系：
+[[./picture/figure6.gif]]
 
-*** 标签发现界面
-- 探索标签共现关系
-- 交互式添加和移除过滤器
-- 实时显示匹配节点
+- 🚀 标签触发预设动作，实现自动化
+行为系统使标签变得“智能”，*在添加/删除标签时自动触发预设的动作*（如改变样式、设置状态等）。
 
-[[./picture/figure7.gif]]
+- 🧩 行为可定时、组合、带参数
+行为可以定时执行、组合使用、带参数，*使 Org-mode 的工作流程更自动化、更高效*。
 
-~M-x org-supertag-tag-discover~
+- 🧱 内置行为库与自定义支持
+内置行为库，用户既可以使用预定义的常用行为，也可以创建自定义行为。*模块化设计使行为在不同的 Org 文件之间或用户之间轻松共享、重用和扩展*。
 
-*** 多列标签对比视图
-- 并排比较不同标签组合下的节点
-- 动态添加和删除比较列
-- 支持向列中添加额外标签
-- 全键盘驱动的操作界面
+相关命令
+~M-x org-supertag-behavior-attach~ 为当前标签添加行为
+~M-x org-supertag-behavior-detach~ 为当前标签解除行为
 
-~M-x org-supertag-tag-columns~
-
-*** 标签关系管理
-- 可视化标签关系
-- 智能推荐相关标签
-- 简化关系编辑工作流
-
-~M-x org-supertag-relation-manage~
-
-* 基本使用
-
-** 添加标签
-
-#+begin_src
-M-x org-supertag-tag-add-tag
-#+end_src
-
-为当前标题添加标签，可同时设置属性。
-
-** 创建引用
-#+begin_src
-M-x org-supertag-node-add-reference
-#+end_src
-
-添加对其他节点的引用。
-
-** 搜索
-#+begin_src
-M-x org-supertag-query
-#+end_src
-
-使用多个关键词搜索节点。
-
-** 添加行为
-#+begin_src
-M-x org-supertag-behavior-attach
-#+end_src
-
-为标签附加自动化行为。
-
-** 使用行内标签
-#+begin_src
-M-x org-supertag-inline-insert-tag
-#+end_src
-
-在您的内容中插入哈希标签风格的行内标签。这些标签：
-- 可以在您的文本中的任何位置使用 `C-c t i` 添加
-- 会自动链接到当前节点
-- 支持现有标签的完成
-- 允许通过添加 '#' 后缀即时创建新标签
-- 以独特的样式显示，以便更好地阅读
-
-[[./picture/figure10.gif]]
-*** 自定义选项
-
-
-您可以自定义行内标签的外观和行为：
-
-#+begin_src emacs-lisp
-;; 启用或禁用标签高亮
-(setq org-supertag-inline-enable-fontification t)
-
-;; 自定义浅色主题的颜色
-(setq org-supertag-inline-light-theme-colors
-      '(:box (:line-width -1 :color "#d0d0d0")
-        :background "#f8f8f8"
-        :foreground "#2a2a2a"))
-
-;; 自定义深色主题的颜色
-(setq org-supertag-inline-dark-theme-colors
-      '(:box (:line-width -1 :color "#505050")
-        :background "#383838"
-        :foreground "#e8e8e8"))
-
-;; 自定义文本属性
-(setq org-supertag-inline-text-properties
-      '(:height 0.95
-        :weight normal
-        :spacing 0.2))
-
-;; 控制是否隐藏 # 前缀
-(setq org-supertag-inline-hide-hash t)
-
-;; 自定义匹配标签的正则表达式模式
-(setq org-supertag-inline-tag-regexp "#\\([[:alnum:]_-]+\\)")
-
-;; 指定不应高亮显示标签的上下文
-(setq org-supertag-inline-excluded-contexts
-      '(src-block comment example-block export-block))
-#+end_src
-
-* 基本安装
-
-#+begin_src emacs-lisp
-(use-package org-supertag
-  :straight (:host github :repo "yibie/org-supertag")
-  :after org
-  :config
-  (org-supertag-setup))
-#+end_src
-
-* 高级用法
-
-** 行为系统配置
+*** 行为系统的高级用法
 创建自定义行为，编辑 ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el 文件：
 
 以下是一个示例
@@ -249,27 +131,222 @@ M-x org-supertag-inline-insert-tag
 ;;   - :trigger: 触发条件，:on-add 表示添加标签时触发
 ;;   - :list: 要执行的动作列表，每个动作都是一个命令字符串
 ;;   - :style: 标签的显示样式，包含字体和前缀图标设置
-(org-supertag-behavior-register "@urgent"                 <= 注册一个名为 "@urgent" 的行为
-  :trigger :on-add                                        <= 添加标签时触发
-  :list '("@todo=TODO"                                    <= 设置 TODO 状态
-         "@priority=A"                                    <= 设置优先级为 A
-         "@deadline=today")                               <= 设置截止日期为今天
-  :style '(:face (:foreground "red" :weight bold)         <= 设置标签显示为红色加粗
-          :prefix "🔥"))                                  <= 在标签前显示火焰图标
+(org-supertag-behavior-register "@urgent"                 ;; 注册一个名为 "@urgent" 的行为
+  :trigger :on-add                                        ;; 添加标签时触发
+  :list '("@todo=TODO"                                    ;; 设置 TODO 状态
+         "@priority=A"                                    ;; 设置优先级为 A
+         "@deadline=today")                               ;; 设置截止日期为今天
+  :style '(:face (:foreground "red" :weight bold)         ;; 设置标签显示为红色加粗
+          :prefix "🔥"))                                  ;; 在标签前显示火焰图标
 #+end_src
 
 更多示例请参考 [[./DEMO.org][DEMO.org]]。
 
 更多用法请参考 [[https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide][Org‐supertag Advance Usage]]
 
+
+** 🏷️ 多种视图，提供多维度的发现与比较
+*** 🔖 标签表格视图：一览无遗，快速编辑
+- ​同时显示节点（Node）的标题和属性值，信息一目了然。​
+- 直接在表格内修改属性值，省去繁琐步骤。​
+- 支持全键盘操作，提升操作效率。​
+
+[[./picture/figure12.gif]]
+​
+相关命令 ~M-x org-supertag-view-table~
+
+*** 🧲 标签发现视图：探索标签共现，精准筛选
+- ​深入探索标签之间的共现关系，揭示潜在联系。​
+- 动态添加或移除过滤器，实时调整视图。​
+- ​实时显示匹配的节点，快速定位目标信息。​
+
+[[./picture/figure7.gif]]
+
+相关命令 ~M-x org-supertag-tag-discover~
+
+*** 🧩 多列标签对比视图：并行比较，洞察差异
+- ​同时比较不同标签组合下的节点，直观分析差异。​
+- ​动态添加或删除比较列，满足多样化需求。​
+- 支持向列中添加额外标签，深化比较维度。​
+- ​全键盘支持​
+
+[[./picture/figure15.gif]]
+
+相关命令 ~M-x org-supertag-tag-columns~
+
+** 🧩 标签关系智能管理，揭示隐藏关联
+相关命令 ~M-x org-supertag-relation-manage~
+**** ↔️支持单向、双向关系类型，节省操作步骤
+***** 预设的关系类型
+
+#+begin_src 
+(defcustom org-supertag-relation-types
+  '((contrast . "A ⋮ B, A compare with B")    ; contrast relationship
+    (relate . "A ~ B, A relate to B")          ; general relation
+    (influence . "A → B, A influence B")      ; influence relationship
+    (contain . "A ⊃ B, A contain B")           ; containment (parent)
+    (belong . "A ⊂ B, A belong to B")          ; belonging (child)
+    (parallel . "A ∥ B, A parallel with B")    ; parallel relationship
+    (dependency . "A ⇒ B, A depend on B")     ; dependency relationship
+    (prerequisite . "A ⊃ B, A prerequisite B") ; prerequisite relationship
+    (cause . "A ⤳ B, A cause B")              ; causal relationship
+    (effect . "A ⤝ B, A effect B")            ; effect relationship
+    (cooccurrence . "A ⋈ B, A co-occur with B")) ; co-occurrence relationship
+  "Predefined relation types.
+Each relation type contains a symbol and a description text."
+  :type '(alist :key-type symbol :value-type string)
+  :group 'org-supertag-relation)
+#+end_src
+
+当应用双向关系时，会自动在对应的两个标签里设置关系。比如：
+
+有这两个标签 #气候变化 和 #冰川融化，想表达它们之间的因果关系。
+
+#+begin_src 
+;; 通过关系管理界面选择
+(org-supertag-relation-manage) ;; 打开关系管理界面
+;; 选择"气候变化"标签
+;; 点击[Select]按钮选择"冰川融化"标签
+;; 在关系类型提示中选择"cause - A ⤳ B, A cause B"
+;; 系统会自动创建：
+;; 1. 气候变化 cause 冰川融化
+;; 2. 冰川融化 effect 气候变化
+#+end_src
+
+***** 关系类型自定义：
+
+#+begin_src 
+;; 自定义关系类型
+(setq org-supertag-relation-types
+      '((contrast . "A ⋮ B, A compare with B") 
+        (relate . "A ~ B, A relate to B")   
+        (influence . "A → B, A influence B") 
+        (contain . "A ⊃ B, A contain B")  
+        (belong . "A ⊂ B, A belong to B")   
+        (parallel . "A ∥ B, A parallel with B") 
+        (dependency . "A ⇒ B, A depend on B") 
+        (prerequisite . "A ⊃ B, A prerequisite B") 
+        (cause . "A ⤳ B, A cause B")    
+        (effect . "A ⤝ B, A effect B")
+        (cooccurrence . "A ⋈ B, A co-occur with B")
+        ;; 添加自定义类型
+        (is-part-of . "A ◐ B, A is part of B")
+        (leads-to . "A ⟿ B, A leads to B")))
+
+;; 自定义互补关系对
+(setq org-supertag-relation-complementary-pairs
+      '((contain . belong)
+        (cause . effect)
+        (dependency . prerequisite)
+        ;; 添加自定义互补关系
+        (is-part-of . contains-part)))
+#+end_src
+
+**** 🧬 自动记录标签间的共现关系
+当不同标签出现在同一个对象上，这些标签之间存在「共同出现」的关系，简称「共现关系」。
+
+*org-supertag 自动识别标签之间的共现关系*，帮助用户理解标签间的关系，简化标签关系的操作。
+
+它将在 Tag Discovery 面板里显示，当点击前面的 [+]，就会添加多一层过滤：
+
+[[./picture/figure13.png]]
+
+**** 📊 实时统计分析与更新
+对标签的共现和互信息进行统计分析，*在添加或删除标签时实时更新关系*，确保信息的准确性。
+
+根据上下文，*智能推荐相关标签*，提升标签管理的便捷性。
+
+[[./picture/figure14.gif]]  
+
+相关命令 ~M-x org-supertag-sim-auto-tag-node~ 
+
+** 🔄 自动同步，减少手动维护
+
+- *自动同步*转换为节点的 Org 标题的位置和变化，减少手动操作。
+- 自动同步将检查节点的增加、修改、移动、删除的情况，*自动化维护数据库*。
+- 提供同步所有节点的手动命令，*确保数据的一致性*。
+  
+[[./picture/figure7.gif]]
+
+如果有的节点需要同步，但未能自动同步，你可以直接运行 ~M-x org-supertag-sync-force-all~ 命令，将所有节点的信息同步到数据库。
+
+** 🖥️ 隐形的人工智能
+在 org-supertag 部分功能中，使用了 AI/NLP 作为后端，提供更多维度的标签表现，以及降低操作的压力。由于 AI/NLP 只是作为后端，因此用户只需要调用对应的命令即可，在日常使用中不会感受到 AI/NLP 的存在。
+
+在 org-supertag 中，将人工智能视为支持性的功能，不会作为直接的前台功能，让人陷入对话的漩涡中（同时也是为了避免重复实现，因为 Emacs 已经有大量助理类 AI 工具，比如 gptel、chatgpt-shell、Ellama、Ollama-buddy......
+
+当前使用了 AI/NLP 支持的命令：
+
+~M-x org-supertag-sim-auto-tag-node~ 该命令将分析当前的 Node 里的所有内容（标题和内容），自动提供几个标签建议。
+
+ATTENTION：AI 功能需要安装依赖，安装方法已经在「基本安装」一节里说明。
+*** 进一步解释
+org-supertag 的人工智能功能架构：
+
+- 后端是 Ollama
+- 通信框架是 epc
+- 大模型是 hf.co/unsloth/gemma-3-4b-it-GGUF:latest
+
+~org-supertag-sim-auto-tag-node~ 的标签建议，由 ~tag_generator.py~ 提供，如对标签建议效果不满意，可以直接到文件里修改 Prompt。
+
+* 基本安装
+
+#+begin_src emacs-lisp
+(use-package org-supertag
+  :straight (:host github :repo "yibie/org-supertag")
+  :after org
+  :config
+  (org-supertag-setup))
+
+(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; 配置同步文件夹
+#+end_src
+
+*org-supertag 需要一些 Python 依赖，包括 `torch`, `sentence-transformers`, `epc` 和 `ollama` 等*:
+
+- 使用自动化脚本安装依赖
+  
+#+begin_src 
+cd /path/to/org-supertag
+
+sh ./setup_venv.sh
+#+end_src
+
+* 使用建议
+** 行内标签（#tag）与普通标签（:#tag:）混用
+普通标签，适合分类。比如 :project:, :issue: 等。
+行内标签，适合直接使用语义。 比如 #org_supertag。
+
+* FAQ
+** 什么是 Node？什么是 Field？为什么要和 org-headline、org-properties 区分？
+Node 代表着被 org-supertag 转化之后的 org-headline，表明已经被 org-supertag 记录，可以被它操作。
+
+从概念上看，Node 相当于一般笔记软件里的笔记块，它包括：一个带着 ID 的 org-headline + org-headline 以下所包含的内容。
+
+当 org-supertag 操作 Node 的时候，实际上是对整个笔记块进行操作，举个例子：M-x org-supertag-node-delete，将直接删除整个 Node，清理数据库里记录的 ID、Node 与 Node 之间的引用关系，与 Tag 的 Link 关系等等，清理相关的 Field Value。
+
+Field 略等于 org-properties，和 Node 一样，它代表着被 org-supertag 所转化、所记录的 org-properites。
+
+这种概念上的区分，是为了让用户清晰的知道笔记状态，是否已经记录到数据库。
+
+** 为什么要为标签设置「共现关系」？
+当一个标签，与另外一个标签，应用到同一个 Node 上，那么它们之间就存在一种关系，叫「共现」。
+
+「共现」关系是所有标签关系中，最为基础的关系。但它有什么用？
+
+1. 当你在「标签发现视图」时，可以通过共现标签，层层过滤
+2. 当你管理「标签关系」时，可以通过「共现关系」，快速找到背后存在关系的标签
+3. ......
+
+我觉得「共同出现」是世界上最美妙的一种现象。这让我们在添加标签的时候，自动获得有意义的联系。
+
 * Changelog
+详细见 [[./CHANGELOG.org][CHANGELOG]]
 
 - 2025-01-13 2.0.0 release
   - 新增行为调度系统
   - 新增行为模板变量
   - 新增自动同步系统
   - 以及诸多改进
-  详细见 [[./CHANGELOG.org][CHANGELOG]]
 
 - 2024-12-31 1.0.0 release
   - feat behavior-system: 完整的行为系统实现，形成自动工作流
@@ -296,15 +373,17 @@ M-x org-supertag-inline-insert-tag
 - ✅能够提供更多查询的范围，比如针对一个文件或多个文件的查询
 - ✅初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
 - ✅实现一个任务调度系统，让多个节点组合起来，完成一系列的任务，比如自动设置晚上 9 点进行每日回顾，并自动将回顾结果插入到回顾节点中（实验性功能，未必会实现）
-- 与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
-- 像 Tana 那样，提供更多视图（实验性功能，未必会实现）
+- ✅与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
+- ✅像 Tana 那样，提供更多视图（实验性功能，未必会实现）
 
 * Acknowledgments
 
-感谢 Tana 的启发，感谢 org-mode 和 Emacs 的强大。
+org-supertag 深深受到 Tana 的影响，尤其是它将「节点视为标签的操作对象」的核心概念，带来很多启发。
 
-我真诚希望你能喜欢这个包，并从中受益。
+org-supertag 也同时深受 ekg 和 org-node 的影响：
+- [[https://github.com/ahyatt/ekg/commits/develop/][ekg]] 是我眼中第一个以标签为中心的笔记工具，我曾经用它记了很多天的日记
+- [[https://github.com/meedstrom/org-node][org-node]] 对 org-mode 文件的解析和哈希表的应用，深深影响了 org-supertag 的基础工作机制
 
 * 贡献
 
-欢迎贡献！请查看我们的[[file:.github/CONTRIBUTING.org][贡献指南]]。
+欢迎贡献！请查看[[file:.github/CONTRIBUTING.org][贡献指南]]。
