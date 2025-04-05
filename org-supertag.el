@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 2.2.9
+;; Version: 3.0.0
 ;; Package-Requires: ((emacs "28.1") (org "9.6"))
 ;; URL: https://github.com/yibie/org-supertag
 
@@ -35,31 +35,6 @@
 ;; - Comprehensive node operations (move, delete, reference)
 ;; - Automatic tag synchronization
 ;; - Custom tag behaviors support
-;;
-;; New in 2.0.0:
-;; - Schedule trigger and deadline management system
-;;   - Cron-style scheduling for behaviors ("minute hour day month weekday")
-;;     Examples: " 0 9 * * 1-5" (weekdays at 9:00)
-;;              "30 * * * *" (every hour at :30)
-;;   - Deadline check behaviors (@deadline-check)
-;;   - Overdue and upcoming deadline handling
-;; - Enhanced node movement with link preservation
-;; - Improved tag change functionality
-;; - Automatic file synchronization system
-;;   - Real-time buffer state tracking
-;;   - Conflict detection and resolution
-;;   - Robust error recovery
-;; - Optimized query results using ewoc
-;; - Async face refresh for better performance
-;;
-;; Latest Updates:
-;; - Smart tag completion with TAB support
-;; - Enhanced node management commands
-;; - Query history with customizable size
-;; - Improved reference tracking system
-;;
-;; For detailed usage and examples, see the README.org file in the project
-;; repository.
 
 ;;; Code:
 

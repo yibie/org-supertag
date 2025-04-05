@@ -1,6 +1,6 @@
 """
-标签生成器模块
-负责从文本内容生成标签建议
+Tag Generator Module
+Responsible for generating tag suggestions from text content
 """
 
 import re
@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 import traceback
 
-# 全局单例实例
+# Global singleton instance
 _generator_instance = None
 
 def suggest_tags(text: str, limit: int = 5) -> List[str]:
@@ -25,7 +25,6 @@ def suggest_tags(text: str, limit: int = 5) -> List[str]:
     
     if _generator_instance is None:
         _generator_instance = TagGenerator(None)
-    
     
     return _generator_instance.suggest_tags(text)  # Don't pass limit parameter
 
@@ -44,7 +43,7 @@ class TagGenerator:
     def suggest_tags(self, text: str, limit: int = 5) -> List[str]:
         """Generate tag suggestions"""
         try:
-            self.logger.debug(f"开始生成标签建议，文本长度: {len(text)}")
+            self.logger.debug(f"Starting tag generation, text length: {len(text)}")
             
             if not text or len(text.strip()) == 0:
                 self.logger.warning("The input text is empty or only contains whitespace")
@@ -55,7 +54,7 @@ class TagGenerator:
                     text_bytes = text.encode('utf-8')
                     text = text_bytes.decode('utf-8')
             except UnicodeError as e:
-                self.logger.warning(f"文本编码有问题: {e}")
+                self.logger.warning(f"Text encoding issue: {e}")
                 try:
                     if isinstance(text, str):
                         text = text.encode('utf-8', errors='replace').decode('utf-8')
@@ -86,7 +85,7 @@ TEXT END
 Return ONLY a comma-separated list of tags, with no explanations or other text.
 Example format: tag1, tag2, tag3, tag4, tag5"""
 
-            # 添加system变量的定义
+            # Add system variable definition
             system = """You are a tag generation expert. Your task is to generate relevant tags for the given text.
 Guidelines:
 1. Each tag should be concise and accurate
@@ -94,59 +93,59 @@ Guidelines:
 3. Return ONLY a comma-separated list of tags
 4. Do not include any explanations or other text in your response"""
 
-            # 尝试直接调用 Ollama
-            self.logger.debug("准备调用 Ollama API...")
+            # Try to call Ollama directly
+            self.logger.debug("Preparing to call Ollama API...")
             
-            # 检查 Ollama 状态并添加额外的测试
+            # Check Ollama status and add additional tests
             try:
-                # 直接使用 ollama 命令行测试
+                # Test using ollama command line directly
                 import subprocess
                 result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-                self.logger.debug(f"Ollama 命令行测试: {result.stdout.strip()}")
+                self.logger.debug(f"Ollama command line test: {result.stdout.strip()}")
                 
-                # 检查 API 可用性
+                # Check API availability
                 import requests
                 test_response = requests.get("http://127.0.0.1:11434/api/tags")
-                self.logger.debug(f"Ollama API 测试: {test_response.status_code}")
+                self.logger.debug(f"Ollama API test: {test_response.status_code}")
                 
-                # 检查对象状态
+                # Check object status
                 if hasattr(self.ollama, 'status'):
                     status = self.ollama.status()
-                    self.logger.debug(f"Ollama 状态: {status}")
+                    self.logger.debug(f"Ollama status: {status}")
             except Exception as e:
-                self.logger.error(f"检查 Ollama 状态失败: {e}")
+                self.logger.error(f"Failed to check Ollama status: {e}")
             
-            # 调用 Ollama
+            # Call Ollama
             try:
-                self.logger.debug("调用 Ollama 生成标签")
+                self.logger.debug("Calling Ollama to generate tags")
                 
-                # 记录请求详情
-                self.logger.debug(f"系统提示: {system}")
-                # 避免记录过长的提示，只记录前200个字符和最后100个字符
+                # Log request details
+                self.logger.debug(f"System prompt: {system}")
+                # Avoid logging long prompts, only log first 200 and last 100 characters
                 if len(prompt) > 300:
-                    self.logger.debug(f"用户提示(截断): {prompt[:200]}...{prompt[-100:]}")
+                    self.logger.debug(f"User prompt (truncated): {prompt[:200]}...{prompt[-100:]}")
                 else:
-                    self.logger.debug(f"用户提示: {prompt}")
-                self.logger.info(f"用户提示长度: {len(prompt)} 字符")
+                    self.logger.debug(f"User prompt: {prompt}")
+                self.logger.info(f"User prompt length: {len(prompt)} characters")
                 
-                # 确认文本是否实际包含在提示中
+                # Verify if text is actually included in prompt
                 text_in_prompt = "TEXT START" in prompt and "TEXT END" in prompt
-                self.logger.debug(f"文本已正确包含在提示中: {text_in_prompt}")
+                self.logger.debug(f"Text correctly included in prompt: {text_in_prompt}")
                 
-                # 调用Ollama并记录详细信息
-                self.logger.debug(f"开始调用Ollama.run()，提示长度: {len(prompt)}")
+                # Call Ollama and log details
+                self.logger.debug(f"Starting Ollama.run(), prompt length: {len(prompt)}")
                 response = self.ollama.run(prompt, system=system)
-                self.logger.debug(f"Ollama.run()完成，响应长度: {len(response) if response else 0}")
+                self.logger.debug(f"Ollama.run() completed, response length: {len(response) if response else 0}")
                 
-                # 记录原始响应
-                raw_response = response if response else "无响应"
+                # Log raw response
+                raw_response = response if response else "No response"
                 if len(raw_response) > 200:
-                    self.logger.debug(f"Ollama原始响应(截断): {raw_response[:200]}...")
+                    self.logger.debug(f"Ollama raw response (truncated): {raw_response[:200]}...")
                 else:
-                    self.logger.debug(f"Ollama原始响应: '{raw_response}'")
-                self.logger.info(f"收到Ollama响应，长度: {len(raw_response)}")
+                    self.logger.debug(f"Ollama raw response: '{raw_response}'")
+                self.logger.info(f"Received Ollama response, length: {len(raw_response)}")
                 
-                # 识别并处理特殊响应情况
+                # Identify and handle special response cases
                 lower_response = raw_response.lower() if raw_response else ""
                 special_phrases = [
                     "please provide", "i need", "please give", 
@@ -156,117 +155,116 @@ Guidelines:
                 
                 is_error_response = any(phrase in lower_response for phrase in special_phrases)
                 if is_error_response:
-                    self.logger.warning(f"Ollama 返回了错误响应: '{raw_response}'")
+                    self.logger.warning(f"Ollama returned error response: '{raw_response}'")
                     
-                    # 尝试再次请求，提供更明确的说明
-                    self.logger.info("尝试使用备用提示再次请求...")
+                    # Try again with clearer instructions
+                    self.logger.info("Attempting with backup prompt...")
                     
-                    # 备用提示更加简单直接
+                    # Backup prompt is simpler and more direct
                     backup_prompt = f"Generate 5 tags for this text: {cleaned_text[:1000]}"
-                    self.logger.debug(f"备用提示: {backup_prompt[:200]}...")
+                    self.logger.debug(f"Backup prompt: {backup_prompt[:200]}...")
                     
                     try:
                         backup_response = self.ollama.run(backup_prompt, system=system)
                         if backup_response and not any(phrase in backup_response.lower() for phrase in special_phrases):
-                            self.logger.info(f"备用请求成功: '{backup_response}'")
+                            self.logger.info(f"Backup request successful: '{backup_response}'")
                             response = backup_response
                         else:
-                            self.logger.warning("备用请求也失败了")
+                            self.logger.warning("Backup request also failed")
                             return []
                     except Exception as e:
-                        self.logger.error(f"备用请求失败: {e}")
+                        self.logger.error(f"Backup request failed: {e}")
                         return []
                     
-                # 如果仍然没有有效响应，返回空列表
+                # If still no valid response, return empty list
                 if not response:
-                    self.logger.warning("Ollama 返回空响应")
+                    self.logger.warning("Ollama returned empty response")
                     return []
                 
-                # 增强的标签提取逻辑
-                # 首先尝试直接按逗号分割
+                # Enhanced tag extraction logic
+                # First try direct comma separation
                 raw_tags = [tag.strip() for tag in response.split(',')]
                 
-                # 如果只有一个元素，可能是响应格式不正确
+                # If only one element, response format might be incorrect
                 if len(raw_tags) <= 1:
-                    self.logger.warning("响应格式可能不正确，尝试其他分割方式")
+                    self.logger.warning("Response format may be incorrect, trying alternative splitting methods")
                     
-                    # 首先尝试按换行符分割
+                    # First try splitting by newlines
                     line_tags = []
                     for line in response.split('\n'):
                         line = line.strip()
-                        # 跳过空行和明显的非标签行
+                        # Skip empty lines and obvious non-tag lines
                         if not line or len(line) > 100:
                             continue
-                        # 检查是否是列表项（以数字或连字符开头）
+                        # Check if it's a list item (starts with number or hyphen)
                         if line.startswith(('-', '*', '1.', '2.', '3.', '4.', '5.')):
-                            # 移除列表标记
+                            # Remove list markers
                             line = line.lstrip('-*0123456789. ')
-                        # 如果行里有逗号，可能是多个标签
+                        # If line has commas, might be multiple tags
                         if ',' in line:
                             line_tags.extend([t.strip() for t in line.split(',')])
                         else:
                             line_tags.append(line)
                     
                     if line_tags:
-                        self.logger.debug(f"使用换行分割提取到 {len(line_tags)} 个标签")
+                        self.logger.debug(f"Extracted {len(line_tags)} tags using newline splitting")
                         raw_tags = line_tags
                     else:
-                        # 如果换行分割也失败了，尝试更激进的分割方法
-                        # 寻找可能的标签模式，如带引号的内容或冒号后的内容
-                        # 寻找引号中的内容或冒号后的内容作为可能的标签
+                        # If newline splitting also failed, try more aggressive splitting
+                        # Look for possible tag patterns like quoted content or content after colons
                         potential_tags = re.findall(r'"([^"]+)"|\'([^\']+)\'|:\s*([^,\n]+)', response)
                         
                         extracted_tags = []
                         for tag_tuple in potential_tags:
-                            # findall 会返回元组，取非空值
+                            # findall returns tuples, get non-empty value
                             tag = next((t for t in tag_tuple if t), None)
                             if tag:
                                 extracted_tags.append(tag.strip())
                         
                         if extracted_tags:
-                            self.logger.debug(f"使用正则表达式提取到 {len(extracted_tags)} 个标签")
+                            self.logger.debug(f"Extracted {len(extracted_tags)} tags using regex")
                             raw_tags = extracted_tags
-                        elif raw_tags[0]:  # 如果只有一个元素且不为空
-                            # 使用原始单一元素作为唯一标签
-                            self.logger.debug(f"使用原始响应作为单一标签: {raw_tags[0]}")
+                        elif raw_tags[0]:  # If there's only one non-empty element
+                            # Use the original single element as the only tag
+                            self.logger.debug(f"Using original response as single tag: {raw_tags[0]}")
                         else:
-                            self.logger.warning("无法从响应中提取标签")
+                            self.logger.warning("Unable to extract tags from response")
                             return []
                 
-                self.logger.debug(f"原始标签列表 ({len(raw_tags)}): {raw_tags}")
+                self.logger.debug(f"Raw tag list ({len(raw_tags)}): {raw_tags}")
                 
-                # 清理和筛选标签
+                # Clean and filter tags
                 valid_tags = []
                 for tag in raw_tags:
-                    # 跳过明显无效的标签
+                    # Skip obviously invalid tags
                     if not tag or len(tag) > 50:
-                        self.logger.debug(f"跳过无效标签: '{tag}'")
+                        self.logger.debug(f"Skipping invalid tag: '{tag}'")
                         continue
                         
-                    # 标准化标签 (小写，移除多余空格和标点)
+                    # Normalize tag (lowercase, remove extra spaces and punctuation)
                     clean_tag = tag.strip().lower()
-                    # 移除引号和括号等可能的标记
+                    # Remove quotes and brackets
                     clean_tag = re.sub(r'[\'"`\(\)\[\]\{\}]', '', clean_tag)
-                    # 移除开头的数字和点
+                    # Remove leading numbers and dots
                     clean_tag = re.sub(r'^[\d\.\-\s]+', '', clean_tag)
-                    # 移除反斜杠字符
+                    # Remove backslash characters
                     clean_tag = clean_tag.replace('\\', '')
-                    # 将内部空格替换为下划线
+                    # Replace internal spaces with underscores
                     clean_tag = re.sub(r'\s+', '_', clean_tag)
-                    # 不再截断标签长度
+                    # No longer truncate tag length
                     
                     if clean_tag and clean_tag not in valid_tags:
                         valid_tags.append(clean_tag)
                     else:
-                        self.logger.debug(f"忽略重复或空标签: '{tag}'")
+                        self.logger.debug(f"Ignoring duplicate or empty tag: '{tag}'")
                 
-                # 确保我们有标签
+                # Ensure we have tags
                 if not valid_tags:
-                    self.logger.warning("没有提取到有效标签")
-                    # 如果无法提取标签，尝试使用第一行作为标签
+                    self.logger.warning("No valid tags extracted")
+                    # If unable to extract tags, try using first line as tag
                     first_line = response.split('\n')[0].strip()
                     if first_line and len(first_line) <= 50:
-                        self.logger.info(f"使用响应第一行作为标签: '{first_line}'")
+                        self.logger.info(f"Using first line of response as tag: '{first_line}'")
                         valid_tags = [first_line.lower()]
                     else:
                         return []
@@ -274,15 +272,15 @@ Guidelines:
                 if limit and valid_tags:
                     valid_tags = valid_tags[:limit]
                     
-                self.logger.info(f"最终生成的有效标签({len(valid_tags)}): {valid_tags}")
+                self.logger.info(f"Final valid tags ({len(valid_tags)}): {valid_tags}")
                 return valid_tags
                 
             except Exception as e:
-                self.logger.error(f"Ollama 调用失败: {e}")
+                self.logger.error(f"Ollama call failed: {e}")
                 self.logger.error(traceback.format_exc())
                 return []
                 
         except Exception as e:
-            self.logger.error(f"标签生成过程出错: {e}")
+            self.logger.error(f"Tag generation process failed: {e}")
             self.logger.error(traceback.format_exc())
-            return []  # 返回空列表而不是抛出异常 
+            return []  # Return empty list instead of raising exception

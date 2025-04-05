@@ -1,4 +1,4 @@
-# Org-SuperTag SimTag 安装指南
+# Org-SuperTag SimTag 
 
 本文档提供了安装和配置 Org-SuperTag SimTag 组件的详细步骤。
 

@@ -1,6 +1,6 @@
 """
-SimTag 主包
-提供标签向量相似度搜索、实体提取和标签生成功能
+SimTag Main Package
+Provides tag vector similarity search, entity extraction, and tag generation functionality
 """
 
 from .config import Config

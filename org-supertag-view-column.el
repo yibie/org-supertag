@@ -537,7 +537,7 @@ If database is empty, offers to update it."
     (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
     (define-key map (kbd "d") 'org-supertag-view-remove-column)
     (define-key map (kbd "R") 'org-supertag-view-reset-columns)
-    (define-key map (kbd "v") 'org-supertag-view-view-node-at-point)
+    (define-key map (kbd "v") 'org-supertag-view-node-at-point)
     (define-key map (kbd "m") 'org-supertag-view-manage-relations)
     (define-key map (kbd "S") 'org-supertag-view-save-current-columns)
     (define-key map (kbd "L") 'org-supertag-view-load-saved-columns)

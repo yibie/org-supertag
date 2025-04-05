@@ -109,11 +109,6 @@ The :style can be:
           (const :tag "Semi-bold" semi-bold))
   :group 'org-supertag-inline-style)
 
-(defcustom org-supertag-inline-border-radius 3
-  "Border radius for inline tags (only works in GUI Emacs with CSS support)."
-  :type 'integer
-  :group 'org-supertag-inline-style)
-
 ;; Define the face for inline tags
 (defface org-supertag-inline-face
   `((t (:background ,org-supertag-inline-background
@@ -233,15 +228,15 @@ TAG-NAME is the name of the tag to insert."
                (substring input 4)
              input))))
   
-  ;; 保存原始位置，便于后续分析上下文
+  ;; Save original position for context analysis
   (let* ((original-pos (point-marker))
-         ;; 基本参数处理
+         ;; Basic parameter processing
          (direct-create (string-suffix-p "#" tag-name))
          (tag-name-clean (if direct-create
                            (substring tag-name 0 -1)
                          tag-name))
          (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
-         ;; 对上下文的分析，检查是否在drawer内等
+         ;; Analyze context, check if in drawer, etc.
          (context (org-element-context))
          (context-type (org-element-type context))
          (in-drawer (or (eq context-type 'drawer)
@@ -249,67 +244,67 @@ TAG-NAME is the name of the tag to insert."
                         (eq context-type 'node-property)
                         (and (eq context-type 'keyword)
                              (string= (org-element-property :key context) "END"))))
-         ;; ID 查找逻辑 - 优先使用强制 ID，其次查找现有 ID
+         ;; ID lookup logic - prioritize forced ID, then existing ID
          (force-id (and (boundp 'org-supertag-force-node-id)
                       org-supertag-force-node-id))
-         ;; 可靠地获取节点 ID - 先尝试直接获取，如果失败则尝试定位到标题
+         ;; Reliably get node ID - try direct get first, then locate heading if failed
          (existing-id (or force-id
                          (org-entry-get nil "ID")
                          (save-excursion
-                           (ignore-errors 
+                           (ignore-errors
                              (org-back-to-heading t)
                              (org-entry-get nil "ID")))))
-         ;; 如果没有现有 ID 且在标题上，则创建新 ID
+         ;; If no existing ID and on heading, create new ID
          (node-id (or existing-id
                      (save-excursion
                        (when (ignore-errors (org-back-to-heading t))
                          (org-supertag-node-create))))))
-      
-    ;; 调试信息
-    (message "inline-insert-tag: ID=%s force=%s drawer=%s ctx=%s pos=%d" 
+
+    ;; Debugging message
+    (message "inline-insert-tag: ID=%s force=%s drawer=%s ctx=%s pos=%d"
              node-id force-id in-drawer context-type (marker-position original-pos))
-    
-    ;; 处理标签创建
+
+    ;; Handle tag creation
     (let ((tag-id
            (cond
-            ;; 如果标签存在，直接使用
+            ;; If tag exists, use it directly
             ((org-supertag-tag-exists-p sanitized-name)
              sanitized-name)
-            ;; 否则创建新标签
+            ;; Otherwise create a new tag
             (t
              (if (or direct-create
                      (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
                  (org-supertag-tag-create sanitized-name)
                (user-error "Tag creation cancelled"))))))
-      
-      ;; 删除选区（如果有）
+
+      ;; Delete region if any
       (when (use-region-p)
         (delete-region (region-beginning) (region-end)))
-      
-      ;; 处理光标位置 - 如果在 drawer 中，移到 drawer 后面
+
+      ;; Handle cursor position - if in drawer, move after drawer
       (when in-drawer
         (let ((end-pos (org-element-property :end context)))
           (when end-pos
             (goto-char end-pos))))
-      
-      ;; 插入标签文本
+
+      ;; Insert tag text
       (unless (or (bobp) (eq (char-before) ? ))
         (insert " "))
       (insert (concat "#" tag-id))
       (unless (or (eobp) (eq (char-after) ? ))
         (insert " "))
-      
-      ;; 应用标签关系
+
+      ;; Apply tag relationship
       (when node-id
         (let ((org-supertag-tag-apply-skip-headline t)
               (org-supertag-force-node-id node-id))
           (org-supertag-tag-apply tag-id)))
-      
-      ;; 清理
+
+      ;; Cleanup
       (set-marker original-pos nil)
-      
-      ;; 返回消息
-      (message "Inserted inline tag #%s%s" 
+
+      ;; Return message
+      (message "Inserted inline tag #%s%s"
               tag-id
               (if node-id
                   (format " and linked to node %s" node-id)

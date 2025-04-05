@@ -1,6 +1,6 @@
 """
-SimTag 序列化工具模块
-提供数据的序列化和反序列化功能
+SimTag Serialization Utility Module
+Provides data serialization and deserialization functionality
 """
 
 import json
@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Union
 from datetime import datetime
 
 def to_serializable(obj: Any) -> Any:
-    """将对象转换为可序列化的格式
+    """Converts an object to a serializable format
     
     Args:
-        obj: 需要序列化的对象
+        obj: The object to be serialized
         
     Returns:
-        可序列化的对象
+        The serialized object
     """
     if isinstance(obj, dict):
         return {k: to_serializable(v) for k, v in obj.items()}
@@ -34,48 +34,48 @@ def to_serializable(obj: Any) -> Any:
     return obj
 
 def serialize_to_json(obj: Any) -> str:
-    """将对象序列化为JSON字符串
+    """Serializes an object to a JSON string
     
     Args:
-        obj: 需要序列化的对象
+        obj: The object to be serialized
         
     Returns:
-        JSON字符串
+        The JSON string
     """
     return json.dumps(to_serializable(obj), ensure_ascii=False, indent=2)
 
 def save_to_json_file(obj: Any, file_path: str) -> None:
-    """将对象保存为JSON文件
+    """Saves an object to a JSON file
     
     Args:
-        obj: 需要序列化的对象
-        file_path: JSON文件路径
+        obj: The object to be serialized
+        file_path: The path of the JSON file
     """
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(to_serializable(obj), f, ensure_ascii=False, indent=2)
 
 def load_from_json_file(file_path: str) -> Any:
-    """从JSON文件加载对象
+    """Loads an object from a JSON file
     
     Args:
-        file_path: JSON文件路径
+        file_path: The path of the JSON file
         
     Returns:
-        加载的对象
+        The loaded object
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def normalize_response(data: Any, status: str = "success", message: str = None) -> Dict[str, Any]:
-    """生成标准化的响应格式
+    """Generates a standardized response format
     
     Args:
-        data: 响应数据
-        status: 响应状态，"success"或"error"
-        message: 状态消息，通常用于错误说明
+        data: The response data
+        status: The response status, "success" or "error"
+        message: The status message, usually used for error explanation
         
     Returns:
-        标准化的响应字典
+        The standardized response dictionary
     """
     response = {
         "status": status,

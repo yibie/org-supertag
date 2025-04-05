@@ -1,6 +1,6 @@
 """
-SimTag 标签向量处理模块
-提供标签向量的生成、存储和相似性查询功能
+SimTag tag vector processing module
+Provides functions for generating, storing, and querying tag vectors
 """
 
 import os
@@ -16,17 +16,17 @@ from sentence_transformers import SentenceTransformer
 import torch
 
 class TagVectorEngine:
-    """标签向量引擎类"""
+    """Tag vector engine class"""
     
     def __init__(self, vector_file: str = None):
-        """初始化标签向量引擎
+        """Initializes the tag vector engine
         
         Args:
-            vector_file: 向量文件路径
+            vector_file: Path to the vector file
         """
         self.logger = logging.getLogger("simtag.tag_vectors")
         self.vector_file = vector_file
-        self.tag_vectors = {}  # 标签向量字典
+        self.tag_vectors = {}  # Tag vector dictionary
         self.is_initialized = False
         self.model_name = 'sentence-transformers/paraphrase-MiniLM-L6-v2'
         self._model = None
@@ -36,23 +36,23 @@ class TagVectorEngine:
             
     @property
     def model(self):
-        """延迟加载模型"""
+        """Lazily loads the model"""
         if self._model is None:
-            self.logger.info(f"加载模型: {self.model_name}")
+            self.logger.info(f"loading model: {self.model_name}")
             self._model = SentenceTransformer(
                 self.model_name,
                 cache_folder=os.path.join(os.path.dirname(__file__), 'models')
             )
-            # 设置设备
+            # Set device
             device = self._get_device()
             if device.type != 'cpu':
                 self._model = self._model.to(device)
-                self.logger.info(f"启用 {device.type.upper()} 加速")
+                self.logger.info(f"enabled {device.type.upper()} acceleration")
                 
         return self._model
         
     def _get_device(self):
-        """获取最佳可用设备"""
+        """Gets the best available device"""
         if torch.cuda.is_available():
             return torch.device('cuda')
         elif torch.backends.mps.is_available():
@@ -60,10 +60,10 @@ class TagVectorEngine:
         return torch.device('cpu')
         
     def status(self) -> Dict[str, Any]:
-        """获取引擎状态
+        """Gets the engine status
         
         Returns:
-            状态信息字典
+            Status information dictionary
         """
         return {
             "initialized": self.is_initialized,
@@ -74,28 +74,28 @@ class TagVectorEngine:
         }
             
     def load_vectors(self, vector_file: str) -> bool:
-        """加载标签向量
+        """Loads tag vectors
         
         Args:
-            vector_file: 向量文件路径
+            vector_file: Path to the vector file
             
         Returns:
-            是否成功加载
+            True if loaded successfully, False otherwise
         """
         try:
             if not os.path.exists(vector_file):
-                self.logger.error(f"向量文件不存在: {vector_file}")
+                self.logger.error(f"vector file not found: {vector_file}")
                 return False
                 
-            self.logger.info(f"加载向量文件: {vector_file}")
+            self.logger.info(f"loading vector file: {vector_file}")
             with open(vector_file, 'r') as f:
                 data = json.load(f)
                 
             if not isinstance(data, dict) or 'tags' not in data:
-                self.logger.error(f"无效的向量文件格式")
+                self.logger.error(f"invalid vector file format")
                 return False
                 
-            # 更新向量
+            # Update vectors
             self.tag_vectors = {
                 tag_id: np.array(info['vector']) 
                 for tag_id, info in data['tags'].items()
@@ -103,160 +103,160 @@ class TagVectorEngine:
             
             self.vector_file = vector_file
             self.is_initialized = True
-            self.logger.info(f"成功加载 {len(self.tag_vectors)} 个标签向量")
+            self.logger.info(f"successfully loaded {len(self.tag_vectors)} tag vectors")
             return True
             
         except Exception as e:
-            self.logger.error(f"加载向量文件出错: {e}")
+            self.logger.error(f"error loading vector file: {e}")
             self.logger.error(traceback.format_exc())
             return False
             
     def find_similar(self, tag_name: str, top_k: int = 5) -> List[Tuple[str, float]]:
-        """查找与给定标签相似的标签
+        """Finds tags similar to the given tag
         
         Args:
-            tag_name: 标签名称
-            top_k: 返回的结果数量
+            tag_name: Tag name
+            top_k: Number of results to return
             
         Returns:
-            相似标签列表，每个元素是 (tag_name, similarity_score)
+            List of similar tags, each element is (tag_name, similarity_score)
         """
-        self.logger.info(f"查找相似标签: tag={tag_name}, top_k={top_k}")
+        self.logger.info(f"finding similar tags: tag={tag_name}, top_k={top_k}")
         
-        # 检查向量文件
+        # Check vector file
         if not self.is_initialized:
             if not self.vector_file or not os.path.exists(self.vector_file):
-                self.logger.error("向量文件未指定或不存在")
+                self.logger.error("vector file not specified or not found")
                 return []
             if not self.load_vectors(self.vector_file):
-                self.logger.error("无法加载向量文件")
+                self.logger.error("unable to load vector file")
                 return []
         
-        # 检查标签向量字典
+        # Check tag vector dictionary
         if not self.tag_vectors:
-            self.logger.error("没有可用的标签向量")
+            self.logger.error("no available tag vectors")
             return []
             
-        # 获取目标标签向量
+        # Get target tag vector
         if tag_name not in self.tag_vectors:
             try:
-                self.logger.info(f"标签 '{tag_name}' 不在向量库中，生成向量...")
+                self.logger.info(f"tag '{tag_name}' not in vector library, generating vector...")
                 target_vector = self.model.encode(tag_name)
-                self.logger.info(f"向量生成成功，维度: {target_vector.shape}")
+                self.logger.info(f"vector generated successfully, dimension: {target_vector.shape}")
             except Exception as e:
-                self.logger.error(f"生成向量出错: {e}")
+                self.logger.error(f"error generating vector: {e}")
                 return []
         else:
             target_vector = self.tag_vectors[tag_name]
-            self.logger.info(f"标签 '{tag_name}' 向量已存在")
+            self.logger.info(f"tag '{tag_name}' vector already exists")
             
-        # 计算相似度
+        # Calculate similarity
         start_time = time.time()
         similarities = []
-        self.logger.info(f"开始计算与 {len(self.tag_vectors)} 个标签的相似度...")
+        self.logger.info(f"calculating similarity with {len(self.tag_vectors)} tags...")
         
         for other_tag, other_vector in self.tag_vectors.items():
             if other_tag != tag_name:
                 try:
-                    # 计算余弦相似度
+                    # Calculate cosine similarity
                     sim = self._compute_similarity(target_vector, other_vector)
                     similarities.append((other_tag, sim))
                 except Exception as e:
-                    self.logger.error(f"计算与标签 '{other_tag}' 的相似度出错: {e}")
+                    self.logger.error(f"error calculating similarity with tag '{other_tag}': {e}")
                     continue
         
-        # 按相似度排序
+        # Sort by similarity
         similarities.sort(key=lambda x: x[1], reverse=True)
         
-        # 返回前 top_k 个结果
+        # Return top_k results
         results = similarities[:top_k]
         
         elapsed = time.time() - start_time
-        self.logger.info(f"相似度计算完成，耗时: {elapsed:.2f}秒，找到 {len(results)} 个相似标签")
+        self.logger.info(f"similarity calculation completed, time: {elapsed:.2f} seconds, found {len(results)} similar tags")
         
         return results
         
     def _compute_similarity(self, vec1, vec2) -> float:
-        """计算两个向量之间的相似度
+        """Computes the similarity between two vectors
         
         Args:
-            vec1: 第一个向量
-            vec2: 第二个向量
+            vec1: The first vector
+            vec2: The second vector
             
         Returns:
-            相似度分数
+            Similarity score
         """
         try:
-            # 确保向量是numpy数组
+            # Ensure vectors are numpy arrays
             if not isinstance(vec1, np.ndarray):
                 vec1 = np.array(vec1)
             if not isinstance(vec2, np.ndarray):
                 vec2 = np.array(vec2)
             
-            # 确保向量是2D
+            # Ensure vectors are 2D
             if len(vec1.shape) == 1:
                 vec1 = vec1.reshape(1, -1)
             if len(vec2.shape) == 1:
                 vec2 = vec2.reshape(1, -1)
             
-            # 计算余弦相似度
+            # Calculate cosine similarity
             sim = np.dot(vec1, vec2.T) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-            return float(sim[0][0])  # 确保返回Python原生浮点数
+            return float(sim[0][0])  # Ensure to return Python native float
         except Exception as e:
-            self.logger.error(f"计算相似度出错: {e}")
+            self.logger.error(f"error calculating similarity: {e}")
             self.logger.error(traceback.format_exc())
             raise
             
     def test_engine(self, test_text: str) -> np.ndarray:
-        """测试引擎是否正常工作
+        """Tests if the engine is working correctly
         
         Args:
-            test_text: 测试文本
+            test_text: Test text
             
         Returns:
-            生成的向量
+            Generated vector
             
         Raises:
-            Exception: 如果引擎不能正常工作
+            Exception: If the engine is not working correctly
         """
-        self.logger.info("测试引擎功能...")
+        self.logger.info("testing engine functionality...")
         
-        # 确保模型已加载
+        # Ensure the model is loaded
         if not self.model:
-            raise RuntimeError("文本相似度模型未加载")
+            raise RuntimeError("text similarity model not loaded")
             
         try:
-            # 生成向量
+            # Generate vector
             vector = self.model.encode(test_text)
             
-            # 验证向量
+            # Verify vector
             if not isinstance(vector, np.ndarray):
-                raise TypeError(f"向量类型错误: {type(vector)}")
+                raise TypeError(f"vector type error: {type(vector)}")
                 
-            if vector.shape[0] != 384:  # MiniLM-L6 维度
-                raise ValueError(f"向量维度错误: {vector.shape}")
+            if vector.shape[0] != 384:  # MiniLM-L6 dimension
+                raise ValueError(f"vector dimension error: {vector.shape}")
                 
-            self.logger.info("引擎测试成功")
-            return vector.tolist()  # 转换为列表以便序列化
+            self.logger.info("engine test successful")
+            return vector.tolist()  # Convert to list for serialization
             
         except Exception as e:
-            self.logger.error(f"引擎测试失败: {e}")
+            self.logger.error(f"engine test failed: {e}")
             self.logger.error(traceback.format_exc())
             raise
 
     def initialize(self, db_file: str, vector_file: str, tag_data: List[Dict] = None) -> Dict[str, Any]:
-        """初始化标签库
+        """Initializes the tag library
         
         Args:
-            db_file: 数据库文件路径
-            vector_file: 向量文件输出路径
-            tag_data: 标签数据列表
+            db_file: Path to the database file
+            vector_file: Output path for the vector file
+            tag_data: List of tag data
             
         Returns:
-            初始化结果信息
+            Initialization result information
         """
         try:
-            # 确保参数类型正确
+            # Ensure parameter types are correct
             if not isinstance(db_file, str):
                 self.logger.error(f"db_file 参数类型错误: {type(db_file)}")
                 return {
@@ -269,26 +269,26 @@ class TagVectorEngine:
                 self.logger.error(f"vector_file 参数类型错误: {type(vector_file)}")
                 return {
                     "status": "error",
-                    "message": f"向量文件路径必须是字符串，而不是 {type(vector_file)}",
+                    "message": f"vector file path must be a string, not {type(vector_file)}",
                     "result": None
                 }
             
-            # 记录初始化参数
-            self.logger.info(f"初始化标签库:")
-            self.logger.info(f"- 数据库文件: {db_file}")
-            self.logger.info(f"- 向量文件: {vector_file}")
-            self.logger.info(f"- 标签数据: {len(tag_data) if tag_data else '无'}")
+            # Log initialization parameters
+            self.logger.info(f"initializing tag library:")
+            self.logger.info(f"- database file: {db_file}")
+            self.logger.info(f"- vector file: {vector_file}")
+            self.logger.info(f"- tag data: {len(tag_data) if tag_data else 'none'}")
             
             self.vector_file = vector_file
             
-            # 首先测试引擎
+            # Test the engine first
             try:
                 test_vector = self.test_engine("test sentence for initialization")
-                self.logger.info("引擎功能测试通过")
+                self.logger.info("engine test successful")
             except Exception as e:
                 return {
                     "status": "error",
-                    "message": f"引擎功能测试失败: {e}",
+                    "message": f"engine test failed: {e}",
                     "result": {
                         "vector_file": vector_file,
                         "db_file": db_file,
@@ -296,11 +296,11 @@ class TagVectorEngine:
                     }
                 }
 
-            # 首先确保模型加载成功
+            # First ensure the model is loaded successfully
             if not self.model:
                 return {
                     "status": "error",
-                    "message": "无法加载文本相似度模型",
+                    "message": "unable to load text similarity model",
                     "result": {
                         "vector_file": vector_file,
                         "db_file": db_file,
@@ -308,17 +308,17 @@ class TagVectorEngine:
                     }
                 }
             
-            # 测试模型是否能正常工作
+            # Test if the model can work normally
             try:
                 test_text = "test sentence for model verification"
                 test_vector = self.model.encode(test_text)
-                if not isinstance(test_vector, np.ndarray) or test_vector.shape[0] != 384:  # MiniLM-L6 维度
-                    raise ValueError(f"模型输出向量维度不正确: {test_vector.shape}")
+                if not isinstance(test_vector, np.ndarray) or test_vector.shape[0] != 384:  # MiniLM-L6 dimension
+                    raise ValueError(f"model output vector dimension error: {test_vector.shape}")
             except Exception as e:
-                self.logger.error(f"模型功能测试失败: {e}")
+                self.logger.error(f"model functionality test failed: {e}")
                 return {
                     "status": "error",
-                    "message": f"模型功能测试失败: {e}",
+                    "message": f"model functionality test failed: {e}",
                     "result": {
                         "vector_file": vector_file,
                         "db_file": db_file,
@@ -326,18 +326,18 @@ class TagVectorEngine:
                     }
                 }
 
-            # 确保输出目录存在
+            # Ensure the output directory exists
             os.makedirs(os.path.dirname(vector_file), exist_ok=True)
             
-            # 解析标签数据
+            # Parse tag data
             tag_info = {}
             if tag_data:
                 for tag_dict in tag_data:
-                    # 处理不同格式的标签数据
+                    # Handle tag data in different formats
                     if isinstance(tag_dict, dict):
                         tag_data_dict = tag_dict
                     elif isinstance(tag_dict, list):
-                        # 将列表转换为字典
+                        # Convert list to dictionary
                         tag_data_dict = {}
                         for item in tag_dict:
                             if isinstance(item, tuple) and len(item) == 2:
@@ -346,28 +346,28 @@ class TagVectorEngine:
                                     value = value[0]
                                 tag_data_dict[key] = value
                     else:
-                        self.logger.warning(f"跳过无效的标签数据: {tag_dict}")
+                        self.logger.warning(f"skipping invalid tag data: {tag_dict}")
                         continue
                         
-                    # 提取标签ID
+                    # Extract tag ID
                     tag_id = tag_data_dict.get('id') or tag_data_dict.get('name')
                     if not tag_id:
                         continue
                         
-                    # 如果tag_id是列表，取第一个元素
+                    # If tag_id is a list, take the first element
                     if isinstance(tag_id, list):
                         tag_id = tag_id[0]
                         
-                    # 处理字段
+                    # Process fields
                     fields = self._process_fields(tag_data_dict.get('fields', []))
                     
-                    # 处理行为
+                    # Process behaviors
                     behaviors = self._process_behaviors(tag_data_dict.get('behaviors', []))
                         
-                    # 处理关系
+                    # Process relations
                     relations = self._process_relations(tag_data_dict.get('relations', []))
                         
-                    # 存储标签信息
+                    # Store tag information
                     tag_info[tag_id] = {
                         'name': tag_id,
                         'type': 'tag',
@@ -376,27 +376,27 @@ class TagVectorEngine:
                         'relations': relations,
                     }
             else:
-                # 从数据库文件解析
+                # Parse from database file
                 tag_info = self.parse_supertag_db(db_file)
             
-            self.logger.info(f"处理了 {len(tag_info)} 个标签")
+            self.logger.info(f"processed {len(tag_info)} tags")
             
             if not tag_info:
-                self.logger.error("没有找到有效的标签数据")
-                return {"status": "error", "message": "没有找到有效的标签数据"}
+                self.logger.error("no valid tag data found")
+                return {"status": "error", "message": "no valid tag data found"}
             
-            # 生成标签向量
+            # Generate tag vectors
             tag_vectors = {}
             for tag_id, info in tag_info.items():
                 try:
-                    # 生成向量
+                    # Generate vector
                     tag_vector = self.model.encode(tag_id)
                     tag_vectors[tag_id] = tag_vector
                 except Exception as e:
-                    self.logger.error(f"生成标签 '{tag_id}' 的向量出错: {e}")
+                    self.logger.error(f"error generating tag '{tag_id}' vector: {e}")
                     continue
             
-            # 构建缓存数据
+            # Build cache data
             cache_data = {
                 'tags': {
                     tag_id: {
@@ -408,20 +408,20 @@ class TagVectorEngine:
                 },
                 'metadata': {
                     'total_tags': len(tag_vectors),
-                    'vector_dim': 384,  # MiniLM-L6 维度
+                    'vector_dim': 384,  # MiniLM-L6 dimension
                     'created_at': datetime.now().isoformat(),
                     'model_name': 'sentence-transformers/paraphrase-MiniLM-L6-v2'
                 }
             }
             
-            # 保存到文件
+            # Save to file
             with open(vector_file, 'w') as f:
                 json.dump(cache_data, f, indent=2)
                 
-            self.logger.info(f"标签库初始化完成，保存到 {vector_file}")
-            self.logger.info(f"文件大小: {os.path.getsize(vector_file)} 字节")
+            self.logger.info(f"tag library initialized, saved to {vector_file}")
+            self.logger.info(f"file size: {os.path.getsize(vector_file)} bytes")
             
-            # 更新状态
+            # Update status
             self.tag_vectors = {
                 tag_id: np.array(vector) for tag_id, vector in tag_vectors.items()
             }
@@ -439,7 +439,7 @@ class TagVectorEngine:
             }
             
         except Exception as e:
-            self.logger.error(f"初始化标签库出错: {e}")
+            self.logger.error(f"error initializing tag library: {e}")
             self.logger.error(traceback.format_exc())
             return {
                 "status": "error", 
@@ -452,7 +452,7 @@ class TagVectorEngine:
             }
     
     def _process_fields(self, raw_fields):
-        """处理字段数据"""
+        """Processes field data"""
         fields = []
         if raw_fields:
             for field in raw_fields:
@@ -478,7 +478,7 @@ class TagVectorEngine:
         return fields
     
     def _process_behaviors(self, raw_behaviors):
-        """处理行为数据"""
+        """Processes behavior data"""
         behaviors = []
         if isinstance(raw_behaviors, dict):
             behaviors = list(raw_behaviors.keys())
@@ -487,44 +487,44 @@ class TagVectorEngine:
         return behaviors
     
     def _process_relations(self, raw_relations):
-        """处理关系数据"""
+        """Processes relation data"""
         relations = []
         if isinstance(raw_relations, list):
             relations = [r for r in raw_relations if r]
         return relations
             
     def parse_supertag_db(self, db_file_path: str) -> Dict[str, Dict]:
-        """解析supertag-db.el文件，提取标签信息
+        """Parses the supertag-db.el file to extract tag information
         
         Args:
-            db_file_path: 数据库文件路径
+            db_file_path: Path to the database file
             
         Returns:
-            标签信息字典
+            Dictionary of tag information
         """
-        self.logger.info(f"解析数据库文件: {db_file_path}")
+        self.logger.info(f"parsing database file: {db_file_path}")
         tag_info = {}
         
         try:
             with open(db_file_path) as f:
                 content = f.read()
                 
-            # 提取标签定义
+            # Extract tag definitions
             tag_pattern = r'\(ht-set!\s+org-supertag-db--object\s+"([^"]+)"\s+\'(\(:type\s+:tag.*?\))\)'
             for match in re.finditer(tag_pattern, content, re.DOTALL):
                 tag_id = match.group(1)
                 tag_props = match.group(2)
                 
-                # 跳过元数据
+                # Skip metadata
                 if tag_id == "metadata":
                     continue
                     
-                # 提取字段定义
+                # Extract field definitions
                 fields = []
                 fields_match = re.search(r':fields\s+(\(.*?\)|nil)(?=\s+:|$)', tag_props, re.DOTALL)
                 if fields_match and fields_match.group(1) != 'nil':
                     field_str = fields_match.group(1)
-                    # 解析字段列表
+                    # Parse field list
                     field_pattern = r'\(([^)]+)\)'
                     for field_match in re.finditer(field_pattern, field_str):
                         field_def = field_match.group(1)
@@ -538,21 +538,21 @@ class TagVectorEngine:
                                 field['description'] = ' '.join(field_parts[2:]).strip('"')
                             fields.append(field)
                 
-                # 提取行为定义
+                # Extract behavior definitions
                 behaviors = []
                 behaviors_match = re.search(r':behaviors\s+(\(.*?\)|nil)(?=\s+:|$)', tag_props, re.DOTALL)
                 if behaviors_match and behaviors_match.group(1) != 'nil':
                     behavior_str = behaviors_match.group(1).strip('()')
                     behaviors = [b.strip('"') for b in behavior_str.split()]
                 
-                # 提取关系定义
+                # Extract relation definitions
                 relations = []
                 relations_match = re.search(r':relations\s+(\(.*?\)|nil)(?=\s+:|$)', tag_props, re.DOTALL)
                 if relations_match and relations_match.group(1) != 'nil':
                     relation_str = relations_match.group(1).strip('()')
                     relations = [r.strip('"') for r in relation_str.split()]
                 
-                # 存储标签信息
+                # Store tag information
                 tag_info[tag_id] = {
                     'name': tag_id,
                     'type': 'tag',
@@ -561,10 +561,10 @@ class TagVectorEngine:
                     'relations': relations
                 }
             
-            self.logger.info(f"找到 {len(tag_info)} 个标签定义")
+            self.logger.info(f"found {len(tag_info)} tag definitions")
             return tag_info
             
         except Exception as e:
-            self.logger.error(f"解析数据库文件出错: {e}")
+            self.logger.error(f"error parsing database file: {e}")
             self.logger.error(traceback.format_exc())
             return {}

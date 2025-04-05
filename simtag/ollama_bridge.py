@@ -1,5 +1,5 @@
 """
-SimTag Ollama桥接模块 - 提供与Ollama模型的交互功能
+SimTag Ollama Bridge Module - Provides interaction with the Ollama model
 """
 
 import logging
@@ -11,124 +11,124 @@ import json
 import sys
 
 class OllamaBridge:
-    """Ollama API集成，提供基础的LLM调用功能"""
+    """Ollama API integration, providing basic LLM call functionality"""
     
     def __init__(self, model: str = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"):
-        """初始化 Ollama 客户端
+        """Initialize the Ollama client
         
         Args:
-            model: 使用的模型名称
+            model: The name of the model to use
         """
         self.logger = logging.getLogger("simtag.ollama_bridge")
         if not model:
-            model = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"  # 确保有默认值
-        self.model = str(model)  # 确保是字符串类型
-        self.logger.info(f"初始化 OllamaBridge，使用模型: {self.model}")
+            model = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"  # Ensure a default value
+        self.model = str(model)  # Ensure it's a string type
+        self.logger.info(f"Initialized OllamaBridge, using model: {self.model}")
 
     def run(self, prompt: str, system: str = None) -> str:
-        """运行 Ollama 命令
+        """Run Ollama command
         
         Args:
-            prompt: 提示文本
-            system: 系统提示
+            prompt: Prompt text
+            system: System prompt
             
         Returns:
-            模型输出文本
+            Model output text
         """
         try:
-            self.logger.info("准备调用 Ollama API")
+            self.logger.info("Preparing to call Ollama API")
             
-            # 确保模型名称有效
+            # Ensure the model name is valid
             if not self.model:
-                self.logger.error("模型名称未设置")
-                raise Exception("模型名称未设置")
+                self.logger.error("Model name not set")
+                raise Exception("Model name not set")
             
-            # 确保 prompt 是 UTF-8 编码的有效字符串
+            # Ensure the prompt is a valid UTF-8 encoded string
             if not isinstance(prompt, str):
                 prompt = str(prompt)
             
-            # 确保系统提示也是有效字符串
+            # Ensure the system prompt is also a valid string
             if system and not isinstance(system, str):
                 system = str(system)
                 
-            self.logger.debug(f"使用模型: {self.model}")
-            self.logger.debug(f"系统提示: {system}")
-            self.logger.debug(f"用户提示: {prompt[:100]}...")
+            self.logger.debug(f"Using model: {self.model}")
+            self.logger.debug(f"System prompt: {system}")
+            self.logger.debug(f"User prompt: {prompt[:100]}...")
             
-            # 构建请求数据
+            # Build the request data
             data = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False,  # 不使用流式响应
+                "stream": False,  # Do not use streaming response
                 "options": {
-                    "temperature": 0.7,  # 控制输出的随机性
-                    "num_predict": 1024,  # 最大输出长度
-                    "stop": []  # 停止标记
+                    "temperature": 0.7,  # Control the randomness of the output
+                    "num_predict": 1024,  # Maximum output length
+                    "stop": []  # Stop markers
                 }
             }
             
-            # 添加系统提示
+            # Add system prompt
             if system:
                 data["system"] = system
             
-            # 记录生成的请求数据（不包含敏感内容）
-            self.logger.info(f"发送 API 请求到模型: {self.model}")
+            # Log the generated request data (excluding sensitive content)
+            self.logger.info(f"Sending API request to model: {self.model}")
             
-            # 发送请求
+            # Send the request
             try:
                 response = requests.post(
                     "http://127.0.0.1:11434/api/generate",
                     json=data,
                     headers={"Content-Type": "application/json"},
-                    timeout=60  # 添加超时设置
+                    timeout=60  # Add timeout setting
                 )
             except requests.RequestException as e:
-                self.logger.error(f"请求异常: {e}")
-                raise Exception(f"请求异常: {e}")
+                self.logger.error(f"Request exception: {e}")
+                raise Exception(f"Request exception: {e}")
             
-            # 检查响应状态码
+            # Check the response status code
             if response.status_code == 200:
                 try:
                     response_data = response.json()
                     result = response_data.get('response', '').strip()
                     
-                    # 记录生成统计信息
+                    # Log the generation statistics
                     if 'eval_duration' in response_data:
                         eval_duration = response_data['eval_duration']
                         eval_count = response_data.get('eval_count', 0)
                         tokens_per_second = eval_count / (eval_duration / 1e9) if eval_duration > 0 else 0
-                        self.logger.info(f"生成速度: {tokens_per_second:.2f} tokens/s")
+                        self.logger.info(f"Generation speed: {tokens_per_second:.2f} tokens/s")
                     
                     if not result:
-                        self.logger.warning("Ollama 返回了空响应")
+                        self.logger.warning("Ollama returned an empty response")
                         
-                    self.logger.info("Ollama API 调用成功")
-                    self.logger.debug(f"响应结果: {result[:100]}..." if len(result) > 100 else f"响应结果: {result}")
+                    self.logger.info("Ollama API call successful")
+                    self.logger.debug(f"Response result: {result[:100]}..." if len(result) > 100 else f"Response result: {result}")
                     return result
                 except json.JSONDecodeError as e:
-                    self.logger.error(f"解析 JSON 响应失败: {e}")
-                    self.logger.error(f"原始响应内容: {response.text[:200]}...")
-                    raise Exception(f"解析 JSON 响应失败: {e}")
+                    self.logger.error(f"Failed to parse JSON response: {e}")
+                    self.logger.error(f"Original response content: {response.text[:200]}...")
+                    raise Exception(f"Failed to parse JSON response: {e}")
             else:
-                error_msg = f"Ollama API 调用失败: HTTP {response.status_code} - {response.text}"
+                error_msg = f"Ollama API call failed: HTTP {response.status_code} - {response.text}"
                 self.logger.error(error_msg)
                 raise Exception(error_msg)
                 
         except requests.exceptions.ConnectionError as e:
-            error_msg = f"无法连接到 Ollama 服务: {str(e)}"
+            error_msg = f"Failed to connect to Ollama service: {str(e)}"
             self.logger.error(error_msg)
             raise Exception(error_msg)
             
         except Exception as e:
-            error_msg = f"Ollama 执行异常: {str(e)}"
+            error_msg = f"Ollama execution exception: {str(e)}"
             self.logger.error(error_msg)
             self.logger.error(traceback.format_exc())
             raise Exception(error_msg)
 
     def status(self) -> Dict[str, Any]:
-        """获取 Ollama 状态"""
+        """Get Ollama status"""
         try:
-            self.logger.info("检查 Ollama 状态")
+            self.logger.info("Checking Ollama status")
             result = subprocess.run(
                 ["ollama", "list"],
                 capture_output=True,
@@ -136,21 +136,21 @@ class OllamaBridge:
             )
             
             if result.returncode == 0:
-                self.logger.info("Ollama 状态检查成功")
+                self.logger.info("Ollama status check successful")
                 return {
                     "available": True,
                     "model": self.model,
                     "models": result.stdout.strip()
                 }
             else:
-                self.logger.error(f"Ollama 状态检查失败: {result.stderr}")
+                self.logger.error(f"Ollama status check failed: {result.stderr}")
                 return {
                     "available": False,
                     "error": result.stderr
                 }
                 
         except Exception as e:
-            error_msg = f"Ollama 状态检查异常: {str(e)}"
+            error_msg = f"Ollama status check exception: {str(e)}"
             self.logger.error(error_msg)
             return {
                 "available": False,
@@ -158,8 +158,8 @@ class OllamaBridge:
             }
 
 def _test():
-    """测试 Ollama Bridge 功能"""
-    # 设置日志
+    """Test Ollama Bridge functionality"""
+    # Set up logging
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -168,50 +168,50 @@ def _test():
     logger = logging.getLogger("ollama_bridge_test")
     
     try:
-        logger.info("开始测试 Ollama Bridge")
+        logger.info("Starting Ollama Bridge test")
         
-        # 1. 测试初始化
+        # 1. Test initialization
         bridge = OllamaBridge()
-        logger.info(f"创建 OllamaBridge 实例成功，使用模型: {bridge.model}")
+        logger.info(f"OllamaBridge instance created successfully, using model: {bridge.model}")
         
-        # 2. 测试状态检查
-        logger.info("测试状态检查...")
+        # 2. Test status check
+        logger.info("Testing status check...")
         status = bridge.status()
-        logger.info(f"Ollama 状态: {status}")
+        logger.info(f"Ollama status: {status}")
         
-        # 3. 测试简单对话
-        logger.info("测试简单对话...")
-        prompt = "你好，请用一句话介绍自己。"
+        # 3. Test simple dialogue
+        logger.info("Testing simple dialogue...")
+        prompt = "Hello, please introduce yourself in one sentence."
         response = bridge.run(prompt)
-        logger.info(f"简单对话响应: {response}")
+        logger.info(f"Simple dialogue response: {response}")
         
-        # 4. 测试带系统提示的对话
-        logger.info("测试带系统提示的对话...")
-        system = "你是一个简洁的助手，回答要简短。"
-        prompt = "解释什么是人工智能。"
+        # 4. Test dialogue with system prompt
+        logger.info("Testing dialogue with system prompt...")
+        system = "You are a concise assistant, answer should be short."
+        prompt = "Explain what is artificial intelligence."
         response = bridge.run(prompt, system=system)
-        logger.info(f"带系统提示的对话响应: {response}")
+        logger.info(f"Dialogue response with system prompt: {response}")
         
-        # 5. 测试标签生成场景
-        logger.info("测试标签生成场景...")
-        system = """你是一个标签生成专家。请分析给定的文本，生成最相关的标签。
-要求：
-1. 每个标签应该简洁、准确
-2. 标签应该反映文本的主要主题和概念
-3. 返回格式为逗号分隔的标签列表
-4. 不要解释，只返回标签列表"""
+        # 5. Test tag generation scenario
+        logger.info("Testing tag generation scenario...")
+        system = """You are a tag generation expert. Please analyze the given text and generate the most relevant tags.
+Requirements:
+1. Each tag should be concise and accurate
+2. Tags should reflect the main theme and concepts of the text
+3. Return the format as a comma-separated list of tags
+4. Do not explain, just return the list of tags"""
         
         test_text = """
-        Python是一种流行的编程语言，以其简洁的语法和丰富的生态系统而闻名。
-        它广泛应用于Web开发、数据分析、人工智能等领域。
+        Python is a popular programming language, known for its concise syntax and rich ecosystem.
+        It is widely used in fields such as web development, data analysis, and artificial intelligence.
         """
         response = bridge.run(test_text, system=system)
-        logger.info(f"标签生成响应: {response}")
+        logger.info(f"Tag generation response: {response}")
         
-        logger.info("所有测试完成")
+        logger.info("All tests completed")
         
     except Exception as e:
-        logger.error(f"测试过程出错: {e}")
+        logger.error(f"Error during testing: {e}")
         logger.error(traceback.format_exc())
         return False
         
