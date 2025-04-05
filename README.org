@@ -160,7 +160,7 @@ Related commands ~M-x org-supertag-view-table~
 - Dynamically add or remove filters, adjust the view in real time.​
 - ​Real-time display of matching nodes, quickly locate the target information.​
 
-[[./picture/figure7.gif]]
+[[./picture/figure13.png]]
 
 Related commands ~M-x org-supertag-tag-discover~
 
@@ -304,12 +304,13 @@ The tag suggestions of ~org-supertag-sim-auto-tag-node~ are provided by ~tag_gen
 *org-supertag requires some Python dependencies, including `torch`, `sentence-transformers`, `epc` and `ollama`*:
 
 - Use the automated script to install dependencies
-  
+
 #+begin_src 
 cd /path/to/org-supertag
 
-sh ./setup_venv.sh
+sh ./run_simtag_epc_venv.sh
 #+end_src
+
 
 * Usage Suggestions
 ** Mix use of inline tags (#tag) and normal tags (:#tag:)

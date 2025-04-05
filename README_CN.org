@@ -162,7 +162,7 @@ org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 - 动态添加或移除过滤器，实时调整视图。​
 - ​实时显示匹配的节点，快速定位目标信息。​
 
-[[./picture/figure7.gif]]
+[[./picture/figure13.gif]]
 
 相关命令 ~M-x org-supertag-tag-discover~
 
@@ -310,7 +310,7 @@ org-supertag 的人工智能功能架构：
 #+begin_src 
 cd /path/to/org-supertag
 
-sh ./setup_venv.sh
+sh ./run_simtag_epc_venv.sh
 #+end_src
 
 * 使用建议
