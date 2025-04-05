@@ -551,7 +551,7 @@ For normal users, use org-supertag-sim-init as the main entry point."
   (interactive)
   (org-supertag-sim-epc-ensure-server)
   (condition-case err
-      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'echo '("测试消息"))))
+      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'echo '("test"))))
         (message "Echo test successful: %S" result)
         t)
     (error
@@ -618,7 +618,6 @@ For normal users, use org-supertag-sim-init as the main entry point."
   (interactive)
   (org-supertag-sim-epc-log "Starting server test...")
   
-  ;; 1. 测试基本连接
   (condition-case err
       (let ((result (epc:call-sync org-supertag-sim-epc-manager 'echo '("test"))))
         (org-supertag-sim-epc-log "Echo test successful: %S" result))
@@ -626,7 +625,6 @@ For normal users, use org-supertag-sim-init as the main entry point."
      (org-supertag-sim-epc-log "Echo test failed: %s" (error-message-string err))
      (error "Echo test failed")))
   
-  ;; 2. 测试模块导入
   (condition-case err
       (let ((result (epc:call-sync org-supertag-sim-epc-manager 'check_imports '())))
         (org-supertag-sim-epc-log "Module import test successful: %S" result))
@@ -634,7 +632,6 @@ For normal users, use org-supertag-sim-init as the main entry point."
      (org-supertag-sim-epc-log "Module import test failed: %s" (error-message-string err))
      (error "Module import test failed")))
   
-  ;; 3. 测试配置
   (condition-case err
       (let ((result (epc:call-sync org-supertag-sim-epc-manager 'get_config '())))
         (org-supertag-sim-epc-log "Configuration test successful: %S" result))
