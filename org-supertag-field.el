@@ -56,7 +56,6 @@ TAG-ID: Associated tag identifier"
   (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
     (remhash link-id org-supertag-db--link)))
 
-
 ;;----------------------------------------------------------------------
 ;; Field Type System
 ;;----------------------------------------------------------------------
