@@ -154,18 +154,18 @@ TAG-ID is the removed tag ID."
   (when org-supertag-sim--initialized
     (org-supertag-sim--remove-tag tag-id)))
 
-(defun org-supertag-sim--sync-library ()
-  "Synchronize the tag vector library."
-  (when org-supertag-sim--initialized
-    (let* ((db-info (org-supertag-sim--ensure-db-file))
-           (db-file (car db-info))
-           (tag-data (cadr db-info)))
-      (condition-case err
-          (epc:call-deferred org-supertag-sim-epc-manager
-                            'sync_library
-                            (list db-file tag-data))
-        (error
-         (message "同步标签库出错: %s" (error-message-string err)))))))
+;; (defun org-supertag-sim--sync-library ()
+;;   "Synchronize the tag vector library."
+;;   (when org-supertag-sim--initialized
+;;     (let* ((db-info (org-supertag-sim--ensure-db-file))
+;;            (db-file (car db-info))
+;;            (tag-data (cadr db-info)))
+;;       (condition-case err
+;;           (epc:call-deferred org-supertag-sim-epc-manager
+;;                             'sync_library
+;;                             (list db-file tag-data))
+;;         (error
+;;          (message "同步标签库出错: %s" (error-message-string err)))))))
 
 (defun org-supertag-sim--start-sync-timer ()
   "Start the periodic synchronization timer."
@@ -191,7 +191,7 @@ Returns:
     (deferred:$
       (deferred:next
         (lambda ()
-          (message "系统未初始化，正在初始化...")
+          (message "System not initialized, initializing...")
           (org-supertag-sim-init)))
       (deferred:nextc it
         (lambda (_)
