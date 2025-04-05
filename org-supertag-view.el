@@ -31,13 +31,7 @@ Available views:
          (tag (or tag-at-point
                  (completing-read "Select tag: "
                                 (org-supertag-view--get-all-tags)
-                                nil t))))
-    (when tag
-      (pcase view-type
-        ('tag-only (org-supertag-view-table tag))
-        ('discover (org-supertag-view-discover (list tag)))
-        ('columns  (org-supertag-view-column tag))
-        (_ (error "Invalid view type"))))))
+
 
 (define-derived-mode org-supertag-discover-mode special-mode "Org-ST-Discover"
   "Major mode for progressive tag discovery in org-supertag."
@@ -64,9 +58,6 @@ Available views:
   (setq-local org-mode-hook nil)
   (use-local-map org-supertag-view-column-mode-map))
 
-
-
-
 (define-minor-mode org-supertag-view-mode
   "Minor mode for viewing org-supertag tag-related content."
   :lighter " SuperTag-View"
@@ -81,8 +72,46 @@ Available views:
         (buffer-disable-undo))
     ;; When disabling the mode
     (when (boundp 'org-supertag-view--prev-read-only)
-      (setq buffer-read-only org-supertag-view--prev-read-only))))
-      
+      (setq buffer-read-only org-supertag-view--prev-read-only))))     
+
+(defun org-supertag-view--view-node-from-table ()
+  "Select and view a node from the traditional table view.
+This function is specific to the traditional table view mode."
+  (interactive)
+  (let* ((buffer-name (buffer-name))
+         (tag nil)
+         (nodes nil)
+         (node-titles nil))
+    
+    ;; 从缓冲区名称中提取标签名
+    (when (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" buffer-name)
+      (setq tag (match-string 1 buffer-name)))
+    
+    (if tag
+        (progn
+          ;; 获取与标签相关的节点
+          (setq nodes (org-supertag-view--get-nodes-with-tags (list tag)))
+          (setq node-titles
+                (mapcar (lambda (node-id)
+                        (let* ((props (gethash node-id org-supertag-db--object))
+                               (title (or (plist-get props :title) "无标题"))
+                               (type (or (plist-get props :todo-state) "")))
+                         (cons (format "%s %s" title 
+                                      (if (string-empty-p type) 
+                                          "" 
+                                        (format "[%s]" type)))
+                               node-id)))
+                       nodes))
+          
+          ;; 让用户选择节点并查看
+          (if nodes
+              (let* ((selected (completing-read "View node: " 
+                                             (mapcar #'car node-titles) nil t)))
+                (when selected
+                  (let ((node-id (cdr (assoc selected node-titles))))
+                        (org-supertag-view--goto-node node-id))))
+                    (org-supertag-view--goto-node node-id))))
+            (message "No nodes found for tag: %s" tag)))
 
 
 (provide 'org-supertag-view)
