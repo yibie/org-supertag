@@ -342,6 +342,13 @@ Field 略等于 org-properties，和 Node 一样，它代表着被 org-supertag 
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-04-05 3.0.0 release
+  - 新增 AI 后端，提供标签自动建议
+  - 新增双向标签关系管理
+  - 新增表格视图
+  - 重构同步机制
+  - 更新 README 文档
+
 - 2025-01-13 2.0.0 release
   - 新增行为调度系统
   - 新增行为模板变量

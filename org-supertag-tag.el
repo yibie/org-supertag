@@ -11,38 +11,6 @@
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
 
-
-
-(defun org-supertag-tag--refresh-field-table (context)
-  "Refresh the field table display.
-CONTEXT is the edit context plist containing:
-- :node-id        The node ID
-- :node-title     The node title
-- :tags           List of tags
-- :source-buffer  The source buffer
-- :source-point   The point in source buffer"
-  (let ((inhibit-read-only t)
-        (current-point (point))
-        (current-values (org-supertag-tag--collect-current-values)))
-    (erase-buffer)
-    ;; Header
-    (insert (format "Fields for Node: %s\n" 
-                    (plist-get context :node-title)))
-    ;; Fields
-    (dolist (tag-id (plist-get context :tags))
-      (org-supertag-tag--insert-tag-fields 
-       tag-id
-       (plist-get context :source-buffer)
-       (plist-get context :source-point)))
-    ;; Help text
-    (insert "\nCommands:\n")
-    (insert "n: Next field            p: Previous field\n")
-    (insert "RET: Edit field value    C-c C-c: Save           C-c C-k: Cancel\n")
-    ;; Restore field values
-    (org-supertag-tag--restore-field-values current-values)
-    ;; Restore point
-    (goto-char (min current-point (point-max)))))
-
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert
@@ -579,6 +547,7 @@ The hook functions are called with one argument:
   :type 'hook
   :group 'org-supertag)
 
+
 ;;----------------------------------------------------------------------
 ;; Preset Tag
 ;;----------------------------------------------------------------------
@@ -736,10 +705,7 @@ Example return value:
                                    (list :options options))))))))
 
 
-
 (defalias 'org-supertag-set-field-and-value 'org-supertag-tag-edit-fields)
-
-
 
 
 (provide 'org-supertag-tag)
