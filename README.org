@@ -314,7 +314,17 @@ sh ./setup_venv.sh
 * Usage Suggestions
 ** Mix use of inline tags (#tag) and normal tags (:#tag:)
 Normal tags are suitable for classification. For example: :project:, :issue:, etc.
+
 Inline tags are suitable for directly using semantics. For example: #org_supertag.
+
+For example:
+
+#+begin_src
+* org-supertag :#project:
+#org_supertag is a #emacs package based on #org_mode.
+#+end_src
+
+In this way, your document will be very readable and provide rich associations. This makes it very efficient and rewarding to explore and retrieve your notes or documents during use.
 
 * FAQ
 ** What is a Node? What is a Field? Why distinguish them from org-headline, org-properties?
