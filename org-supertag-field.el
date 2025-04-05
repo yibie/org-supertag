@@ -18,21 +18,26 @@
 ;; Field Value Database Operations
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-field-db-set-value (node-id field-name value tag-id)
+(defun org-supertag-db-set-field-value (node-id field-name value tag-id)
   "Set field value to database.
 NODE-ID: Node identifier
 FIELD-NAME: Field name
 VALUE: Field value
 TAG-ID: Associated tag identifier"
-  (let ((link-id (format ":node-field:%s->%s" node-id field-name))
+(let ((link-id (format ":node-field:%s->%s" node-id field-name))
         (props (list :from node-id
                     :to field-name
                     :tag-id tag-id
                     :value value
                     :created-at (current-time))))
-    (puthash link-id props org-supertag-db--link)))
+    (message "Debug: Setting field value - link-id=%S props=%S" link-id props)
+    (puthash link-id props org-supertag-db--link)
+    (org-supertag-db--mark-dirty)
+    (org-supertag-db--schedule-save)
+    (message "Debug: Field value set - current value=%S"
+             (gethash link-id org-supertag-db--link))))
 
-(defun org-supertag-field-db-get-value (node-id field-name tag-id)
+(defun org-supertag-db-get-field-value (node-id field-name tag-id)
   "Get field value from database.
 NODE-ID: Node identifier
 FIELD-NAME: Field name
@@ -43,156 +48,13 @@ TAG-ID: Associated tag identifier"
                (equal (plist-get link :tag-id) tag-id))
       (plist-get link :value))))
 
-(defun org-supertag-field-db-delete-value (node-id field-name tag-id)
+(defun org-supertag-db-delete-field-value (node-id field-name tag-id)
   "Delete field value from database.
 NODE-ID: Node identifier
 FIELD-NAME: Field name
 TAG-ID: Associated tag identifier"
   (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
     (remhash link-id org-supertag-db--link)))
-
-;;----------------------------------------------------------------------
-;; Field Value Entity Operations
-;;----------------------------------------------------------------------
-
-(defun org-supertag-field-set-value (field-def value node-id tag-id)
-  "Set field value for node.
-FIELD-DEF is the field definition
-VALUE is the field value
-NODE-ID is the target node ID
-TAG-ID is the tag ID"
-  (condition-case err
-      (let* ((field-name (plist-get field-def :name))
-             (sanitized-name (org-supertag--sanitize-field-name field-name))
-             (field-type (plist-get field-def :type))
-             (type-def (org-supertag-get-field-type field-type))
-             (processed-value
-              (progn
-                (message "Debug - Setting field: name=%S, type=%S, initial-value=%S" 
-                         sanitized-name field-type value)
-                (if (and type-def value)
-                    (progn
-                      (message "Debug - Processing value with type-def: %S" type-def)
-                      (when-let ((validator (plist-get type-def :validator)))
-                        (message "Debug - Validating with %S" validator)
-                        (unless (funcall validator value)
-                          (error "Value validation failed for %s: %S" sanitized-name value)))
-                      (if-let ((formatter (plist-get type-def :formatter)))
-                          (progn
-                            (message "Debug - Formatting with %S" formatter)
-                            (funcall formatter value field-def))
-                        value))
-                  (progn
-                    (message "Debug - Using raw value (no processing): %S" value)
-                    value)))))
-        
-        ;; Use sanitized name for all operations
-        (unless (string= field-name sanitized-name)
-          (setq field-name sanitized-name)
-          (setq field-def (copy-sequence field-def))
-          (setf (plist-get field-def :name) sanitized-name))
-        
-        (message "Debug - Final processed value: %S" processed-value)
-        
-        (when (eq field-type 'tag-reference)
-          (message "Debug - Processing tag-reference: value=%S, processed=%S" 
-                   value processed-value)
-          (when-let ((old-value (org-supertag-field-get-value field-def node-id tag-id)))
-            (org-supertag-node-db-remove-reference node-id old-value))
-          (when processed-value
-            (org-supertag-node-db-add-reference node-id processed-value)))
-        
-        (org-supertag-field-db-set-value node-id field-name processed-value tag-id)
-        
-        (when-let ((pos (condition-case nil
-                           (org-id-find node-id t)
-                         (error nil))))
-          (org-with-point-at pos
-            (org-set-property field-name processed-value))))
-    (error
-     (message "Error in field set-value operation: %s"
-              (error-message-string err))
-     (signal (car err) (cdr err)))))
-
-(defun org-supertag-field-validate (field value)
-  "Validate field value.
-FIELD: Field definition
-VALUE: Value to validate
-Returns t if valid, otherwise throws error"
-  (let* ((name (plist-get field :name))
-         (type (plist-get field :type))
-         (required (plist-get field :required))
-         (type-def (org-supertag-get-field-type type))
-         (validator (plist-get type-def :validator)))
-    (message "Debug - Validating field: name=%S, type=%S, value=%S" name type value)
-    
-    (when (and required (null value))
-      (error "Field '%s' is required" name))
-    
-    (if (null value)
-        t
-      (progn
-        (when (and (eq type 'string) (not (stringp value)))
-          (error "Field '%s' requires string type, got %S" name (type-of value)))
-        
-        (when validator
-          (condition-case err
-              (if (not (funcall validator value))
-                (error "Value '%s' does not meet validation requirements" value))
-            (error
-             (error "Error validating field '%s': %s" name (error-message-string err)))))
-        t))))
-
-(defun org-supertag-field-get-value (field-def node-id tag-id)
-  "Get field value.
-FIELD-DEF: field definition
-NODE-ID: node ID
-TAG-ID: tag ID"
-  (let* ((field-name (plist-get field-def :name))
-         (type (plist-get field-def :type))
-         (type-spec (org-supertag-get-field-type type))
-         (value (org-supertag-field-db-get-value node-id field-name tag-id)))
-    (when (and value
-               (plist-get type-spec :formatter))
-      (setq value (funcall (plist-get type-spec :formatter) value field-def)))
-    value))
-
-(defun org-supertag-field-remove-value (field-def node-id tag-id)
-  "Remove field value.
-FIELD-DEF: field definition
-NODE-ID: node ID
-TAG-ID: tag ID"
-  (let ((field-name (plist-get field-def :name)))
-    (org-supertag-db-remove-link :node-field node-id field-name
-                                `(:tag-id ,tag-id))
-    (org-with-point-at (org-id-find node-id t)
-      (org-entry-delete nil field-name))))
-
-(defun org-supertag-field-batch-set-value (field-def-list value-list node-id tag-id)
-  "Set multiple field values in batch.
-FIELD-DEF-LIST: List of field definitions to set
-VALUE-LIST: List of values corresponding to the fields
-NODE-ID: ID of the target node
-TAG-ID: ID of the associated tag"
-  (cl-loop for field-def in field-def-list
-           for value in value-list
-           do (org-supertag-field-set-value field-def value node-id tag-id)))
-
-(defun org-supertag-field-find-nodes (field-name value &optional tag-id)
-  "Find nodes that have a specific field value.
-FIELD-NAME: Name of the field to search
-VALUE: Value to match against
-TAG-ID: Optional tag ID to limit search scope
-
-Returns a list of nodes that match the criteria."
-  (let ((links (org-supertag-db-get-links :node-field)))
-    (cl-remove-if-not
-     (lambda (link)
-       (and (equal (car link) field-name)  ; Match field name
-            (equal (plist-get (cadr link) :value) value)  ; Match value
-            (or (null tag-id)  ; If no tag ID specified
-                (equal (plist-get (cadr link) :tag-id) tag-id)))) ; Match tag ID
-     links)))
 
 ;;----------------------------------------------------------------------
 ;; Field Type System
@@ -219,9 +81,6 @@ Returns a list of nodes that match the criteria."
              :formatter org-supertag-format-timestamp
              :reader org-supertag-read-timestamp-field
              :description "Timestamp"))
-    (tag-reference . (:validator org-supertag-validate-tag-reference
-                  :reader org-supertag-read-tag-reference-field
-                  :description "Node Reference"))
     (list . (:validator org-supertag-validate-list
              :formatter org-supertag-format-list
              :reader org-supertag-read-list-field
@@ -388,36 +247,6 @@ VALUE can be either:
   "Format URL VALUE."
   (string-trim value))
 
-(defun org-supertag-validate-tag-reference (value)
-  "Validate tag reference value.
-VALUE should be a node ID (string) or nil, or an org-mode link format."
-  (message "Debug - Validating tag reference: %S" value)
-  (or (null value)  ; 允许 nil 值
-      (and (stringp value)
-           (let ((node-id (cond
-                          ;; org-mode 链接格式：[[id:NODE-ID][TITLE]]
-                          ((string-match "\\[\\[id:\\([^]]+\\)\\]" value)
-                           (match-string 1 value))
-                          ;; 纯 ID
-                          (t value))))
-             (message "Debug - Checking if node exists: %S" node-id)
-             (let ((exists (org-supertag-node-db-exists-p node-id)))
-               (message "Debug - Node exists? %S" exists)
-               exists)))))
-
-
-(defun org-supertag-field-get-reference-value (node-id tag-id field)
-  "Get referenced field value and type.
-NODE-ID: Current node ID
-TAG-ID: Current tag ID
-FIELD: Field definition containing tag reference"
-  (when-let* ((ref-value (org-supertag-field-get-value field node-id tag-id))
-              (ref-tag-id (plist-get ref-value :tag-id))
-              (ref-field-name (plist-get ref-value :field))
-              (ref-tag (org-supertag-tag-get ref-tag-id)))
-    (list :field ref-field-name
-          :value (org-supertag-field-get-value ref-field-name node-id ref-tag-id))))
-
 (defun org-supertag-validate-options (value &optional field-def)
   "Validate options value.
 VALUE is the value to validate.
@@ -513,20 +342,6 @@ VALUE should be in 'min-max' format."
                (< min max)))            ; Min must be less than max
       (error nil))))
 
-(defun org-supertag-format-range (value field-def)
-  "Format range value.
-VALUE is the range value.
-FIELD-DEF is the field definition."
-  value)  ; Return value as-is
-
-(defun org-supertag-read-range-field (field-def)
-  "Read range value.
-FIELD-DEF is the field definition."
-  (let ((value (read-string 
-                (format "Enter range (format: min-max): "))))
-    (if (org-supertag-validate-range value)
-        value
-      (error "Invalid range format, use 'min-max' format like '1-10'"))))
 
 ;;---------------------------------------------------------------------------
 ;; Get Field Initial Value
@@ -581,7 +396,7 @@ Format example:
 - Behavior[:always +action]"
   (cond
    ((stringp value)
-    (if-let ((behavior (gethash value org-supertag-behavior-registry)))
+    (if-let* ((behavior (gethash value org-supertag-behavior-registry)))
         (let ((trigger (plist-get behavior :trigger))
               (has-action (plist-get behavior :action))
               (style (plist-get behavior :style)))
@@ -681,31 +496,17 @@ VALUE: Value to convert."
   (message "Debug - Converting value: type=%S, value=%S" type value)
   (let ((type-spec (org-supertag-get-field-type type)))
     (message "Debug - Type spec: %S" type-spec)
-    (cond
-     ((null value)
-      (message "Debug - Value is nil, returning nil")
-      nil)
-     ((eq type 'tag-reference)
-      (message "Debug - Processing tag-reference value: %S" value)
-      (let* ((node-id (cond
-                      ((stringp value) value)
-                      ((listp value) (car value))
-                      (t (format "%s" value))))
-             (node (org-supertag-db-get node-id)))
-        (if node
-            (let ((title (or (plist-get node :title)
-                           (format "Node %s" node-id))))
-              (format "[[id:%s][%s]]" node-id title))
-          ;; If the node is not found, return the original ID
-          node-id)))
-     (t
-      (if-let ((formatter (plist-get type-spec :formatter)))
+    (if (null value)
+        (progn
+          (message "Debug - Value is nil, returning nil")
+          nil)
+      (if-let* ((formatter (plist-get type-spec :formatter)))
           (progn
             (message "Debug - Using formatter: %S" formatter)
             (funcall formatter value nil))
         (progn
           (message "Debug - No formatter found, using raw value")
-          value))))))
+          value)))))
 
 (defun org-supertag-read-string-field (prompt)
   "Read string field value.
@@ -866,6 +667,8 @@ This will clear all existing values of this field across all nodes."
         
         (message "Field '%s' modified. You may now set new values." 
                  new-name)))))
+
+
 
 (provide 'org-supertag-field)
 ;;; org-supertag-field.el ends here

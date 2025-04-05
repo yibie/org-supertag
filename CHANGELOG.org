@@ -1,5 +1,58 @@
 * Changelog
 
+* [3.0.0] - 2025-04-05
+** Features
+*** Add AI backend for tag auto suggestion
+*** Add Bidirectional tag relation management
+*** Add Table View
+*** Refactor sync-mechanism
+* [2.5.3] - 2025-03-11
+** Features
+*** Enhanced multi-column view with relation-based tag management
+- Added ~org-supertag-view-add-related-tag-to-column~ for adding related tags to existing columns
+- Improved tag relation integration in column view:
+  - Select source column and relation group
+  - Choose from available related tags
+  - Add selected tag to existing column
+- Enhanced user interface with clear feedback messages
+- Added comprehensive error handling for edge cases
+
+** Improvements
+*** Better user interaction in multi-column view
+- Clearer operation instructions and feedback
+- Improved error messages and edge case handling
+- Better integration with tag relation system
+
+* [2.5.2] - 2025-03-10
+** Features
+*** Improved inline tag support with enhanced visual styling
+- Improved inline tag fontification with adaptive theming
+- Enhanced tag appearance with slight elevation and proper spacing
+- Fixed compatibility issues with font-lock implementation
+- Optimized tag recognition in various contexts
+- Improved tag insertion with better completion support
+- Added support for hiding # prefix symbol with customizable option
+
+The inline tag system now provides:
+- More reliable tag highlighting in all contexts
+- Better visual distinction between tags and regular text
+- Smoother integration with org-mode's native styling
+- Improved performance for documents with many tags
+
+*** Added comprehensive customization options for inline tags
+New variables for complete control over tag appearance:
+- `org-supertag-inline-enable-fontification`: Toggle tag highlighting
+- `org-supertag-inline-light-theme-colors`: Color settings for light themes
+- `org-supertag-inline-dark-theme-colors`: Color settings for dark themes
+- `org-supertag-inline-text-properties`: Control font size, weight, and spacing
+- `org-supertag-inline-tag-regexp`: Customize pattern for matching tags
+- `org-supertag-inline-hide-hash`: Option to hide/show the # prefix
+- `org-supertag-inline-excluded-contexts`: Control where tags are highlighted
+
+These customization options allow users to tailor the appearance of inline tags 
+to match their preferences and theme setup, ensuring optimal readability
+and visual harmony with the rest of their document.
+
 * [2.5.1] - 2025-03-03
 ** Bug Fixes
 *** Fix org-supertag-tag-delete-at-all to ensure complete cleanup
@@ -13,7 +66,7 @@
 ** Features
 *** (org-supertag-inline.el) Add inline tag support for content tagging 
 - Enable users to tag specific content within org nodes using #hashtag style
-- Seamlessly insert tags in text with ~C-c C-x #~:
+- Seamlessly insert tags in text with ~C-c t i~:
   - Choose from existing tags through completion
   - Create new tags on the fly by adding '#' suffix
   - Quick access to preset tags marked with [P]
