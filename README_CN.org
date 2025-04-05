@@ -116,7 +116,9 @@ org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 内置行为库，用户既可以使用预定义的常用行为，也可以创建自定义行为。*模块化设计使行为在不同的 Org 文件之间或用户之间轻松共享、重用和扩展*。
 
 相关命令
+
 ~M-x org-supertag-behavior-attach~ 为当前标签添加行为
+
 ~M-x org-supertag-behavior-detach~ 为当前标签解除行为
 
 *** 行为系统的高级用法
@@ -314,7 +316,17 @@ sh ./setup_venv.sh
 * 使用建议
 ** 行内标签（#tag）与普通标签（:#tag:）混用
 普通标签，适合分类。比如 :project:, :issue: 等。
+
 行内标签，适合直接使用语义。 比如 #org_supertag。
+
+比如这样子：
+
+#+begin_src
+* org-supertag :#project:
+#org_supertag is a #emacs package based on #org_mode.
+#+end_src
+
+这样子，你的文档将非常具有可读性，也提供了丰富的关联性，这让你探索、检索自己的笔记或文档时， 有着非常高的效率，和使用过程中的获得感。
 
 * FAQ
 ** 什么是 Node？什么是 Field？为什么要和 org-headline、org-properties 区分？
