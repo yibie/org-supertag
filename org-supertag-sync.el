@@ -244,7 +244,7 @@ Uses a two-pass approach:
                   (not (string= old-file file)))
              (let ((preserved-props '(:ref-to :ref-from :ref-count)))
                (dolist (prop preserved-props)
-                 (when-let ((value (plist-get old-node prop)))
+                 (when-let* ((value (plist-get old-node prop)))
                    (setq props (plist-put props prop value)))))
              (org-supertag-db-add-with-hash id props)
              (cl-incf moved))
@@ -253,7 +253,7 @@ Uses a two-pass approach:
                   (org-supertag-node-changed-p old-node props))
              (let ((preserved-props '(:ref-to :ref-from :ref-count)))
                (dolist (prop preserved-props)
-                 (when-let ((value (plist-get old-node prop)))
+                 (when-let* ((value (plist-get old-node prop)))
                    (setq props (plist-put props prop value)))))
              (org-supertag-db-add-with-hash id props)
              (cl-incf updated))
@@ -288,7 +288,7 @@ Uses a two-pass approach:
         (when old-node
           (let ((preserved-props '(:ref-to :ref-from :ref-count)))
             (dolist (prop preserved-props)
-              (when-let ((value (plist-get old-node prop)))
+              (when-let* ((value (plist-get old-node prop)))
                 (setq props (plist-put props prop value))))))
         ;; Update database
         (org-supertag-db-add-with-hash id props)
@@ -629,16 +629,13 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
                     (let ((org-fold-core-style 'overlays)
                           (org-element-use-cache nil)
                           (org-startup-folded nil))
-                      ;; 扫描并更新节点，保持关系数据
                       (let ((current-nodes (org-supertag-scan-buffer-nodes)))
                         (maphash
                          (lambda (id props)
-                           ;; 恢复关系数据
-                           (when-let ((rel-data (gethash id preserved-data)))
+                           (when-let* ((rel-data (gethash id preserved-data)))
                              (dolist (prop '(:ref-to :ref-from :ref-count))
-                               (when-let ((value (plist-get rel-data prop)))
+                               (when-let* ((value (plist-get rel-data prop)))
                                  (setq props (plist-put props prop value)))))
-                           ;; 更新节点
                            (org-supertag-db-add-with-hash id props))
                          current-nodes))
                       (org-supertag-sync-update-state file))
@@ -753,9 +750,9 @@ Uses ID-based scanning to ensure reliability."
                   (maphash
                    (lambda (id props)
                      ;; Restore relationship data if exists
-                     (when-let ((rel-data (gethash id preserved-data)))
+                     (when-let* ((rel-data (gethash id preserved-data)))
                        (dolist (prop '(:ref-to :ref-from :ref-count))
-                         (when-let ((value (plist-get rel-data prop)))
+                         (when-let* ((value (plist-get rel-data prop)))
                            (setq props (plist-put props prop value)))))
                      ;; Update node with hash
                      (org-supertag-db-add-with-hash id props)
