@@ -121,7 +121,7 @@ signature for consistency.
 Example:
   (org-supertag-behavior--update-statistics node-id nil)"
   (message "Debug update-stats - node=%s" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
         (org-update-statistics-cookies nil)
@@ -328,7 +328,7 @@ Example:
     (message "Debug copy-property - Copying %s from %s" name from-id)
     (save-excursion
       (org-with-point-at from-pos
-        (when-let ((value (org-entry-get nil name)))
+        (when-let* ((value (org-entry-get nil name)))
           (org-with-point-at pos
             (when (or (not if-missing)
                      (not (org-entry-get nil name)))
@@ -385,14 +385,14 @@ Example:
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 插入抽屉
+        ;; Insert drawer
         (condition-case err
             (progn
               (if region
                   (org-insert-drawer)
                 (insert ":" name ":\n:END:\n")
                 (forward-line -2))
-              ;; 如果有内容，插入内容
+              ;; If there is content, insert it
               (when content
                 (forward-line 1)
                 (insert content "\n")))
@@ -488,13 +488,10 @@ Example:
     (save-excursion
       (org-with-point-at pos
         (let ((old-state (org-get-todo-state)))
-          ;; 添加临时钩子
           (add-hook 'org-todo-state-change-hook
                    (lambda ()
                      (apply hook-fn hook-args)))
-          ;; 设置状态
           (org-todo state)
-          ;; 移除临时钩子
           (remove-hook 'org-todo-state-change-hook
                       (lambda ()
                         (apply hook-fn hook-args))))))))   
@@ -557,7 +554,7 @@ Example:
 
 (defun org-supertag-behavior--clock-in (node-id _params)
   "Start clock on node with NODE-ID."
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
         (condition-case err
@@ -567,7 +564,7 @@ Example:
 
 (defun org-supertag-behavior--clock-out (node-id _params)
   "Stop clock on node with NODE-ID."
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
         (condition-case err
@@ -657,7 +654,7 @@ Example:
           (subtree
            (org-map-entries
             (lambda ()
-              (when-let ((deadline (org-get-deadline-time nil)))
+              (when-let* ((deadline (org-get-deadline-time nil)))
                 (funcall action-fn 
                         (org-get-heading t t t t)
                         deadline)))
@@ -666,7 +663,7 @@ Example:
           (file
            (org-map-entries
             (lambda ()
-              (when-let ((deadline (org-get-deadline-time nil)))
+              (when-let* ((deadline (org-get-deadline-time nil)))
                 (funcall action-fn 
                         (org-get-heading t t t t)
                         deadline)))
@@ -674,7 +671,7 @@ Example:
           (agenda
            (org-map-entries
             (lambda ()
-              (when-let ((deadline (org-get-deadline-time nil)))
+              (when-let* ((deadline (org-get-deadline-time nil)))
                 (funcall action-fn 
                         (org-get-heading t t t t)
                         deadline)))
@@ -703,7 +700,7 @@ Example:
   (org-supertag-behavior--get-children \"20240101T123456\")
   ;; => ((\"Task 1\" \"TODO\") (\"Task 2\" \"DONE\"))"
   (message "\n=== Getting Children for Node %s ===" node-id)
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (cond
        ((markerp pos) (set-buffer (marker-buffer pos)))
@@ -759,7 +756,7 @@ Example:
                (heading (org-get-heading t t t t)))
                (todo (org-get-todo-state)))
           (when (member (concat "#" tag-id) tags)
-            (when-let ((parent-id (org-id-get)))
+            (when-let* ((parent-id (org-id-get)))
               (when action-fn
                 (funcall action-fn parent-id))
               parent-id))))))
@@ -785,7 +782,7 @@ PARAMS is a plist with:
 (defun org-supertag-behavior--archive-subtree (node-id _params)
   "Archive subtree at NODE-ID using org-archive-subtree.
 The archive location is determined by `org-archive-location'."
-  (when-let ((pos (org-supertag-db-get-pos node-id)))
+  (when-let* ((pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
         (condition-case err
@@ -1000,7 +997,7 @@ FACE-PLIST is a property list of face attributes."
 (defun org-supertag-behavior--apply-styles (node-id)
   "Apply visual styles for NODE-ID based on its behaviors."
   (org-with-wide-buffer
-   (when-let ((pos (org-supertag-db-get-pos node-id)))
+   (when-let* ((pos (org-supertag-db-get-pos node-id)))
      (save-excursion
        (goto-char pos)
        (org-back-to-heading t)
@@ -1017,7 +1014,7 @@ FACE-PLIST is a property list of face attributes."
                     (behavior (org-supertag-behavior--get-behavior tag-id))
                     (style (plist-get behavior :style)))
                ;; Apply face/color
-               (when-let ((face (plist-get style :face)))
+               (when-let* ((face (plist-get style :face)))
                  (let* ((face-attrs (if (facep face)
                                       (face-all-attributes face nil)
                                     face))
@@ -1036,7 +1033,7 @@ FACE-PLIST is a property list of face attributes."
                        (overlay-put ov 'node-id node-id)))))
                
                ;; Apply prefix
-               (when-let ((prefix (plist-get style :prefix)))
+               (when-let* ((prefix (plist-get style :prefix)))
                  (when (looking-at org-complex-heading-regexp)
                    (let* ((current-title (match-string 4))
                           (new-title (if (string-prefix-p prefix current-title)
@@ -1047,7 +1044,7 @@ FACE-PLIST is a property list of face attributes."
 (defun org-supertag-behavior--update-prefix (node-id)
   "Update prefix for NODE-ID based on its tags."
   (org-with-wide-buffer
-   (when-let ((pos (org-supertag-db-get-pos node-id)))
+   (when-let* ((pos (org-supertag-db-get-pos node-id)))
      (save-excursion
        (goto-char pos)
        (org-back-to-heading t)

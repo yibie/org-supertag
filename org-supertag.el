@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 2.2.9
+;; Version: 3.0.0
 ;; Package-Requires: ((emacs "28.1") (org "9.6"))
 ;; URL: https://github.com/yibie/org-supertag
 
@@ -35,36 +35,12 @@
 ;; - Comprehensive node operations (move, delete, reference)
 ;; - Automatic tag synchronization
 ;; - Custom tag behaviors support
-;;
-;; New in 2.0.0:
-;; - Schedule trigger and deadline management system
-;;   - Cron-style scheduling for behaviors ("minute hour day month weekday")
-;;     Examples: " 0 9 * * 1-5" (weekdays at 9:00)
-;;              "30 * * * *" (every hour at :30)
-;;   - Deadline check behaviors (@deadline-check)
-;;   - Overdue and upcoming deadline handling
-;; - Enhanced node movement with link preservation
-;; - Improved tag change functionality
-;; - Automatic file synchronization system
-;;   - Real-time buffer state tracking
-;;   - Conflict detection and resolution
-;;   - Robust error recovery
-;; - Optimized query results using ewoc
-;; - Async face refresh for better performance
-;;
-;; Latest Updates:
-;; - Smart tag completion with TAB support
-;; - Enhanced node management commands
-;; - Query history with customizable size
-;; - Improved reference tracking system
-;;
-;; For detailed usage and examples, see the README.org file in the project
-;; repository.
 
 ;;; Code:
 
 (require 'org)
 (require 'org-id)
+(require 'deferred)
 (require 'org-supertag-db)
 (require 'org-supertag-node)
 (require 'org-supertag-relation)
@@ -76,6 +52,8 @@
 (require 'org-supertag-luhmann)
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
+(require 'org-supertag-sim)
+(require 'org-supertag-sim-epc) 
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -89,7 +67,8 @@
   :lighter " ST"
   :group 'org-supertag
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-c C-r") 'org-supertag-relation-manage)
+            (define-key map (kbd "C-c t m") 'org-supertag-relation-manage)
+            (define-key map (kbd "C-c t v") 'org-supertag-view-tag)
             map)
   (if org-supertag-mode
       (org-supertag--enable)
@@ -132,12 +111,16 @@
     (org-supertag-db-init)
     ;; 4. Setup auto-save
     (org-supertag-db--setup-auto-save)
-    ;; 5. Initialize inline system
-    (when (featurep 'org-supertag-inline)
-      (org-supertag-inline-setup)
-      (org-supertag-inline-mode 1))
-    ;; 6. Initialize sync system
+    ;; 5. Initialize sync system
     (org-supertag-sync-init)
+    ;; 6. Initialize EPC server for similarity features
+    (when (featurep 'org-supertag-sim-epc)
+      (condition-case err
+          (progn
+            (org-supertag-sim-epc-start-server)
+            (org-supertag-sim-init))
+        (error
+         (message "Failed to start EPC server: %s" (error-message-string err)))))
     ;; 7. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
@@ -153,6 +136,9 @@
   (when org-supertag-sync--timer
     (cancel-timer org-supertag-sync--timer)
     (setq org-supertag-sync--timer nil))
+  ;; 4. Stop EPC server
+  (when (featurep 'org-supertag-sim-epc)
+    (org-supertag-sim-epc-stop-server))
   ;; 5. Clear cache
   (org-supertag-db--cache-clear)
   ;; 6. Remove hooks
@@ -168,9 +154,12 @@ Used for manual cleanup or system state reset."
   (org-supertag-db-save)
   ;; 2. Clean up auto-save timer
   (org-supertag-db--cleanup-auto-save)
-  ;; 3. Clear cache
+  ;; 3. Stop EPC server
+  (when (featurep 'org-supertag-sim-epc)
+    (org-supertag-sim-epc-stop-server))
+  ;; 4. Clear cache
   (org-supertag-db--cache-clear)
-  ;; 4. Reset dirty data flag
+  ;; 5. Reset dirty data flag
   (org-supertag-db--clear-dirty))
 
 ;;;###autoload
@@ -184,7 +173,7 @@ Used for manual cleanup or system state reset."
       (unless (file-exists-p custom-file)
         (unless (file-exists-p org-supertag-data-directory)
           (make-directory org-supertag-data-directory t)) 
-        (when-let ((template (locate-library "org-supertag-custom-behavior.el")))
+        (when-let* ((template (locate-library "org-supertag-custom-behavior.el")))
           (copy-file template custom-file)
           (message "Created custom behaviors file at %s" custom-file)))
       (when (file-exists-p custom-file)

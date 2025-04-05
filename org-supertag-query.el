@@ -182,7 +182,7 @@ NODE-ID is the node identifier.
 Returns:
 - List of tags
 - nil if node doesn't exist or has no tags"
-  (when-let ((props (org-supertag-db-get node-id)))
+  (when-let* ((props (org-supertag-db-get node-id)))
     (plist-get props :tags)))
 
 (defun org-supertag-node-has-children-p (node-id)
@@ -303,7 +303,7 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-next ()
   "Move to next result."
   (interactive)
-  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
              (next (ewoc-next org-supertag-query-ewoc current)))
     (goto-char (ewoc-location next))
     (beginning-of-line)
@@ -312,7 +312,7 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-prev ()
   "Move to previous result."
   (interactive)
-  (when-let ((current (ewoc-locate org-supertag-query-ewoc))
+  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
              (prev (ewoc-prev org-supertag-query-ewoc current)))
     (goto-char (ewoc-location prev))
     (beginning-of-line)
@@ -535,18 +535,46 @@ Returns t if node was found and visited successfully, nil otherwise."
               (file-path (plist-get props :file-path))
               ((file-exists-p file-path))
               (buffer (find-file-noselect file-path)))
+    (message "Finding node %s in file %s" node-id file-path)
     (with-current-buffer buffer
       ;; make sure in org-mode buffer, avoid conflict with org-supertag-view.el
       (when (derived-mode-p 'org-mode)
+        (message "Buffer is in org-mode")
         (widen)
-        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
-          (goto-char (cdr marker))
-          (org-show-entry)
-          (org-show-children)
-          ;; Switch to buffer before recentering
-          (switch-to-buffer buffer)
-          (recenter)
-          t)))))
+        (let ((marker (org-id-find-id-in-file node-id file-path)))
+          (if marker
+              (progn
+                (message "Found node at position %s" (cdr marker))
+                (goto-char (cdr marker))
+                (org-show-entry)
+                (org-show-children)
+                ;; Switch to buffer before recentering
+                (switch-to-buffer buffer)
+                (recenter)
+                t)
+            (message "org-id-find-id-in-file returned nil for node %s in file %s" 
+                     node-id file-path)
+            ;; Try alternative method using org-map-entries
+            (message "Trying alternative method...")
+            (save-excursion
+              (goto-char (point-min))
+              (let ((found nil))
+                (org-map-entries
+                 (lambda ()
+                   (when (equal (org-entry-get nil "ID") node-id)
+                     (setq found (point))))
+                 t nil)
+                (if found
+                    (progn
+                      (message "Found node using alternative method at position %s" found)
+                      (goto-char found)
+                      (org-show-entry)
+                      (org-show-children)
+                      (switch-to-buffer buffer)
+                      (recenter)
+                      t)
+                  (message "Node not found using alternative method either")
+                  nil)))))))))
 
 (defun org-supertag-query-visit-node ()
   "Visit current selected node."
@@ -642,7 +670,7 @@ START and END define the region boundaries."
       (while (re-search-forward 
               "^☑.*\\[\\[id:\\([^]]+\\)\\]"
               nil t)
-        (when-let ((node-id (match-string-no-properties 1)))
+        (when-let* ((node-id (match-string-no-properties 1)))
           ;; Verify node exists
           (when (org-supertag-node-db-exists-p node-id)
             (push node-id selected-nodes)))))

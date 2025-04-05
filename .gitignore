@@ -4,6 +4,15 @@
 # Packaging
 .cask
 
+# pytest
+.pytest_cache/
+
+
+# developing
+.developing/
+
+# venv
+.venv/
 
 # Backup files
 *~
@@ -25,3 +34,21 @@ tramp
 # Visual Studio Code
 .vscode/
 .aider*
+
+
+# log files
+*.log
+*.log.*
+*.log.*.*
+*.log.*.*.*
+*.log.*.*.*.*
+*.log.*.*.*.*.*
+
+# test files
+*.test
+*.test.*
+*.test.*.*
+*.test.*.*.*
+*.test.*.*.*.*
+*.test.*.*.*.*.*
+

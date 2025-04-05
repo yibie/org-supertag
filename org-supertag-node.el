@@ -52,7 +52,7 @@ Notes:
   "Update an existing node in the database.
 ID is the node identifier
 PROPS are the properties to update"
-  (when-let ((node (org-supertag-db-get id)))
+  (when-let* ((node (org-supertag-db-get id)))
     (let ((new-props nil))
       ;; 1. Preserve creation time
       (setq new-props (list :created-at (plist-get node :created-at)))
@@ -81,7 +81,7 @@ ID is the unique node identifier
 Returns:
 - t   if node exists and type is :node
 - nil if node doesn't exist or type isn't :node"
-  (when-let ((node (org-supertag-db-get id)))
+  (when-let* ((node (org-supertag-db-get id)))
     (eq (plist-get node :type) :node)))
 
 (defun org-supertag-node-db-get-tags (id)
@@ -271,8 +271,8 @@ Notes:
 - Keeps display state consistent with database
 - Does not trigger database updates
 - Only updates display-related properties"
-  (when-let ((node-id (org-id-get)))
-    (when-let ((node (org-supertag-db-get node-id)))
+  (when-let* ((node-id (org-id-get)))
+    (when-let* ((node (org-supertag-db-get node-id)))
       ;; Update properties drawer
       (org-set-property "ID" node-id)
       ;; Update other display states
@@ -325,7 +325,7 @@ Returns:
   (message "[Move] Starting node move: ID=%s to file=%s level=%s point=%s" 
            node-id target-file target-level target-point)
   
-  (when-let ((content (org-supertag-get-node-content node-id)))
+  (when-let* ((content (org-supertag-get-node-content node-id)))
     (message "[Move] Got node content: %d chars" (length content))
     
     ;; 使用 condition-case 包装整个移动过程
@@ -614,13 +614,20 @@ Returns:
   (interactive)
   (let ((at-heading (org-at-heading-p)))
     (cond
-     ;; Case 1: At existing heading
+     ;; Case 1: At existing heading with ID
      ((and at-heading (org-id-get))
       (user-error "Heading already has a node"))
      
      ;; Case 2: At existing heading without ID
      (at-heading
-      (org-supertag-node-sync-at-point))
+      (let* ((node-id (org-id-get-create))
+             (props (org-supertag-db--parse-node-at-point)))
+        (unless props
+          (error "Failed to parse node properties"))
+        ;; Add node to database
+        (org-supertag-db-add node-id props)
+        ;; Return node ID
+        node-id))
      
      ;; Case 3: At blank position
      (t
@@ -636,52 +643,52 @@ Returns:
         ;; Move back to heading
         (forward-line -1)
         ;; Create node
-        (org-supertag-node-sync-at-point))))))
+        (let* ((node-id (org-id-get-create))
+               (props (org-supertag-db--parse-node-at-point)))
+          (unless props
+            (error "Failed to parse node properties"))
+          ;; Add node to database
+          (org-supertag-db-add node-id props)
+          ;; Return node ID
+          node-id))))))
 
 (defun org-supertag-node-delete ()
   "Delete current node and all its associated data."
   (interactive)
-  (if-let ((node-id (org-supertag-node--ensure-sync)))
+  (if-let* ((node-id (org-supertag-node--ensure-sync)))
       (when (yes-or-no-p "Really delete this node and all its data? ")
         ;; 1. Get node info before deletion
         (let* ((node (org-supertag-db-get node-id))
                (tags (org-supertag-node-get-tags node-id))
                (ref-from (plist-get node :ref-from)))
-        ;; 2. Remove all tags
-        (dolist (tag-id tags)
-          (org-supertag-tag--remove tag-id node-id))
-        ;; 3. Remove all references to this node
-        (dolist (ref-node-id ref-from)
-          (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
-            (with-current-buffer (find-file-noselect ref-file)
-              (save-excursion
-                (goto-char (point-min))
-                (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
-                  (delete-region (match-beginning 0) (match-end 0)))
-                (save-buffer)))))
-        ;; 4. Delete the headline content including properties
-        (org-back-to-heading t)
-        (let* ((element (org-element-at-point))
-               (begin (org-element-property :begin element))
-               (end (org-element-property :end element)))
-          ;; Delete the entire heading including properties
-          (delete-region begin end)
-          (when (looking-at "\n") (delete-char 1)))
-        ;; 5. Remove from database
-        (remhash node-id org-supertag-db--object)
-        ;; 6. Clear database caches
-        (org-supertag-db--cache-remove 'entity node-id)
-        (org-supertag-db--cache-remove 'query (format "type:%s" :node))
-        (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
-        (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
-        (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
-        ;; 7. Save changes
-        (save-buffer)
-        (org-supertag-db-save)
-        ;; 8. Run hooks
-        (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
-        (message "Node deleted: %s" node-id))
-    (user-error "No node found at current position"))))
+          ;; 2. Remove all tags
+          (dolist (tag-id tags)
+            (org-supertag-tag--remove tag-id node-id))
+          ;; 3. Remove all references to this node
+          (dolist (ref-node-id ref-from)
+            (when-let* ((ref-file (plist-get (org-supertag-db-get ref-node-id) :file-path)))
+              (with-current-buffer (find-file-noselect ref-file)
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
+                    (delete-region (match-beginning 0) (match-end 0)))
+                  (save-buffer)))))
+          ;; 4. Delete the headline content including properties
+          (org-back-to-heading t)
+          (let* ((element (org-element-at-point))
+                 (begin (org-element-property :begin element))
+                 (end (org-element-property :end element)))
+            ;; Delete the entire heading including properties
+            (delete-region begin end)
+            (when (looking-at "\n") (delete-char 1)))
+          ;; 5. Remove from database using proper function
+          (org-supertag-db-remove-object node-id)
+          ;; 6. Save changes
+          (save-buffer)
+          ;; 7. Run hooks
+          (run-hook-with-args 'org-supertag-node-deleted-hook node-id)
+          (message "Node deleted: %s" node-id)))
+    (user-error "No node found at current position")))
 
 (defun org-supertag-node--ensure-id-system ()
   "Ensure org-id system is properly initialized."
@@ -692,31 +699,24 @@ Returns:
     (when (file-exists-p org-id-locations-file)
       (org-id-locations-load))))
 
-(defun org-supertag--create-node (node-id)
-  "Create a new node with NODE-ID."
-  (org-supertag-node--ensure-id-system)
-  (save-excursion
-    (unless (org-at-heading-p)
-      (org-back-to-heading t))
-    (let ((current-id (org-id-get)))
-      (when (and current-id (not (equal current-id node-id)))
-        (error "Position mismatch in create-node: Expected %s but at %s" 
-               node-id current-id)))
-    (let ((props (org-supertag-db--parse-node-at-point)))
-      (unless props
-        (error "Failed to parse node properties at point"))
-      (org-supertag-db-add node-id props))))
-
 
 (defun org-supertag-node-update ()
   "Update node at current position.
 Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
   (interactive)
-  (if-let ((node-id (org-supertag-node--ensure-sync)))
-      (progn
-        (message "Node updated successfully: %s" node-id)
-        node-id)
-    (user-error "Cannot find or create node at current position")))
+  (unless (org-at-heading-p)
+    (user-error "Must be on a heading to update node"))
+  
+  (let ((node-id (org-id-get)))
+    (unless node-id
+      (message "No node ID found, creating new node...")
+      (setq node-id (org-id-get-create)))
+    
+    (if-let* ((sync-result (org-supertag-node--ensure-sync)))
+        (progn
+          (message "Node updated successfully: %s" node-id)
+          node-id)
+      (user-error "Failed to sync node. Please ensure:\n1. You're on a valid heading\n2. The heading is not archived or commented\n3. The node ID is valid"))))
 
 (defun org-supertag-node-remove-tag (node-id tag-id)
   "Remove tag association from a node.
@@ -750,25 +750,33 @@ Returns t if:
                (if (org-in-archived-heading-p) "yes" "no")))
     at-heading))
 
-(defun org-supertag-node--format-path (file-path olp title)
+(defun org-supertag-node--format-path (file-path olp title &optional props)
   "Format node path for display.
 FILE-PATH is the path to the file
 OLP is the outline path list
-TITLE is the node title"
+TITLE is the node title
+PROPS is optional property list for additional info"
   (let* ((file-name (if file-path 
                         (file-name-nondirectory file-path)
-                      "<no file>"))  
-         (path-parts (append (list file-name) 
-                           (or olp nil)  
-                           (list (or title "<no title>")))))  
+                      "<no file>"))
+         (clean-title (or title "<no title>"))
+         ;; 如果最后一个 olp 和标题相同，则不重复显示
+         (filtered-olp (if (and olp (string= (car (last olp)) clean-title))
+                          (butlast olp)
+                        olp))
+         (path-parts (append (list file-name)
+                           filtered-olp
+                           (list clean-title))))
     (mapconcat #'identity 
-               (remove nil path-parts)  
+               (remove nil path-parts)
                " / ")))
 
 (defun org-supertag-node--collect-nodes ()
   "Collect all nodes with their paths.
 Returns a list of (node-id . display-string) pairs."
-  (let (nodes)
+  (let ((nodes '())
+        (display-counts (make-hash-table :test 'equal)))
+    ;; First pass: count occurrences of each display string
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
@@ -779,9 +787,31 @@ Returns a list of (node-id . display-string) pairs."
                 (clean-title (if (stringp title)
                                (substring-no-properties title)
                              "<invalid title>"))
-                (display (org-supertag-node--format-path file-path olp clean-title)))
+                (display (org-supertag-node--format-path file-path olp clean-title props)))
+           (puthash display
+                    (1+ (gethash display display-counts 0))
+                    display-counts))))
+     org-supertag-db--object)
+    
+    ;; Second pass: create nodes list with unique display strings
+    (maphash
+     (lambda (id props)
+       (when (eq (plist-get props :type) :node)
+         (let* ((file-path (plist-get props :file-path))
+                (title (or (plist-get props :title) "<untitled>"))
+                (olp (plist-get props :olp))
+                ;; 确保所有字符串属性都是纯文本
+                (clean-title (if (stringp title)
+                               (substring-no-properties title)
+                             "<invalid title>"))
+                (base-display (org-supertag-node--format-path file-path olp clean-title props))
+                ;; If display string is not unique, append node ID
+                (display (if (> (gethash base-display display-counts) 1)
+                           (format "%s [%s]" base-display id)
+                         base-display)))
            (push (cons id display) nodes))))
      org-supertag-db--object)
+    
     ;; 按显示字符串排序
     (sort nodes (lambda (a b) 
                  (string< (cdr a) (cdr b))))))
@@ -819,7 +849,7 @@ filename / outline-path / title"
         (find-file-other-window file-path)
         ;; Find and show node
         (widen)
-        (when-let ((marker (org-id-find-id-in-file node-id file-path)))
+        (when-let* ((marker (org-id-find-id-in-file node-id file-path)))
           (goto-char (cdr marker))
           (org-show-entry)
           (org-show-children)
@@ -833,7 +863,7 @@ filename / outline-path / title"
 
 (defun org-supertag-node--in-node-p ()
   "Check if current position is within a valid org-supertag node."
-  (when-let ((node-id (org-supertag-node--ensure-sync)))
+  (when-let* ((node-id (org-supertag-node--ensure-sync)))
     (cons node-id (org-get-heading t t t t))))
 
 (defun org-supertag-node-db-add-reference (from-id to-id)
@@ -872,7 +902,7 @@ Returns:
 List of node IDs"
   (or (org-supertag-db--cache-get 'query 
                                  (format "node-refs:%s:%s" node-id direction))
-      (when-let ((node (org-supertag-db-get node-id)))
+      (when-let* ((node (org-supertag-db-get node-id)))
         (let ((refs (pcase direction
                      ('to (plist-get node :refs-to))
                      ('from (plist-get node :refs-from))
@@ -1142,7 +1172,7 @@ This function will:
        (when (and (eq (plist-get props :type) :node)
                   (not (org-id-find id 'marker)))
          (push id missing-ids)
-         (when-let ((file (plist-get props :file-path)))
+         (when-let* ((file (plist-get props :file-path)))
            (push file problematic-files))))
      org-supertag-db--object)
     
@@ -1158,7 +1188,7 @@ This function will:
         (princ "Missing ID Details:\n")
         (princ "-------------------\n")
         (dolist (id missing-ids)
-          (when-let ((props (org-supertag-db-get id)))
+          (when-let* ((props (org-supertag-db-get id)))
             (princ (format "ID: %s\n" id))
             (princ (format "  Title: %s\n" (or (plist-get props :title) "[No title]")))
             (princ (format "  File: %s\n" (or (plist-get props :file-path) "[No file]")))
