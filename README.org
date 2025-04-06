@@ -178,8 +178,8 @@ Related commands ~M-x org-supertag-tag-columns~
 
 ** 🖇️ Intelligent management of tag relationships, revealing hidden associations
 Related commands ~M-x org-supertag-relation-manage~
-**** ↔️Supports one-way and two-way relationship types, saving operation steps
-***** Predefined relationship types
+*** Supports one-way and two-way relationship types, saving operation steps
+**** Predefined relationship types
 
 #+begin_src 
 (defcustom org-supertag-relation-types
@@ -215,7 +215,7 @@ If there are two tags #climate_change and #glacier_melting, and you want to expr
 ;; 2. glacier_melting effect climate_change
 #+end_src
 
-***** Custom relationship types：
+**** Custom relationship types：
 
 #+begin_src 
 ;; Custom relationship types
@@ -244,7 +244,7 @@ If there are two tags #climate_change and #glacier_melting, and you want to expr
         (is-part-of . contains-part)))
 #+end_src
 
-**** 🧬 Automatically record the co-occurrence relationship between tags
+****  Automatically record the co-occurrence relationship between tags
 When different tags are applied to the same object, there is a "co-occurrence" relationship between these tags, which is abbreviated as "co-occurrence".
 
 *org-supertag automatically recognizes the co-occurrence relationship between tags*, helps users understand the relationship between tags, and simplifies the operation of tag relationships.
@@ -253,7 +253,29 @@ It will be displayed in the Tag Discovery panel, when you click the [+] in front
 
 [[./picture/figure13.png]]
 
-**** 📊 Real-time statistical analysis and update
+**** Hierarchical Propagation of Tag Co-occurrence
+When tags appear in parent-child nodes, org-supertag automatically establishes a special kind of co-occurrence relationship:
+
+- The tags of the parent node have a one-way influence on the tags of the child node
+- This influence is propagated from top to bottom, expressing the hierarchical containment relationship of concepts
+- The strength of this influence is weaker than ordinary co-occurrence, reflecting the characteristic of indirect association
+
+For example:
+#+begin_src org
+* Project Planning #project #planning
+** Technical Research #research
+#+end_src
+
+Here, #project and #planning have a one-way influence on #research, indicating that this is a research task under project planning. This automatically recognized hierarchical relationship helps to:
+
+1. Provide more context-appropriate suggestions during tag recommendation
+2. Display more abundant association relationships in the tag discovery view
+3. Assist in building the hierarchical structure of knowledge
+
+This feature is fully automated, and users only need to organize their document structure naturally, and the system will automatically establish these semantic associations.
+
+
+**** Real-time statistical analysis and update
 Statistical analysis of the co-occurrence and mutual information of tags, *real-time update of relationships when adding or deleting tags*, ensuring the accuracy of the information.
 
 Based on the context, *intelligently recommend related tags*, improving the convenience of tag management.
@@ -403,6 +425,7 @@ org-supertag is also deeply influenced by ekg and org-node:
 - [[https://github.com/ahyatt/ekg/commits/develop/][ekg]] is the first note-taking tool in my eyes that is centered on tags. I once used it to record many days of diaries
 - [[https://github.com/meedstrom/org-node][org-node]] deeply influenced the basic working mechanism of org-supertag with its parsing of org-mode files and the application of hash tables
 
+Thank [[https://www.reddit.com/r/orgmode/comments/1jrwnqf/comment/mljbsx9/?context=3][simplex5d]] to genearte a good summary to org-supertag, I put it in the TL;DR section at the beginning of README.
 * Contribution
 
 Contributions are welcome! Please see [[file:.github/CONTRIBUTING.org][Contribution Guide]].
