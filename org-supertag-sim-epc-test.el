@@ -231,6 +231,6 @@ PORT is the port number to check"
       (org-supertag-sim-epc-test-log "Some tests failed, please check the log for details.")))
   
   (org-supertag-sim-epc-test-log "Tests completed")
-
+)
 (provide 'org-supertag-sim-epc-test)
-;;; org-supertag-sim-epc-test.el ends here 
+;;; org-supertag-sim-epc-test.el ends here
