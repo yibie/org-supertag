@@ -127,7 +127,7 @@ BEGIN and END are the start and end positions of the region."
                                         'help-echo "Apply all suggested tags to current entry"))))))))))
            
            ;; Display result buffer
-           (switch-to-buffer-other-window buf)))))))
+           (switch-to-buffer-other-window buf))))))
 
 (defun org-supertag-sim-advanced--apply-tag (tag-name)
   "Apply a tag to the current Org entry.
@@ -411,7 +411,7 @@ ORG-FILES is a list of Org file paths."
                            next-batch))))
         
         ;; Start processing the first batch of files
-        (process-batch org-files)))))
+        (process-batch org-files))))
 
 ;; Provide a hook function for automatic tag suggestions
 (defvar org-supertag-sim-suggestion-timer nil
@@ -452,7 +452,7 @@ ORG-FILES is a list of Org file paths."
                                        (mapconcat 
                                         (lambda (s) 
                                           (format "%s" (cdr (assoc 'tag s))))
-                                        suggestions ", ")))))))))))))))
+                                        suggestions ", "))))))))))))))))
 (add-hook 'post-command-hook 'org-supertag-sim-advanced--suggest-on-idle)
 
 ;;;###autoload
