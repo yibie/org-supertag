@@ -1,10 +1,19 @@
 * Changelog
 
+* [3.0.1] - 2025-04-26
+** Features
+*** Add Backlink panel for node references
+- Add ~org-supertag-backlink-show~ command to display node references
+- Show both referenced and referencing nodes
+- Display node content with proper formatting
+- Support keyboard navigation and node viewing
+
 * [3.0.0] - 2025-04-05
 ** Features
 *** Add AI backend for tag auto suggestion
 *** Add Bidirectional tag relation management
 *** Add Table View
+
 *** Refactor sync-mechanism
 * [2.5.3] - 2025-03-11
 ** Features

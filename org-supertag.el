@@ -53,7 +53,8 @@
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
 (require 'org-supertag-sim)
-(require 'org-supertag-sim-epc) 
+(require 'org-supertag-sim-epc)
+(require 'org-supertag-backlink)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -116,9 +117,7 @@
     ;; 6. Initialize EPC server for similarity features
     (when (featurep 'org-supertag-sim-epc)
       (condition-case err
-          (progn
-            (org-supertag-sim-epc-start-server)
-            (org-supertag-sim-init))
+         (org-supertag-sim-epc-start-server)
         (error
          (message "Failed to start EPC server: %s" (error-message-string err)))))
     ;; 7. Add hooks

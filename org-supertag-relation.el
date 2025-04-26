@@ -396,7 +396,7 @@ TAG-ID: The ID of the current tag being edited."
         (insert " " (propertize "→" 'face '(:foreground "blue")) " - unidirectional relation\n\n")
 
         ;; 显示共现关系
-        (insert (propertize "\n共现标签:\n" 'face '(:weight bold)))
+        (insert (propertize "\nCo-occurrence Tags:\n" 'face '(:weight bold)))
         (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
                ;; 过滤共现关系
                (relations (cl-remove-duplicates
@@ -414,13 +414,30 @@ TAG-ID: The ID of the current tag being edited."
                        (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
                        (strength (or (plist-get rel :strength) 0.0))
                        (strength-display (format " %.2f" strength))
-                       (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
+                       (add-button-text (propertize "[+]" 'face '(:foreground "green"))))
                   (insert " ")
-                  (insert-text-button remove-button-text
-                                    'action 'org-supertag-relation--remove-button-action
+                  (insert-text-button add-button-text
+                                    'action (lambda (button)
+                                              (let* ((tag-id org-supertag-relation--current-tag)
+                                                     (other-tag-id (button-get button 'other-tag-id))
+                                                     ;; 只允许选择非 cooccurrence 的关系类型
+                                                     (rel-choices (cl-remove-if (lambda (c)
+                                                                                  (string-match-p "^cooccurrence" c))
+                                                                                (org-supertag-relation--get-relation-type-choices)))
+                                                     (choice (completing-read "Select relation type: " rel-choices nil t))
+                                                     (rel-type (org-supertag-relation--get-type-from-choice choice)))
+                                                (when (and tag-id other-tag-id rel-type)
+                                                  (if (org-supertag-relation-has-complement-p rel-type)
+                                                      (org-supertag-relation-add-with-complement tag-id other-tag-id rel-type)
+                                                    (org-supertag-relation-add-relation tag-id other-tag-id rel-type))
+                                                  (org-supertag-relation--refresh-display)
+                                                  (message "Added relation: %s -[%s]-> %s"
+                                                           (org-supertag-tag-get-name-by-id tag-id)
+                                                           rel-type
+                                                           (org-supertag-tag-get-name-by-id other-tag-id)))))
                                     'other-tag-id other-tag-id
                                     'follow-link t
-                                    'help-echo "Click to remove this relation")
+                                    'help-echo "Click to add an explicit relation to this tag")
                   (insert (format " %s " 
                                 (propertize "cooccurrence" 'face '(:foreground "white" :background "black"))))
                   (insert (format " %s%s\n" 

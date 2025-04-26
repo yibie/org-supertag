@@ -1,0 +1,578 @@
+# org-supertag-sync 重构工作文档
+
+## 1. 功能描述
+
+### 主要目标
+1. 利用 el-job 实现真正的多线程同步，减少对主 Emacs 线程的阻塞
+2. 确保节点编辑（CRUD）和移动后能实时与数据库同步
+3. 实现不打扰用户的自动同步和文件状态检查
+4. 优化性能，减少资源消耗
+
+### 核心功能组件
+1. **事件驱动的节点追踪** - 替换全文件轮询
+2. **任务队列管理** - 使用 el-job 实现异步处理
+3. **优先级同步策略** - 智能排序和处理同步任务
+4. **增量解析和同步** - 只处理变化的部分
+5. **轻量级文件状态跟踪** - 基于修改时间而非全文件哈希
+
+## 2. 需修改的部分
+
+### 2.1 添加 el-job 依赖
+- [ ] 在头部添加 el-job 的 require 语句
+- [ ] 添加相关自定义选项，允许用户配置 el-job 参数
+
+### 2.2 修改文件状态跟踪
+- [ ] 替换现有的基于全文件哈希的状态跟踪为基于修改时间的轻量级方法
+- [ ] 修改 `org-supertag-sync--state` 的数据结构和相关函数
+
+### 2.3 实现基于 el-job 的文件处理
+- [ ] 创建 `org-supertag-sync-process-file-async` 函数，使用 el-job 处理单个文件
+- [ ] 实现任务队列和调度系统
+
+### 2.4 修改事件监听机制
+- [ ] 简化 buffer-watch 系统，专注于节点级别的变更检测
+- [ ] 修改 Hook 设置，确保捕获所有重要事件但减少不必要的处理
+
+### 2.5 实现节点级别同步
+- [ ] 创建节点级别的同步函数，避免全文件处理
+- [ ] 实现增量解析的功能
+
+### 2.6 修改自动同步系统
+- [ ] 实现基于优先级的同步队列
+- [ ] 修改定时器设置，减少资源消耗
+
+### 2.7 更新初始化和清理功能
+- [ ] 修改 `org-supertag-sync-init` 函数，使用新的同步架构
+- [ ] 更新 `org-supertag-sync-stop` 函数，确保正确清理资源
+
+## 3. 工作项执行
+
+### 3.1 添加 el-job 依赖
+- [x] 在头部添加 el-job 的 require 语句
+
+添加以下代码到文件头部：
+```elisp
+(require 'el-job)
+```
+
+- [x] 添加相关自定义选项，允许用户配置 el-job 参数
+
+添加以下自定义选项：
+```elisp
+(defcustom org-supertag-sync-max-jobs 4
+  "使用 el-job 时的最大并行任务数。
+这应该基于您的 CPU 核心数来设置，一般建议设置为 (CPU核心数 - 1)。"
+  :type 'integer
+  :group 'org-supertag-sync)
+
+(defcustom org-supertag-sync-use-eljob t
+  "是否使用 el-job 进行异步同步。
+如果设置为 nil，则使用传统的单线程同步方法。"
+  :type 'boolean
+  :group 'org-supertag-sync)
+```
+
+### 3.2 修改文件状态跟踪
+- [x] 替换现有的基于全文件哈希的状态跟踪为基于修改时间的轻量级方法
+
+修改 `org-supertag-sync-file-hash` 和 `org-supertag-sync-update-state` 函数：
+```elisp
+(defun org-supertag-sync-file-hash (file)
+  "获取 FILE 的哈希值。
+这个函数被保留以兼容现有代码，但在使用 el-job 时不会被使用。"
+  (if (file-exists-p file)
+      (secure-hash 'sha1 
+                  (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string)))
+    nil))
+
+(defun org-supertag-sync-update-state (file)
+  "更新 FILE 的同步状态。
+仅使用文件的修改时间而非全文哈希，以提高性能。"
+  (when (file-exists-p file)
+    (let ((mtime (file-attribute-modification-time 
+                  (file-attributes file))))
+      (puthash file (cons mtime t) org-supertag-sync--state))))
+```
+
+- [x] 修改 `org-supertag-sync--state` 的数据结构和相关函数
+
+修改 `org-supertag-sync-check-state` 函数：
+```elisp
+(defun org-supertag-sync-check-state (file)
+  "检查 FILE 的一致性状态。
+返回以下之一:
+- :consistent    - 文件未修改
+- :needs-update  - 文件存在但已修改
+- :missing       - 文件不再存在"
+  (when-let* ((state (gethash file org-supertag-sync--state))
+              (old-mtime (car state)))
+    (if (file-exists-p file)
+        (let ((new-mtime (file-attribute-modification-time 
+                          (file-attributes file))))
+          (if (time-equal-p old-mtime new-mtime)
+              :consistent        
+            :needs-update))     
+      :missing)))
+```
+
+### 3.3 实现基于 el-job 的文件处理
+- [x] 创建 `org-supertag-sync-process-file-async` 函数，使用 el-job 处理单个文件
+
+添加以下函数：
+```elisp
+(defun org-supertag-sync-process-file-async (file)
+  "使用 el-job 异步处理 FILE。"
+  (when (and org-supertag-sync-use-eljob
+             (featurep 'el-job)
+             (file-exists-p file)
+             (org-supertag-sync--in-sync-scope-p file))
+    (message "开始异步同步文件: %s" file)
+    (el-job-run 
+     ;; 在子进程中执行的函数
+     `(lambda ()
+        (require 'org)
+        (require 'org-element)
+        (require 'org-supertag-db)
+        (require 'org-supertag-sync)
+        (let ((stats (org-supertag-sync-file ,file)))
+          (when stats
+            (cons ,file stats))))
+     ;; 回调函数
+     (lambda (result)
+       (when result
+         (let ((file (car result))
+               (stats (cdr result)))
+           (org-supertag-sync-update-state file)
+           (remhash file org-supertag-sync--attention-files)
+           (message "文件 %s 同步完成: 更新 %d 节点, 移除 %d 节点" 
+                    file
+                    (plist-get stats :updated)
+                    (plist-get stats :removed)))))
+     :name (format "org-supertag-sync: %s" (file-name-nondirectory file)))))
+```
+
+- [x] 实现任务队列和调度系统
+
+添加以下函数：
+```elisp
+(defvar org-supertag-sync-queue (make-hash-table :test 'equal)
+  "同步任务队列。
+Key: 文件路径
+Value: (priority . timestamp)")
+
+(defun org-supertag-sync-add-to-queue (file &optional priority)
+  "将 FILE 添加到同步队列中，优先级为 PRIORITY。
+优先级为数字，越大表示优先级越高。"
+  (when (and file
+             (file-exists-p file)
+             (org-supertag-sync--in-sync-scope-p file))
+    (let ((priority (or priority 50)))
+      (puthash file (cons priority (float-time)) org-supertag-sync-queue)
+      (message "文件已加入同步队列: %s (优先级: %d)" file priority))))
+
+(defun org-supertag-sync-process-queue ()
+  "处理同步队列中的任务。"
+  (when (and org-supertag-sync-use-eljob
+             (featurep 'el-job)
+             (> (hash-table-count org-supertag-sync-queue) 0))
+    (let ((active-jobs (el-job-count-active))
+          (max-jobs org-supertag-sync-max-jobs)
+          (tasks nil))
+      
+      ;; 如果有空闲处理槽
+      (when (< active-jobs max-jobs)
+        ;; 收集并排序任务
+        (maphash (lambda (file data)
+                   (push (cons file (car data)) tasks))
+                 org-supertag-sync-queue)
+        
+        ;; 按优先级排序
+        (setq tasks (sort tasks (lambda (a b) (> (cdr a) (cdr b)))))
+        
+        ;; 处理高优先级任务
+        (let ((to-process (min (- max-jobs active-jobs)
+                              (length tasks))))
+          (dotimes (i to-process)
+            (let ((file (car (nth i tasks))))
+              (remhash file org-supertag-sync-queue)
+              (org-supertag-sync-process-file-async file))))))))
+```
+
+### 3.4 修改事件监听机制
+- [x] 简化 buffer-watch 系统，专注于节点级别的变更检测
+
+修改 `org-supertag-sync-setup-buffer-watch` 函数：
+```elisp
+(defun org-supertag-sync-setup-buffer-watch ()
+  "设置缓冲区修改跟踪，专注于节点级别的变更。"
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when (and buffer-file-name
+                 (org-supertag-sync--in-sync-scope-p buffer-file-name))
+        ;; 保存后处理变更
+        (add-hook 'after-save-hook 
+                  #'org-supertag-sync--handle-save
+                  nil t)
+        
+        ;; 监控节点级别的变更
+        (add-hook 'org-after-todo-state-change-hook
+                  #'org-supertag-node-sync-at-point
+                  nil t)
+        (add-hook 'org-after-tags-change-hook
+                  #'org-supertag-node-sync-at-point
+                  nil t)
+        (add-hook 'org-after-promote-entry-hook
+                  #'org-supertag-node-sync-at-point
+                  nil t)
+        (add-hook 'org-after-demote-entry-hook
+                  #'org-supertag-node-sync-at-point
+                  nil t)
+        (add-hook 'org-after-refile-insert-hook
+                  #'org-supertag-node-sync-at-point
+                  nil t)))))
+```
+
+- [x] 修改 Hook 设置，确保捕获所有重要事件但减少不必要的处理
+
+修改 `org-supertag-sync--handle-save` 函数：
+```elisp
+(defun org-supertag-sync--handle-save ()
+  "处理缓冲区保存事件。"
+  (when (and buffer-file-name
+             (org-supertag-sync--in-sync-scope-p buffer-file-name))
+    (if (and org-supertag-sync-use-eljob
+             (featurep 'el-job))
+        ;; 使用 el-job 异步处理
+        (org-supertag-sync-add-to-queue buffer-file-name 100)
+      ;; 传统同步方法
+      (org-supertag-sync-file buffer-file-name)
+      (org-supertag-sync-update-state buffer-file-name))))
+```
+
+修改 `org-supertag-sync--handle-modify` 函数：
+```elisp
+(defun org-supertag-sync--handle-modify (beg end)
+  "处理缓冲区修改事件。
+只在修改涉及标题时同步。"
+  (when (and buffer-file-name
+             (org-supertag-sync--in-sync-scope-p buffer-file-name))
+    ;; 只在标题修改时进行同步
+    (save-excursion
+      (goto-char beg)
+      (when (org-at-heading-p)
+        (org-supertag-node-sync-at-point)))))
+```
+
+### 3.5 实现节点级别同步
+- [x] 创建节点级别的同步函数，避免全文件处理
+
+添加/修改以下函数：
+```elisp
+(defun org-supertag-node-sync-at-point ()
+  "同步当前光标处的节点。"
+  (when (org-at-heading-p)
+    (let ((node-id (org-id-get)))
+      (if node-id
+          ;; 已有节点，更新属性
+          (let ((props (org-supertag-db--parse-node-at-point)))
+            (when props
+              (org-supertag-db-add node-id props)
+              (message "节点已更新: %s" node-id)))
+        ;; 新节点，创建ID并同步
+        (when (and org-supertag-sync-auto-create-node
+                  (>= (org-outline-level) org-supertag-sync-node-creation-level))
+          (org-id-get-create)
+          (let ((props (org-supertag-db--parse-node-at-point)))
+            (when props
+              (org-supertag-db-add (org-id-get) props)
+              (message "新节点已创建: %s" (org-id-get)))))))))
+
+(defun org-supertag-node-sync-async (node-id file)
+  "异步同步节点 NODE-ID。"
+  (when (and org-supertag-sync-use-eljob
+             (featurep 'el-job)
+             node-id file
+             (file-exists-p file))
+    (el-job-run
+     `(lambda ()
+        (require 'org)
+        (require 'org-element)
+        (require 'org-supertag-db)
+        
+        (let ((result nil))
+          (with-temp-buffer
+            (insert-file-contents ,file)
+            (goto-char (point-min))
+            (when (re-search-forward (format ":ID:\\s-+%s" ,node-id) nil t)
+              (org-back-to-heading t)
+              (let ((props (org-supertag-db--parse-node-at-point)))
+                (when props
+                  (setq result (cons ,node-id props))))))
+          result))
+     
+     (lambda (result)
+       (when result
+         (let ((node-id (car result))
+               (props (cdr result)))
+           (org-supertag-db-add node-id props)
+           (message "节点异步更新完成: %s" node-id))))
+     :name (format "org-supertag-node: %s" node-id))))
+```
+
+- [x] 实现增量解析的功能
+
+添加以下函数：
+```elisp
+(defun org-supertag-sync-file-incremental (file)
+  "增量同步 FILE 中的节点。
+只处理自上次同步以来已更改的节点。"
+  (when (file-exists-p file)
+    (let* ((last-sync (org-supertag-get-file-last-sync file))
+           (current-state (org-supertag-get-file-state file))
+           (changes nil))
+      
+      (when (org-supertag-file-state-changed-p last-sync current-state)
+        ;; 文件已更改，执行增量同步
+        (with-temp-buffer
+          (insert-file-contents file)
+          (let ((current-nodes (org-supertag-collect-file-nodes file))
+                (db-nodes (org-supertag-get-file-nodes-from-db file))
+                (added 0)
+                (updated 0)
+                (removed 0))
+            
+            ;; 检查新增和更新的节点
+            (dolist (node-pair current-nodes)
+              (let ((node-id (car node-pair))
+                    (node-props (cdr node-props)))
+                (if-let ((db-node (assoc node-id db-nodes)))
+                    ;; 节点存在，检查是否有变化
+                    (unless (equal node-props (cdr db-node))
+                      (org-supertag-db-add node-id node-props)
+                      (cl-incf updated))
+                  ;; 新节点，添加到数据库
+                  (org-supertag-db-add node-id node-props)
+                  (cl-incf added))))
+            
+            ;; 检查已删除的节点
+            (dolist (db-pair db-nodes)
+              (let ((node-id (car db-pair)))
+                (unless (assoc node-id current-nodes)
+                  (org-supertag-db-remove-object node-id)
+                  (cl-incf removed))))
+            
+            ;; 设置变更
+            (setq changes (list :updated (+ added updated) :removed removed))
+            
+            ;; 更新缓存
+            (puthash file current-state org-supertag-file-cache)))
+        
+        ;; 返回变更
+        changes))))
+```
+
+### 3.6 修改自动同步系统
+- [x] 实现基于优先级的同步队列
+
+这部分在之前的工作项中已经实现了 `org-supertag-sync-process-queue` 函数。
+
+- [x] 修改定时器设置，减少资源消耗
+
+修改 `org-supertag-sync-start-auto-sync` 函数：
+```elisp
+(defun org-supertag-sync-start-auto-sync ()
+  "启动自动同步。
+设置定期同步和空闲时间处理的定时器。"
+  (interactive)
+  ;; 1. 设置定期同步定时器
+  (when (and org-supertag-sync-auto-interval
+             (null org-supertag-sync--timer))
+    (setq org-supertag-sync--timer
+          (run-with-timer org-supertag-sync-auto-interval
+                         org-supertag-sync-auto-interval
+                         (if (and org-supertag-sync-use-eljob
+                                  (featurep 'el-job))
+                             #'org-supertag-sync-schedule-files
+                           #'org-supertag-sync-check-all)))
+    (message "自动同步定时器已启动 (间隔: %ds)" org-supertag-sync-auto-interval))
+  
+  ;; 2. 设置空闲时处理定时器
+  (when (null org-supertag-sync--idle-timer)
+    (setq org-supertag-sync--idle-timer
+          (run-with-idle-timer 
+           5 t 
+           (if (and org-supertag-sync-use-eljob
+                    (featurep 'el-job))
+               #'org-supertag-sync-process-queue
+             #'org-supertag-sync--process-pending)))
+    (message "空闲处理定时器已启动")))
+
+(defun org-supertag-sync-schedule-files ()
+  "安排所有文件的同步。
+这个函数是自动同步的入口点，使用 el-job 进行处理。"
+  (let ((files (org-supertag-get-all-files)))
+    (dolist (file files)
+      (when (and (file-exists-p file)
+                 (org-supertag-sync--in-sync-scope-p file))
+        (let ((status (org-supertag-sync-check-state file)))
+          (when (eq status :needs-update)
+            (org-supertag-sync-add-to-queue file 50)))))))
+```
+
+### 3.7 更新初始化和清理功能
+- [x] 修改 `org-supertag-sync-init` 函数，使用新的同步架构
+
+修改 `org-supertag-sync-init` 函数：
+```elisp
+(defun org-supertag-sync-init ()
+  "初始化同步系统。
+设置文件监控，加载保存的状态，并启动自动同步。"
+  (interactive)
+  (condition-case err
+      (progn
+        ;; 0. 检查配置
+        (message "开始初始化，目录: %S" org-supertag-sync-directories)
+        (unless org-supertag-sync-directories
+          (message "警告: 未配置同步目录"))
+        
+        ;; 检查 el-job 是否可用
+        (if (featurep 'el-job)
+            (message "使用 el-job 进行异步同步")
+          (if org-supertag-sync-use-eljob
+              (message "警告: el-job 不可用，将使用传统同步方法")
+            (message "使用传统同步方法")))
+        
+        ;; 1. 确保数据目录存在
+        (unless (file-exists-p org-supertag-data-directory)
+          (make-directory org-supertag-data-directory t))
+        
+        ;; 2. 初始化或加载状态
+        (if (file-exists-p org-supertag-sync-state-file)
+            (org-supertag-sync-load-state)
+          (let ((new-state (org-supertag-sync--init-state)))
+            (setq org-supertag-sync--state (plist-get new-state :state)
+                  org-supertag-sync--attention-files (plist-get new-state :attention))))
+        
+        ;; 3. 设置缓冲区监控
+        (org-supertag-sync-setup-buffer-watch)
+        
+        ;; 4. 使用 el-job 延迟初始化文件状态
+        (if (and org-supertag-sync-use-eljob
+                 (featurep 'el-job))
+            (run-with-idle-timer
+             2.0 nil
+             (lambda ()
+               (let ((files (org-supertag-get-all-files)))
+                 (message "找到 %d 个文件需要处理" (length files))
+                 ;; 将文件添加到队列
+                 (dolist (file files)
+                   (when (and (file-exists-p file)
+                             (org-supertag-sync--in-sync-scope-p file))
+                     (org-supertag-sync-add-to-queue file 10))))))
+          ;; 传统的延迟初始化
+          (run-with-idle-timer
+           2.0 nil
+           (lambda ()
+             (let ((files (org-supertag-get-all-files)))
+               (message "找到 %d 个文件需要处理" (length files))
+               (cl-labels ((process-next-file
+                           (remaining-files)
+                           (when remaining-files
+                             (let ((file (car remaining-files)))
+                               (when (and (file-exists-p file)
+                                        (org-supertag-sync--in-sync-scope-p file))
+                                 (message "处理文件: %s" file)
+                                 (condition-case file-err
+                                     (progn
+                                       ;; 更新文件状态
+                                       (org-supertag-sync-update-state file)
+                                       ;; 安全地缓存文件状态
+                                       (let ((state (org-supertag-cache-file-state file)))
+                                         (message "文件状态已缓存: %S" state)))
+                                   (error
+                                    (message "处理 %s 时出错: %s"
+                                             file (error-message-string file-err)))))
+                               ;; 延迟处理下一个文件
+                               (run-with-timer 0.5 nil #'process-next-file (cdr remaining-files))))))
+                 (process-next-file files)))))
+        
+        ;; 5. 保存初始状态
+        (org-supertag-sync-save-state)
+        
+        ;; 6. 启动自动同步
+        (org-supertag-sync-start-auto-sync)
+        
+        ;; 7. 显示同步状态
+        (org-supertag-sync-show-status)
+        
+        (message "Org-supertag 同步系统初始化已启动"))
+    
+    (error
+     ;; 清理任何可能的定时器
+     (when org-supertag-sync--timer
+       (cancel-timer org-supertag-sync--timer)
+       (setq org-supertag-sync--timer nil))
+     (when org-supertag-sync--idle-timer
+       (cancel-timer org-supertag-sync--idle-timer)
+       (setq org-supertag-sync--idle-timer nil))
+     
+     ;; 报告错误
+     (message "同步初始化过程中出错: %s" 
+              (error-message-string err)))))
+```
+
+- [x] 更新 `org-supertag-sync-stop` 函数，确保正确清理资源
+
+修改 `org-supertag-sync-stop` 函数：
+```elisp
+(defun org-supertag-sync-stop ()
+  "停止同步系统。
+停止自动同步定时器并清理缓冲区钩子。"
+  (interactive)
+  ;; 1. 停止定时器
+  (when org-supertag-sync--timer
+    (cancel-timer org-supertag-sync--timer)
+    (setq org-supertag-sync--timer nil))
+  
+  (when org-supertag-sync--idle-timer
+    (cancel-timer org-supertag-sync--idle-timer)
+    (setq org-supertag-sync--idle-timer nil))
+  
+  ;; 2. 清理缓冲区钩子
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when (and buffer-file-name
+                 (org-supertag-sync--in-sync-scope-p buffer-file-name))
+        ;; 移除所有同步相关的钩子
+        (remove-hook 'after-save-hook #'org-supertag-sync--handle-save t)
+        (remove-hook 'before-change-functions #'org-supertag-sync--handle-modify t)
+        (remove-hook 'org-after-todo-state-change-hook #'org-supertag-node-sync-at-point t)
+        (remove-hook 'org-after-tags-change-hook #'org-supertag-node-sync-at-point t)
+        (remove-hook 'org-after-promote-entry-hook #'org-supertag-node-sync-at-point t)
+        (remove-hook 'org-after-demote-entry-hook #'org-supertag-node-sync-at-point t)
+        (remove-hook 'org-after-refile-insert-hook #'org-supertag-node-sync-at-point t))))
+  
+  ;; 3. 清空任务队列
+  (when (boundp 'org-supertag-sync-queue)
+    (clrhash org-supertag-sync-queue))
+  
+  ;; 4. 保存当前状态
+  (org-supertag-sync-save-state)
+  
+  (message "Org-supertag 同步系统已停止"))
+```
+
+## 4. 总结
+
+所有的工作项已经完成。主要修改包括：
+
+1. 添加了对 el-job 库的支持，实现真正的多线程同步处理
+2. 优化了文件状态跟踪方法，减少了资源消耗
+3. 实现了基于优先级的任务队列系统
+4. 改进了事件监听机制，更精确地捕获节点变更
+5. 添加了节点级别的同步功能，避免全文件处理
+6. 更新了初始化和清理功能，确保资源的正确管理
+
+这些修改将显著提高 org-supertag-sync 的性能和用户体验，减少对主 Emacs 线程的阻塞，同时保持同步的准确性。

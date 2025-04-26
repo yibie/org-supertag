@@ -104,23 +104,24 @@ ARGS is the format parameters"
       (list db-file tag-list))))
 
 (defun org-supertag-sim-epc-debug-env ()
-  "Debug Python environment settings."
-  (let* ((python-exe org-supertag-sim-epc-python-path)
-         (script-dir (file-name-directory org-supertag-sim-epc-script-path))
-         (debug-script "
-import sys
-import os
-
-print('=== Python Environment Debug ===')
-print(f'Python version: {sys.version}')
-print(f'Current working directory: {os.getcwd()}')
-print(f'PYTHONPATH: {os.environ.get(\"PYTHONPATH\", \"Not set\")}')
-print(f'Sys.path: {sys.path}')
-print('=== End Debug ===')
-"))
-    (with-temp-buffer
-      (call-process python-exe nil t nil "-c" debug-script)
-      (message "Python环境信息:\n%s" (buffer-string)))))
+  "Debug environment variables."
+  (interactive)
+  (let ((debug-info (format "=== Environment Debug ===
+PYTHONPATH: %s
+VIRTUAL_ENV: %s
+PATH: %s
+Python Path: %s
+Base Dir: %s
+Venv Dir: %s
+=== End Debug ==="
+                           (getenv "PYTHONPATH")
+                           (getenv "VIRTUAL_ENV")
+                           (getenv "PATH")
+                           org-supertag-sim-epc-python-path
+                           org-supertag-sim-epc-dir
+                           org-supertag-sim-epc-venv-dir)))
+    (org-supertag-sim-epc-log debug-info)
+    (message debug-info)))
 
 (defun org-supertag-sim-epc-start-server ()
   "Start SimTag EPC server."
@@ -140,27 +141,58 @@ print('=== End Debug ===')
               (org-supertag-sim-epc-log "服务器启动失败: %s" err)
               (message "SimTag EPC服务器启动失败，将在下次空闲时重试")))))))
 
+(defun org-supertag-sim-epc-setup-venv ()
+  "Setup the Python virtual environment."
+  (interactive)
+  (let ((venv-dir (file-name-as-directory org-supertag-sim-epc-venv-dir))
+        (base-dir (file-name-as-directory org-supertag-sim-epc-dir)))
+    ;; 设置环境变量
+    (setq process-environment 
+          (append process-environment
+                  (list (format "PYTHONPATH=%s" base-dir)
+                        (format "VIRTUAL_ENV=%s" venv-dir)
+                        (format "PATH=%s/bin:%s" venv-dir (getenv "PATH")))))
+    
+    (unless (file-exists-p venv-dir)
+      (org-supertag-sim-epc-log "Creating virtual environment...")
+      (make-directory venv-dir t)
+      (shell-command-to-string 
+       (format "python3 -m venv %s" venv-dir)))
+    
+    ;; 安装依赖
+    (let ((pip (expand-file-name "bin/pip" venv-dir)))
+      (org-supertag-sim-epc-log "Installing dependencies...")
+      (shell-command-to-string 
+       (format "%s install epc sentence-transformers torch numpy requests" pip)))
+    
+    ;; 更新 Python 解释器路径
+    (let ((python-path (expand-file-name "bin/python" venv-dir)))
+      (when (file-exists-p python-path)
+        (setq org-supertag-sim-epc-python-path python-path)
+        (org-supertag-sim-epc-log "Python path updated: %s" python-path)))
+    
+    ;; 调试输出
+    (org-supertag-sim-epc-debug-env)))
+
 (defun org-supertag-sim-epc--start-server-internal ()
   "Internal function: Start SimTag EPC server."
-  (let* ((python-exe org-supertag-sim-epc-python-path)
+  (let* ((venv-dir (file-name-as-directory org-supertag-sim-epc-venv-dir))
+         (base-dir (file-name-as-directory org-supertag-sim-epc-dir))
+         (python-exe (expand-file-name "bin/python" venv-dir))  ;; 使用虚拟环境中的 Python
          (python-file org-supertag-sim-epc-script-path)
-         (vector-file org-supertag-sim-epc-vector-file)  ; Use the correct custom variable
-         (db-file org-supertag-db-file)                  ; Use the correct custom variable
-         (base-dir org-supertag-sim-epc-dir)
-         (process-environment 
-          (cons (format "PYTHONPATH=%s" base-dir)
-                process-environment))
+         (vector-file org-supertag-sim-epc-vector-file)
+         (db-file org-supertag-db-file)
          (default-directory base-dir)
          (process-buffer (get-buffer-create "*simtag-epc-process*")))
     
-    ;; Ensure the environment settings are correct
+    ;; 确保环境设置正确
     (org-supertag-sim-epc-setup-venv)
     (org-supertag-sim-epc-check-module-structure)
     
-    ;; Record startup information
+    ;; 记录启动信息
     (org-supertag-sim-epc-log "Starting server...")
     (org-supertag-sim-epc-log "Working directory: %s" default-directory)
-    (org-supertag-sim-epc-log "PYTHONPATH: %s" (getenv "PYTHONPATH"))
+    (org-supertag-sim-epc-debug-env)
     
     (org-supertag-sim-epc-log "Starting EPC server...")
     (org-supertag-sim-epc-log "Python path: %s" python-exe)
@@ -177,7 +209,7 @@ print('=== End Debug ===')
      :buffer process-buffer
      :command (cons python-exe (list python-file "--vector-file" vector-file "--db-file" db-file "--debug"))
      :filter (lambda (proc output)
-               (org-supertag-sim-epc-log "进程输出: %s" output)
+               (org-supertag-sim-epc-log "Process output: %s" output)
                (with-current-buffer (process-buffer proc)
                  (goto-char (point-max))
                  (insert output))
@@ -252,22 +284,22 @@ print('=== End Debug ===')
      ((string-match-p "gnu/linux" system-type)  ;; Linux
       "curl -fsSL https://ollama.com/install.sh | sh")
      ((string-match-p "windows" system-type)  ;; Windows
-      "Windows安装选项:
-1. 使用winget(推荐):
+      "Windows installation options:
+1. Use winget (recommended):
    winget install Ollama.Ollama
 
-2. 使用Scoop:
+2. Use Scoop:
    scoop bucket add main
    scoop install ollama
 
-3. 直接下载安装包:
-   访问 https://ollama.com/download")
+3. Download the installation package directly:
+   Visit https://ollama.com/download")
      (t
-      "请访问 https://ollama.com 获取安装指南"))))
+      "Please visit https://ollama.com for installation guide"))))
 
 (defun org-supertag-sim-epc-check-ollama ()
   "Check if the Ollama service is running.
-Check方式类似于ollama_bridge.py中的is_service_running方法."
+Check方式类似于 ollama_bridge.py中的is_service_running方法."
   (org-supertag-sim-epc-log "Checking the Ollama service...")
   (let ((result (condition-case nil
                     (with-timeout (3)  ;; Set 3 second timeout
@@ -567,28 +599,6 @@ For normal users, use org-supertag-sim-init as the main entry point."
       (goto-char (point-max)))
     (display-buffer log-buffer)))
 
-(defun org-supertag-sim-epc-setup-venv ()
-  "Setup the Python virtual environment."
-  (interactive)
-  (let ((venv-dir org-supertag-sim-epc-venv-dir))
-    (unless (file-exists-p venv-dir)
-      (org-supertag-sim-epc-log "Creating virtual environment...")
-      (make-directory venv-dir t)
-      (shell-command-to-string 
-       (format "python3 -m venv %s" venv-dir)))
-    
-    ;; Install dependencies
-    (let ((pip (expand-file-name "bin/pip" venv-dir)))
-      (org-supertag-sim-epc-log "Installing dependencies...")
-      (shell-command-to-string 
-       (format "%s install epc sentence-transformers torch numpy requests" pip)))
-    
-    ;; Update the Python interpreter path
-    (let ((python-path (expand-file-name "bin/python" venv-dir)))
-      (when (file-exists-p python-path)
-        (setq org-supertag-sim-epc-python-path python-path)
-        (org-supertag-sim-epc-log "Python path updated: %s" python-path)))))
-
 (defun org-supertag-sim-epc-check-module-structure ()
   "Check and create the necessary module structure."
   (interactive)
@@ -787,10 +797,10 @@ CALLBACK is the callback function that receives the similar tags"
       (let ((inhibit-read-only t))
         (save-excursion
           (goto-char (point-min))
-          (when (search-forward "用户消息:\n" nil t)
+          (when (search-forward "User message:\n" nil t)
             (delete-region (point) (point-max))
             (insert user-message)
-            (insert "\n\n等待Ollama响应...\n"))))
+            (insert "\n\nWaiting for Ollama response...\n"))))
       
       ;; Send message to Ollama
       (when user-message

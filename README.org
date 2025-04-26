@@ -25,10 +25,15 @@ Convert ordinary Org headlines into searchable and referable nodes, *enhance the
 
 - Automatically create nodes, no need to create manually
 - Establish reference relationships between nodes
+- View node references in a dedicated backlink panel
 
 [[./picture/figure5.gif]]
 
-Related commands ~M-x org-supertag-node-add-reference~ Key binding ~C-c t r~. The reference relationship of the node will be automatically recorded in the database.
+Related commands:
+- ~M-x org-supertag-node-add-reference~ Key binding ~C-c t r~
+- ~M-x org-supertag-backlink-show~ Show backlink panel
+
+The reference relationship of the node will be automatically recorded in the database.
 
 If the node fails to be created automatically, you can directly run the ~M-x org-supertag-node-create~ command to convert the current headline into a node.
 

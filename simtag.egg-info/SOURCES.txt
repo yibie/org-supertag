@@ -1,0 +1,17 @@
+setup.py
+simtag/__init__.py
+simtag/config.py
+simtag/entity_extractor.py
+simtag/epc_server.py
+simtag/ollama_bridge.py
+simtag/tag_generator.py
+simtag/tag_relation_analyzer.py
+simtag/tag_vectors.py
+simtag.egg-info/PKG-INFO
+simtag.egg-info/SOURCES.txt
+simtag.egg-info/dependency_links.txt
+simtag.egg-info/requires.txt
+simtag.egg-info/top_level.txt
+simtag/utils/__init__.py
+simtag/utils/logging.py
+simtag/utils/serialization.py

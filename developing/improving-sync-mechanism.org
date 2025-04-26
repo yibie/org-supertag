@@ -1,0 +1,323 @@
+#+TITLE: 改进 org-supertag 同步机制
+#+AUTHOR: org-supertag Development Team
+#+DATE: [2024-03-30 Sat]
+
+* 问题描述
+
+当前的同步机制存在以下问题：
+
+1. 使用 org-element-parser 解析文档，但没有进行真正的对比
+2. 数据库中会不断记录重复信息
+3. 可能存在不准确的信息
+4. 实时监控修改困难且不可靠
+
+* 改进方案
+
+** 核心思路
+
+基于文件级别的完整对比：
+
+1. 对同一个 file-path 中的所有节点进行对比
+   - 检查文件中现有的节点
+   - 对比数据库中的记录
+   - 处理新增、修改和删除的节点
+
+2. 逐个处理所有文件
+   - 确保每个文件都得到完整处理
+   - 维护文件级别的同步状态
+
+3. 完整性检查
+   - 确保所有文件都被处理
+   - 清理孤立的数据库记录
+
+** 实现步骤
+
+*** 第一步：文件节点收集 [待实现]
+
+#+begin_src elisp
+(defun org-supertag-collect-file-nodes (file)
+  "Collect all nodes in FILE.
+Returns alist of (id . props)."
+  (with-current-buffer (find-file-noselect file)
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (let (nodes)
+       (while (re-search-forward org-heading-regexp nil t)
+         (when-let* ((id (org-id-get))
+                    (props (org-supertag-db--parse-node-at-point)))
+           (push (cons id props) nodes)))
+       (nreverse nodes)))))
+#+end_src
+
+*** 第二步：数据库节点获取 [待实现]
+
+#+begin_src elisp
+(defun org-supertag-get-file-nodes-from-db (file)
+  "Get all nodes in database for FILE.
+Returns alist of (id . props)."
+  (let (nodes)
+    (maphash
+     (lambda (id props)
+       (when (and (eq (plist-get props :type) :node)
+                  (string= (plist-get props :file-path) file))
+         (push (cons id props) nodes)))
+     org-supertag-db--object)
+    nodes))
+#+end_src
+
+*** 第三步：节点对比和同步 [待实现]
+
+#+begin_src elisp
+(defun org-supertag-sync-file (file)
+  "Sync nodes in FILE with database."
+  (let ((file-nodes (org-supertag-collect-file-nodes file))
+        (db-nodes (org-supertag-get-file-nodes-from-db file))
+        (stats (list :updated 0 :removed 0)))
+    
+    ;; 1. 检查现有节点的变化
+    (dolist (node-pair file-nodes)
+      (let ((node-id (car node-pair))
+            (node-props (cdr node-pair)))
+        (if-let ((db-node (assoc node-id db-nodes)))
+            ;; 节点存在，检查是否有变化
+            (unless (equal node-props (cdr db-node))
+              (org-supertag-db-add node-id node-props)
+              (cl-incf (plist-get stats :updated)))
+          ;; 新节点，添加到数据库
+          (org-supertag-db-add node-id node-props)
+          (cl-incf (plist-get stats :updated)))))
+    
+    ;; 2. 清理不存在的节点
+    (dolist (db-pair db-nodes)
+      (let ((node-id (car db-pair)))
+        (unless (assoc node-id file-nodes)
+          (org-supertag-db-remove-object node-id)
+          (cl-incf (plist-get stats :removed)))))
+    
+    ;; 返回统计信息
+    stats))
+#+end_src
+
+*** 第四步：全局同步控制 [待实现]
+
+#+begin_src elisp
+(defun org-supertag-sync-all-files ()
+  "Sync all files with database."
+  (let ((files (org-supertag-get-all-files))
+        (total 0)
+        (updated 0)
+        (removed 0))
+    (dolist (file files)
+      (when (file-exists-p file)
+        (cl-incf total)
+        (condition-case err
+            (let ((changes (org-supertag-sync-file file)))
+              (cl-incf updated (plist-get changes :updated))
+              (cl-incf removed (plist-get changes :removed)))
+          (error
+           (message "Error syncing %s: %s" file err)))))
+    (message "Sync complete: %d files processed, %d nodes updated, %d nodes removed"
+             total updated removed)))
+#+end_src
+
+** 性能优化
+
+*** 增量同步 [计划中]
+
+为避免每次都完整扫描所有文件，添加增量同步机制：
+
+#+begin_src elisp
+(defun org-supertag-sync-file-incremental (file)
+  "Only sync changed nodes in FILE."
+  (let* ((last-sync (org-supertag-get-file-last-sync file))
+         (current-state (org-supertag-get-file-state file)))
+    (when (org-supertag-file-state-changed-p last-sync current-state)
+      (org-supertag-sync-file file))))
+#+end_src
+
+*** 文件状态缓存 [计划中]
+
+维护文件状态缓存以提高性能：
+
+#+begin_src elisp
+(defun org-supertag-cache-file-state (file)
+  "Cache current state of FILE."
+  (let ((nodes (org-supertag-collect-file-nodes file)))
+    (puthash file
+             (list :nodes nodes
+                   :mtime (nth 5 (file-attributes file))
+                   :size (nth 7 (file-attributes file)))
+             org-supertag-file-cache)))
+#+end_src
+
+* 实施计划
+
+1. [X] 创建改进方案文档
+2. [ ] 添加新的基础函数
+   - [X] org-supertag-collect-file-nodes
+   - [X] org-supertag-get-file-nodes-from-db
+3. [X] 实现节点对比和同步功能
+4. [X] 修改现有函数
+   - [X] org-supertag-sync--check-and-sync
+   - [X] 处理 org-supertag-db-update-buffer
+5. [ ] 实现全局同步控制
+6. [ ] 添加性能优化功能
+7. [ ] 进行测试和调试
+8. [ ] 更新文档和注释
+
+* 注意事项
+
+1. 并发修改处理
+   - 需要考虑文件正在被编辑的情况
+   - 可能需要添加锁定机制
+
+2. 错误处理
+   - 每个步骤都需要适当的错误处理
+   - 保持数据库的一致性
+
+3. 性能考虑
+   - 大文件处理可能较慢
+   - 需要适当的优化策略
+
+4. 数据安全
+   - 确保不会丢失节点数据
+   - 考虑添加备份机制
+
+* 测试计划
+
+1. 单元测试
+   - 文件节点收集功能测试
+   - 数据库节点获取功能测试
+   - 节点对比功能测试
+
+2. 集成测试
+   - 完整同步流程测试
+   - 错误处理测试
+   - 并发操作测试
+
+3. 性能测试
+   - 大文件处理测试
+   - 多文件同步测试
+   - 增量同步效率测试
+
+** 需要修改的函数
+
+*** 需要添加的新函数
+
+1. org-supertag-collect-file-nodes [待添加]
+   - 功能：收集文件中的所有节点
+   - 位置：在 Buffer Monitoring 部分之前
+   - 替代：部分替代 org-supertag-db-update-buffer 的功能
+
+2. org-supertag-get-file-nodes-from-db [待添加]
+   - 功能：获取数据库中特定文件的所有节点
+   - 位置：在 Buffer Monitoring 部分之前
+   - 依赖：org-supertag-db--object
+
+3. org-supertag-sync-file [待添加]
+   - 功能：同步单个文件的节点
+   - 位置：在 Core Functions 部分
+   - 替代：org-supertag-db-update-buffer 的功能
+
+*** 需要修改的现有函数
+
+1. org-supertag-sync--check-and-sync [已完成]
+   - 当前位置：Automatic Synchronization 部分
+   - 修改内容：使用新的 org-supertag-sync-file 替代 org-supertag-db-update-buffer
+   - 保持：错误处理和节点检查功能
+
+2. org-supertag-db-update-buffer [已完成]
+   - 当前位置：Buffer Monitoring 部分
+   - 原因：功能将被 org-supertag-sync-file 替代
+   - 已添加弃用警告，保持向后兼容
+
+3. org-supertag-sync--handle-save [已完成]
+   - 已修改为使用新的同步机制
+   - 已更新文档和注释
+
+4. org-supertag-sync--process-node [已删除]
+   - 原因：其功能已被新的节点收集和同步机制替代
+   - 已从代码中移除
+
+5. org-supertag-sync--handle-modify [已完成]
+   - 已修改为使用增量同步方案
+   - 优化了节点处理逻辑
+
+** 删除/弃用计划
+
+1. [X] 第一阶段：标记弃用
+   - [X] 为 org-supertag-db-update-buffer 添加弃用声明
+   - [X] 更新文档，说明替代方案
+
+2. [X] 第二阶段：修改依赖函数
+   - [X] 修改 org-supertag-sync--handle-save
+   - [X] 修改 org-supertag-sync--handle-modify
+   - [X] 更新所有使用旧函数的地方
+
+3. [X] 第三阶段：清理代码
+   - [X] 删除 org-supertag-sync--process-node
+   - [X] 在下一个主版本中删除弃用的函数
+
+4. [X] 兼容性维护
+   - [X] 保持弃用函数至少一个版本周期
+   - [X] 在删除前确保所有依赖都已更新
+
+*** 需要保持的关键函数
+
+1. org-supertag-node-locate
+   - 功能：定位节点在文件中的位置
+   - 原因：仍然需要用于节点移动检测
+
+2. org-supertag-check-nodes
+   - 功能：检查所有节点状态
+   - 原因：用于全局节点状态验证
+
+** 实现顺序
+
+1. [X] 记录需要修改的函数
+2. [ ] 添加新的基础函数
+   - [X] org-supertag-collect-file-nodes
+   - [X] org-supertag-get-file-nodes-from-db
+3. [X] 添加新的同步函数
+   - [X] org-supertag-sync-file
+4. [X] 修改现有函数
+   - [X] org-supertag-sync--check-and-sync
+   - [X] 处理 org-supertag-db-update-buffer
+5. [ ] 添加性能优化函数
+   - [X] org-supertag-sync-file-incremental
+   - [X] org-supertag-cache-file-state
+
+* 注意事项
+
+1. 并发修改处理
+   - 需要考虑文件正在被编辑的情况
+   - 可能需要添加锁定机制
+
+2. 错误处理
+   - 每个步骤都需要适当的错误处理
+   - 保持数据库的一致性
+
+3. 性能考虑
+   - 大文件处理可能较慢
+   - 需要适当的优化策略
+
+4. 数据安全
+   - 确保不会丢失节点数据
+   - 考虑添加备份机制
+
+* 测试计划
+
+1. 单元测试
+   - 文件节点收集功能测试
+   - 数据库节点获取功能测试
+   - 节点对比功能测试
+
+2. 集成测试
+   - 完整同步流程测试
+   - 错误处理测试
+   - 并发操作测试
+
+3. 性能测试
+   - 大文件处理测试
+   - 多文件同步测试
+   - 增量同步效率测试 
