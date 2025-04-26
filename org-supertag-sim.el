@@ -116,6 +116,21 @@ As a unified entry point, it will initialize the entire system, including the un
      (message "Tag similarity system initialization failed: %s" (error-message-string err))
      nil)))
 
+(defun org-supertag-sim--on-tag-created (tag)
+  "Handle tag creation events.
+TAG is the created tag information."
+  (when org-supertag-sim--initialized
+    (let ((tag-props (org-supertag-db-get tag)))
+      (when (eq (plist-get tag-props :type) :tag)
+        (org-supertag-sim--update-tag tag)))))
+
+(defun org-supertag-sim--on-tag-removed (tag-id)
+  "Handle tag removal events.
+TAG-ID is the ID of the removed tag."
+  (when org-supertag-sim--initialized
+    ;; Assuming the tag type is known or irrelevant for removal
+    (org-supertag-sim--remove-tag tag-id)))
+
 (defun org-supertag-sim--update-tag (tag)
   "Update the vector of a single tag.
 TAG is the tag information."
@@ -140,32 +155,18 @@ TAG-ID is the tag ID."
       (error
        (message "Delete tag vector error: %s" (error-message-string err))))))
 
-(defun org-supertag-sim--on-tag-created (tag)
-  "Handle tag creation events.
-TAG is the created tag information."
+(defun org-supertag-sim--sync-library ()
+  "Synchronize the tag vector library."
   (when org-supertag-sim--initialized
-    (let ((tag-props (org-supertag-db-get tag)))
-      (when (eq (plist-get tag-props :type) :tag)
-        (org-supertag-sim--update-tag tag)))))
-
-(defun org-supertag-sim--on-tag-removed (tag-id)
-  "Handle tag removal events.
-TAG-ID is the removed tag ID."
-  (when org-supertag-sim--initialized
-    (org-supertag-sim--remove-tag tag-id)))
-
-;; (defun org-supertag-sim--sync-library ()
-;;   "Synchronize the tag vector library."
-;;   (when org-supertag-sim--initialized
-;;     (let* ((db-info (org-supertag-sim--ensure-db-file))
-;;            (db-file (car db-info))
-;;            (tag-data (cadr db-info)))
-;;       (condition-case err
-;;           (epc:call-deferred org-supertag-sim-epc-manager
-;;                             'sync_library
-;;                             (list db-file tag-data))
-;;         (error
-;;          (message "同步标签库出错: %s" (error-message-string err)))))))
+    (let* ((db-info (org-supertag-sim--ensure-db-file))
+           (db-file (car db-info))
+           (tag-data (cadr db-info)))
+      (condition-case err
+          (epc:call-deferred org-supertag-sim-epc-manager
+                            'sync_library
+                            (list db-file tag-data))
+        (error
+         (message "Sync tag library error: %s" (error-message-string err)))))))
 
 (defun org-supertag-sim--start-sync-timer ()
   "Start the periodic synchronization timer."
@@ -189,16 +190,22 @@ Returns:
       (deferred:next (lambda () t))
     ;; Otherwise, try to initialize
     (deferred:$
-      (deferred:next
-        (lambda ()
-          (message "System not initialized, initializing...")
-          (org-supertag-sim-init)))
-      (deferred:nextc it
-        (lambda (_)
-          ;; Check initialization status again
-          (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
-              t
-            (error "System initialization failed")))))))
+      (deferred:try
+        (deferred:$
+          (deferred:next
+            (lambda ()
+              (message "System not initialized, initializing...")
+              (org-supertag-sim-init)))
+          (deferred:nextc it
+            (lambda (_)
+              ;; Check initialization status again
+              (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+                  t
+                (error "System initialization failed: EPC server not ready")))))
+        :catch
+        (lambda (err)
+          (message "Initialization error: %s" (error-message-string err))
+          nil)))))
 
 (defun org-supertag-sim-find-similar (tag-name &optional top-k callback)
   "Find tags similar to the specified tag.

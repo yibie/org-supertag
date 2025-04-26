@@ -1,0 +1,128 @@
+#+TITLE: Handling Orphaned Nodes in org-supertag
+#+DATE: [2024-03-30 Sun]
+#+AUTHOR: org-supertag team
+
+* 问题描述
+当前 org-supertag 在处理源文件中不存在的节点时存在不足：
+1. 不知道节点是否还存在
+2. 不知道节点是否被移动到其他文件
+
+* 设计目标
+1. 通过 ID 定位节点位置
+2. 处理找不到节点的情况（恢复或清理）
+3. 更新移动了的节点信息
+
+* 实现方案
+
+** 核心函数
+#+begin_src emacs-lisp
+;; 通过 ID 定位节点 [已完成]
+(defun org-supertag-node-locate (node-id)
+  "Locate node by NODE-ID in all monitored files.
+Returns (file . pos) if found, nil if not found."
+  (catch 'found
+    (dolist (file (org-supertag-get-all-files))
+      (when (file-exists-p file)
+        (with-current-buffer (find-file-noselect file)
+          (org-with-wide-buffer
+           (goto-char (point-min))
+           (while (re-search-forward org-heading-regexp nil t)
+             (when (string= (org-id-get) node-id)
+               (throw 'found (cons file (point)))))))))))
+
+;; 处理找不到的节点 [已完成]
+(defun org-supertag-handle-missing-node (node-id)
+  "Handle a missing node with NODE-ID.
+Prompts user to restore or remove the node."
+  (when-let* ((node (org-supertag-db-get node-id))
+              (title (plist-get node :title)))
+    (if (yes-or-no-p 
+         (format "Node '%s' (%s) not found. Restore it? " 
+                title node-id))
+        ;; 还原节点到文件
+        (org-supertag-node-restore node-id)
+      ;; 从数据库中移除
+      (org-supertag-db-remove node-id))))
+
+;; 还原节点到文件 [已完成]
+(defun org-supertag-node-restore (node-id)
+  "Restore a node with NODE-ID to its file.
+If original file doesn't exist, prompts for new location."
+  (when-let* ((node (org-supertag-db-get node-id))
+              (file (plist-get node :file-path))
+              (title (plist-get node :title))
+              (content (plist-get node :content)))
+    ;; 如果原文件不存在，询问新位置
+    (unless (file-exists-p file)
+      (setq file 
+            (read-file-name 
+             (format "File for node '%s': " title)
+             (file-name-directory file))))
+    ;; 插入节点
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-min))
+      (insert "* " title "\n"
+              ":PROPERTIES:\n"
+              ":ID: " node-id "\n"
+              ":END:\n"
+              content "\n")
+      (save-buffer))))
+
+;; 检查并更新节点 [已完成]
+(defun org-supertag-check-nodes ()
+  "Check all nodes in database and handle missing ones."
+  (interactive)
+  (let ((missing 0)
+        (moved 0))
+    (maphash
+     (lambda (id node)
+       (if-let ((new-loc (org-supertag-node-locate id)))
+           ;; 节点存在，检查是否移动了
+           (let ((old-file (plist-get node :file-path))
+                 (old-pos (plist-get node :pos))
+                 (new-file (car new-loc))
+                 (new-pos (cdr new-loc)))
+             (unless (and (string= old-file new-file)
+                         (= old-pos new-pos))
+               ;; 位置变了，更新信息
+               (with-current-buffer (find-file-noselect new-file)
+                 (goto-char new-pos)
+                 (org-supertag-node-update)
+                 (cl-incf moved))))
+         ;; 节点不存在，处理它
+         (org-supertag-handle-missing-node id)
+         (cl-incf missing)))
+     org-supertag-db--object)
+    (message "%d nodes moved, %d nodes missing" moved missing)))
+#+end_src
+
+** 修改现有函数 [已完成]
+1. 在 =org-supertag-sync--check-and-sync= 中添加节点检查：
+   #+begin_src emacs-lisp
+   (defun org-supertag-sync--check-and-sync ()
+     "Check and sync files based on their consistency state."
+     ;; 原有的文件同步逻辑
+     (org-supertag-sync--check-files)
+     ;; 添加节点检查
+     (org-supertag-check-nodes))
+   #+end_src
+
+* 测试用例
+#+begin_src emacs-lisp
+(ert-deftest test-org-supertag-node-locate ()
+  "Test node location."
+  ;; 测试能找到存在的节点
+  ;; 测试找不到不存在的节点
+  ;; 测试能找到移动了的节点)
+
+(ert-deftest test-org-supertag-node-restore ()
+  "Test node restoration."
+  ;; 测试还原到原文件
+  ;; 测试还原到新文件
+  ;; 测试内容完整性)
+
+(ert-deftest test-org-supertag-check-nodes ()
+  "Test node checking."
+  ;; 测试更新移动的节点
+  ;; 测试处理丢失的节点)
+#+end_src 

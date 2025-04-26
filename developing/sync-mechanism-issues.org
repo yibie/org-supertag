@@ -1,0 +1,419 @@
+#+TITLE: org-supertag 同步机制设计
+#+DATE: [2024-03-31 Sun]
+#+AUTHOR: Chen Bin
+#+OPTIONS: ^:nil
+
+* 设计理念
+org-supertag 的同步机制应该是简单且可靠的。它的核心是以节点 ID 为中心，
+而不是以文件为中心。这意味着我们追踪的是节点的变化，文件只是节点的容器。
+
+同步机制的关键在于如何可靠地检测节点变化。由于 org-mode 没有内置的细粒度修改跟踪，
+我们需要采用一个平衡性能和可靠性的策略。
+
+* 核心功能
+
+** 文件变更监控
+文件监控采用最简单的方式：记录文件的最后修改时间。这是第一层过滤，
+用于快速确定哪些文件可能包含变化的节点。
+
+#+begin_src elisp
+(defvar org-supertag-sync--state (make-hash-table :test 'equal)
+  "文件修改状态表。
+Key: 文件路径
+Value: 最后同步时间")
+#+end_src
+
+** 节点变更检测
+节点变更检测采用两层策略：
+
+*** 快速检测（基于哈希）
+对于每个节点，我们计算其关键属性的哈希值：
+
+#+begin_src elisp
+(defun org-supertag-node-hash (node)
+  "计算节点的哈希值。
+只包含稳定属性，不包含位置信息。"
+  (secure-hash 'sha1
+               (format "%s%s%s%s%s"
+                      (plist-get node :raw-value)    ; 标题
+                      (plist-get node :tags)         ; 标签
+                      (plist-get node :todo-type)    ; TODO状态
+                      (plist-get node :priority)     ; 优先级
+                      (plist-get node :properties)))) ; 属性抽屉
+
+(defun org-supertag-db-add-with-hash (id props)
+  "添加节点到数据库，同时计算和存储哈希值。"
+  (let ((node-hash (org-supertag-node-hash props)))
+    (org-supertag-db-add id 
+                         (plist-put props :hash node-hash))))
+#+end_src
+
+这个哈希值存储在数据库中，作为节点的一个属性。当扫描文件时，
+我们首先比较哈希值，这样可以快速跳过未变化的节点。
+
+*** 精确比较（按需进行）
+只有当哈希值不同时，才进行详细的属性比较：
+
+#+begin_src elisp
+(defun org-supertag-node-changed-p (old-node new-node)
+  "详细比较两个节点版本。"
+  (or (not (string= (org-supertag-node-hash old-node)
+                    (org-supertag-node-hash new-node)))
+      ;; 如果配置要求检查内容
+      (when org-supertag-sync-check-contents
+        (not (string= (org-supertag-get-node-content old-node)
+                     (org-supertag-get-node-content new-node))))))
+#+end_src
+
+** 同步流程
+整个同步过程变得更加高效：
+
+1. 获取修改过的文件（基于文件时间戳）
+2. 扫描这些文件中的节点：
+   a. 提取节点 ID
+   b. 计算节点哈希值
+   c. 与数据库中的哈希值比较
+3. 只对发生变化的节点进行处理：
+   - 删除：从数据库移除
+   - 移动：更新位置，保持哈希值
+   - 更新：更新内容和哈希值
+   - 创建：计算哈希值并存储
+
+这个设计的优势：
+1. 性能优先：快速哈希比较避免了不必要的详细比较
+2. 可靠性：哈希值能可靠反映节点的关键属性变化
+3. 灵活性：可以通过配置决定是否检查节点内容
+4. 效率：增量处理，只关注真正改变的部分
+
+
+** 节点状态追踪
+节点状态的追踪建立在两个基础上：
+1. 文件修改时间作为第一层过滤
+2. 节点哈希值作为变更检测的核心
+
+整个追踪过程分为三步：
+
+*** 第一步：获取修改文件
+基于文件修改时间快速确定需要检查的文件：
+
+#+begin_src elisp
+(defun org-supertag-get-modified-files ()
+  "获取修改过的文件列表。"
+  (let ((files nil))
+    (maphash
+     (lambda (file state)
+       (when (time-less-p
+              (cdr state)  ; 上次同步时间
+              (file-attribute-modification-time
+               (file-attributes file)))
+         (push file files)))
+     org-supertag-sync--state)
+    files))
+#+end_src
+
+*** 第二步：扫描节点状态
+对修改过的文件进行扫描，建立当前状态映射：
+
+#+begin_src elisp
+(defun org-supertag-scan-nodes (files)
+  "扫描文件中的节点，返回状态映射。
+返回值是一个 hash 表，包含：
+- :id -> (:file :hash :props) ; 现存节点
+- :deleted -> (id1 id2 ...)  ; 已删除节点
+- :moved -> ((id1 . file1) ...) ; 移动的节点"
+  (let ((current-map (make-hash-table :test 'equal))
+        (deleted-nodes nil)
+        (moved-nodes nil))
+    ;; 扫描所有文件
+    (dolist (file files)
+      (with-current-buffer (find-file-noselect file)
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (while (re-search-forward org-heading-regexp nil t)
+           (when-let* ((id (org-id-get))
+                      (props (org-supertag-extract-node-props))
+                      (hash (org-supertag-node-hash props)))
+             ;; 记录节点信息
+             (puthash id
+                      (list :file file
+                           :hash hash
+                           :props props)
+                      current-map))))))
+    
+    ;; 检查数据库中的节点
+    (maphash
+     (lambda (id node)
+       (let ((current (gethash id current-map))
+             (old-file (plist-get node :file-path)))
+         (cond
+          ;; 节点已删除
+          ((and (member old-file files)
+                (null current))
+           (push id deleted-nodes))
+          ;; 节点已移动
+          ((and current
+                (not (string= old-file
+                            (plist-get (plist-get current :props)
+                                     :file-path))))
+           (push (cons id (plist-get current :file))
+                 moved-nodes)))))
+     org-supertag-db--object)
+    
+    ;; 返回完整状态
+    (list :nodes current-map
+          :deleted deleted-nodes
+          :moved moved-nodes)))
+#+end_src
+
+*** 第三步：状态处理
+基于扫描结果，分别处理不同状态的节点：
+
+#+begin_src elisp
+(defun org-supertag-process-node-states (states)
+  "处理节点状态变化。"
+  (let ((nodes (plist-get states :nodes))
+        (deleted (plist-get states :deleted))
+        (moved (plist-get states :moved)))
+    
+    ;; 处理删除的节点
+    (dolist (id deleted)
+      (org-supertag-db-remove id))
+    
+    ;; 处理移动的节点
+    (dolist (move moved)
+      (let* ((id (car move))
+             (new-file (cdr move))
+             (node (org-supertag-db-get id))
+             (props (plist-get node :props)))
+        ;; 更新文件路径，清除位置信息
+        (setq props
+              (plist-put
+               (plist-put props :file-path new-file)
+               :pos nil))
+        (org-supertag-db-add id props)))
+    
+    ;; 处理更新的节点
+    (maphash
+     (lambda (id info)
+       (let* ((new-props (plist-get info :props))
+              (new-hash (plist-get info :hash))
+              (old-node (org-supertag-db-get id))
+              (old-hash (and old-node (plist-get old-node :hash))))
+         ;; 只在哈希值变化时更新
+         (unless (and old-hash (string= old-hash new-hash))
+           ;; 保留关系数据
+           (when old-node
+             (let ((preserved-props '(:ref-to :ref-from :ref-count)))
+               (dolist (prop preserved-props)
+                 (when-let ((value (plist-get old-node prop)))
+                   (setq new-props (plist-put new-props prop value))))))
+           ;; 更新数据库
+           (org-supertag-db-add-with-hash id new-props))))
+     nodes)))
+#+end_src
+
+
+
+这种设计的优势：
+1. 统一性：
+   - 使用相同的哈希机制检测变化
+   - 保持状态追踪的一致性
+   - 简化了判断逻辑
+
+2. 效率：
+   - 文件修改时间作为快速过滤
+   - 哈希值作为精确比较
+   - 批量处理所有状态变化
+
+3. 可靠性：
+   - 准确识别节点变化
+   - 正确处理复杂情况（如移动）
+   - 保持关系数据完整性
+
+4. 扩展性：
+   - 容易添加新的状态检测
+   - 支持自定义处理逻辑
+   - 便于调试和维护
+
+** 同步流程
+整个同步过程变得更加高效：
+
+1. 获取修改过的文件（基于文件时间戳）
+2. 扫描这些文件中的节点：
+   a. 提取节点 ID
+   b. 计算节点哈希值
+   c. 与数据库中的哈希值比较
+3. 只对发生变化的节点进行处理：
+   - 删除：从数据库移除
+   - 移动：更新位置，保持哈希值
+   - 更新：更新内容和哈希值
+   - 创建：计算哈希值并存储
+
+这个设计的优势：
+1. 性能优先：快速哈希比较避免了不必要的详细比较
+2. 可靠性：哈希值能可靠反映节点的关键属性变化
+3. 灵活性：可以通过配置决定是否检查节点内容
+4. 效率：增量处理，只关注真正改变的部分
+
+* 实现细节
+
+** 哈希计算
+- 只包含稳定属性，不包含位置信息
+- 可配置要包含的属性
+- 可选是否包含内容
+
+** 数据存储
+- 在数据库中增加 :hash 属性
+- 可选存储上次同步时间
+- 保持关系数据独立
+
+** 性能优化
+- 批量哈希计算
+- 缓存常用节点的哈希值
+- 增量更新策略
+
+* 配置选项
+- 哈希计算包含的属性
+- 是否检查节点内容
+- 同步频率和触发条件
+- 缓存策略
+
+* 修改方案
+
+** 第一步：简化文件状态追踪
+修改 =org-supertag-sync--state= 变量：
+
+#+begin_src elisp
+(defvar org-supertag-sync--state (make-hash-table :test 'equal)
+  "文件修改状态表。
+Key: 文件路径
+Value: 最后同步时间")
+#+end_src
+
+相应修改 =org-supertag-sync-update-state= 函数：
+
+#+begin_src elisp
+(defun org-supertag-sync-update-state (file)
+  "更新文件的同步状态。"
+  (when (file-exists-p file)
+    (puthash file
+             (file-attribute-modification-time 
+              (file-attributes file))
+             org-supertag-sync--state)))
+#+end_src
+
+** 第二步：添加节点哈希支持
+添加新的函数：
+
+#+begin_src elisp
+(defun org-supertag-node-hash (node)
+  "计算节点的哈希值。
+只包含稳定属性，不包含位置信息。"
+  (secure-hash 'sha1
+               (format "%s%s%s%s%s"
+                      (plist-get node :raw-value)    ; 标题
+                      (plist-get node :tags)         ; 标签
+                      (plist-get node :todo-type)    ; TODO状态
+                      (plist-get node :priority)     ; 优先级
+                      (plist-get node :properties)))) ; 属性抽屉
+
+(defun org-supertag-db-add-with-hash (id props)
+  "添加节点到数据库，同时计算和存储哈希值。"
+  (let ((node-hash (org-supertag-node-hash props)))
+    (org-supertag-db-add id 
+                         (plist-put props :hash node-hash))))
+#+end_src
+
+** 第三步：重构核心同步逻辑
+修改 =org-supertag-db-update-buffer= 函数：
+
+#+begin_src elisp
+(defun org-supertag-db-update-buffer ()
+  "更新当前缓冲区中的所有节点。"
+  (save-excursion
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (let ((current-nodes (make-hash-table :test 'equal))
+           (updated 0))
+       ;; 第一遍扫描：收集当前节点
+       (while (re-search-forward org-heading-regexp nil t)
+         (when-let* ((id (org-id-get))
+                    (props (org-supertag-extract-node-props)))
+           (puthash id props current-nodes)))
+       
+       ;; 第二遍处理：更新、删除节点
+       (maphash
+        (lambda (id props)
+          (let* ((old-node (org-supertag-db-get id))
+                 (old-hash (and old-node (plist-get old-node :hash)))
+                 (new-hash (org-supertag-node-hash props)))
+            (unless (and old-hash (string= old-hash new-hash))
+              ;; 保留关系数据
+              (when old-node
+                (let ((preserved-props '(:ref-to :ref-from :ref-count)))
+                  (dolist (prop preserved-props)
+                    (when-let ((value (plist-get old-node prop)))
+                      (setq props (plist-put props prop value))))))
+              ;; 更新数据库
+              (org-supertag-db-add-with-hash id props)
+              (cl-incf updated))))
+        current-nodes)
+       
+       (when (> updated 0)
+         (message "Updated %d nodes in buffer" updated))))))
+#+end_src
+
+** 第四步：优化自动同步
+修改 =org-supertag-sync--check-and-sync= 函数：
+
+#+begin_src elisp
+(defun org-supertag-sync--check-and-sync ()
+  "检查并同步修改的文件。"
+  (let ((modified-files (org-supertag-get-modified-files)))
+    (when modified-files
+      ;; 同步修改的文件
+      (dolist (file modified-files)
+        (when (and (file-exists-p file)
+                   (org-supertag-sync--in-sync-scope-p file))
+          (condition-case err
+              (with-current-buffer (find-file-noselect file)
+                (org-supertag-db-update-buffer)
+                (org-supertag-sync-update-state file)
+                (message "Successfully synchronized %s" file))
+            (error
+             (message "Error updating %s: %s" 
+                      file (error-message-string err))))))
+      
+      ;; 更新同步状态
+      (org-supertag-sync-save-state))))
+#+end_src
+
+** 第五步：添加配置选项
+添加新的自定义选项：
+
+#+begin_src elisp
+(defcustom org-supertag-sync-check-contents nil
+  "是否在同步时检查节点内容。
+启用会增加准确性但降低性能。"
+  :type 'boolean
+  :group 'org-supertag-sync)
+
+(defcustom org-supertag-sync-hash-props
+  '(:raw-value :tags :todo-type :priority :properties)
+  "计算节点哈希值时包含的属性列表。"
+  :type '(repeat symbol)
+  :group 'org-supertag-sync)
+#+end_src
+
+这个修改方案的优点：
+1. 简化了文件状态追踪
+2. 引入了高效的哈希检测机制
+3. 统一了节点更新逻辑
+4. 提供了灵活的配置选项
+5. 保持了与现有代码的兼容性
+
+注意事项：
+1. 需要迁移现有数据库，添加哈希值
+2. 可能需要调整性能参数
+3. 建议添加测试用例验证新逻辑
+
