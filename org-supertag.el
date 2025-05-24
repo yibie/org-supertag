@@ -52,9 +52,10 @@
 (require 'org-supertag-luhmann)
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
-(require 'org-supertag-sim)
 (require 'org-supertag-sim-epc)
+(require 'org-supertag-sim)
 (require 'org-supertag-backlink)
+(require 'org-supertag-recovery)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -114,12 +115,15 @@
     (org-supertag-db--setup-auto-save)
     ;; 5. Initialize sync system
     (org-supertag-sync-init)
-    ;; 6. Initialize EPC server for similarity features
-    (when (featurep 'org-supertag-sim-epc)
+    ;; 6. Initialize similarity system and EPC service
+    (when (featurep 'org-supertag-sim)
       (condition-case err
-         (org-supertag-sim-epc-start-server)
+          (progn
+            (require 'org-supertag-sim)
+            (org-supertag-sim-init))
         (error
-         (message "Failed to start EPC server: %s" (error-message-string err)))))
+         (message "Failed to initialize similarity system: %s"
+                  (error-message-string err)))))
     ;; 7. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
@@ -167,23 +171,28 @@ Used for manual cleanup or system state reset."
   (interactive)
   (unless org-supertag--initialized
     (org-supertag--enable)
+
+    ;; Load custom behaviors first, so the registry is populated
     (let ((custom-file (expand-file-name "org-supertag-custom-behavior.el"
                                        org-supertag-data-directory)))
       (unless (file-exists-p custom-file)
         (unless (file-exists-p org-supertag-data-directory)
-          (make-directory org-supertag-data-directory t)) 
+          (make-directory org-supertag-data-directory t))
         (when-let* ((template (locate-library "org-supertag-custom-behavior.el")))
           (copy-file template custom-file)
           (message "Created custom behaviors file at %s" custom-file)))
       (when (file-exists-p custom-file)
         (load custom-file)))
-    (add-hook 'org-mode-hook #'org-supertag-mode)))
 
+    ;; Now that custom behaviors are loaded, initialize and enable the behavior system
+    ;; This will trigger org-supertag-behavior--init,
+    ;; which in turn calls org-supertag-behavior--setup-scheduled-behaviors
+    (org-supertag-behavior-mode 1)
 
-(defun org-supertag--initialize ()
-  "Initialize org-supertag system."
-  ;; Enable behavior system
-  (org-supertag-behavior-mode 1))
+    ;; Add org-supertag-mode to org-mode-hook
+    (add-hook 'org-mode-hook #'org-supertag-mode))
+  ;; It's good practice for setup functions to signal completion or success.
+  (message "org-supertag setup complete."))
 
 (provide 'org-supertag)
 

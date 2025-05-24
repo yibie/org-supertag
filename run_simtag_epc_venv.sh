@@ -2,8 +2,9 @@
 
 # Get the absolute path of the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-VENV_DIR="${SCRIPT_DIR}/venv"
+VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_SCRIPT="${SCRIPT_DIR}/simtag_epc.py"
+PYTHON_EXE="python3"
 
 # Output error message to standard error and exit
 function error_exit {
@@ -16,6 +17,7 @@ echo "SimTag EPC Startup Script"
 echo "========================================"
 echo "Script Directory: ${SCRIPT_DIR}"
 echo "Python Script: ${PYTHON_SCRIPT}"
+echo "Virtual Env Dir: ${VENV_DIR}"
 
 # Check if the Python script exists
 if [ ! -f "$PYTHON_SCRIPT" ]; then
@@ -30,45 +32,49 @@ if pgrep -f "python.*simtag_epc.py" > /dev/null; then
     sleep 1
 fi
 
-# Check if the virtual environment exists
-if [ -d "$VENV_DIR" ]; then
-    echo "Using existing virtual environment: ${VENV_DIR}"
-    
-    # Activate the virtual environment
-    if [ -f "${VENV_DIR}/bin/activate" ]; then
-        echo "Activating the virtual environment..."
-        source "${VENV_DIR}/bin/activate"
-    else
-        error_exit "Virtual environment directory exists but the activation script was not found"
+# Ensure the virtual environment exists
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Virtual environment (${VENV_DIR}) does not exist, creating it..."
+    if ! command -v $PYTHON_EXE &> /dev/null; then
+        error_exit "'$PYTHON_EXE' command not found. Cannot create virtual environment."
     fi
+    $PYTHON_EXE -m venv "$VENV_DIR" || error_exit "Failed to create virtual environment."
+    echo "Virtual environment created."
 else
-    echo "Virtual environment does not exist, attempting to use system Python"
-    
-    # Check the system Python version
-    PYTHON_VERSION=$(python3 --version 2>&1)
-    echo "System Python version: ${PYTHON_VERSION}"
-    
-    # Check if the necessary dependencies are installed
-    echo "Checking necessary dependencies..."
-    
-    if ! python3 -c "import sys; print(f'Python Path: {sys.executable}')" 2>/dev/null; then
-        error_exit "Unable to execute Python"
+    echo "Using existing virtual environment: ${VENV_DIR}"
+fi
+
+# Activate the virtual environment
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+    echo "Activating the virtual environment..."
+    source "${VENV_DIR}/bin/activate"
+    PYTHON_IN_VENV="${VENV_DIR}/bin/python"
+    PIP_IN_VENV="${VENV_DIR}/bin/pip"
+else
+    error_exit "Virtual environment activation script not found in ${VENV_DIR}/bin/"
+fi
+
+# Ensure all necessary dependencies are installed *within the virtual environment*
+echo "Checking/Installing dependencies within virtual environment..."
+REQUIRED_PACKAGES=(epc sentence-transformers numpy requests ollama)
+INSTALL_CMD="${PIP_IN_VENV} install --upgrade"
+PACKAGES_TO_INSTALL=""
+
+for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    echo -n "Checking for ${pkg}... "
+    if ! $PYTHON_IN_VENV -c "import importlib.util; exit(0) if importlib.util.find_spec('$pkg') else exit(1)" &> /dev/null; then
+        echo "Not found."
+        PACKAGES_TO_INSTALL+="${pkg} "
+    else
+        echo "Found."
     fi
-    
-    if ! python3 -c "import epc" 2>/dev/null; then
-        echo "Warning: EPC library not detected, attempting to install automatically..."
-        python3 -m pip install epc || error_exit "Unable to install EPC library"
-    fi
-    
-    if ! python3 -c "import sentence_transformers" 2>/dev/null; then
-        echo "Warning: sentence_transformers library not detected, attempting to install automatically..."
-        python3 -m pip install sentence_transformers || error_exit "Unable to install sentence_transformers library"
-    fi
-    
-    if ! python3 -c "import numpy" 2>/dev/null; then
-        echo "Warning: numpy library not detected, attempting to install automatically..."
-        python3 -m pip install numpy || error_exit "Unable to install numpy library"
-    fi
+done
+
+if [ -n "$PACKAGES_TO_INSTALL" ]; then
+    echo "Installing/Upgrading missing packages: ${PACKAGES_TO_INSTALL}"
+    $INSTALL_CMD $PACKAGES_TO_INSTALL || error_exit "Failed to install dependencies in venv."
+else
+    echo "All required packages seem to be installed."
 fi
 
 # Set environment variables
@@ -79,8 +85,7 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 echo ""
 echo "Runtime Environment Information:"
 echo "- Script Directory: ${SCRIPT_DIR}"
-echo "- Python Interpreter: $(which python3)"
-echo "- Python Version: $(python3 --version 2>&1)"
+echo "- Python Interpreter: $($PYTHON_IN_VENV --version 2>&1) (from ${PYTHON_IN_VENV})"
 echo "- Command Line Arguments: $@"
 
 # Check if the simtag module directory exists
@@ -88,7 +93,6 @@ if [ -d "${SCRIPT_DIR}/simtag" ]; then
     echo "- simtag module directory: exists"
 else
     echo "- simtag module directory: does not exist (warning)"
-    # Attempt to create the minimal module
     mkdir -p "${SCRIPT_DIR}/simtag"
     touch "${SCRIPT_DIR}/simtag/__init__.py"
     echo "  Minimal module directory created"
@@ -96,19 +100,29 @@ fi
 
 # Check the port parameter
 PORT_ARG=""
-for arg in "$@"; do
-    if [[ $arg == --port* ]]; then
-        PORT_ARG=$arg
-        PORT_NUM=${arg#*=}
-        PORT_NUM=${PORT_NUM#* }
+PORT_NUM=""
+for i in "${!@}"; do
+    arg="${@:$i:1}"
+    if [[ "$arg" == "--port" ]]; then
+        next_index=$((i + 1))
+        next_arg="${@:$next_index:1}"
+        if [[ "$next_arg" =~ ^[0-9]+$ ]]; then
+            PORT_ARG="--port $next_arg"
+            PORT_NUM="$next_arg"
+            echo "- Using Port: $PORT_NUM"
+            break
+        fi
+    elif [[ "$arg" == --port=* ]]; then
+        PORT_ARG="$arg"
+        PORT_NUM="${arg#*=}"
         echo "- Using Port: $PORT_NUM"
         break
     fi
 done
 
-# If no port is specified, use the default port
 if [ -z "$PORT_ARG" ]; then
-    echo "- Port not specified, using default port"
+    echo "- Port not specified, using default port (0)"
+    PORT_NUM=0
 fi
 
 echo ""
@@ -116,22 +130,22 @@ echo "========================================"
 echo "Starting SimTag EPC Server..."
 echo "========================================"
 
-# Ensure the directory exists
 cd "$SCRIPT_DIR" || error_exit "Unable to switch to the script directory"
 
-# Check if there is an existing process occupying the port
-if [[ ! -z "$PORT_NUM" ]]; then
-    if nc -z 127.0.0.1 "$PORT_NUM" 2>/dev/null; then
+if [[ ! -z "$PORT_NUM" ]] && [[ "$PORT_NUM" -ne 0 ]]; then
+    if nc -z 127.0.0.1 "$PORT_NUM" &> /dev/null; then
         echo "Warning: Port $PORT_NUM is already in use"
         echo "Attempting to terminate the process occupying the port..."
-        if command -v lsof &> /dev/null; then
-            lsof -i :"$PORT_NUM" -t | xargs kill -9 2>/dev/null || true
-            echo "Waiting for the port to be released..."
+        PID_ON_PORT=$(lsof -ti :"$PORT_NUM" -sTCP:LISTEN)
+        if [[ ! -z "$PID_ON_PORT" ]]; then
+            echo "Killing process(es) on port $PORT_NUM: $PID_ON_PORT"
+            kill -9 $PID_ON_PORT || echo "Failed to kill process $PID_ON_PORT, maybe already terminated."
             sleep 1
+        else
+            echo "Warning: Could not find specific PID using lsof on port $PORT_NUM."
         fi
     fi
 fi
 
-# Execute the Python script, ensuring all parameters are passed
-echo "Executing command: python3 $PYTHON_SCRIPT $@"
-exec python3 "$PYTHON_SCRIPT" "$@"
+echo "Executing command: $PYTHON_IN_VENV $PYTHON_SCRIPT $@"
+exec "$PYTHON_IN_VENV" "$PYTHON_SCRIPT" "$@"

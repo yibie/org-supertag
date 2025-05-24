@@ -57,6 +57,176 @@
 ;;; Code:
 
 (require 'org)
+(require 'org-supertag-db)
+(require 'org-supertag-sim-epc)
+(require 'epc)
+
+
+;;------------------------------------------------------------------------------
+;; AI Interaction Library
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--call-ai (prompt &optional system-prompt)
+  "Call the configured AI model with PROMPT and optional SYSTEM-PROMPT.
+Uses the EPC connection managed by `org-supertag-sim-epc`.
+
+PROMPT: The main user prompt string.
+SYSTEM-PROMPT: An optional system prompt string to guide the AI's behavior.
+
+Returns the AI's text response as a string on success.
+Returns nil and logs an error on failure (e.g., EPC connection error,
+AI error, timeout)."
+  (org-supertag-sim-epc-log "Calling AI with prompt (length %d)..." (length prompt))
+  (condition-case err
+      (progn
+        ;; Ensure EPC server is running
+        (org-supertag-sim-epc-ensure-server)
+        (unless (org-supertag-sim-epc-server-running-p)
+          (error "SimTag EPC server is not running."))
+
+        ;; Prepare arguments for the EPC call
+        (let* ((args (if system-prompt
+                         (list prompt system-prompt)
+                       (list prompt)))
+               ;; Assuming 'run_ollama' is the correct Python function name
+               (response (epc:call-sync org-supertag-sim-epc-manager 'run_ollama args)))
+
+          (org-supertag-sim-epc-log "AI raw response: %S" response)
+
+          ;; Check response status
+          (if (and response
+                   (plistp response)
+                   (string= (plist-get response :status) "success"))
+              (let ((result (plist-get response :result)))
+                (org-supertag-sim-epc-log "AI call successful, response length: %d" (if result (length result) 0))
+                result)
+            ;; Handle AI-side error
+            (let ((error-msg (or (plist-get response :message) "Unknown AI error")))
+              (org-supertag-sim-epc-log "AI call failed: %s" error-msg)
+              (error "AI Error: %s" error-msg)
+              nil))))
+    ;; Handle Elisp-side errors (EPC connection, timeout, etc.)
+    (error
+     (org-supertag-sim-epc-log "Error calling AI: %s" (error-message-string err))
+     (message "Error communicating with AI: %s" (error-message-string err))
+     nil)))
+
+;;------------------------------------------------------------------------------
+;; Node Content Modification Library
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--insert-text (node-id params)
+  "Insert text into the Org node specified by NODE-ID.
+PARAMS is a plist containing:
+- :text (required): The text string to insert.
+- :location (required): Where to insert the text. Currently supported:
+    - :body-end : Append text to the end of the node's body content.
+    - '(:drawer \"DRAWER_NAME\" :append t) : Append text inside the drawer.
+    - '(:drawer \"DRAWER_NAME\" :replace t) : Replace drawer content.
+
+Logs an error and returns nil if insertion fails (e.g., invalid node-id,
+unsupported location)."
+  (let ((text (plist-get params :text))
+        (location (plist-get params :location)))
+
+    ;; Validate required parameters
+    (unless text
+      (message "Error in org-supertag-behavior--insert-text: :text parameter is required.")
+      (error "Missing :text parameter"))
+    (unless location
+      (message "Error in org-supertag-behavior--insert-text: :location parameter is required.")
+      (error "Missing :location parameter"))
+
+    (message "Inserting text (length %d) into node %s at location %S"
+             (length text) node-id location)
+
+    (condition-case err
+        (if-let ((pos (org-supertag-db-get-pos node-id)))
+            (save-excursion
+              (org-with-point-at pos
+                (org-back-to-heading t) ;; Ensure we are at the heading start
+                (pcase location
+                  (:body-end
+                   (let ((element (org-element-at-point)))
+                     (if-let ((contents-end (org-element-property :contents-end element)))
+                         (progn
+                           (goto-char contents-end)
+                           ;; Ensure a newline before inserting if needed
+                           (unless (looking-back "\n" (max (point-min) (- (point) 1)))
+                             (insert "\n"))
+                           (insert text))
+                       ;; Node might have no body, insert after heading
+                       (end-of-line)
+                       (insert "\n")
+                       (insert text)))
+                   t) ; Return t on success
+
+                  (`(:drawer ,name :append ,_)
+                   (let ((drawer-name (format ":%s:" name)))
+                     (if (re-search-forward (concat "^[ \t]*" (regexp-quote drawer-name)) nil t)
+                         (progn
+                           (goto-char (match-end 0))
+                           (forward-line 1)
+                           (search-backward ":END:")
+                           (goto-char (match-beginning 0))
+                           (insert text "\n")
+                           t)
+                       ;; Drawer not found, create and insert
+                       (progn
+                         (org-supertag-behavior--insert-drawer node-id `(:name ,name :content ,text))
+                         t))))
+
+                  (`(:drawer ,name :replace ,_)
+                    (let ((drawer-name (format ":%s:" name)))
+                     (if (re-search-forward (concat "^[ \t]*" (regexp-quote drawer-name) "[ \t]*$") nil t)
+                         (let ((start (match-end 0)))
+                             (forward-line 1)
+                             (if (re-search-forward "^[ \t]*:END:[ \t]*$" nil t)
+                                 (let ((end (match-beginning 0)))
+                                   (delete-region start end)
+                                   (insert "\n" text)
+                                   t) ; Return t on success
+                               (progn (message "Error: Could not find :END: for drawer %s" name) nil))) ; Error finding :END:
+                       ;; Drawer not found, create and insert
+                       (progn
+                         (org-supertag-behavior--insert-drawer node-id `(:name ,name :content ,text))
+                         t)))) ; Return t after creating
+
+                  (_
+                   (message "Error: Unsupported location specifier: %S" location)
+                   nil)))) ; Return nil for unsupported location
+          ;; Handle case where node-id is invalid
+          (progn
+            (message "Error: Could not find node with ID: %s" node-id)
+            nil)) ; Return nil if node not found
+      ;; Handle other errors during insertion
+      (error
+       (message "Error inserting text into node %s: %s" node-id (error-message-string err))
+       nil)))) ; Return nil on error
+
+;;------------------------------------------------------------------------------
+;; Higher-Level Behavior Actions (Composing Basic Functions)
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--generate-topics-action (node-id params)
+  "Action function for the @GenerateTopics behavior.
+Calls AI to generate topic suggestions based on a predefined prompt
+and inserts the result into the NODE-ID's body.
+PARAMS are currently ignored."
+  (message "Executing @GenerateTopics for node %s with params %S" node-id params)
+  (let ((prompt my/ai-generate-topics-prompt)
+        ;; 从 params 获取 location，如果未提供则默认为 :body-end
+        (insert-location (plist-get params :location :body-end)))
+    (message "正在调用 AI 生成选题 (将插入到 %S)..." insert-location)
+    (when-let* ((ai-response (org-supertag-behavior--call-ai prompt)))
+      (message "AI 已响应，正在插入内容...")
+      (unless (org-supertag-behavior--insert-text node-id `(:text ,(concat "\n;; AI Generated Topics:\n" ai-response)
+                                                          :location ,insert-location))
+         (message "Error: Failed to insert AI response into node %s at %S" node-id insert-location))
+      (message "选题已成功插入。")
+    (unless ai-response
+       (message "错误：未能从 AI 获取响应。请检查日志。")
+       (message "Error: Failed to get response from AI for node %s" node-id)))))
 
 
 ;;------------------------------------------------------------------------------
@@ -423,11 +593,9 @@ Example:
               (pos (org-supertag-db-get-pos node-id)))
     (save-excursion
       (org-with-point-at pos
-        ;; 设置抽屉日志
         (let ((org-log-into-drawer (if enabled
                                       (or name t)
                                     nil)))
-          ;; 如果需要添加注释
           (when note
             (org-add-note note)))))))
 
@@ -966,6 +1134,33 @@ Example:
     (kill-buffer output-buffer)))
 
 ;;------------------------------------------------------------------------------
+;; Command Execution Library
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--execute-command (node-id params)
+  "Execute an Emacs command for NODE-ID based on PARAMS.
+PARAMS is a plist with:
+- :command : The command to execute (symbol or function)
+- :args    : Optional list of arguments for the command
+
+Example:
+  (org-supertag-behavior--execute-command node-id
+    '(:command org-agenda
+      :args (\"a\")))"
+  (let* ((command (plist-get params :command))
+         (args (plist-get params :args)))
+    
+    (unless command
+      (error "Missing required parameter: :command"))
+
+    (condition-case err
+        (if args
+            (apply command args)
+          (funcall command))
+      (error
+       (message "Error executing command: %S" err)))))
+
+;;------------------------------------------------------------------------------
 ;; Face Management Library
 ;;------------------------------------------------------------------------------
 
@@ -1066,3 +1261,4 @@ FACE-PLIST is a property list of face attributes."
 
 
 (provide 'org-supertag-behavior-library) 
+

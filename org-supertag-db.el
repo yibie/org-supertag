@@ -250,23 +250,24 @@ PROPS is the property list
 
 Returns:
 - t if valid
-- nil if invalid"
+- Signals error if invalid"
   (let* ((struct (cl-find type org-supertag-db-object-structure
                          :key (lambda (x) (plist-get x :type))))
-         (required (plist-get struct :required)))
-    (and
+         (required (plist-get struct :required))
+         (missing-props (when required
+                          (cl-remove-if (lambda (key) (plist-member props key))
+                                       required))))
+    (cond
      ;; Check required properties exist
-     (if required
-         (cl-every (lambda (key) (plist-member props key))
-                  required)
-       t)
+     (missing-props
+      (error "Invalid object properties for type %S. Missing required keys: %S" type missing-props))
      ;; Special validation for tag type
-     (pcase type
-       (:tag
-        (let ((fields (plist-get props :fields)))
-          (or (null fields)  ; Fields can be empty
-              (org-supertag-db--validate-fields fields))))
-       (_ t)))))
+     ((eq type :tag)
+      (let ((fields (plist-get props :fields)))
+        (or (null fields) ; Fields can be empty
+            (org-supertag-db--validate-fields fields))))
+     ;; Default: valid
+     (t t))))
 
 (defun org-supertag-db--validate-fields (fields)
   "Validate field definition list.
@@ -933,18 +934,22 @@ Returns:
       (mapcar #'car 
               (org-supertag-db-find base-pred)))))
 
-(defun org-supertag-db-find-nodes-by-tag (tag-id)
-  "Find nodes that use the specified tag.
-TAG-ID is the tag ID to find
-
-Returns:
-- List of node IDs that use the tag
-- nil if no matches found"
-  (let ((links (org-supertag-db-find-links :node-tag nil tag-id)))
-    (message "Found links: %S" links)  ; Debug info
-    (mapcar (lambda (link)
-              (plist-get link :from))
-            links)))
+(defun org-supertag-db-find-nodes-by-tag (tag)
+  "Find all nodes that have TAG.
+TAG can be with or without # prefix.
+Returns a list of node IDs that have the specified tag."
+  (let ((normalized-tag (if (string-prefix-p "#" tag)
+                           (substring tag 1)
+                         tag)))
+    (cl-loop for (id . node) in (ht->alist org-supertag-db--object)
+             when (and (eq (plist-get node :type) :node)
+                      (member normalized-tag 
+                             (mapcar (lambda (t) 
+                                      (if (string-prefix-p "#" t)
+                                          (substring t 1)
+                                        t))
+                                    (plist-get node :tags))))
+             collect id)))
 
 (defun org-supertag-db-find-nodes-by-field-value (field-name value &optional tag-id)
   "Find nodes with the specified field value.
