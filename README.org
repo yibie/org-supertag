@@ -379,8 +379,86 @@ The "co-occurrence" relationship is the most basic relationship among all tag re
 
 I think "co-occurrence" is the most wonderful phenomenon in the world. This allows us to automatically obtain meaningful connections when adding tags.
 
+** Database Recovery - When Things Go Wrong
+
+If you encounter issues with org-supertag's database (missing tags, lost relationships, or corrupted data), org-supertag provides a comprehensive recovery suite.
+
+*** Quick Recovery
+
+#+begin_src emacs-lisp
+;; Load the recovery tool
+M-x load-file RET org-supertag-recovery.el RET
+
+;; Start recovery
+M-x org-supertag-recovery-full-suite
+#+end_src
+
+*** Recovery Options
+
+The recovery suite provides 9 different recovery options:
+
+1. **Diagnose database status** - Analyze current database state
+2. **Restore from backup** - Automatically find and restore from latest backup
+3. **Rebuild entire database** - Rescan all org files from scratch
+4. **Rebuild tag definitions from nodes** - Recover lost tag definitions
+5. **Recover field definitions from links** - Rebuild field structures
+6. **Recover tag relationships from metadata** - Restore tag associations
+7. **Execute full recovery workflow** - Complete step-by-step recovery
+8. **View recovery status** - Monitor recovery progress
+9. **Exit** - Exit recovery suite
+
+*** Common Recovery Scenarios
+
+**** Scenario 1: Lost All Tags
+#+begin_src
+Symptom: org-supertag-tag-add-tag cannot complete tags
+Solution: Choose option 4 "Rebuild tag definitions from nodes"
+#+end_src
+
+**** Scenario 2: Missing Field Definitions
+#+begin_src
+Symptom: Tags exist but field definitions are empty
+Solution: Choose option 5 "Recover field definitions from links"
+#+end_src
+
+**** Scenario 3: Lost Tag Relationships
+#+begin_src
+Symptom: Tags exist but no co-occurrence relationships
+Solution: Choose option 6 "Recover tag relationships from metadata"
+#+end_src
+
+**** Scenario 4: Complete Database Corruption
+#+begin_src
+Symptom: Database cannot load or is empty
+Solution: Choose option 2 "Restore from backup" or option 3 "Rebuild entire database"
+#+end_src
+
+*** Recovery Features
+
+- **🔍 Smart Diagnosis**: Automatically analyzes database state and provides recommendations
+- **📊 Progress Tracking**: Detailed recovery status and progress monitoring
+- **🔄 Safe Operations**: Automatic backup before recovery operations
+- **⚡ Incremental Recovery**: Support for single-item recovery and complete reconstruction
+- **🛡️ Error Handling**: Comprehensive error handling and rollback mechanisms
+
+*** Technical Details
+
+The recovery tool can extract data from multiple sources:
+- **Node data**: Tag references in `:tags` properties
+- **Link data**: Field links with `:node-field:` prefix
+- **Metadata**: `tag-cooccur:` and `tag-pmi:` key-value pairs
+- **Backup files**: Automatic backup file detection and restoration
+
+For more detailed information, see the included `RECOVERY_GUIDE.md`.
+
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
+
+- 2025-05-24 3.0.2 release
+  - Enhanced synchronization stability with comprehensive data protection
+  - Fixed tag vector database update mechanism
+  - Added comprehensive database recovery system
+  - Codebase cleanup and organization improvements
 
 - 2025-04-05 3.0.0 release
   - feat AI backend for tag auto suggestion

@@ -340,11 +340,28 @@ class TagVectorEngine:
                         # Convert list to dictionary
                         tag_data_dict = {}
                         for item in tag_dict:
-                            if isinstance(item, tuple) and len(item) == 2:
+                            if isinstance(item, (list, tuple)) and len(item) == 2:
                                 key, value = item
+                                # Handle Symbol('.') and other special cases
+                                if hasattr(value, '__name__') and value.__name__ == '.':
+                                    # Skip Symbol('.') entries
+                                    continue
                                 if isinstance(value, list) and len(value) == 1:
                                     value = value[0]
                                 tag_data_dict[key] = value
+                            elif isinstance(item, (list, tuple)) and len(item) == 3:
+                                # Handle triplet format like ['id', Symbol('.'), 'c_maker']
+                                key, symbol, value = item
+                                if hasattr(symbol, '__name__') and symbol.__name__ == '.':
+                                    # This is a valid triplet with Symbol('.') separator
+                                    tag_data_dict[key] = value
+                                else:
+                                    self.logger.warning(f"Unknown triplet format: {item}")
+                        
+                        # If we couldn't convert the list, skip it
+                        if not tag_data_dict:
+                            self.logger.warning(f"skipping invalid tag data: {tag_dict}")
+                            continue
                     else:
                         self.logger.warning(f"skipping invalid tag data: {tag_dict}")
                         continue
@@ -568,3 +585,286 @@ class TagVectorEngine:
             self.logger.error(f"error parsing database file: {e}")
             self.logger.error(traceback.format_exc())
             return {}
+
+    def add_tag(self, tag_id: str, tag_name: str = None) -> bool:
+        """Add a new tag to the vector library
+        
+        Args:
+            tag_id: Tag ID
+            tag_name: Tag name (if different from ID)
+            
+        Returns:
+            True if added successfully, False otherwise
+        """
+        try:
+            # Use tag_name if provided, otherwise use tag_id
+            text_to_encode = tag_name or tag_id
+            
+            self.logger.info(f"Adding tag vector: {tag_id} -> '{text_to_encode}'")
+            
+            # Generate vector
+            tag_vector = self.model.encode(text_to_encode)
+            
+            # Add to memory
+            self.tag_vectors[tag_id] = tag_vector
+            
+            # Save to file
+            self._save_vectors()
+            
+            self.logger.info(f"Successfully added tag: {tag_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error adding tag '{tag_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
+    def update_tag(self, tag_id: str, tag_name: str = None) -> bool:
+        """Update an existing tag in the vector library
+        
+        Args:
+            tag_id: Tag ID
+            tag_name: Tag name (if different from ID)
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        try:
+            # Use tag_name if provided, otherwise use tag_id
+            text_to_encode = tag_name or tag_id
+            
+            self.logger.info(f"Updating tag vector: {tag_id} -> '{text_to_encode}'")
+            
+            # Generate new vector
+            tag_vector = self.model.encode(text_to_encode)
+            
+            # Update in memory
+            self.tag_vectors[tag_id] = tag_vector
+            
+            # Save to file
+            self._save_vectors()
+            
+            self.logger.info(f"Successfully updated tag: {tag_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error updating tag '{tag_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
+    def remove_tag(self, tag_id: str) -> bool:
+        """Remove a tag from the vector library
+        
+        Args:
+            tag_id: Tag ID to remove
+            
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        try:
+            self.logger.info(f"Removing tag vector: {tag_id}")
+            
+            # Remove from memory
+            if tag_id in self.tag_vectors:
+                del self.tag_vectors[tag_id]
+                
+                # Save to file
+                self._save_vectors()
+                
+                self.logger.info(f"Successfully removed tag: {tag_id}")
+                return True
+            else:
+                self.logger.warning(f"Tag '{tag_id}' not found in vector library")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error removing tag '{tag_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
+    def _save_vectors(self) -> bool:
+        """Save current vectors to file
+        
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        try:
+            if not self.vector_file:
+                self.logger.error("No vector file specified")
+                return False
+            
+            # Build cache data
+            cache_data = {
+                'tags': {
+                    tag_id: {
+                        'name': tag_id,
+                        'vector': vector.tolist(),
+                        'info': {'name': tag_id, 'type': 'tag'}
+                    }
+                    for tag_id, vector in self.tag_vectors.items()
+                },
+                'metadata': {
+                    'total_tags': len(self.tag_vectors),
+                    'vector_dim': 384,  # MiniLM-L6 dimension
+                    'updated_at': datetime.now().isoformat(),
+                    'model_name': self.model_name
+                }
+            }
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.vector_file), exist_ok=True)
+            
+            # Save to file
+            with open(self.vector_file, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+                
+            self.logger.info(f"Vectors saved to {self.vector_file}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error saving vectors: {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+
+    def sync_from_tags(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Synchronize the vector library with the provided tag data
+        
+        Args:
+            tag_data: List of dictionaries, each containing tag information
+                     Expected format: [{"id": tag_id, "name": tag_name}, ...]
+                     
+        Returns:
+            Dictionary with synchronization results
+        """
+        try:
+            self.logger.info(f"Starting synchronization with {len(tag_data)} tags")
+            
+            # Parse tag data
+            processed_tags = {}
+            for tag_dict in tag_data:
+                # Handle tag data in different formats  
+                if isinstance(tag_dict, dict):
+                    tag_data_dict = tag_dict
+                elif isinstance(tag_dict, list):
+                    # Convert list to dictionary
+                    tag_data_dict = {}
+                    for item in tag_dict:
+                        if isinstance(item, (list, tuple)) and len(item) == 2:
+                            key, value = item
+                            # Handle Symbol('.') and other special cases
+                            if hasattr(value, '__name__') and value.__name__ == '.':
+                                # Skip Symbol('.') entries
+                                continue
+                            if isinstance(value, list) and len(value) == 1:
+                                value = value[0]
+                            tag_data_dict[key] = value
+                        elif isinstance(item, (list, tuple)) and len(item) == 3:
+                            # Handle triplet format like ['id', Symbol('.'), 'c_maker']
+                            key, symbol, value = item
+                            if hasattr(symbol, '__name__') and symbol.__name__ == '.':
+                                # This is a valid triplet with Symbol('.') separator
+                                tag_data_dict[key] = value
+                            else:
+                                self.logger.warning(f"Unknown triplet format: {item}")
+                    
+                    # If we couldn't convert the list, skip it
+                    if not tag_data_dict:
+                        self.logger.warning(f"Skipping invalid tag data: {tag_dict}")
+                        continue
+                        
+                    tag_dict = tag_data_dict
+                else:
+                    self.logger.warning(f"Skipping invalid tag data: {tag_dict}")
+                    continue
+                
+                # Extract tag ID and name
+                tag_id = tag_dict.get('id') or tag_dict.get('name')
+                tag_name = tag_dict.get('name') or tag_id
+                
+                if not tag_id:
+                    self.logger.warning(f"Skipping tag without ID: {tag_dict}")
+                    continue
+                
+                # If tag_id is a list, take the first element
+                if isinstance(tag_id, list):
+                    tag_id = tag_id[0]
+                if isinstance(tag_name, list):
+                    tag_name = tag_name[0]
+                
+                processed_tags[tag_id] = tag_name
+            
+            self.logger.info(f"Processed {len(processed_tags)} valid tags")
+            
+            if not processed_tags:
+                self.logger.warning("No valid tags to synchronize")
+                return {
+                    "status": "success",
+                    "added": 0,
+                    "updated": 0,
+                    "removed": 0,
+                    "total": 0
+                }
+            
+            # Track statistics
+            added_count = 0
+            updated_count = 0
+            
+            # Process each tag
+            for tag_id, tag_name in processed_tags.items():
+                try:
+                    if tag_id in self.tag_vectors:
+                        # Update existing tag
+                        if self.update_tag(tag_id, tag_name):
+                            updated_count += 1
+                            self.logger.debug(f"Updated tag: {tag_id}")
+                    else:
+                        # Add new tag
+                        if self.add_tag(tag_id, tag_name):
+                            added_count += 1
+                            self.logger.debug(f"Added tag: {tag_id}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing tag '{tag_id}': {e}")
+                    continue
+            
+            # Remove tags that are no longer in the sync data
+            current_tags = set(self.tag_vectors.keys())
+            new_tags = set(processed_tags.keys())
+            tags_to_remove = current_tags - new_tags
+            
+            removed_count = 0
+            for tag_id in tags_to_remove:
+                try:
+                    if self.remove_tag(tag_id):
+                        removed_count += 1
+                        self.logger.debug(f"Removed tag: {tag_id}")
+                except Exception as e:
+                    self.logger.error(f"Error removing tag '{tag_id}': {e}")
+                    continue
+            
+            # Final save (in case individual operations didn't save)
+            if added_count > 0 or updated_count > 0 or removed_count > 0:
+                self._save_vectors()
+            
+            result = {
+                "status": "success",
+                "added": added_count,
+                "updated": updated_count,
+                "removed": removed_count,
+                "total": len(self.tag_vectors)
+            }
+            
+            self.logger.info(f"Synchronization completed: {result}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error during synchronization: {e}")
+            self.logger.error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": str(e),
+                "added": 0,
+                "updated": 0,
+                "removed": 0,
+                "total": len(self.tag_vectors) if hasattr(self, 'tag_vectors') else 0
+            }

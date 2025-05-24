@@ -1,0 +1,198 @@
+#+TITLE: org-supertag-ai Usage Documentation
+#+AUTHOR: yibie
+#+DATE: 2025-05-02
+
+* Introduction
+`org-supertag-ai.el` provides an AI workflow engine integrated with Org mode. It allows users to define and execute complex workflows directly within Org files by leveraging Org headline properties. The engine can execute nodes sequentially or based on defined logic, interact with Large Language Models (LLMs) via EPC (External Process Communication), call Elisp functions, execute behaviors, handle user input/output, and manage conditional logic.
+
+* Dependencies
+** Emacs Packages
+- `cl-lib`: Common Lisp extensions.
+- `org`: Org mode core.
+- `org-element`: Org element parsing library.
+- `org-id`: Org ID management.
+- `org-supertag-behavior`: Required if using `behavior` node types. Assumes the function `org-supertag-behavior-execute` is available.
+- `org-supertag-sim-epc`: Required if using `llm` node types for interaction with Ollama via the SimTag EPC server.
+
+** External
+- A running Python environment with the `simtag` package installed (for `org-supertag-sim-epc`).
+- A running Ollama instance (or compatible service) if using the default LLM integration.
+
+* Installation
+1. Ensure all dependency packages are installed.
+2. Place `org-supertag-ai.el` in your Emacs `load-path`.
+3. Add the following to your Emacs configuration file (e.g., `init.el`):
+   #+BEGIN_SRC emacs-lisp
+   (require 'org-supertag-ai)
+   #+END_SRC
+4. (Optional) Customize the data directory:
+   #+BEGIN_SRC emacs-lisp
+   (setq org-supertag-ai-data-dir "/path/to/your/ai-data")
+   #+END_SRC
+
+* Core Concepts
+
+** Workflow Nodes
+- Workflows are sequences of operations defined as Org headlines.
+- Each headline represents a node in the workflow.
+- The behavior and connections of each node are determined by its Org properties.
+
+** Node Properties
+- Standard Org properties (key-value pairs under the `:PROPERTIES:` drawer) define everything about a node.
+- Key properties include `:NODE_TYPE:`, `:ID:`, and `:AI_SUCCESSORS:`.
+
+** Node Types (`:NODE_TYPE:`)
+The engine supports several types of nodes, specified by the `:NODE_TYPE:` property:
+  - `llm`: Interacts with an LLM (via EPC) using a prompt template.
+  - `function`: Executes a specified Emacs Lisp function.
+  - `behavior`: Executes a predefined behavior using `org-supertag-behavior-execute`. Requires an `:ID:` property on the node.
+  - `input`: Prompts the user for input in the minibuffer.
+  - `output`: Displays information, typically rendered from a template.
+  - `conditional`: Evaluates an Elisp expression to determine the next step (action).
+
+** Shared Context
+- A hash table (`shared-context-hash`) is passed between nodes, allowing data sharing.
+- Nodes can read data from previous nodes specified in `:AI_CONTEXT_SOURCES:`.
+- Nodes can write their primary result to the context, accessible via the key `"last_result"`.
+- Specific node types (like `input`) can store results under custom keys defined by `:AI_CONTEXT_KEY:`.
+- The context always contains:
+    - `"last_result"`: The primary result of the previously executed node.
+    - `"last_action"`: The action string returned by the previous node (used for successor logic).
+    - `"current_node_title"`: The title of the node currently being executed.
+    - `"current_node_id"`: The `:ID:` property of the node currently being executed (if present).
+
+** Output and Thought Blocks
+- `:AI_OUTPUT_BLOCK:`: Specifies the name of an Org dynamic block where the main result of the node (e.g., LLM response) will be written. The block type typically matches the block name (e.g., `#+BEGIN_LLMResponse LLMResponse`).
+- `:AI_THOUGHTS_BLOCK:`: Specifies the name of an Org dynamic block where internal processing details, logs, or intermediate "thoughts" of the node execution are stored. Useful for debugging.
+
+* Defining Workflows
+
+A workflow node is an Org headline with a `:PROPERTIES:` drawer:
+
+#+BEGIN_SRC org
+,* My Workflow Node Title
+:PROPERTIES:
+:NODE_TYPE:        <node_type_string>
+:ID:               <unique_node_id_string>
+:AI_SUCCESSORS:    <successor_logic_string>
+; ... other properties specific to NODE_TYPE ...
+:END:
+#+END_SRC
+
+** Standard Property Keys
+
+These are the core properties used across different node types:
+
+- `:NODE_TYPE:` (String): Mandatory. Defines the node's type (e.g., `"llm"`, `"function"`, `"input"`).
+- `:ID:` (String): Highly recommended. A unique identifier for the node. Used for finding nodes (especially by successors or context sources) and required by `behavior` nodes. Org IDs created with `M-x org-id-get-create` are ideal.
+- `:AI_SUCCESSORS:` (String - Elisp Alist): Optional. Defines the next node(s) to execute based on the `action` returned by the current node. The format is a string representing an association list: `"((\"action1\" . \"next_node_id_1\") (\"action2\" . \"next_node_id_2\") (\"default\" . \"default_node_id\") (\"*\" . \"catch_all_node_id\"))"`.
+    - The engine looks for a match in this order: Specific action -> `"default"` -> `"*"` (catch-all).
+    - If no successor is found via this property, the engine attempts to execute the next sibling headline in the Org file. If no suitable successor is found, the workflow ends.
+- `:AI_CONTEXT_SOURCES:` (String - Elisp Alist): Optional. Specifies where to fetch context data *from*. The format is a string representing an association list: `"((\"source_node_id_1\" . \"block_name_1\") (\"source_node_id_2\" . \"block_name_2\"))"`.
+    - For each pair, the engine finds the node `source_node_id` and reads the content of the dynamic block named `block_name`.
+    - The content is added to the current node's context hash table with a key formatted as `"context_<BlockName>"` (e.g., `"context_LLMResponse"`).
+- `:AI_OUTPUT_BLOCK:` (String): Optional. The name for the dynamic block where the node's primary result (e.g., LLM output, function return value) will be written within the current node's content area. E.g., `"LLMResult"`.
+- `:AI_THOUGHTS_BLOCK:` (String): Optional. The name for the dynamic block where execution details and logs for the current node will be written. E.g., `"NodeThoughts"`.
+
+** Node-Specific Properties
+
+*** LLM Node (`:NODE_TYPE: "llm"`)
+  - `:AI_PROMPT:` (String): Mandatory. A template string for the main prompt sent to the LLM. Can contain placeholders like `{{variable_name}}` which will be replaced by values from the context hash.
+  - `:AI_SYSTEM_PROMPT:` (String): Optional. A template string for the system prompt. Also supports `{{variable_name}}` templating.
+  - `:AI_MODEL:` (String): Optional. Specifies the LLM model name (e.g., `"gemma:2b"`). If omitted, the default model configured in the EPC server is used. *Note: Currently, the Elisp side only verifies this model exists; it doesn't dynamically set it per call in the backend `run_ollama` function.*
+
+*** Function Node (`:NODE_TYPE: "function"`)
+  - `:AI_FUNCTION:` (String): Mandatory. The name of the Elisp function to execute (e.g., `"my-workflow-function"`).
+  - *Function Signature*: The specified Elisp function MUST accept two arguments: `(node-element context-hash)` where `node-element` is the Org element data structure for the current headline, and `context-hash` is the current shared context hash table.
+  - *Function Return Value*: The function MUST return a cons cell `(action . result)`, where `action` is a string indicating the outcome (used for successor logic, e.g., `"success"`, `"failure"`, `"custom_action"`, or `"default"`) and `result` is the primary output of the function (this value will be stored in `"last_result"` in the context).
+
+*** Behavior Node (`:NODE_TYPE: "behavior"`)
+  - `:AI_BEHAVIOR_NAME:` (String): Mandatory. The name of the behavior to execute.
+  - `:AI_BEHAVIOR_PARAMS:` (String): Optional. Parameters to pass to the behavior function.
+  - `:ID:` (String): *Mandatory for Behavior nodes*. The node's ID is passed to `org-supertag-behavior-execute`.
+  - *Dependency*: Relies on `org-supertag-behavior-execute` function being defined and loaded.
+  - *Return*: Assumes success and returns `("default" . nil)`. Error messages are logged and stored in the thoughts block.
+
+*** Input Node (`:NODE_TYPE: "input"`)
+  - `:AI_PROMPT:` (String): Mandatory. The prompt string displayed to the user in the minibuffer (e.g., `"Enter your name:"`).
+  - `:AI_CONTEXT_KEY:` (String - Elisp String): Optional. A string (read from the property value, e.g., `"\"user_name\""`) specifying the key under which the user's input will be stored in the shared context hash table *in addition* to being stored in `"last_result"`.
+
+*** Output Node (`:NODE_TYPE: "output"`)
+  - `:AI_TEMPLATE:` (String): Mandatory. A template string to be rendered. Supports `{{variable_name}}` placeholders using values from the context.
+  - `:AI_OUTPUT_TARGET:` (String): Optional. Specifies where to display the rendered output. Currently, only `"message"` is supported (displays in the echo area/`*Messages*` buffer). Defaults to `"message"`.
+  - `:AI_CONTEXT_SOURCES:` (String - Elisp Alist): Typically used here to fetch data needed for the template (e.g., fetching an LLM response from a previous node).
+
+*** Conditional Node (`:NODE_TYPE: "conditional"`)
+  - `:AI_CONDITIONS:` (String - Elisp Code String): Mandatory. A string containing an Elisp expression *that evaluates to an action string*. This expression is evaluated within a lambda that receives the `context` hash table as its single argument. Example: `"\"(if (> (string-to-number (gethash \\\"user_age\\\" context)) 18) \\\"adult\\\" \\\"minor\\\")\""`. Note the escaping of quotes.
+  - *Return*: The node itself doesn't produce a primary result (`"last_result"` will likely be from the previous node). Its purpose is to generate an `action` string based on the evaluated condition, which is then used by `:AI_SUCCESSORS:` logic to determine the next node.
+
+* Running Workflows
+
+** Interactive Command
+- `M-x org-supertag-ai-workflow-run`
+- Prompts for the starting node's ID or exact title.
+- Executes the workflow starting from that node in the current buffer.
+
+** Programmatic Function
+- `(org-supertag-ai-workflow-run START-NODE-IDENTIFIER &optional INITIAL-CONTEXT BUFFER)`
+- `START-NODE-IDENTIFIER` (String): The ID or title of the starting node.
+- `INITIAL-CONTEXT` (Hash Table): Optional. A hash table to pre-populate the shared context.
+- `BUFFER` (Buffer): Optional. The buffer containing the workflow definition (defaults to the current buffer).
+- Returns the final shared context hash table after the workflow completes or stops.
+
+** EPC Server Handling
+- When a workflow involves an `llm` node, the engine attempts to ensure the SimTag EPC server is running and initialized automatically using functions from `org-supertag-sim-epc`. Errors related to the EPC server will be reported.
+
+* Helper Commands
+
+** `M-x org-supertag-ai-select-model`
+- Fetches available Ollama models via the EPC server.
+- Presents a list for selection using `completing-read`.
+- Inserts the selected model name at the current point in the buffer (useful when writing `:AI_MODEL:` properties).
+
+* Example Workflow: Simple Greeting
+
+#+BEGIN_SRC org
+* Start: Get User Name
+:PROPERTIES:
+:NODE_TYPE:       input
+:ID:              GET_NAME
+:AI_PROMPT:       "Please enter your name"
+:AI_CONTEXT_KEY:  "\"user_name\""
+:AI_SUCCESSORS:   "((\"default\" . \"GREET_USER\"))"
+:AI_THOUGHTS_BLOCK: GetNameThoughts
+:END:
+
+** Process: Generate Greeting
+:PROPERTIES:
+:NODE_TYPE:       llm
+:ID:              GREET_USER
+:AI_CONTEXT_SOURCES: "((\"GET_NAME\" . \"LLMResponse\"))" ; Note: INPUT nodes don't usually write to OUTPUT_BLOCK, use context key. Need to fix this too!
+:AI_PROMPT:       "Create a short, friendly greeting for a user named {{user_name}}. Just the greeting."
+:AI_OUTPUT_BLOCK: "GreetingText"
+:AI_THOUGHTS_BLOCK: GreetUserThoughts
+:AI_SUCCESSORS:   "((\"default\" . \"SHOW_GREETING\"))" ; <-- Correct format
+:END:
+
+
+** End: Display Greeting
+:PROPERTIES:
+:NODE_TYPE:       output
+:ID:              SHOW_GREETING
+:AI_CONTEXT_SOURCES: "((\"GREET_USER\" . \"GreetingText\"))"
+:AI_TEMPLATE:     "{{context_GreetingText}}"
+:AI_OUTPUT_TARGET: "message"
+:AI_THOUGHTS_BLOCK: ShowGreetingThoughts
+:END:
+#+END_SRC
+
+* Troubleshooting
+- **Check `*Messages*` Buffer:** The engine logs information, warnings, and errors here during execution. EPC server messages also often appear here.
+- **Examine Thoughts Blocks:** If you defined `:AI_THOUGHTS_BLOCK:` for nodes, check their contents for detailed execution steps and potential error messages.
+- **Verify Property Syntax:** Ensure property values are correctly formatted, especially strings containing Elisp code or alists (pay attention to quoting and escaping). Use `M-x eval-expression` to test parts of Elisp strings if needed.
+- **Check Node IDs:** Ensure `:ID:` properties are unique and that `:AI_SUCCESSORS:` and `:AI_CONTEXT_SOURCES:` refer to the correct IDs.
+- **EPC Issues:**
+    - Make sure the Python `simtag` EPC server is running.
+    - Check for Python errors in the terminal where the server is running.
+    - Ensure the correct Ollama models are available to the server.
+- **Function Node Errors:** If using `function` nodes, ensure the target Elisp function exists, accepts the correct arguments `(element context)`, and returns the correct `(action . result)` cons cell format.

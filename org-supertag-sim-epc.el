@@ -94,13 +94,14 @@ ARGS is the format parameters"
     (unless (file-exists-p db-file)
       (org-supertag-db-save))
     
-    ;; Convert tag data to list format
+    ;; Convert tag data to list format expected by Python
     (let ((tag-list
-           (cl-loop for tag in tags
-                    for props = (org-supertag-db-get tag)
-                    for name = (and props (plist-get props :name))
-                    when name
-                    collect (list :id tag :name name))))
+           (delq nil
+                 (cl-loop for tag in tags
+                          for props = (org-supertag-db-get tag)
+                          for name = (and props (plist-get props :name))
+                          when name
+                          collect (list (cons "id" tag) (cons "name" name))))))
       (list db-file tag-list))))
 
 (defun org-supertag-sim-epc-debug-env ()

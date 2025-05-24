@@ -13,6 +13,7 @@
 (require 'org-supertag-tag)
 (require 'org-supertag-behavior-library)
 (require 'org-supertag-behavior-template)
+(require 'org-supertag-db)
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Registry
@@ -348,14 +349,22 @@ BEHAVIOR is the behavior definition with:
 :schedule  - Time specification (cron, absolute, relative, etc.)
 :action    - Function to execute
 :list      - Optional list of behaviors to execute
+:params    - Optional parameters for the action
 :tag-id    - Associated tag ID
 :node-id   - Associated node ID"
   (let* ((id (plist-get behavior :id))
          (schedule (plist-get behavior :schedule))
          (action (plist-get behavior :action))
          (behavior-list (plist-get behavior :list))
+         (task-params (plist-get behavior :params))
          (tag-id (plist-get behavior :tag-id))
          (node-id (plist-get behavior :node-id)))
+    
+    (message "Debug add-task - Adding task with ID: %s" id)
+    (message "Debug add-task - Schedule: %s" schedule)
+    (message "Debug add-task - Action: %S" action)
+    (message "Debug add-task - Tag: %s" tag-id)
+    (message "Debug add-task - Node: %s" node-id)
     
     ;; Validate required fields
     (unless (and id schedule tag-id node-id
@@ -371,10 +380,20 @@ BEHAVIOR is the behavior definition with:
              (list :schedule schedule
                    :action action
                    :list behavior-list
+                   :params task-params
                    :tag-id tag-id
                    :node-id node-id
                    :last-run nil)
-             org-supertag-scheduled-tasks)))
+             org-supertag-scheduled-tasks)
+    
+    ;; Verify task was added
+    (let ((added-task (gethash id org-supertag-scheduled-tasks)))
+      (message "Debug add-task - Verification - Task added: %S" added-task)
+      (message "Debug add-task - Current tasks in scheduler: %d"
+               (hash-table-count org-supertag-scheduled-tasks)))
+    
+    ;; Return the task ID
+    id))
 
 (defun org-supertag-schedule-remove-task (id)
   "Remove scheduled task with ID."
@@ -382,102 +401,171 @@ BEHAVIOR is the behavior definition with:
   (remhash id org-supertag-scheduled-tasks))
 
 
+(defun org-supertag-scheduler--execute-single-task (node-id action)
+  "Execute single ACTION on NODE-ID."
+  (if (functionp action)
+      (funcall action node-id)
+    (message "Warning: Invalid action: %S" action)))
+
+(defun org-supertag-scheduler--execute-behavior-list (node-id behavior-list)
+  "Execute BEHAVIOR-LIST on NODE-ID."
+  (dolist (sub-behavior behavior-list)
+    (let* ((parts (split-string sub-behavior "="))
+           (name (car parts))
+           (args (cadr parts)))
+      (message "Executing sub-behavior: %s with args: %s" name args)
+      (org-supertag-behavior-execute node-id name args))))
+
+(defun org-supertag-scheduler--execute-task-at-point (node-id task)
+  "Execute task at current point for NODE-ID and TASK."
+  (let ((action (plist-get task :action))
+        (behavior-list (plist-get task :list))
+        (task-params (plist-get task :params)))
+    (cond
+     (behavior-list
+      (org-supertag-scheduler--execute-behavior-list node-id behavior-list))
+     ((functionp action)
+      (if task-params
+          (funcall action node-id task-params)
+        (funcall action node-id nil)))
+     (t
+      (message "Warning: Invalid action in task: %S" action)))))
+
+(defun org-supertag-scheduler--update-task (id task now)
+  "Update task execution time and status."
+  (puthash id
+           (list :schedule (plist-get task :schedule)
+                 :action (plist-get task :action)
+                 :list (plist-get task :list)
+                 :params (plist-get task :params)
+                 :tag-id (plist-get task :tag-id)
+                 :node-id (plist-get task :node-id)
+                 :last-run (format-time-string "%Y-%m-%d %H:%M" now))
+           org-supertag-scheduled-tasks))
+
+(defun org-supertag-scheduler--should-execute-p (task now node-id)
+  "Check if TASK should be executed at NOW for NODE-ID."
+  (let ((schedule (plist-get task :schedule))
+        (last-run (plist-get task :last-run))
+        (current-time-str (format-time-string "%Y-%m-%d %H:%M" now)))
+    (message "Debug - Schedule: %s, Last run: %s, Current time: %s"
+             schedule last-run current-time-str)
+    (and (org-supertag-time-matches-p schedule now node-id)
+         (not (equal last-run current-time-str)))))
+
+(defun org-supertag-scheduler--process-task (id task now)
+  "Process single task with ID and TASK at time NOW."
+  (let ((tag-id (plist-get task :tag-id))
+        (node-id (plist-get task :node-id)))
+    
+    ;; 验证节点和标签
+    (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
+      (message "Task %s - Node %s has tags: %S. Required tag: %s"
+               id node-id node-tags tag-id)
+      
+      ;; 检查标签是否存在
+      (if (not (member tag-id node-tags))
+          (message "Task %s - SKIPPING, node does not have tag %s" 
+                   id tag-id)
+        
+        ;; 检查是否应该执行
+        (if (not (org-supertag-scheduler--should-execute-p task now node-id))
+            (message "Task %s - SKIPPING, time does not match or already ran" 
+                     id)
+          
+          ;; 执行任务
+          (message "Task %s - EXECUTING" id)
+          (condition-case err
+              (save-excursion
+                (when-let* ((pos (org-supertag-db-get-pos node-id)))
+                  (org-with-point-at pos
+                    (org-supertag-scheduler--execute-task-at-point node-id task)
+                    (org-supertag-scheduler--update-task id task now))))
+            (error
+             (message "Error in task %s: %s" 
+                      id (error-message-string err)))))))))
+
 (defun org-supertag-scheduler-check-tasks ()
   "Check and execute tasks matching current time."
   (let ((now (current-time)))
-    ;; (message "Checking scheduled tasks at %s" (format-time-string "%Y-%m-%d %H:%M:%S" now))
+    ;; 基本信息日志
+    (message "Scheduler: Checking tasks at %s. Total tasks: %d"
+             (format-time-string "%Y-%m-%d %H:%M:%S" now)
+             (hash-table-count org-supertag-scheduled-tasks))
+    
+    ;; 处理所有任务
     (maphash
      (lambda (id task)
-       ;; (message "Checking task %s with schedule %s" id (plist-get task :schedule))
-       ;; Only execute if we can find a node with this behavior's tag
-       (when-let* ((tag-id (plist-get task :tag-id))  ; Get associated tag
-                  (node-id (plist-get task :node-id)) ; Get associated node
-                  (node-tags (org-supertag-node-get-tags node-id))) ; Get node's tags
-         (when (and (member tag-id node-tags)  ; Check if node has tag
-                   (org-supertag-time-matches-p 
-                    (plist-get task :schedule) 
-                    now
-                    node-id))
-           ;; Avoid repeated execution in same minute
-           (unless (equal (plist-get task :last-run)
-                         (format-time-string "%Y-%m-%d %H:%M" 
-                                             now))
-             ;; Execute task
-             (condition-case err
-                 (progn
-                   (message "Executing scheduled task %s for node %s" id node-id)
-                   (save-excursion
-                     (when-let* ((pos (org-supertag-db-get-pos node-id)))
-                       (org-with-point-at pos
-                         (if-let* ((behavior-list (plist-get task :list)))
-                             ;; Execute behavior list
-                             (dolist (sub-behavior behavior-list)
-                               (let* ((parts (split-string sub-behavior "="))
-                                      (name (car parts))
-                                      (args (cadr parts)))
-                                 (message "Executing sub-behavior: %s with args: %s" name args)
-                                 (org-supertag-behavior-execute node-id name args)))
-                           ;; Execute single action
-                           (let ((action (plist-get task :action)))
-                             (if (functionp action)
-                                 (funcall action node-id)
-                               (message "Warning: Invalid action for task %s: %S" id action)))))))
-                   ;; Update last execution time
-                   (puthash id
-                            (list :schedule (plist-get task :schedule)
-                                  :action (plist-get task :action)
-                                  :list (plist-get task :list)  ; Preserve behavior list
-                                  :tag-id tag-id
-                                  :node-id node-id
-                                  :last-run (format-time-string 
-                                           "%Y-%m-%d %H:%M" 
-                                           now))
-                            org-supertag-scheduled-tasks))
-               (error
-                (message "Error in scheduled task %s: %s" 
-                         id (error-message-string err))))))))
+       (message "Checking task: %s" id)
+       (org-supertag-scheduler--process-task id task now))
      org-supertag-scheduled-tasks)))
 
 
 (defun org-supertag-behavior--setup-scheduled-behaviors ()
-  "Setup scheduled behaviors."
-  (message "Setting up scheduler system...")
-  ;; Initialize scheduled tasks storage
+  "Scan all tags and their attached behaviors to set up scheduled tasks."
+  ;; 1. Clear and initialize the scheduled tasks hash table.
   (setq org-supertag-scheduled-tasks (make-hash-table :test 'equal))
-  ;; Iterate through all behaviors and register scheduled tasks
+
+  ;; 2. Iterate through all objects in the main database.
   (maphash
-   (lambda (name behavior)
-     (when (and (eq (plist-get behavior :trigger) :schedule)
-                (plist-get behavior :schedule))
-      ;;  (message "Registering scheduled behavior: %s with schedule: %s"
-      ;;           name (plist-get behavior :schedule))
-       ;; Build complete task definition
-       (condition-case err
-           (progn
-             (org-supertag-schedule-add-task
-              (list :id name
-                    :schedule (plist-get behavior :schedule)
-                    :action (plist-get behavior :action)
-                    :list (plist-get behavior :list)
-                    :tag-id name  ; Use behavior name as tag ID since it's registered as a tag
-                    :node-id (org-id-get-create))) ; Create ID for current node
-             (message "Successfully registered scheduled behavior: %s" name))
-         (error
-          (message "Error registering scheduled behavior %s: %s"
-                   name (error-message-string err))))))
-   org-supertag-behavior-registry)
-  
-  ;; Start the scheduler
+   (lambda (tag-name tag-plist)
+     (when (eq (plist-get tag-plist :type) :tag)
+       (let ((behaviors (plist-get tag-plist :behaviors)))
+         (when behaviors
+           (dolist (behavior-name behaviors)
+             (let ((behavior (gethash behavior-name org-supertag-behavior-registry)))
+               (when (and behavior
+                          (eq (plist-get behavior :trigger) :on-schedule)
+                          (plist-get behavior :schedule))
+                 (let ((nodes (org-supertag-db-find-nodes-by-tag tag-name)))
+                   (dolist (node-id nodes)
+                     (let ((task-id (format "%s-%s" node-id behavior-name)))
+                       (ignore-errors
+                         (org-supertag-schedule-add-task
+                          (list :id task-id
+                                :schedule (plist-get behavior :schedule)
+                                :action (plist-get behavior :action)
+                                :list (plist-get behavior :list)
+                                :params (plist-get behavior :params)
+                                :tag-id tag-name
+                                :node-id node-id)))))))))))))
+   org-supertag-db--object)
+
+  ;; 3. Start the scheduler timer.
   (org-supertag-scheduler-start)
-  (message "Scheduled behaviors setup completed with %d tasks"
+
+  ;; 4. Log the total number of tasks scheduled.
+  (message "Scheduled behaviors setup completed. Total tasks in queue: %d"
            (hash-table-count org-supertag-scheduled-tasks)))
 
 (defun org-supertag-scheduler-start ()
   "Start the scheduler."
-  (unless org-supertag-scheduler-timer
-    (setq org-supertag-scheduler-timer
-          (run-at-time t 300 #'org-supertag-scheduler-check-tasks)) ;; 5 minutes check 1 time
-    (message "Scheduler started with timer: %S" org-supertag-scheduler-timer)))
+  (message "Starting scheduler...")
+  
+  ;; 检查现有定时器
+  (when org-supertag-scheduler-timer
+    (message "Found existing timer: %S" org-supertag-scheduler-timer)
+    (cancel-timer org-supertag-scheduler-timer)
+    (setq org-supertag-scheduler-timer nil)
+    (message "Cancelled existing timer"))
+  
+  ;; 检查任务数量
+  (let ((task-count (hash-table-count org-supertag-scheduled-tasks)))
+    (message "Current scheduled tasks: %d" task-count)
+    
+    ;; 只有在有任务时才启动定时器
+    (if (> task-count 0)
+        (progn
+          (setq org-supertag-scheduler-timer
+                (run-at-time t 300 #'org-supertag-scheduler-check-tasks))
+          (message "Scheduler started with timer: %S" org-supertag-scheduler-timer)
+          
+          ;; 立即执行一次检查
+          (org-supertag-scheduler-check-tasks))
+      (message "No tasks to schedule, scheduler not started")))
+  
+  ;; 返回定时器状态
+  org-supertag-scheduler-timer)
 
 (defun org-supertag-scheduler-stop ()
   "Stop the scheduler."
@@ -511,28 +599,37 @@ Returns t if valid, nil otherwise."
     ;;          behavior trigger)
     (cond
      ;; Handle scheduled behaviors
-     ((eq trigger :schedule)
+     ((eq trigger :on-schedule)
       (if (eq action :add)
           (progn
-            (message "Registering scheduled behavior for tag %s on node %s" tag-id node-id)
+            (message "Attempting to register scheduled behavior for tag %s on node %s" tag-id node-id)
             (condition-case err
-                (let ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
+                (let* ((behavior-props (org-supertag-behavior--get-behavior tag-id)) ; Get full behavior props
+                       (b-action (plist-get behavior-props :action))
+                       (b-list (plist-get behavior-props :list))
+                       (b-schedule (plist-get behavior-props :schedule))
+                       ;; IMPORTANT: Task ID should be unique per node and behavior combination
+                       (task-unique-id (format "%s-%s" node-id tag-id)))
+                  (message "Registering task with ID: %s, Schedule: %s, Action: %S, List: %S, Tag: %s, Node: %s"
+                           task-unique-id b-schedule b-action b-list tag-id node-id)
                   (org-supertag-schedule-add-task
-                   (list :id behavior-name  ; Use behavior name as ID
-                         :schedule (plist-get behavior :schedule)
-                         :action (plist-get behavior :action)
-                         :list (plist-get behavior :list)
+                   (list :id task-unique-id      ; Use unique ID
+                         :schedule b-schedule
+                         :action b-action
+                         :list b-list
+                         :params (plist-get behavior-props :params)
                          :tag-id tag-id
                          :node-id node-id))
-                  (message "Successfully registered scheduled behavior %s for tag %s on node %s" 
-                          behavior-name tag-id node-id))
+                  (message "Successfully registered scheduled behavior %s for tag %s on node %s"
+                           tag-id tag-id node-id)) ; Referring to tag-id as behavior name for this message
               (error
                (message "Error registering scheduled behavior for tag %s: %s"
                         tag-id (error-message-string err)))))
         ;; Remove scheduled task when tag is removed
         (when (eq action :remove)
-          (when-let* ((behavior-name (car (plist-get (org-supertag-tag-get tag-id) :behaviors))))
-            (org-supertag-schedule-remove-task behavior-name)))))
+          (let ((task-unique-id (format "%s-%s" node-id tag-id)))
+            (message "Attempting to remove scheduled task with ID: %s" task-unique-id)
+            (org-supertag-schedule-remove-task task-unique-id)))))
      
      ;; Handle regular behaviors
      ((or (eq trigger :always)
@@ -629,7 +726,7 @@ Returns t if valid, nil otherwise."
     ((pred functionp)
      (if params
          (apply action params)
-       (funcall action)))
+       (funcall action (org-id-get) nil)))
     
     (_ (error "Invalid action: %S" action))))
 
@@ -1313,8 +1410,6 @@ Returns t if valid, signals error if invalid."
 
 (add-hook 'org-supertag-after-load-hook
           #'org-supertag-behavior-setup)
-
-;; 在数据库加载后重新设置调度系统
 (add-hook 'org-supertag-db-after-load-hook 
           #'org-supertag-behavior--setup-scheduled-behaviors)
 
