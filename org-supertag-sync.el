@@ -574,7 +574,11 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
          ;; disable auto collect keywords
          (org--collect-keywords-cache (make-hash-table :test 'equal))
          ;; 保存节点关系数据
-         (preserved-data (make-hash-table :test 'equal)))
+         (preserved-data (make-hash-table :test 'equal))
+         ;; 保存所有非节点实体
+         (preserved-entities (make-hash-table :test 'equal))
+         ;; 保存所有链接数据
+         (preserved-links (make-hash-table :test 'equal)))
     
     ;; 保存所有节点的关系数据
     (maphash
@@ -584,6 +588,13 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
                               :ref-from (plist-get node :ref-from)
                               :ref-count (plist-get node :ref-count))))
            (puthash id rel-data preserved-data))))
+     org-supertag-db--object)
+    
+    (maphash
+     (lambda (id entity)
+       (let ((entity-type (plist-get entity :type)))
+         (when (and entity-type (not (eq entity-type :node)))
+           (puthash id (copy-sequence entity) preserved-entities))))
      org-supertag-db--object)
     
     ;; Confirm with user if too many files
@@ -658,6 +669,18 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
             (user-error "Force sync interrupted at file %d/%d" 
                        current total)))))
     
+         ;; 恢复所有非节点实体
+     (maphash
+      (lambda (id entity)
+        (org-supertag-db-add id entity))
+      preserved-entities)
+     
+     ;; 恢复所有链接数据
+     (maphash
+      (lambda (link-id link-data)
+        (puthash link-id link-data org-supertag-db--link))
+      preserved-links)
+    
     ;; Report results
     (if errors
         (progn
@@ -729,7 +752,9 @@ Uses ID-based scanning to ensure reliability."
   (when (yes-or-no-p "This will update all nodes. Continue? ")
     (let ((updated 0)
           (errors nil)
-          (preserved-data (make-hash-table :test 'equal)))
+          (preserved-data (make-hash-table :test 'equal))
+          (preserved-entities (make-hash-table :test 'equal))
+          (preserved-links (make-hash-table :test 'equal)))
       
       ;; 1. First preserve all relationship data
       (maphash
@@ -740,6 +765,20 @@ Uses ID-based scanning to ensure reliability."
                                 :ref-count (plist-get node :ref-count))))
              (puthash id rel-data preserved-data))))
        org-supertag-db--object)
+      
+             ;; 1.5. 保存所有非节点实体
+       (maphash
+        (lambda (id entity)
+          (let ((entity-type (plist-get entity :type)))
+            (when (and entity-type (not (eq entity-type :node)))
+              (puthash id (copy-sequence entity) preserved-entities))))
+        org-supertag-db--object)
+       
+       ;; 1.6. 保存所有链接数据
+       (maphash
+        (lambda (link-id link-data)
+          (puthash link-id (copy-sequence link-data) preserved-links))
+        org-supertag-db--link)
       
       ;; 2. Scan all files and update nodes
       (dolist (file (org-supertag-get-all-files))
@@ -761,6 +800,18 @@ Uses ID-based scanning to ensure reliability."
             (error
              (push (cons file (error-message-string err))
                    errors)))))
+      
+             ;; 2.5. 恢复所有非节点实体
+       (maphash
+        (lambda (id entity)
+          (org-supertag-db-add id entity))
+        preserved-entities)
+       
+       ;; 2.6. 恢复所有链接数据
+       (maphash
+        (lambda (link-id link-data)
+          (puthash link-id link-data org-supertag-db--link))
+        preserved-links)
       
       ;; 3. Report results
       (if errors
