@@ -346,31 +346,89 @@
 ;; Script Execution Behaviors
 ;;------------------------------------------------------------------------------
 
-;; base
+;; Base script execution (async by default)
 (org-supertag-behavior-register "@script"
   :trigger :on-add
   :action #'org-supertag-behavior--execute-script
-  :params '(script-path args log-drawer)
-  :description "Execute a script and log its output")
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t)
+  :description "Execute script asynchronously from SCRIPT_PATH property")
 
-;; python-schedule
+;; Sync script execution (when you need to wait for result)
+(org-supertag-behavior-register "@script-sync"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async nil)
+  :description "Execute script synchronously from SCRIPT_PATH property")
+
+;; Python script with callback
 (org-supertag-behavior-register "@python"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t
+            :callback org-supertag-behavior--script-completion-callback)
+  :description "Execute Python script with completion notification")
+
+;; Scheduled Python execution
+(org-supertag-behavior-register "@python-schedule"
   :trigger :on-schedule
   :schedule "0 23 * * *"
   :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${script_path}"
-            :log-drawer "PYTHON_LOG"
-            :log-format "%Y-%m-%d %H:%M:%S")
-  :description "Execute Python script")
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t
+            :callback org-supertag-behavior--scheduled-script-callback)
+  :description "Execute Python script daily at 23:00")
 
-;; shell
+;; Shell script execution
 (org-supertag-behavior-register "@shell"
   :trigger :on-add
   :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${script_path}"
-            :log-drawer "SHELL_LOG"
-            :log-format "%Y-%m-%d %H:%M:%S")
-  :description "Execute Shell script")
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t)
+  :description "Execute Shell script asynchronously")
+
+;; Quick data processing (your lex-scraper example)
+(org-supertag-behavior-register "@lex-scraper"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "~/Documents/prj/lex-scraper/lex-scraper.py"
+            :async t
+            :callback org-supertag-behavior--lex-scraper-callback)
+  :description "Run lex-scraper and notify when complete"
+  :style '(:prefix "📺"))
+
+;; Development script runner
+(org-supertag-behavior-register "@dev-script"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :args ("${prop:SCRIPT_ARGS}")
+            :async t
+            :callback org-supertag-behavior--dev-script-callback)
+  :description "Run development script with arguments"
+  :style '(:prefix "🔧"))
+
+;; Data processing with smart callback
+(org-supertag-behavior-register "@data-process"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t
+            :callback org-supertag-behavior--data-processing-callback)
+  :description "Run data processing script with statistics"
+  :style '(:prefix "📊"))
+
+;; Backup script
+(org-supertag-behavior-register "@backup"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t
+            :callback org-supertag-behavior--backup-script-callback)
+  :description "Run backup script with file count summary"
+  :style '(:prefix "💾"))
 
 (provide 'org-supertag-custom-behavior)
 ;;; org-supertag-custom-behavior.el ends here 
