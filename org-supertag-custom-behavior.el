@@ -126,216 +126,251 @@
 (require 'org-supertag-behavior)
 (require 'org-supertag-behavior-library)
 
+(defcustom my/ai-generate-topics-prompt
+  "我是一个专注于\"用AI提升人生体验\"的创作者。\n请为我生成5个具体、可操作的小选题，要求：\n- 聚焦个人成长、体验优化、创造力释放、情绪能量管理\n- 每个选题都小到可以用一篇短文或一条动态阐述\n- 尽量具体而非抽象，例如\"如何用ChatGPT优化晨间例行\"而不是\"AI和习惯养成\"\n- 带一点轻盈感或哲思感，避免太重学术气息"
+  "用于 @GenerateTopics 行为的默认 AI Prompt。"
+  :type 'string
+  :group 'org-supertag-behavior) ; 或者你自己的 custom group
+
 ;;------------------------------------------------------------------------------
 ;; Basic Behaviors - Core functionality
 ;;------------------------------------------------------------------------------
 
-;; Node Movement - Basic move operation
+;; Node Movement
 (org-supertag-behavior-register "@move"
   :trigger :on-add
   :action #'org-supertag-behavior--move-node
-  :params '(target-file))
+  :params '(target-file)
+  :description "Move node to target file")
 
-;; TODO State - Basic behavior, other states through parameters
+;; TODO State Management
 (org-supertag-behavior-register "@todo"
   :trigger :on-add
   :action #'org-supertag-behavior--set-todo
-  :params '(state))
+  :params '(state)
+  :description "Set TODO state for node")
 
-;; Priority - Set specific levels through parameters
+;; Priority Management
 (org-supertag-behavior-register "@priority"
   :trigger :on-add
   :action #'org-supertag-behavior--set-priority
-  :params '(priority))
+  :params '(priority)
+  :description "Set priority for node")
 
-;; Timestamp - Different types through parameters
-(org-supertag-behavior-register "@timestamp"
-  :trigger :on-add
-  :action #'org-supertag-behavior--set-property
-  :params '(name value))
-
-;; Property Setting - Set any property through parameters
+;; Property Management
 (org-supertag-behavior-register "@property"
   :trigger :on-add
   :action #'org-supertag-behavior--set-property
-  :params '(name value))
+  :params '(name value)
+  :description "Set property for node")
 
-;; Clock Management - Control through parameters
+;; Clock Management
 (org-supertag-behavior-register "@clock"
   :trigger :on-add
   :action #'org-supertag-behavior--clock-in
-  :params '(switch-state))
+  :params '(switch-state)
+  :description "Control node clock")
 
-;; State Toggle Basic Behavior
+;; State Toggle
 (org-supertag-behavior-register "@state"
   :trigger :on-add
   :action #'org-supertag-behavior--toggle-state
-  :params '(states))
+  :params '(states)
+  :description "Toggle between specified states")
 
-;; Deadline Check - Basic deadline checking operation
+;; Deadline Check
 (org-supertag-behavior-register "@deadline-check"
   :trigger :on-add
   :action #'org-supertag-behavior--check-deadline
-  :params '(scope days action))
+  :params '(scope days action)
+  :description "Check node deadline")
 
-
-
-;; State Propagation Basic Behavior
+;; State Propagation
 (org-supertag-behavior-register "@propagate"
   :trigger :on-add
   :action #'org-supertag-behavior--propagate-state
-  :params '(state recursive))
+  :params '(state recursive)
+  :description "Propagate state to child nodes")
 
-;; Drawer Management Basic Behavior
+;; Drawer Management
 (org-supertag-behavior-register "@drawer"
   :trigger :on-add
   :action #'org-supertag-behavior--insert-drawer
-  :params '(name content region))
+  :params '(name content region)
+  :description "Manage node drawers")
 
-;; Log Drawer Basic Behavior
+;; Log Management
 (org-supertag-behavior-register "@log"
   :trigger :on-add
   :action #'org-supertag-behavior--log-into-drawer
-  :params '(enabled name note))
+  :params '(enabled name note)
+  :description "Configure node logging")
 
-;; Clock Report Basic Behavior
-(org-supertag-behavior-register "@report"
-  :trigger :on-add
-  :action #'org-supertag-behavior--clock-report
-  :params '(scope range))
-
-;; Clock Control Basic Behavior (clock-out and cancel)
-(org-supertag-behavior-register "@clock-out"
-  :trigger :on-add
-  :action #'org-supertag-behavior--clock-out
-  :params '(switch-state note))
-
-;; Archive Basic Behavior
+;; Archive Management
 (org-supertag-behavior-register "@archive"
   :trigger :on-add
-  :action #'org-supertag-behavior--archive-subtree)
+  :action #'org-supertag-behavior--archive-subtree
+  :description "Archive node")
 
-;; Node Operations - Get Child Node Information
+;; Node Operations
 (org-supertag-behavior-register "@children"
   :trigger :on-change
-  :action #'org-supertag-behavior--get-children)
+  :action #'org-supertag-behavior--get-children
+  :description "Get children node information")
 
-;; Parent Node Search - Find Parent with Specific Tag
+;; Parent Node Search
 (org-supertag-behavior-register "@parent"
   :trigger :on-add
   :action #'org-supertag-behavior--find-parent-with-tag
-  :params '(tag-id))
+  :params '(tag-id)
+  :description "Find parent node with specific tag")
 
-;; Heading Management - Modify Heading Text
+;; Heading Management
 (org-supertag-behavior-register "@heading"
   :trigger :on-add
   :action #'org-supertag-behavior--set-heading
-  :params '(title))
+  :params '(title)
+  :description "Modify node title")
 
-;; Progress Calculation - Based on Child Task States
+;; Progress Calculation
 (org-supertag-behavior-register "@progress"
   :trigger :on-change
-  :action #'org-supertag-behavior--calculate-progress)
-
+  :action #'org-supertag-behavior--calculate-progress
+  :description "Calculate node progress")
 
 ;;------------------------------------------------------------------------------
 ;; Shortcut Behaviors - Based on Basic Behaviors
 ;;------------------------------------------------------------------------------
 
-;; 1. Task State Derivatives
+;; Task State Shortcuts
 (org-supertag-behavior-register "@done"
   :trigger :on-add
   :list '("@todo=DONE")
+  :description "Mark node as done"
   :style '(:face (:foreground "green" :weight bold)
           :prefix "✓"))
 
 (org-supertag-behavior-register "@start"
   :trigger :on-add
   :list '("@todo=DOING")
+  :description "Start processing node"
   :style '(:prefix "▶"))
 
-;; 2. Priority Derivatives
+;; Priority Shortcuts
 (org-supertag-behavior-register "@urgent"
   :trigger :on-add
   :list '("@priority=A")
+  :description "Mark node as urgent"
   :style '(:face (:foreground "red" :weight bold)
           :prefix "🔥"))
 
-;; 3. Time-Related Derivatives
+;; Time-Related Shortcuts
 (org-supertag-behavior-register "@deadline"
   :trigger :on-add
-  :list '("@timestamp=DEADLINE"))
+  :list '("@property=DEADLINE,${date:now+1d}")
+  :description "Set node deadline")
 
 (org-supertag-behavior-register "@scheduled"
   :trigger :on-add
-  :list '("@timestamp=SCHEDULED"))
+  :list '("@property=SCHEDULED,${date:now}")
+  :description "Set node scheduled time")
 
-;; 4. Move-Related Derivatives
+;; Move-Related Shortcuts
 (org-supertag-behavior-register "@move-to-project"
   :trigger :on-add
-  :list '("@move=/Users/chenyibin/Documents/notes/project.org"))
-
-
-;; 5. Deadline Check Derivatives
-(org-supertag-behavior-register "@overdue-archive"
-  :trigger :on-schedule
-  :schedule "0 0 * * 0"  ; every sunday 0:00 execute
-  :action (lambda (node-id)
-            (org-supertag-behavior--check-deadline node-id
-              '(scope subtree
-                days 0
-                action (lambda (heading deadline)
-                        (when (member (org-get-todo-state) 
-                                    org-done-keywords)
-                          (org-archive-subtree-default)))))))
+  :list '("@move=/Users/chenyibin/Documents/notes/project.org")
+  :description "Move node to project file"
+  :style '(:prefix "📁"))
 
 ;;------------------------------------------------------------------------------
 ;; Workflow Behaviors - Complex Functionality
 ;;------------------------------------------------------------------------------
 
-;; 1. Complete and Archive
+;; Complete and Archive
 (org-supertag-behavior-register "@done+archive"
   :trigger :on-add
-  :list '("@todo=DONE"                                ; Set state to DONE
-          "@archive")                                 ; Archive using org-archive-location
+  :list '("@todo=DONE"
+          "@property=COMPLETED_TIME,${date:now}"
+          "@archive")
+  :description "Complete and archive node"
   :style '(:face (:foreground "gray50")
           :prefix "📦"))
 
-;; 2. Start Task and Clock In
+;; Start Task and Clock In
 (org-supertag-behavior-register "@start+clock"
   :trigger :on-add
-  :list '("@todo=DOING" 
-          "@clock=start"))
+  :list '("@todo=DOING"
+          "@property=STARTED_TIME,${date:now}"
+          "@clock=start")
+  :description "Start task and clock in"
+  :style '(:prefix "⏱"))
 
-;; 3. Urgent Task (High Priority + Deadline)
+;; Urgent Task
 (org-supertag-behavior-register "@urgent+deadline"
   :trigger :on-add
-  :list '("@priority=A" 
-          "@deadline-check,scope=agenda,days=0"
-          "@priority=A")
+  :list '("@priority=A"
+          "@property=DEADLINE,${date:now+1d}"
+          "@property=URGENT,true")
+  :description "Create urgent task"
   :style '(:face (:foreground "red" :weight bold)
           :prefix "🚨"))
 
-;; Test behavior
-
-;; 1. Base behavior: Record time (testing template variables)
-(org-supertag-behavior-register "@timestamp"
+;; AI Content Generation
+(org-supertag-behavior-register "@GenerateTopics"
   :trigger :on-add
-  :list '("@property=TIME=${date:now}"))
+  :action #'org-supertag-behavior--generate-topics-action
+  :description "Generate content topics with AI"
+  :style '(:prefix "🤖"))
 
-;; 2. Workflow behavior: Create task and set reminder
-(org-supertag-behavior-register "@task"
-  :trigger :on-add
-  :list '(
-    "@todo=TODO"
-    "@property=CREATED=${date:now}"
-    "@property=WHO=${input:Owner}"))
+;;------------------------------------------------------------------------------
+;; Command Execution Behaviors
+;;------------------------------------------------------------------------------
 
-;; 3. Scheduled check behavior
-(org-supertag-behavior-register "@check"
+;; Basic Command Execution
+(org-supertag-behavior-register "@execute"
   :trigger :on-schedule
-  :schedule "0 * * * *"              ; Check every hour
-  :list '("@todo=WAIT{if:CREATED<${date:now-1d}}"))
+  :action #'org-supertag-behavior--execute-command
+  :params '(command args)
+  :description "Execute an Emacs command")
+
+
+;;Auto run org-zettel-ref-run-python-script
+(org-supertag-behavior-register "@run-python-script"
+  :trigger :on-schedule
+  :schedule "0 22 * * *"  ; Every 5 minutes
+  :action #'org-zettel-ref-run-python-script
+  :description "Run Python script every 5 minutes")
+
+
+;;------------------------------------------------------------------------------
+;; Script Execution Behaviors
+;;------------------------------------------------------------------------------
+
+;; base
+(org-supertag-behavior-register "@script"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(script-path args log-drawer)
+  :description "Execute a script and log its output")
+
+;; python-schedule
+(org-supertag-behavior-register "@python"
+  :trigger :on-schedule
+  :schedule "0 23 * * *"
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${script_path}"
+            :log-drawer "PYTHON_LOG"
+            :log-format "%Y-%m-%d %H:%M:%S")
+  :description "Execute Python script")
+
+;; shell
+(org-supertag-behavior-register "@shell"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${script_path}"
+            :log-drawer "SHELL_LOG"
+            :log-format "%Y-%m-%d %H:%M:%S")
+  :description "Execute Shell script")
 
 (provide 'org-supertag-custom-behavior)
 ;;; org-supertag-custom-behavior.el ends here 

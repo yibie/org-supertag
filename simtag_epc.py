@@ -62,6 +62,7 @@ def main():
     except Exception as e:
         # Make sure error messages are written to stderr
         print(f"Failed to start the server: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":

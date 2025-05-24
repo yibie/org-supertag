@@ -3,7 +3,7 @@ SimTag Ollama Bridge Module - Provides interaction with the Ollama model
 """
 
 import logging
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Literal
 import subprocess
 import traceback
 import requests
@@ -13,7 +13,7 @@ import sys
 class OllamaBridge:
     """Ollama API integration, providing basic LLM call functionality"""
     
-    def __init__(self, model: str = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"):
+    def __init__(self, model: Optional[str] = None):
         """Initialize the Ollama client
         
         Args:
@@ -21,43 +21,35 @@ class OllamaBridge:
         """
         self.logger = logging.getLogger("simtag.ollama_bridge")
         if not model:
-            model = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"  # Ensure a default value
-        self.model = str(model)  # Ensure it's a string type
-        self.logger.info(f"Initialized OllamaBridge, using model: {self.model}")
+            model = "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"
+        # Clean up model name - remove any quotes and extra whitespace
+        self.model = str(model).strip().replace('"', '').replace("'", '')
+        self.logger.info(f"Initialized OllamaBridge, default model: {self.model}")
 
-    def run(self, prompt: str, system: str = None) -> str:
-        """Run Ollama command
-        
+    def run(self, prompt: str, system: Optional[str] = None, model: Optional[str] = None) -> str:
+        """Execute interaction with Ollama model.
+
         Args:
-            prompt: Prompt text
-            system: System prompt
-            
+            prompt: User prompt text.
+            system: Optional system prompt text.
+            model: Optional model name to override the default for this call.
+
         Returns:
-            Model output text
+            The response content string from the model.
+
+        Raises:
+            Exception: If the Ollama interaction fails.
         """
         try:
-            self.logger.info("Preparing to call Ollama API")
-            
-            # Ensure the model name is valid
-            if not self.model:
-                self.logger.error("Model name not set")
-                raise Exception("Model name not set")
-            
-            # Ensure the prompt is a valid UTF-8 encoded string
-            if not isinstance(prompt, str):
-                prompt = str(prompt)
-            
-            # Ensure the system prompt is also a valid string
-            if system and not isinstance(system, str):
-                system = str(system)
-                
-            self.logger.debug(f"Using model: {self.model}")
-            self.logger.debug(f"System prompt: {system}")
-            self.logger.debug(f"User prompt: {prompt[:100]}...")
-            
-            # Build the request data
+            # Determine the model to use for this specific call
+            model_to_use = model.strip().replace('"', '').replace("'", '') if model and model.strip() else self.model
+            self.logger.info(f"Executing Ollama call. Model: {model_to_use}. Prompt length: {len(prompt)}")
+            if system:
+                self.logger.info(f"System prompt provided (length: {len(system)}).")
+
+            # Build request data
             data = {
-                "model": self.model,
+                "model": model_to_use,
                 "prompt": prompt,
                 "stream": False,  # Do not use streaming response
                 "options": {
@@ -72,7 +64,7 @@ class OllamaBridge:
                 data["system"] = system
             
             # Log the generated request data (excluding sensitive content)
-            self.logger.info(f"Sending API request to model: {self.model}")
+            self.logger.info(f"Sending API request to model: {model_to_use}")
             
             # Send the request
             try:
@@ -179,20 +171,30 @@ def _test():
         status = bridge.status()
         logger.info(f"Ollama status: {status}")
         
-        # 3. Test simple dialogue
-        logger.info("Testing simple dialogue...")
+        # 3. Test simple dialogue with generate mode
+        logger.info("Testing simple dialogue (generate mode)...")
         prompt = "Hello, please introduce yourself in one sentence."
-        response = bridge.run(prompt)
-        logger.info(f"Simple dialogue response: {response}")
+        response = bridge.run(prompt, mode="generate")
+        logger.info(f"Simple dialogue response (generate): {response}")
         
-        # 4. Test dialogue with system prompt
-        logger.info("Testing dialogue with system prompt...")
+        # 4. Test simple dialogue with chat mode
+        logger.info("Testing simple dialogue (chat mode)...")
+        response = bridge.run(prompt, mode="chat")
+        logger.info(f"Simple dialogue response (chat): {response}")
+        
+        # 5. Test dialogue with system prompt (generate mode)
+        logger.info("Testing dialogue with system prompt (generate mode)...")
         system = "You are a concise assistant, answer should be short."
         prompt = "Explain what is artificial intelligence."
-        response = bridge.run(prompt, system=system)
-        logger.info(f"Dialogue response with system prompt: {response}")
+        response = bridge.run(prompt, system=system, mode="generate")
+        logger.info(f"Dialogue response with system prompt (generate): {response}")
         
-        # 5. Test tag generation scenario
+        # 6. Test dialogue with system prompt (chat mode)
+        logger.info("Testing dialogue with system prompt (chat mode)...")
+        response = bridge.run(prompt, system=system, mode="chat")
+        logger.info(f"Dialogue response with system prompt (chat): {response}")
+        
+        # 7. Test tag generation scenario
         logger.info("Testing tag generation scenario...")
         system = """You are a tag generation expert. Please analyze the given text and generate the most relevant tags.
 Requirements:
@@ -205,8 +207,11 @@ Requirements:
         Python is a popular programming language, known for its concise syntax and rich ecosystem.
         It is widely used in fields such as web development, data analysis, and artificial intelligence.
         """
-        response = bridge.run(test_text, system=system)
-        logger.info(f"Tag generation response: {response}")
+        # Try both modes
+        response_gen = bridge.run(test_text, system=system, mode="generate")
+        logger.info(f"Tag generation response (generate): {response_gen}")
+        response_chat = bridge.run(test_text, system=system, mode="chat")
+        logger.info(f"Tag generation response (chat): {response_chat}")
         
         logger.info("All tests completed")
         

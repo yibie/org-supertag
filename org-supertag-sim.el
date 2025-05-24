@@ -116,7 +116,7 @@ As a unified entry point, it will initialize the entire system, including the un
      (message "Tag similarity system initialization failed: %s" (error-message-string err))
      nil)))
 
-(defun org-supertag-sim--on-tag-created (tag)
+(defun org-supertag-sim--on-tag-created (tag &rest _)
   "Handle tag creation events.
 TAG is the created tag information."
   (when org-supertag-sim--initialized
@@ -124,9 +124,10 @@ TAG is the created tag information."
       (when (eq (plist-get tag-props :type) :tag)
         (org-supertag-sim--update-tag tag)))))
 
-(defun org-supertag-sim--on-tag-removed (tag-id)
+(defun org-supertag-sim--on-tag-removed (tag-id &rest rest-args)
   "Handle tag removal events.
 TAG-ID is the ID of the removed tag."
+  (message "org-supertag-sim--on-tag-removed received: tag-id=%s, rest=%S" tag-id rest-args)
   (when org-supertag-sim--initialized
     ;; Assuming the tag type is known or irrelevant for removal
     (org-supertag-sim--remove-tag tag-id)))

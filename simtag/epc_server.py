@@ -62,6 +62,10 @@ class SimTagServer:
             ('test_engine', self.test_engine),
             ('analyze_tag_relations', self.analyze_tag_relations),
             ('run_ollama', self.run_ollama),
+            ('sync_library', self.sync_library),
+            ('add_tag', self.add_tag),
+            ('update_tag', self.update_tag),
+            ('remove_tag', self.remove_tag)
         ]
         
         for name, method in methods:
@@ -120,10 +124,10 @@ class SimTagServer:
             # Update and validate file paths
             if vector_file:
                 self.logger.info(f"Using specified vector file: {vector_file}")
-                if not os.path.exists(vector_file):
-                    self.logger.error(f"Specified vector file does not exist: {vector_file}")
-                    return normalize_response(None, "error", f"Vector file does not exist: {vector_file}")
+                # For vector file, we don't require it to exist - it can be created during initialization
                 self.config.vector_file = vector_file
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(vector_file), exist_ok=True)
             
             if db_file:
                 self.logger.info(f"Using specified database file: {db_file}")
@@ -149,15 +153,28 @@ class SimTagServer:
             self.entity_extractor = EntityExtractor(self.ollama)
             self.vector_engine = TagVectorEngine(vector_file=self.config.vector_file)
             
+            # 4. Initialize the vector library with tag data
+            self.logger.info("Initializing vector library...")
+            vector_init_result = self.vector_engine.initialize(
+                self.config.db_file, 
+                self.config.vector_file
+            )
+            
+            if vector_init_result.get("status") != "success":
+                error_msg = f"Vector library initialization failed: {vector_init_result.get('message', 'Unknown error')}"
+                self.logger.error(error_msg)
+                return normalize_response(None, "error", error_msg)
+            
             # Mark initialization complete
             self._initialized = True
-            self.logger.info("All components initialized")
+            self.logger.info("All components initialized successfully")
             
             return normalize_response({
                 "status": "success",
                 "vector_file": self.config.vector_file,
                 "db_file": self.config.db_file,
-                "model": self.config.model_name
+                "model": self.config.model_name,
+                "vector_stats": vector_init_result.get("result", {})
             })
             
         except Exception as e:
@@ -454,6 +471,203 @@ class SimTagServer:
             self.logger.error(traceback.format_exc())
             return normalize_response(None, "error", str(e))
 
+    def sync_library(self, db_file: str, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Synchronize the vector library with the provided tag data.
+
+        Args:
+            db_file: The path to the source database file (for logging/reference).
+            tag_data: A list of dictionaries, each containing 'id' and 'name' of a tag.
+
+        Returns:
+            A dictionary indicating the status of the operation.
+        """
+        self.logger.info(f"Received sync_library request. DB file: {db_file}, {len(tag_data)} tags received.")
+        
+        try:
+            # Check initialization status
+            if not self._initialized:
+                self.logger.error("Service not initialized, please call initialize first")
+                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+
+            # Check vector engine
+            if not self.vector_engine:
+                self.logger.error("Vector engine not initialized")
+                return normalize_response(None, "error", "Vector engine not initialized")
+
+            # Perform the synchronization
+            # Assuming vector_engine has a method like sync_from_tags
+            # You might need to adjust this method name based on your TagVectorEngine implementation
+            result = self.vector_engine.sync_from_tags(tag_data)
+            
+            self.logger.info(f"Library synchronization completed. Result: {result}")
+            return normalize_response({"status": "success", "details": result})
+
+        except Exception as e:
+            error_msg = f"Failed to synchronize library: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", error_msg)
+
+    def update_tag(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Update the name of a tag
+        
+        Args:
+            tag_data: List containing tag information, format: [{"id": tag_id, "name": tag_name}]
+            
+        Returns:
+            Dictionary indicating the status of the operation
+        """
+        try:
+            # Check initialization status
+            if not self._initialized:
+                self.logger.error("Service not initialized, please call initialize first")
+                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+            
+            # Check vector engine
+            if not self.vector_engine:
+                self.logger.error("Vector engine not initialized")
+                return normalize_response(None, "error", "Vector engine not initialized")
+            
+            # Extract tag information
+            if not tag_data or not isinstance(tag_data, list) or len(tag_data) == 0:
+                self.logger.error("Invalid tag data format")
+                return normalize_response(None, "error", "Invalid tag data format")
+            
+            # Get the first tag data item
+            tag_info = tag_data[0]
+            if not isinstance(tag_info, dict):
+                # Handle case where it's passed as a list of tuples
+                if isinstance(tag_info, list):
+                    tag_dict = {}
+                    for item in tag_info:
+                        if isinstance(item, tuple) and len(item) == 2:
+                            key, value = item
+                            tag_dict[key] = value
+                    tag_info = tag_dict
+                else:
+                    self.logger.error(f"Invalid tag info format: {type(tag_info)}")
+                    return normalize_response(None, "error", f"Invalid tag info format: {type(tag_info)}")
+            
+            tag_id = tag_info.get("id")
+            tag_name = tag_info.get("name")
+            
+            if not tag_id:
+                self.logger.error("Missing tag ID")
+                return normalize_response(None, "error", "Missing tag ID")
+            
+            self.logger.info(f"Updating tag: {tag_id} -> '{tag_name}'")
+            
+            # Perform the update
+            result = self.vector_engine.update_tag(tag_id, tag_name)
+            
+            if result:
+                return normalize_response({"status": "success", "tag_id": tag_id, "updated": True})
+            else:
+                return normalize_response(None, "error", "Tag update failed")
+            
+        except Exception as e:
+            error_msg = f"Failed to update tag: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", error_msg)
+
+    def remove_tag(self, tag_id: str) -> Dict[str, Any]:
+        """Remove a tag from the vector library
+        
+        Args:
+            tag_id: ID of the tag to remove
+            
+        Returns:
+            Dictionary indicating the status of the operation
+        """
+        try:
+            # Check initialization status
+            if not self._initialized:
+                self.logger.error("Service not initialized, please call initialize first")
+                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+            
+            # Check vector engine
+            if not self.vector_engine:
+                self.logger.error("Vector engine not initialized")
+                return normalize_response(None, "error", "Vector engine not initialized")
+            
+            # Perform the removal
+            result = self.vector_engine.remove_tag(tag_id)
+            
+            if result:
+                return normalize_response({"status": "success", "details": result})
+            else:
+                return normalize_response(None, "error", "Tag removal failed")
+            
+        except Exception as e:
+            error_msg = f"Failed to remove tag: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", error_msg)
+
+    def add_tag(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Add a new tag to the vector library
+        
+        Args:
+            tag_data: List containing tag information, format: [{"id": tag_id, "name": tag_name}]
+            
+        Returns:
+            Dictionary indicating the status of the operation
+        """
+        try:
+            # Check initialization status
+            if not self._initialized:
+                self.logger.error("Service not initialized, please call initialize first")
+                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+            
+            # Check vector engine
+            if not self.vector_engine:
+                self.logger.error("Vector engine not initialized")
+                return normalize_response(None, "error", "Vector engine not initialized")
+            
+            # Extract tag information
+            if not tag_data or not isinstance(tag_data, list) or len(tag_data) == 0:
+                self.logger.error("Invalid tag data format")
+                return normalize_response(None, "error", "Invalid tag data format")
+            
+            # Get the first tag data item
+            tag_info = tag_data[0]
+            if not isinstance(tag_info, dict):
+                # Handle case where it's passed as a list of tuples
+                if isinstance(tag_info, list):
+                    tag_dict = {}
+                    for item in tag_info:
+                        if isinstance(item, tuple) and len(item) == 2:
+                            key, value = item
+                            tag_dict[key] = value
+                    tag_info = tag_dict
+                else:
+                    self.logger.error(f"Invalid tag info format: {type(tag_info)}")
+                    return normalize_response(None, "error", f"Invalid tag info format: {type(tag_info)}")
+            
+            tag_id = tag_info.get("id")
+            tag_name = tag_info.get("name")
+            
+            if not tag_id:
+                self.logger.error("Missing tag ID")
+                return normalize_response(None, "error", "Missing tag ID")
+            
+            self.logger.info(f"Adding tag: {tag_id} -> '{tag_name}'")
+            
+            # Perform the addition
+            result = self.vector_engine.add_tag(tag_id, tag_name)
+            
+            if result:
+                return normalize_response({"status": "success", "tag_id": tag_id, "added": True})
+            else:
+                return normalize_response(None, "error", "Tag addition failed")
+            
+        except Exception as e:
+            error_msg = f"Failed to add tag: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", error_msg)
+
 def run_ollama_model(text, model_name="gemma-3b-it"):
     """Run ollama command directly"""
     try:
@@ -491,13 +705,6 @@ def main(config: Config):
 
 if __name__ == "__main__":
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SimTag EPC Server')
-    parser.add_argument('--vector-file', help='Vector file path')
-    parser.add_argument('--db-file', help='Database file path')
-    parser.add_argument('--model', help='Model name')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--log-file', help='Log file path')
-    parser.add_argument('--host', default='127.0.0.1', help='Server address')
     parser = argparse.ArgumentParser(description='SimTag EPC Server')
     parser.add_argument('--vector-file', help='Vector file path')
     parser.add_argument('--db-file', help='Database file path')
