@@ -196,16 +196,36 @@ Returns:
           (deferred:next
             (lambda ()
               (message "System not initialized, initializing...")
-              (org-supertag-sim-init)))
+              ;; 添加初始化超时保护
+              (let ((start-time (current-time)))
+                (condition-case err
+                    (progn
+                      (org-supertag-sim-init)
+                      ;; 检查初始化是否超时（30秒）
+                      (when (> (float-time (time-subtract (current-time) start-time)) 30)
+                        (error "Initialization timeout after 30 seconds")))
+                  (error
+                   (message "Initialization failed: %s" (error-message-string err))
+                   (signal (car err) (cdr err)))))))
           (deferred:nextc it
             (lambda (_)
-              ;; Check initialization status again
-              (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
-                  t
-                (error "System initialization failed: EPC server not ready")))))
+              ;; Check initialization status again with timeout
+              (let ((max-attempts 10)
+                    (attempt 0))
+                (while (and (< attempt max-attempts)
+                           (not (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)))
+                  (sit-for 0.5)
+                  (setq attempt (1+ attempt)))
+                
+                (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+                    t
+                  (error "System initialization failed: EPC server not ready after %d attempts" max-attempts))))))
         :catch
         (lambda (err)
           (message "Initialization error: %s" (error-message-string err))
+          ;; 重置初始化状态，避免无限循环
+          (setq org-supertag-sim--initialized nil
+                org-supertag-sim-epc-initialized nil)
           nil)))))
 
 (defun org-supertag-sim-find-similar (tag-name &optional top-k callback)
@@ -370,9 +390,9 @@ Optional CALLBACK will be called with the results."
   "Apply all selected tags to the current node.
 This function will:
 1. Collect selected tags from the selection buffer
-2. Move to the correct position in the source buffer
-3. Insert tags in inline format (#tag) after the properties drawer
-4. Ensure proper spacing between tags"
+2. Move to the correct position in the source buffer (after properties drawer)
+3. Insert tags in inline format (#tag) on a new line after the properties drawer
+4. Ensure proper line formatting and spacing"
   (interactive)
   (let* ((context (buffer-local-value 'org-supertag-sim--select-context (current-buffer)))
          (source-buffer (plist-get context :source-buffer))
@@ -388,12 +408,20 @@ This function will:
       (message "Applying %d selected tags..." (length selected-tags))
       (with-current-buffer source-buffer
         (save-excursion
-          ;; 1. Move to the correct position
+          ;; 1. Move to the correct position - after the properties drawer
           (org-back-to-heading t)
           (org-end-of-meta-data t)
-          ;; 2. Insert tags with proper spacing
-          (dolist (tag selected-tags)
-            (insert "#" tag " "))
+          
+          ;; 2. Ensure we are at the beginning of a line
+          (unless (bolp)
+            (insert "\n"))
+          
+          ;; 3. Insert all tags on the same line with proper spacing
+          (let ((tag-line (mapconcat (lambda (tag) (concat "#" tag)) selected-tags " ")))
+            (insert tag-line)
+            ;; Add a newline after the tags to maintain proper formatting
+            (insert "\n"))
+          
           (message "Successfully applied %d tags: %s" 
                    (length selected-tags)
                    (mapconcat (lambda (tag)
@@ -433,12 +461,25 @@ Use semantic analysis to extract relevant tags from the node content, and displa
 allowing users to select and apply the tags they need by pressing the space key."
   (interactive)
   (require 'org-supertag-inline)
+
+  (unless (and (boundp 'org-supertag-sim-epc-manager)
+               (boundp 'org-supertag-sim--initialized))
+    (user-error "Similarity system not loaded. Please ensure org-supertag-sim is properly initialized"))
+  
+  (when (and org-supertag-sim-epc-manager
+             (not (org-supertag-sim-epc-server-running-p)))
+    (user-error "EPC server is not running. Please restart with `org-supertag-sim-epc-emergency-restart`"))
+  
   (let* ((node-title (org-get-heading t t t t))
          (content (org-get-entry))
          (node-id (org-id-get-create))
          ;; Combine title and content for better semantic understanding
          (full-text (concat node-title "\n\n" content))
          (progress-reporter (make-progress-reporter "Analyzing content..." 0 100)))
+    
+    (when (> (length full-text) 10000)
+      (when (not (yes-or-no-p "Content is very long (%d characters). Continue? " (length full-text)))
+        (user-error "Analysis cancelled by user")))
     
     ;; Display initial progress
     (progress-reporter-update progress-reporter 10)
@@ -448,50 +489,62 @@ allowing users to select and apply the tags they need by pressing the space key.
                              (progress-reporter-update progress-reporter 30)
                              (message "Generating tag suggestions...")))
     
-    ;; Tag generation is asynchronous
-    (org-supertag-sim-suggest-tags-from-text
-     full-text
-     (lambda (suggested-tags)
-       ;; Update progress
-       (progress-reporter-update progress-reporter 80)
-       (progress-reporter-done progress-reporter)
-       
-       (if suggested-tags
-           ;; Display the tag selection interface in a dedicated buffer
-           (let* ((select-buffer (get-buffer-create "*Org SuperTag Selection*"))
-                  (source-buffer (current-buffer)))
-             
-             (with-current-buffer select-buffer
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (org-supertag-sim-tag-select-mode)
-                 
-                 ;; Store context information
-                 (setq-local org-supertag-sim--select-context
-                             (list :node-id node-id
-                                   :node-title node-title
-                                   :source-buffer source-buffer))
+    (let ((timeout-timer nil)
+          (callback-called nil))
+      (setq timeout-timer
+            (run-with-timer 60 nil
+                           (lambda ()
+                             (unless callback-called
+                               (setq callback-called t)
+                               (progress-reporter-done progress-reporter)
+                               (message "Tag suggestion timeout. Please check EPC server status.")))))
+      
+      ;; Tag generation is asynchronous
+      (org-supertag-sim-suggest-tags-from-text
+       full-text
+       (lambda (suggested-tags)
+         (unless callback-called
+           (setq callback-called t)
+           (when timeout-timer
+             (cancel-timer timeout-timer))
+           ;; Update progress
+           (progress-reporter-update progress-reporter 80)
+           (progress-reporter-done progress-reporter)
+           (if suggested-tags
+               ;; Display the tag selection interface in a dedicated buffer
+               (let* ((select-buffer (get-buffer-create "*Org SuperTag Selection*"))
+                      (source-buffer (current-buffer)))
+                 (with-current-buffer select-buffer
+                   (let ((inhibit-read-only t))
+                     (erase-buffer)
+                     (org-supertag-sim-tag-select-mode)
+                     
+                     ;; Store context information
+                     (setq-local org-supertag-sim--select-context
+                                 (list :node-id node-id
+                                       :node-title node-title
+                                       :source-buffer source-buffer))
 
-                 (insert (format "Suggested %d tags for the node:\n" (length suggested-tags)))
-                 (insert "──────────────────────────────────────────────\n")
-                 (insert (format "Node: %s\n\n" node-title))
-                 (dolist (tag suggested-tags)
-                   (insert (format "[ ] %s\n" tag)))
-                 (insert "\nOperation instructions:\n")
-                 (insert "Space/Enter: Select/Unselect tag  n/p: Move up/down\n")
-                 (insert "a: Select all  A: Unselect all\n")
-                 (insert "C-c C-c: Apply selected tags  C-c C-k/q: Cancel\n")))
-             (select-window 
-              (display-buffer select-buffer
-                              '((display-buffer-below-selected)
-                                (window-height . fit-window-to-buffer)
-                                (preserve-size . (nil . t))
-                                (select . t))))
-             (with-current-buffer select-buffer
-               (goto-char (point-min))
-               (re-search-forward "^\\[ \\]" nil t)
-               (beginning-of-line)))
-         (message "No suitable tag suggestions found"))))))
+                     (insert (format "Suggested %d tags for the node:\n" (length suggested-tags)))
+                     (insert "──────────────────────────────────────────────\n")
+                     (insert (format "Node: %s\n\n" node-title))
+                     (dolist (tag suggested-tags)
+                       (insert (format "[ ] %s\n" tag)))
+                     (insert "\nOperation instructions:\n")
+                     (insert "Space/Enter: Select/Unselect tag  n/p: Move up/down\n")
+                     (insert "a: Select all  A: Unselect all\n")
+                     (insert "C-c C-c: Apply selected tags  C-c C-k/q: Cancel\n")))
+                 (select-window 
+                  (display-buffer select-buffer
+                                  '((display-buffer-below-selected)
+                                    (window-height . fit-window-to-buffer)
+                                    (preserve-size . (nil . t))
+                                    (select . t))))
+                 (with-current-buffer select-buffer
+                   (goto-char (point-min))
+                   (re-search-forward "^\\[ \\]" nil t)
+                   (beginning-of-line)))
+             (message "No suitable tag suggestions found"))))))))
 
 (defun org-supertag-sim-regenerate-tags ()
   "Regenerate tag suggestions for the current node."
@@ -505,5 +558,181 @@ allowing users to select and apply the tags they need by pressing the space key.
       ;; Then regenerate tags in the source buffer
       (with-current-buffer source-buffer
         (org-supertag-sim-auto-tag-node)))))
+
+(defun org-supertag-sim-diagnose ()
+  "Diagnose the current state of the similarity system.
+Provides detailed information about system status and potential issues."
+  (interactive)
+  (let ((result-buffer (get-buffer-create "*Org SuperTag Sim Diagnosis*")))
+    (with-current-buffer result-buffer
+      (erase-buffer)
+      (insert "=== Org SuperTag Similarity System Diagnosis ===\n\n")
+      
+      ;; Check basic system state
+      (insert "1. Basic System State:\n")
+      (insert (format "   - org-supertag-sim--initialized: %s\n" 
+                     (if (boundp 'org-supertag-sim--initialized) 
+                         org-supertag-sim--initialized 
+                         "UNBOUND")))
+      (insert (format "   - org-supertag-sim-epc-initialized: %s\n" 
+                     (if (boundp 'org-supertag-sim-epc-initialized) 
+                         org-supertag-sim-epc-initialized 
+                         "UNBOUND")))
+      (insert (format "   - org-supertag-sim-epc-manager: %s\n" 
+                     (if (boundp 'org-supertag-sim-epc-manager) 
+                         (if org-supertag-sim-epc-manager "EXISTS" "NIL")
+                         "UNBOUND")))
+      
+      ;; Check EPC server status
+      (insert "\n2. EPC Server Status:\n")
+      (condition-case err
+          (if (and (boundp 'org-supertag-sim-epc-manager)
+                   org-supertag-sim-epc-manager)
+              (if (org-supertag-sim-epc-server-running-p)
+                  (insert "   - Server Status: RUNNING\n")
+                (insert "   - Server Status: STOPPED\n"))
+            (insert "   - Server Status: NOT INITIALIZED\n"))
+        (error 
+         (insert (format "   - Server Status: ERROR - %s\n" (error-message-string err)))))
+      
+      ;; Check Python environment
+      (insert "\n3. Python Environment:\n")
+      (condition-case err
+          (let ((python-path (if (boundp 'org-supertag-sim-epc-python-path)
+                                org-supertag-sim-epc-python-path
+                               "UNSET")))
+            (insert (format "   - Python Path: %s\n" python-path))
+            (insert (format "   - Python Executable Exists: %s\n" 
+                           (if (and (stringp python-path) (executable-find python-path))
+                               "YES" "NO"))))
+        (error 
+         (insert (format "   - Python Environment: ERROR - %s\n" (error-message-string err)))))
+      
+      ;; Check dependencies
+      (insert "\n4. Dependencies:\n")
+      (insert (format "   - epc package loaded: %s\n" (if (featurep 'epc) "YES" "NO")))
+      (insert (format "   - deferred package available: %s\n" (if (fboundp 'deferred:$) "YES" "NO")))
+      (insert (format "   - json package available: %s\n" (if (fboundp 'json-encode) "YES" "NO")))
+      
+      ;; Provide recommendations
+      (insert "\n5. Recommendations:\n")
+      (cond
+       ;; Everything seems fine
+       ((and (boundp 'org-supertag-sim--initialized) org-supertag-sim--initialized
+             (boundp 'org-supertag-sim-epc-initialized) org-supertag-sim-epc-initialized
+             (org-supertag-sim-epc-server-running-p))
+        (insert "   ✓ System appears to be working correctly\n"))
+       
+       ;; EPC server issues
+       ((and (boundp 'org-supertag-sim-epc-manager) org-supertag-sim-epc-manager
+             (not (org-supertag-sim-epc-server-running-p)))
+        (insert "   ⚠ EPC server is not running\n")
+        (insert "   → Try: M-x org-supertag-sim-epc-emergency-restart\n"))
+       
+       ;; Initialization issues
+       ((or (not (boundp 'org-supertag-sim--initialized))
+            (not org-supertag-sim--initialized))
+        (insert "   ⚠ System not initialized\n")
+        (insert "   → Try: M-x org-supertag-sim-emergency-reset\n"))
+       
+       ;; General issues
+       (t
+        (insert "   ⚠ Multiple issues detected\n")
+        (insert "   → Try: M-x org-supertag-sim-emergency-reset\n")))
+      
+      (insert "\n6. Emergency Commands:\n")
+      (insert "   - M-x org-supertag-sim-emergency-reset    : Complete system reset\n")
+      (insert "   - M-x org-supertag-sim-epc-emergency-restart : Restart EPC server\n")
+      (insert "   - M-x org-supertag-sim-epc-force-kill     : Force kill all processes\n")
+      (insert "   - M-x org-supertag-sim-epc-show-log       : View detailed logs\n")
+      
+      (special-mode))
+    (display-buffer result-buffer)))
+
+(defun org-supertag-sim-emergency-reset ()
+  "Emergency reset of the entire similarity system.
+This function will:
+1. Stop all running processes
+2. Reset all state variables
+3. Restart the system from scratch"
+  (interactive)
+  (when (yes-or-no-p "This will reset the entire similarity system. Continue? ")
+    (message "Performing emergency reset...")
+    
+    ;; Step 1: Stop everything
+    (condition-case err
+        (progn
+          ;; Cancel any running timers
+          (when (and (boundp 'org-supertag-sim--sync-timer) org-supertag-sim--sync-timer)
+            (cancel-timer org-supertag-sim--sync-timer)
+            (setq org-supertag-sim--sync-timer nil))
+          
+          ;; Stop EPC server
+          (when (featurep 'org-supertag-sim-epc)
+            (org-supertag-sim-epc-force-kill))
+          
+          ;; Reset state variables
+          (setq org-supertag-sim--initialized nil)
+          (when (boundp 'org-supertag-sim-epc-initialized)
+            (setq org-supertag-sim-epc-initialized nil))
+          (when (boundp 'org-supertag-sim-epc-manager)
+            (setq org-supertag-sim-epc-manager nil))
+          
+          (message "System state reset completed"))
+      (error
+       (message "Error during reset: %s" (error-message-string err))))
+    
+    ;; Step 2: Wait and restart
+    (sit-for 2)
+    (message "Restarting similarity system...")
+    
+    (condition-case err
+        (progn
+          ;; Try to reinitialize
+          (org-supertag-sim-init)
+          (message "Emergency reset completed successfully"))
+      (error
+       (message "Error during restart: %s" (error-message-string err))
+       (message "You may need to restart Emacs completely")))))
+
+(defun org-supertag-sim-safe-auto-tag-node ()
+  "Safe version of org-supertag-sim-auto-tag-node with comprehensive error handling.
+This function includes all the safety checks and will not cause Emacs to freeze."
+  (interactive)
+  
+  ;; Comprehensive pre-flight checks
+  (cond
+   ;; Check if similarity system is even loaded
+   ((not (featurep 'org-supertag-sim-epc))
+    (user-error "Similarity system not loaded. Please ensure org-supertag-sim is installed and loaded"))
+   
+   ;; Check if we're in an org buffer
+   ((not (derived-mode-p 'org-mode))
+    (user-error "This command can only be used in org-mode buffers"))
+   
+   ;; Check if we're in a heading
+   ((not (org-at-heading-p))
+    (user-error "Please position the cursor on an org heading"))
+   
+   ;; Check system state
+   ((not (and (boundp 'org-supertag-sim--initialized)
+              (boundp 'org-supertag-sim-epc-initialized)))
+    (when (yes-or-no-p "Similarity system not initialized. Initialize now? ")
+      (org-supertag-sim-emergency-reset))
+    (unless (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+      (user-error "System initialization failed")))
+   
+   ;; Check EPC server
+   ((not (org-supertag-sim-epc-server-running-p))
+    (when (yes-or-no-p "EPC server not running. Start it now? ")
+      (org-supertag-sim-epc-emergency-restart)
+      (sit-for 2))
+    (unless (org-supertag-sim-epc-server-running-p)
+      (user-error "EPC server failed to start")))
+   
+   ;; All checks passed, proceed with tag suggestion
+   (t
+    (message "All checks passed. Running safe tag suggestion...")
+    (org-supertag-sim-auto-tag-node))))
 
 (provide 'org-supertag-sim)

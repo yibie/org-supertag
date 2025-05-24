@@ -14,12 +14,25 @@
 - Improved vector database synchronization reliability
 - Enhanced tag similarity computation stability
 
+*** Fixed AI auto-tagging system freezing issues
+- Resolved `org-supertag-sim-auto-tag-node` causing Emacs to freeze
+- Added comprehensive timeout protection for all AI operations
+- Replaced blocking EPC calls with asynchronous implementations
+- Added initialization state validation to prevent infinite loops
+- Enhanced error handling with automatic recovery mechanisms
+
 ** Features
 *** Added comprehensive database recovery system
 - Introduced `org-supertag-recovery` methods for database restoration
 - Provided automated recovery workflows for corrupted data
 - Added diagnostic tools for database integrity checking
 - Enhanced backup and restore capabilities
+
+*** Added AI system diagnostic and emergency tools
+- Added `org-supertag-sim-diagnose` for comprehensive system health checking
+- Added `org-supertag-sim-emergency-reset` for complete system recovery
+- Added `org-supertag-sim-safe-auto-tag-node` as a safer alternative to auto-tagging
+- Provided detailed troubleshooting guidance and emergency commands
 
 ** Maintenance
 *** Codebase cleanup and organization

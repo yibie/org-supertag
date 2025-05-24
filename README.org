@@ -457,7 +457,9 @@ For details, see [[./CHANGELOG.org][CHANGELOG]]
 - 2025-05-24 3.0.2 release
   - Enhanced synchronization stability with comprehensive data protection
   - Fixed tag vector database update mechanism
+  - Fixed AI auto-tagging system freezing issues
   - Added comprehensive database recovery system
+  - Added AI system diagnostic and emergency tools
   - Codebase cleanup and organization improvements
 
 - 2025-04-05 3.0.0 release
