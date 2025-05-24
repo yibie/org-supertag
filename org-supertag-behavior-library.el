@@ -970,8 +970,8 @@ The archive location is determined by `org-archive-location'."
 ;;------------------------------------------------------------------------------
 
 (defcustom org-supertag-script-executors
-  '(("py" . (;; Python scripts
-             :command "python"
+  '(("py" . (;; Python scripts - prefer venv if available
+             :command "python3"
              :args nil
              :env (("PYTHONPATH" . "${script_dir}")
                    ("PYTHONIOENCODING" . "utf-8"))))
@@ -1012,6 +1012,62 @@ Each configuration is a plist with:
                 :value-type (plist :key-type symbol :value-type sexp))
   :group 'org-supertag-script)
 
+(defcustom org-supertag-python-executable nil
+  "Preferred Python executable for script execution.
+If nil, will auto-detect the best available Python interpreter.
+Can be set to:
+- A specific path: \"/usr/local/bin/python3.11\"
+- A command name: \"python3\"
+- nil: Auto-detect (recommended)"
+  :type '(choice (const :tag "Auto-detect" nil)
+                 (string :tag "Custom path/command"))
+  :group 'org-supertag-script)
+
+(defcustom org-supertag-python-venv-paths 
+  '(".venv/bin/python"
+    "venv/bin/python" 
+    ".virtualenv/bin/python"
+    "env/bin/python")
+  "List of relative paths to search for virtual environment Python.
+Paths are relative to script directory or project root."
+  :type '(repeat string)
+  :group 'org-supertag-script)
+
+(defun org-supertag-behavior--find-python-executable (script-path)
+  "Find the best Python executable for SCRIPT-PATH.
+Search order:
+1. Custom setting from `org-supertag-python-executable`
+2. VIRTUAL_ENV environment variable
+3. Virtual environment in script directory or parents
+4. System python3"
+  ;; 1. Use custom setting if specified
+  (if org-supertag-python-executable
+      org-supertag-python-executable
+    ;; 2. Check VIRTUAL_ENV environment variable
+    (if-let ((venv-path (getenv "VIRTUAL_ENV")))
+        (let ((venv-python (expand-file-name "bin/python" venv-path)))
+          (if (file-exists-p venv-python)
+              venv-python
+            "python3"))
+      ;; 3. Search for virtual environment near script
+      (let ((script-dir (file-name-directory (expand-file-name script-path)))
+            (found-python nil))
+        (catch 'found
+          ;; Search in script directory and parent directories
+          (let ((search-dir script-dir))
+            (while (and search-dir 
+                       (not (string= search-dir "/"))
+                       (not (string= search-dir (expand-file-name "~"))))
+              ;; Check each possible venv path
+              (dolist (venv-path org-supertag-python-venv-paths)
+                (let ((python-path (expand-file-name venv-path search-dir)))
+                  (when (file-exists-p python-path)
+                    (throw 'found python-path))))
+              ;; Move to parent directory
+              (setq search-dir (file-name-directory (directory-file-name search-dir))))))
+        ;; 4. Fallback to system python3
+        (or found-python "python3")))))
+
 (defun org-supertag-behavior--get-script-executor (script-path)
   "Get executor configuration for script at SCRIPT-PATH.
 Returns a plist containing :command, :args, and :env settings.
@@ -1019,12 +1075,17 @@ Raises error if no executor is configured for the script extension.
 
 Example:
   (org-supertag-behavior--get-script-executor \"test.py\")
-  ;; => (:command \"python\" :args nil :env ((\"PYTHONPATH\" . \"...\")))"
+  ;; => (:command \"python3\" :args nil :env ((\"PYTHONPATH\" . \"...\")))"
   (let ((ext (file-name-extension script-path)))
     (unless ext
       (error "Script file has no extension: %s" script-path))
-    (or (assoc-default ext org-supertag-script-executors)
-        (error "No executor configured for extension: %s" ext))))
+    (let ((executor (or (assoc-default ext org-supertag-script-executors)
+                       (error "No executor configured for extension: %s" ext))))
+      ;; For Python scripts, find the best Python executable
+      (when (string= ext "py")
+        (let ((python-cmd (org-supertag-behavior--find-python-executable script-path)))
+          (setq executor (plist-put executor :command python-cmd))))
+      executor)))
 
 (defun org-supertag-behavior--setup-script-env (env script-dir)
   "Setup environment variables from ENV using SCRIPT-DIR.
@@ -1046,42 +1107,39 @@ Example:
           env))
 
 (defun org-supertag-behavior--execute-script (node-id params)
-  "Execute a script and log its output.
-Executes script specified in PARAMS and logs output to NODE-ID.
+  "Execute a script asynchronously and display its output.
+Executes script specified in PARAMS and displays output in message buffer.
 
 Required PARAMS:
 - :script-path  : Path to script file
 
 Optional PARAMS:
 - :args         : List of additional command line arguments
-- :log-drawer   : Name of drawer for logging (default: \"SCRIPT_LOG\")
-- :log-format   : Time format for log entries (default: \"%Y-%m-%d %H:%M\")
+- :async        : If t, run asynchronously (default: t)
+- :callback     : Function to call when script completes (receives output string)
 
 The function will:
 1. Determine appropriate executor based on script extension
 2. Setup execution environment
-3. Run script and capture output
-4. Log results to specified drawer
-5. Update LAST_RUN property
+3. Run script asynchronously without blocking Emacs
+4. Display results in message buffer when complete
 
 Example:
   (org-supertag-behavior--execute-script node-id
     '(:script-path \"~/scripts/process.py\"
       :args (\"-v\" \"--mode=batch\")
-      :log-drawer \"EXECUTION_LOG\"
-      :log-format \"%Y-%m-%d %H:%M:%S\"))"
-  (let* ((script-path (plist-get params :script-path))
+      :async t
+      :callback (lambda (output) (message \"Done: %s\" output))))"
+  (let* ((script-path (expand-file-name (plist-get params :script-path)))
          (extra-args (plist-get params :args))
-         (log-drawer (or (plist-get params :log-drawer) "SCRIPT_LOG"))
-         (log-format (or (plist-get params :log-format) "%Y-%m-%d %H:%M"))
-         (log-time (format-time-string log-format))
-         (script-dir (file-name-directory (expand-file-name script-path)))
-         (output-buffer (generate-new-buffer "*script-output*")))
+         (async (if (plist-member params :async) 
+                   (plist-get params :async) 
+                 t))  ; Default to async only if :async not specified
+         (callback (plist-get params :callback))
+         (script-dir (file-name-directory script-path)))
     
     (unless (file-exists-p script-path)
       (error "Script file not found: %s" script-path))
-    
-    (message "Executing script %s at %s" script-path log-time)
     
     (let* ((executor (org-supertag-behavior--get-script-executor script-path))
            (command (plist-get executor :command))
@@ -1093,45 +1151,159 @@ Example:
                  (plist-get executor :env)
                  script-dir)))
       
-      ;; Execute script with environment variables
-      (let ((process-environment
-             (append
-              (mapcar (lambda (var)
-                        (format "%s=%s" (car var) (cdr var)))
-                      env)
-              process-environment)))
-        (apply #'call-process
-               command    ; Program
-               nil       ; Input
-               output-buffer ; Output
-               nil       ; Display
-               all-args)))
+      (if async
+          ;; Async execution
+          (progn
+            (message "Starting script %s (async)..." (file-name-nondirectory script-path))
+            (let* ((process-name (format "*script-%s*" (file-name-base script-path)))
+                   (output-buffer (generate-new-buffer process-name))
+                   (process-environment
+                    (append
+                     (mapcar (lambda (var)
+                               (format "%s=%s" (car var) (cdr var)))
+                             env)
+                     process-environment))
+                   (process (apply #'start-process
+                                  process-name
+                                  output-buffer
+                                  command
+                                  all-args)))
+              
+              ;; Set process completion handler
+              (set-process-sentinel 
+               process
+               (lambda (proc event)
+                 (when (string-match "finished\\|exited" event)
+                   (let ((output (with-current-buffer (process-buffer proc)
+                                   (buffer-string))))
+                     (message "Script %s completed: %s" 
+                             (file-name-nondirectory script-path)
+                             (string-trim (substring event 0 -1)))
+                     (message "Script output: %s" (string-trim output))
+                     
+                     ;; Call callback if provided
+                     (when callback
+                       (funcall callback output))
+                     
+                     ;; Cleanup
+                     (kill-buffer (process-buffer proc))))))
+              
+              ;; Return process object
+              process))
+        
+        ;; Sync execution (original behavior)
+        (let ((output-buffer (generate-new-buffer "*script-output*")))
+          (message "Executing script %s (sync)..." script-path)
+          (let ((process-environment
+                 (append
+                  (mapcar (lambda (var)
+                            (format "%s=%s" (car var) (cdr var)))
+                          env)
+                  process-environment)))
+            (apply #'call-process
+                   command    ; Program
+                   nil       ; Input
+                   output-buffer ; Output
+                   nil       ; Display
+                   all-args))
+          
+          ;; Get and display output
+          (with-current-buffer output-buffer
+            (let ((output (buffer-string)))
+              (message "Script output: %s" (string-trim output))
+              (when callback
+                (funcall callback output))))
+          
+          ;; Cleanup
+          (kill-buffer output-buffer))))))
+
+;;------------------------------------------------------------------------------
+;; Script Execution Callback Library
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-behavior--script-completion-callback (output)
+  "General callback for script completion.
+Shows a notification with script results."
+  (let ((lines (split-string output "\n" t)))
+    (message "🐍 Script completed! Last line: %s" 
+             (or (car (last lines)) "No output"))))
+
+(defun org-supertag-behavior--scheduled-script-callback (output)
+  "Callback for scheduled script execution.
+Logs completion time and basic stats."
+  (let* ((lines (split-string output "\n" t))
+         (line-count (length lines))
+         (char-count (length output)))
+    (message "⏰ Scheduled script completed at %s: %d lines, %d chars"
+             (format-time-string "%H:%M")
+             line-count char-count)))
+
+(defun org-supertag-behavior--lex-scraper-callback (output)
+  "Callback specifically for lex-scraper results.
+Extracts video count and saved file info."
+  (let ((video-count 0)
+        (saved-file nil))
+    ;; Extract video count
+    (when (string-match "Successfully scraped \\([0-9]+\\) videos" output)
+      (setq video-count (string-to-number (match-string 1 output))))
+    ;; Extract saved file
+    (when (string-match "Results saved to \\([^\\s]+\\.json\\)" output)
+      (setq saved-file (match-string 1 output)))
     
-    ;; Get output and log results
-    (with-current-buffer output-buffer
-      (let ((output (buffer-string)))
-        (org-with-point-at (org-supertag-db-get-pos node-id)
-          ;; Create log drawer if needed
-          (org-supertag-behavior--insert-drawer 
-           node-id
-           `(:name ,log-drawer
-             :content ""))
-          
-          ;; Add log entry
-          (save-excursion
-            (org-end-of-meta-data t)
-            (when (re-search-forward (format ":%s:" log-drawer) nil t)
-              (forward-line)
-              (insert (format "* %s\n%s\n" log-time output))))
-          
-          ;; Set last run property
-          (org-set-property "LAST_RUN" log-time)
-          
-          ;; Update node
-          (org-supertag-node-sync-at-point))))
+    (message "📺 Lex-scraper completed! Videos: %d, Saved: %s" 
+             video-count (or saved-file "unknown"))))
+
+(defun org-supertag-behavior--dev-script-callback (output)
+  "Callback for development scripts.
+Shows detailed output for debugging."
+  (let* ((lines (split-string output "\n" t))
+         (error-lines (seq-filter (lambda (line) 
+                                   (string-match-p "\\(error\\|Error\\|ERROR\\)" line)) 
+                                 lines))
+         (success (= 0 (length error-lines))))
     
-    ;; Cleanup
-    (kill-buffer output-buffer)))
+    (if success
+        (message "✅ Dev script completed successfully! Output: %d lines" (length lines))
+      (message "❌ Dev script completed with %d errors. Check output." (length error-lines)))))
+
+(defun org-supertag-behavior--data-processing-callback (output)
+  "Callback for data processing scripts.
+Extracts common data processing statistics."
+  (let ((processed-count 0)
+        (errors-count 0)
+        (output-file nil))
+    
+    ;; Extract processed items count
+    (when (string-match "processed \\([0-9]+\\)" output)
+      (setq processed-count (string-to-number (match-string 1 output))))
+    
+    ;; Extract error count
+    (when (string-match "\\([0-9]+\\) errors?" output)
+      (setq errors-count (string-to-number (match-string 1 output))))
+    
+    ;; Extract output file
+    (when (string-match "\\(?:saved to\\|output:\\|written to\\) \\([^\\s]+\\)" output)
+      (setq output-file (match-string 1 output)))
+    
+    (message "📊 Data processing completed! Processed: %d, Errors: %d, Output: %s"
+             processed-count errors-count (or output-file "console"))))
+
+(defun org-supertag-behavior--backup-script-callback (output)
+  "Callback for backup scripts.
+Shows backup status and file counts."
+  (let ((files-backed-up 0)
+        (backup-size nil))
+    
+    ;; Extract file count
+    (when (string-match "\\([0-9]+\\) files? backed up" output)
+      (setq files-backed-up (string-to-number (match-string 1 output))))
+    
+    ;; Extract backup size
+    (when (string-match "\\([0-9.]+\\s*[KMGT]B\\)" output)
+      (setq backup-size (match-string 1 output)))
+    
+    (message "💾 Backup completed! Files: %d, Size: %s"
+             files-backed-up (or backup-size "unknown"))))
 
 ;;------------------------------------------------------------------------------
 ;; Command Execution Library

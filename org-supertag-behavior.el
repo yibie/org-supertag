@@ -726,7 +726,7 @@ Returns t if valid, nil otherwise."
     ((pred functionp)
      (if params
          (apply action params)
-       (funcall action)))
+       (funcall action (org-id-get) nil)))
     
     (_ (error "Invalid action: %S" action))))
 
@@ -1410,8 +1410,6 @@ Returns t if valid, signals error if invalid."
 
 (add-hook 'org-supertag-after-load-hook
           #'org-supertag-behavior-setup)
-
-;; 在数据库加载后重新设置调度系统
 (add-hook 'org-supertag-db-after-load-hook 
           #'org-supertag-behavior--setup-scheduled-behaviors)
 

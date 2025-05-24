@@ -48,7 +48,6 @@ Available views:
         (propertize " Org-Supertag Tag Discovery" 'face '(:weight bold)))
   (setq-local org-element-use-cache nil)
   (setq-local org-mode-hook nil)
-  ;; 确保不影响 minibuffer
   (setq-local minibuffer-auto-raise t)
   (setq-local enable-recursive-minibuffers t))
 
