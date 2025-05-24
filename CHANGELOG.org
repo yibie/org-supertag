@@ -1,5 +1,33 @@
 * Changelog
 
+* [3.0.2] - 2025-05-24
+** Improvements
+*** Enhanced synchronization stability with comprehensive data protection
+- Added preservation and restoration of non-node entities during sync operations
+- Enhanced protection for field definitions, tag relations, and link data
+- Improved `org-supertag-sync-force-all` to preserve all critical data structures
+- Strengthened `org-supertag-sync-all-nodes` with comprehensive data backup
+- Ensured database consistency during intensive sync operations
+
+*** Fixed tag vector database update mechanism
+- Resolved issues with tag_vector library updates
+- Improved vector database synchronization reliability
+- Enhanced tag similarity computation stability
+
+** Features
+*** Added comprehensive database recovery system
+- Introduced `org-supertag-recovery` methods for database restoration
+- Provided automated recovery workflows for corrupted data
+- Added diagnostic tools for database integrity checking
+- Enhanced backup and restore capabilities
+
+** Maintenance
+*** Codebase cleanup and organization
+- Removed deprecated protection scope checking utilities
+- Removed redundant recovery process files
+- Updated `.gitignore` to exclude development directory
+- Streamlined codebase for better maintainability
+
 * [3.0.1] - 2025-04-26
 ** Features
 *** Add Backlink panel for node references
