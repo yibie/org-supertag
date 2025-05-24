@@ -143,31 +143,31 @@ STRENGTH: Relation strength (optional, default is 1.0)"
                     (org-supertag-tag-get-id-by-name from-tag)))
          (to-id (if (org-supertag-db-exists-p to-tag)
                    to-tag
-                 (org-supertag-tag-get-id-by-name to-tag)))
-         ;; Include rel-type in the relation ID to support multiple relations
-         (rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
+                 (org-supertag-tag-get-id-by-name to-tag))))
     
-    ;; Check if relation already exists
-    (when (gethash rel-id org-supertag-db--link)
-      (user-error "Relation already exists: %s -[%s]-> %s"
-                  (org-supertag-tag-get-name-by-id from-id)
-                  rel-type
-                  (org-supertag-tag-get-name-by-id to-id)))
+    ;; Check if both tag IDs are valid
+    (unless from-id
+      (user-error "Invalid source tag: %s" from-tag))
+    (unless to-id
+      (user-error "Invalid target tag: %s" to-tag))
     
-    ;; Add the relation
-    (let ((props (list :from from-id
-                      :to to-id
-                      :type rel-type
-                      :strength (or strength 1.0)
-                      :created-at (current-time))))
-      (puthash rel-id props org-supertag-db--link)
-         (org-supertag-db-emit 'link:created :tag-relation from-id to-id props)
-      (org-supertag-db--mark-dirty)
-      (org-supertag-db--schedule-save)
-      (message "Added relation: %s -[%s]-> %s" 
-               (org-supertag-tag-get-name-by-id from-id)
-               rel-type 
-               (org-supertag-tag-get-name-by-id to-id)))))
+    (let ((rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
+      ;; Check if relation already exists
+      (unless (gethash rel-id org-supertag-db--link)
+        ;; Add the relation
+        (let ((props (list :from from-id
+                          :to to-id
+                          :type rel-type
+                          :strength (or strength 1.0)
+                          :created-at (current-time))))
+          (puthash rel-id props org-supertag-db--link)
+          (org-supertag-db-emit 'link:created :tag-relation from-id to-id props)
+          (org-supertag-db--mark-dirty)
+          (org-supertag-db--schedule-save)
+          (message "Added relation: %s -[%s]-> %s" 
+                   (org-supertag-tag-get-name-by-id from-id)
+                   rel-type 
+                   (org-supertag-tag-get-name-by-id to-id)))))))
 
 (defun org-supertag-relation-remove-relation (from-tag to-tag &optional rel-type)
   "Remove the relation between FROM-TAG and TO-TAG.

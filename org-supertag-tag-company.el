@@ -2,6 +2,13 @@
 
 (require 'company)
 
+;; Ensure string-trim is available (for Emacs < 24.4 compatibility)
+(unless (fboundp 'string-trim)
+  (defun string-trim (string)
+    "Remove leading and trailing whitespace from STRING."
+    (replace-regexp-in-string "\\`[ \t\n\r]+" ""
+                              (replace-regexp-in-string "[ \t\n\r]+\\'" "" string))))
+
 (defvar org-supertag-company-prefix-regexp
   "#\\([[:alnum:]_-]*\\)"
   "Regexp to match the prefix for company completion.
@@ -50,10 +57,18 @@ If CANDIDATE is a non-existent tag name, create it directly."
   (let* ((is-new-tag (get-text-property 0 'is-new-tag candidate))
          (tag-name (cond
                    (is-new-tag
-                    (read-string "Enter new tag name: "))
+                    (let ((input (read-string "Enter new tag name: ")))
+                      ;; Validate input - must be non-empty after trimming
+                      (when (or (null input) (string-empty-p (string-trim input)))
+                        (user-error "Tag name cannot be empty"))
+                      (string-trim input)))
                    ((get-text-property 0 'tag candidate)
                     (plist-get (get-text-property 0 'tag candidate) :name))
                    (t candidate))))
+    ;; Validate final tag-name before proceeding
+    (when (or (null tag-name) (string-empty-p (string-trim tag-name)))
+      (user-error "Invalid tag name: %s" tag-name))
+    
     (delete-region (- (point) (length candidate) 1) (point))
     
     (org-supertag-inline-insert-tag tag-name)))

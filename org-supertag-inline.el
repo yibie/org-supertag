@@ -23,6 +23,13 @@
 (require 'org-supertag-node)
 (require 'org-supertag-tag)
 
+;; Ensure string-trim is available (for Emacs < 24.4 compatibility)
+(unless (fboundp 'string-trim)
+  (defun string-trim (string)
+    "Remove leading and trailing whitespace from STRING."
+    (replace-regexp-in-string "\\`[ \t\n\r]+" ""
+                              (replace-regexp-in-string "[ \t\n\r]+\\'" "" string))))
+
 (defgroup org-supertag-inline-style nil
   "Customization options for org-supertag inline tag styling."
   :group 'org-supertag)
@@ -195,146 +202,197 @@ The :style can be:
             (lambda (&rest _)
               (font-lock-flush)))
 
-;;;###autoload
-(defun org-supertag-inline-insert-tag (tag-name)
-  "Insert an inline tag at point and establish proper relationships.
-When called with an active region, use the region text as the default tag name.
-TAG-NAME is the name of the tag to insert."
-  (interactive
-   (list (let* ((all-tags (org-supertag-get-all-tags))
-                (preset-names (mapcar #'car org-supertag-preset-tags))
-                ;; Remove existing preset tags to avoid duplicates
-                (user-tags (cl-remove-if (lambda (tag) (member tag preset-names)) all-tags))
-                (candidates (delete-dups
-                            (append 
-                             ;; Use [P] prefix to mark preset tags
-                             (mapcar (lambda (name) 
-                                     (format "[P] %s" name))
-                                   preset-names)
-                             ;; Regular tags are kept as is
-                             user-tags)))
-                ;; Get region content if active
-                (region-text (when (use-region-p)
-                             (buffer-substring-no-properties
-                              (region-beginning)
-                              (region-end))))
-                (input (completing-read
-                       "Inline tag: "
-                       candidates nil nil
-                       ;; Use region text as initial input if available
-                       region-text)))
-           ;; Process input, remove [P] prefix
-           (if (string-prefix-p "[P] " input)
-               (substring input 4)
-             input))))
-  
-  ;; Save original position for context analysis
-  (let* ((original-pos (point-marker))
-         ;; Basic parameter processing
-         (direct-create (string-suffix-p "#" tag-name))
-         (tag-name-clean (if direct-create
-                           (substring tag-name 0 -1)
-                         tag-name))
-         (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
-         ;; Analyze context, check if in drawer, etc.
-         (context (org-element-context))
+;;; Helper functions for inline tag insertion
+
+(defun org-supertag-inline--read-tag-name ()
+  "Read tag name from user input with completion.
+Returns the selected or entered tag name."
+  (let* ((all-tags (org-supertag-get-all-tags))
+         (preset-names (mapcar #'car org-supertag-preset-tags))
+         (user-tags (cl-remove-if (lambda (tag) (member tag preset-names)) all-tags))
+         (candidates (delete-dups
+                     (append 
+                      ;; Use [P] prefix to mark preset tags
+                      (mapcar (lambda (name) (format "[P] %s" name)) preset-names)
+                      ;; Regular tags are kept as is
+                      user-tags)))
+         ;; Get region content if actually active and non-empty
+         (region-text (when (and (use-region-p) 
+                                (region-active-p)
+                                (/= (region-beginning) (region-end)))
+                       (buffer-substring-no-properties
+                        (region-beginning) (region-end))))
+         (input (completing-read "Inline tag: " candidates nil nil region-text)))
+    ;; Process input, remove [P] prefix
+    (if (string-prefix-p "[P] " input)
+        (substring input 4)
+      input)))
+
+(defun org-supertag-inline--analyze-context ()
+  "Analyze the current context for tag insertion.
+Returns a plist with context information:
+- :context - the org element context
+- :type - the context type
+- :in-drawer - whether we're in a drawer
+- :node-id - the current node ID (if any)"
+  (let* ((context (org-element-context))
          (context-type (org-element-type context))
          (in-drawer (or (eq context-type 'drawer)
-                        (eq context-type 'property-drawer)
-                        (eq context-type 'node-property)
-                        (and (eq context-type 'keyword)
-                             (string= (org-element-property :key context) "END"))))
-         ;; ID lookup logic - prioritize forced ID, then existing ID
+                       (eq context-type 'property-drawer)
+                       (eq context-type 'node-property)
+                       (and (eq context-type 'keyword)
+                            (string= (org-element-property :key context) "END"))))
+         ;; ID lookup logic
          (force-id (and (boundp 'org-supertag-force-node-id)
-                      org-supertag-force-node-id))
-         ;; Reliably get node ID - try direct get first, then locate heading if failed
+                       org-supertag-force-node-id))
          (existing-id (or force-id
                          (org-entry-get nil "ID")
                          (save-excursion
                            (ignore-errors
                              (org-back-to-heading t)
                              (org-entry-get nil "ID")))))
-         ;; If no existing ID and on heading, create new ID
          (node-id (or existing-id
                      (save-excursion
                        (when (ignore-errors (org-back-to-heading t))
                          (org-supertag-node-create))))))
+    (list :context context
+          :type context-type
+          :in-drawer in-drawer
+          :node-id node-id)))
 
-    ;; Debugging message
-    (message "inline-insert-tag: ID=%s force=%s drawer=%s ctx=%s pos=%d"
-             node-id force-id in-drawer context-type (marker-position original-pos))
+(defun org-supertag-inline--ensure-tag (tag-name)
+  "Ensure a tag exists, creating it if necessary.
+TAG-NAME is the desired tag name.
+Returns the tag ID."
+  ;; Validate input first
+  (when (or (null tag-name) (string-empty-p (string-trim tag-name)))
+    (user-error "Tag name cannot be empty"))
+  
+  (let* ((direct-create (string-suffix-p "#" tag-name))
+         (tag-name-clean (if direct-create
+                            (substring tag-name 0 -1)
+                          tag-name))
+         (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean)))
+    
+    ;; Validate sanitized name is not empty
+    (when (or (null sanitized-name) (string-empty-p sanitized-name))
+      (user-error "Invalid tag name after sanitization: '%s'" tag-name))
+    
+    (cond
+     ;; If tag exists, use it directly
+     ((org-supertag-tag-exists-p sanitized-name)
+      sanitized-name)
+     ;; Otherwise create a new tag
+     (t
+      (if (or direct-create
+              (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
+          (org-supertag-tag-create sanitized-name)
+        (user-error "Tag creation cancelled"))))))
 
-    ;; Handle tag creation
-    (let ((tag-id
-           (cond
-            ;; If tag exists, use it directly
-            ((org-supertag-tag-exists-p sanitized-name)
-             sanitized-name)
-            ;; Otherwise create a new tag
-            (t
-             (if (or direct-create
-                     (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
-                 (org-supertag-tag-create sanitized-name)
-               (user-error "Tag creation cancelled"))))))
+(defun org-supertag-inline--adjust-position (context-info)
+  "Adjust cursor position based on context.
+CONTEXT-INFO is the context analysis from `org-supertag-inline--analyze-context'.
+Handles region deletion and drawer positioning."
+  ;; Delete region ONLY if there's an actual visible region
+  (when (and (use-region-p) 
+             (region-active-p)
+             (/= (region-beginning) (region-end)))
+    (let ((region-start (region-beginning))
+          (region-end (region-end)))
+      (message "Deleting region from %d to %d" region-start region-end)
+      (delete-region region-start region-end)))
+  
+  ;; Handle cursor position - if in drawer, move after drawer
+  (when (plist-get context-info :in-drawer)
+    (let ((context (plist-get context-info :context)))
+      (when-let ((end-pos (org-element-property :end context)))
+        (goto-char end-pos)))))
 
-      ;; Delete region if any
-      (when (use-region-p)
-        (delete-region (region-beginning) (region-end)))
+(defun org-supertag-inline--insert-tag-text (tag-id)
+  "Insert the tag text with intelligent spacing.
+TAG-ID is the tag identifier to insert.
 
-      ;; Handle cursor position - if in drawer, move after drawer
-      (when in-drawer
-        (let ((end-pos (org-element-property :end context)))
-          (when end-pos
-            (goto-char end-pos))))
+Smart spacing rules:
+- Add space before tag if previous char is alphanumeric
+- Add space after tag ONLY if next char is alphanumeric AND not at line end
+- Never add space at line boundaries or before punctuation"
+  (let* ((prev-char (char-before))
+         (next-char (char-after))
+         ;; Need space before if previous character is alphanumeric
+         (need-space-before 
+          (and prev-char
+               (or (and (>= prev-char ?a) (<= prev-char ?z))
+                   (and (>= prev-char ?A) (<= prev-char ?Z))
+                   (and (>= prev-char ?0) (<= prev-char ?9)))))
+         ;; Need space after ONLY if:
+         ;; 1. next character exists AND is alphanumeric
+         ;; 2. AND we're not at line end (next char is not newline)
+         (need-space-after
+          (and next-char
+               (not (eq next-char ?\n))  ; Never add space before newline
+               (or (and (>= next-char ?a) (<= next-char ?z))
+                   (and (>= next-char ?A) (<= next-char ?Z))
+                   (and (>= next-char ?0) (<= next-char ?9))))))
+    
+    ;; Insert space before tag if needed
+    (when need-space-before
+      (insert " "))
+    
+    ;; Insert the tag
+    (insert (concat "#" tag-id))
+    
+    ;; Insert space after tag if needed
+    (when need-space-after
+      (insert " "))))
 
-      ;; Insert tag text with improved spacing logic
-      ;; This prevents unwanted merging of lines when inserting tags at line ends
-      (let ((need-space-before 
-             ;; Add space before tag only if we're not at:
-             ;; - beginning of buffer
-             ;; - after existing whitespace or newline
-             (and (not (bobp))
-                  (not (eq (char-before) ? ))
-                  (not (eq (char-before) ?\t))
-                  (not (eq (char-before) ?\n))))
-            (need-space-after 
-             ;; Add space after tag only if the next character is:
-             ;; - not whitespace or newline (preserves line breaks)
-             ;; - not punctuation (maintains sentence flow)
-             (and (not (eobp))
-                  (not (eq (char-after) ? ))
-                  (not (eq (char-after) ?\t))
-                  (not (eq (char-after) ?\n))
-                  (not (eq (char-after) ?.))
-                  (not (eq (char-after) ?,))
-                  (not (eq (char-after) ?;))
-                  (not (eq (char-after) ?:))
-                  (not (eq (char-after) ?!))
-                  (not (eq (char-after) ??))))))
-        ;; Insert space before tag if needed
-        (when need-space-before
-          (insert " "))
-        ;; Insert the tag
-        (insert (concat "#" tag-id))
-        ;; Insert space after tag if needed
-        (when need-space-after
-          (insert " ")))
+(defun org-supertag-inline--establish-relationship (tag-id node-id)
+  "Establish relationship between TAG-ID and NODE-ID.
+Only creates the relationship if NODE-ID is not nil."
+  (when node-id
+    (let ((org-supertag-tag-apply-skip-headline t)
+          (org-supertag-force-node-id node-id))
+      (org-supertag-tag-apply tag-id))))
 
-      ;; Apply tag relationship
-      (when node-id
-        (let ((org-supertag-tag-apply-skip-headline t)
-              (org-supertag-force-node-id node-id))
-          (org-supertag-tag-apply tag-id)))
+;;;###autoload
+(defun org-supertag-inline-insert-tag (tag-name)
+  "Insert an inline tag at point and establish proper relationships.
+When called with an active region, use the region text as the default tag name.
+TAG-NAME is the name of the tag to insert.
 
-      ;; Cleanup
-      (set-marker original-pos nil)
-
-      ;; Return message
-      (message "Inserted inline tag #%s%s"
-              tag-id
-              (if node-id
-                  (format " and linked to node %s" node-id)
-                ""))))))
+This function follows a structured approach:
+1. Analyze the current context
+2. Ensure the tag exists (create if necessary)
+3. Adjust cursor position appropriately
+4. Insert the tag with proper spacing
+5. Establish tag-node relationships"
+  (interactive (list (org-supertag-inline--read-tag-name)))
+  
+  (let* ((original-pos (point-marker))
+         (context-info (org-supertag-inline--analyze-context))
+         (node-id (plist-get context-info :node-id))
+         (tag-id (org-supertag-inline--ensure-tag tag-name)))
+    
+    ;; Debug information
+    (message "inline-insert-tag: ID=%s drawer=%s ctx=%s pos=%d"
+             node-id
+             (plist-get context-info :in-drawer)
+             (plist-get context-info :type)
+             (marker-position original-pos))
+    
+    ;; Process the insertion
+    (org-supertag-inline--adjust-position context-info)
+    (org-supertag-inline--insert-tag-text tag-id)
+    (org-supertag-inline--establish-relationship tag-id node-id)
+    
+    ;; Cleanup
+    (set-marker original-pos nil)
+    
+    ;; Return message
+    (message "Inserted inline tag #%s%s"
+             tag-id
+             (if node-id
+                 (format " and linked to node %s" node-id)
+               ""))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

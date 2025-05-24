@@ -390,44 +390,69 @@ Optional CALLBACK will be called with the results."
   "Apply all selected tags to the current node.
 This function will:
 1. Collect selected tags from the selection buffer
-2. Move to the correct position in the source buffer (after properties drawer)
-3. Insert tags in inline format (#tag) on a new line after the properties drawer
-4. Ensure proper line formatting and spacing"
+2. Ensure each tag exists (create if necessary)
+3. Apply tags through org-supertag system to establish proper relationships
+4. Record Co-occurrence relationships between the selected tags
+5. Insert tags visually in inline format"
   (interactive)
   (let* ((context (buffer-local-value 'org-supertag-sim--select-context (current-buffer)))
          (source-buffer (plist-get context :source-buffer))
          (node-id (plist-get context :node-id))
-         (selected-tags '()))
+         (selected-tags '())
+         (tag-ids '()))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^\\([[:space:]]*\\)\\(\\[X\\]\\) \\(.*\\)$" nil t)
         (push (match-string-no-properties 3) selected-tags)))
+    
     (if (null selected-tags)
         (message "No tags selected")
-      ;; Apply tags
+      ;; Apply tags through org-supertag system
       (message "Applying %d selected tags..." (length selected-tags))
       (with-current-buffer source-buffer
         (save-excursion
-          ;; 1. Move to the correct position - after the properties drawer
-          (org-back-to-heading t)
-          (org-end-of-meta-data t)
+          ;; 1. Ensure each tag exists and get their IDs
+          (dolist (tag-name selected-tags)
+            (condition-case err
+                (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+                       (tag-id (if (org-supertag-tag-exists-p sanitized-name)
+                                  sanitized-name
+                                (org-supertag-tag-create sanitized-name))))
+                  (when tag-id
+                    (push tag-id tag-ids)))
+              (error
+               (message "Error creating tag '%s': %s" tag-name (error-message-string err)))))
           
-          ;; 2. Ensure we are at the beginning of a line
-          (unless (bolp)
-            (insert "\n"))
-          
-          ;; 3. Insert all tags on the same line with proper spacing
-          (let ((tag-line (mapconcat (lambda (tag) (concat "#" tag)) selected-tags " ")))
-            (insert tag-line)
-            ;; Add a newline after the tags to maintain proper formatting
-            (insert "\n"))
-          
-          (message "Successfully applied %d tags: %s" 
-                   (length selected-tags)
-                   (mapconcat (lambda (tag)
-                              (propertize (concat "#" tag) 'face 'font-lock-keyword-face))
-                            selected-tags " ")))))
-    (quit-window t)))
+          ;; 2. Apply each tag through org-supertag system
+          (when tag-ids
+            (dolist (tag-id tag-ids)
+              (condition-case err
+                  (let ((org-supertag-tag-apply-skip-headline t)
+                        (org-supertag-force-node-id node-id))
+                    (org-supertag-tag-apply tag-id))
+                (error
+                 (message "Error applying tag '%s': %s" tag-id (error-message-string err)))))
+            
+            ;; 3. Move to correct position and insert visual representation
+            (org-back-to-heading t)
+            (org-end-of-meta-data t)
+            
+            ;; Ensure we are at the beginning of a line
+            (unless (bolp)
+              (insert "\n"))
+            
+            ;; Insert all tags on the same line with proper spacing
+            (let ((tag-line (mapconcat (lambda (tag) (concat "#" tag)) selected-tags " ")))
+              (insert tag-line)
+              ;; Add a newline after the tags to maintain proper formatting
+              (insert "\n"))
+            
+            (message "Successfully applied %d tags: %s" 
+                     (length selected-tags)
+                     (mapconcat (lambda (tag)
+                                (propertize (concat "#" tag) 'face 'font-lock-keyword-face))
+                              selected-tags " ")))))
+    (quit-window t))))
 
 (defun org-supertag-sim-cancel-tag-selection ()
   "Cancel the tag selection operation."
