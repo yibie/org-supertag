@@ -287,12 +287,38 @@ TAG-NAME is the name of the tag to insert."
           (when end-pos
             (goto-char end-pos))))
 
-      ;; Insert tag text
-      (unless (or (bobp) (eq (char-before) ? ))
-        (insert " "))
-      (insert (concat "#" tag-id))
-      (unless (or (eobp) (eq (char-after) ? ))
-        (insert " "))
+      ;; Insert tag text with improved spacing logic
+      ;; This prevents unwanted merging of lines when inserting tags at line ends
+      (let ((need-space-before 
+             ;; Add space before tag only if we're not at:
+             ;; - beginning of buffer
+             ;; - after existing whitespace or newline
+             (and (not (bobp))
+                  (not (eq (char-before) ? ))
+                  (not (eq (char-before) ?\t))
+                  (not (eq (char-before) ?\n))))
+            (need-space-after 
+             ;; Add space after tag only if the next character is:
+             ;; - not whitespace or newline (preserves line breaks)
+             ;; - not punctuation (maintains sentence flow)
+             (and (not (eobp))
+                  (not (eq (char-after) ? ))
+                  (not (eq (char-after) ?\t))
+                  (not (eq (char-after) ?\n))
+                  (not (eq (char-after) ?.))
+                  (not (eq (char-after) ?,))
+                  (not (eq (char-after) ?;))
+                  (not (eq (char-after) ?:))
+                  (not (eq (char-after) ?!))
+                  (not (eq (char-after) ??))))))
+        ;; Insert space before tag if needed
+        (when need-space-before
+          (insert " "))
+        ;; Insert the tag
+        (insert (concat "#" tag-id))
+        ;; Insert space after tag if needed
+        (when need-space-after
+          (insert " ")))
 
       ;; Apply tag relationship
       (when node-id
@@ -308,7 +334,7 @@ TAG-NAME is the name of the tag to insert."
               tag-id
               (if node-id
                   (format " and linked to node %s" node-id)
-                "")))))
+                ""))))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 
