@@ -343,92 +343,105 @@
 
 
 ;;------------------------------------------------------------------------------
-;; Script Execution Behaviors
+;; Script Execution Behaviors - Following the Three-Layer Architecture
 ;;------------------------------------------------------------------------------
 
-;; Base script execution (async by default)
+;; 1. Basic Behaviors (Foundation Layer)
+;; Atomic, single-purpose functions for script execution
+
 (org-supertag-behavior-register "@script"
   :trigger :on-add
   :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :async t)
-  :description "Execute script asynchronously from SCRIPT_PATH property")
+  :params '(:script-path :async :callback :args)
+  :description "Execute script with full parameter control")
 
-;; Sync script execution (when you need to wait for result)
-(org-supertag-behavior-register "@script-sync"
-  :trigger :on-add
-  :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :async nil)
-  :description "Execute script synchronously from SCRIPT_PATH property")
+;; 2. Shortcut Behaviors (Specialization Layer)  
+;; Pre-configured parameter sets for common use cases
 
-;; Python script with callback
 (org-supertag-behavior-register "@python"
   :trigger :on-add
   :action #'org-supertag-behavior--execute-script
   :params '(:script-path "${prop:SCRIPT_PATH}"
             :async t
             :callback org-supertag-behavior--script-completion-callback)
-  :description "Execute Python script with completion notification")
+  :description "Execute Python script asynchronously"
+  :style '(:prefix "🐍"))
 
-;; Scheduled Python execution
-(org-supertag-behavior-register "@python-schedule"
+(org-supertag-behavior-register "@python-sync"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async nil)
+  :description "Execute Python script synchronously"
+  :style '(:prefix "🐍"))
+
+(org-supertag-behavior-register "@shell"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :async t)
+  :description "Execute shell script asynchronously"
+  :style '(:prefix "🔧"))
+
+(org-supertag-behavior-register "@dev"
+  :trigger :on-add
+  :action #'org-supertag-behavior--execute-script
+  :params '(:script-path "${prop:SCRIPT_PATH}"
+            :args "${prop:SCRIPT_ARGS}"
+            :async t
+            :callback org-supertag-behavior--dev-script-callback)
+  :description "Execute development script with arguments"
+  :style '(:prefix "⚙️"))
+
+(org-supertag-behavior-register "@script-daily"
   :trigger :on-schedule
   :schedule "0 23 * * *"
   :action #'org-supertag-behavior--execute-script
   :params '(:script-path "${prop:SCRIPT_PATH}"
             :async t
             :callback org-supertag-behavior--scheduled-script-callback)
-  :description "Execute Python script daily at 23:00")
+  :description "Execute script daily at 23:00")
 
-;; Shell script execution
-(org-supertag-behavior-register "@shell"
-  :trigger :on-add
-  :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :async t)
-  :description "Execute Shell script asynchronously")
+;; 3. Workflow Behaviors (Integration Layer)
+;; Complex workflows combining multiple behaviors
 
-;; Quick data processing (your lex-scraper example)
 (org-supertag-behavior-register "@lex-scraper"
   :trigger :on-add
   :action #'org-supertag-behavior--execute-script
+  :schedule "0 22 * * *"
   :params '(:script-path "~/Documents/prj/lex-scraper/lex-scraper.py"
             :async t
-            :callback org-supertag-behavior--lex-scraper-callback)
-  :description "Run lex-scraper and notify when complete"
-  :style '(:prefix "📺"))
+            :callback org-supertag-behavior--data-processing-callback)
+  :description "Run lex-scraper with specialized callback"
+  :style '(:face (:foreground "blue" :weight bold)
+          :prefix "📺"))
 
-;; Development script runner
-(org-supertag-behavior-register "@dev-script"
-  :trigger :on-add
-  :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :args ("${prop:SCRIPT_ARGS}")
-            :async t
-            :callback org-supertag-behavior--dev-script-callback)
-  :description "Run development script with arguments"
-  :style '(:prefix "🔧"))
-
-;; Data processing with smart callback
 (org-supertag-behavior-register "@data-process"
   :trigger :on-add
-  :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :async t
-            :callback org-supertag-behavior--data-processing-callback)
-  :description "Run data processing script with statistics"
-  :style '(:prefix "📊"))
+  :list '("@property=STATUS,PROCESSING"
+          "@python"
+          "@property=PROCESSED_TIME,${date:now}")
+  :description "Process data and track status"
+  :style '(:face (:foreground "green")
+          :prefix "📊"))
 
-;; Backup script
 (org-supertag-behavior-register "@backup"
   :trigger :on-add
-  :action #'org-supertag-behavior--execute-script
-  :params '(:script-path "${prop:SCRIPT_PATH}"
-            :async t
-            :callback org-supertag-behavior--backup-script-callback)
-  :description "Run backup script with file count summary"
-  :style '(:prefix "💾"))
+  :list '("@property=BACKUP_STATUS,RUNNING"
+          "@shell"
+          "@property=LAST_BACKUP,${date:now}")
+  :description "Run backup and track completion"
+  :style '(:face (:foreground "orange")
+          :prefix "💾"))
+
+(org-supertag-behavior-register "@build"
+  :trigger :on-add
+  :list '("@property=BUILD_STATUS,BUILDING"
+          "@dev"
+          "@property=BUILD_TIME,${date:now}")
+  :description "Build project with status tracking"
+  :style '(:face (:foreground "purple")
+          :prefix "🔨"))
 
 (provide 'org-supertag-custom-behavior)
 ;;; org-supertag-custom-behavior.el ends here 
