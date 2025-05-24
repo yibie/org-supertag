@@ -469,6 +469,12 @@ Field 略等于 org-properties，和 Node 一样，它代表着被 org-supertag 
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-05-24 3.0.2 release
+  - 增强同步稳定性，提供全面的数据保护机制
+  - 修复标签向量数据库更新机制
+  - 新增完善的数据库恢复系统
+  - 代码库清理和组织优化
+
 - 2025-04-05 3.0.0 release
   - 新增 AI 后端，提供标签自动建议
   - 新增双向标签关系管理

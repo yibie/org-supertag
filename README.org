@@ -454,6 +454,12 @@ For more detailed information, see the included `RECOVERY_GUIDE.md`.
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-05-24 3.0.2 release
+  - Enhanced synchronization stability with comprehensive data protection
+  - Fixed tag vector database update mechanism
+  - Added comprehensive database recovery system
+  - Codebase cleanup and organization improvements
+
 - 2025-04-05 3.0.0 release
   - feat AI backend for tag auto suggestion
   - feat Bidirectional tag relation management
