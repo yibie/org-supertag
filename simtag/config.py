@@ -117,9 +117,15 @@ class Config:
         self.host = host
         self.port = port
         
+        # Initialize missing attributes
+        self.is_initialized = False
+        self.env_vars = {}
+        
         # Create the log directory
         if self.log_file:
-            os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
+            log_dir = os.path.dirname(self.log_file)
+            if log_dir:  # 只有当目录路径不为空时才创建
+                os.makedirs(log_dir, exist_ok=True)
             
         # Log the path information
         logging.info(f"Configuration initialized:")

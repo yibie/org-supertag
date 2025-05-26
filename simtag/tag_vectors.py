@@ -15,14 +15,24 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import torch
 
+# Import SQLite-vec bridge for optional vector database support
+try:
+    from .sqlite_vec_bridge import SqliteVecBridge
+    SQLITE_VEC_AVAILABLE = True
+except ImportError:
+    SQLITE_VEC_AVAILABLE = False
+
 class TagVectorEngine:
     """Tag vector engine class"""
     
-    def __init__(self, vector_file: str = None):
+    def __init__(self, vector_file: str = None, use_sqlite_vec: bool = False, 
+                 sqlite_db_path: str = None):
         """Initializes the tag vector engine
         
         Args:
-            vector_file: Path to the vector file
+            vector_file: Path to the vector file (for JSON storage)
+            use_sqlite_vec: Whether to use SQLite-vec for storage
+            sqlite_db_path: Path to SQLite database (for SQLite-vec storage)
         """
         self.logger = logging.getLogger("simtag.tag_vectors")
         self.vector_file = vector_file
@@ -31,8 +41,30 @@ class TagVectorEngine:
         self.model_name = 'sentence-transformers/paraphrase-MiniLM-L6-v2'
         self._model = None
         
-        if vector_file and os.path.exists(vector_file):
+        # SQLite-vec support
+        self.use_sqlite_vec = use_sqlite_vec and SQLITE_VEC_AVAILABLE
+        self.sqlite_db_path = sqlite_db_path or (vector_file.replace('.json', '.db') if vector_file else None)
+        self.sqlite_bridge = None
+        
+        if self.use_sqlite_vec:
+            if not SQLITE_VEC_AVAILABLE:
+                self.logger.warning("SQLite-vec not available, falling back to JSON storage")
+                self.use_sqlite_vec = False
+            else:
+                self.logger.info(f"Initializing with SQLite-vec backend: {self.sqlite_db_path}")
+                self.sqlite_bridge = SqliteVecBridge(self.sqlite_db_path)
+                if self.sqlite_bridge.connect():
+                    self.logger.info("SQLite-vec bridge connected successfully")
+                else:
+                    self.logger.error("Failed to connect SQLite-vec bridge, falling back to JSON")
+                    self.use_sqlite_vec = False
+                    self.sqlite_bridge = None
+        
+        # Load existing vectors
+        if not self.use_sqlite_vec and vector_file and os.path.exists(vector_file):
             self.load_vectors(vector_file)
+        elif self.use_sqlite_vec and self.sqlite_bridge:
+            self._load_vectors_from_sqlite()
             
     @property
     def model(self):
@@ -65,13 +97,30 @@ class TagVectorEngine:
         Returns:
             Status information dictionary
         """
-        return {
+        status = {
             "initialized": self.is_initialized,
-            "vector_file": self.vector_file,
             "vector_count": len(self.tag_vectors),
-            "file_exists": os.path.exists(self.vector_file) if self.vector_file else False,
-            "file_size": os.path.getsize(self.vector_file) if self.vector_file and os.path.exists(self.vector_file) else 0
+            "use_sqlite_vec": self.use_sqlite_vec,
+            "sqlite_vec_available": SQLITE_VEC_AVAILABLE,
         }
+        
+        if self.use_sqlite_vec:
+            status.update({
+                "storage_backend": "SQLite-vec",
+                "sqlite_db_path": self.sqlite_db_path,
+                "sqlite_connected": self.sqlite_bridge is not None and self.sqlite_bridge.db is not None,
+                "db_exists": os.path.exists(self.sqlite_db_path) if self.sqlite_db_path else False,
+                "db_size": os.path.getsize(self.sqlite_db_path) if self.sqlite_db_path and os.path.exists(self.sqlite_db_path) else 0
+            })
+        else:
+            status.update({
+                "storage_backend": "JSON",
+                "vector_file": self.vector_file,
+                "file_exists": os.path.exists(self.vector_file) if self.vector_file else False,
+                "file_size": os.path.getsize(self.vector_file) if self.vector_file and os.path.exists(self.vector_file) else 0
+            })
+        
+        return status
             
     def load_vectors(self, vector_file: str) -> bool:
         """Loads tag vectors
@@ -110,6 +159,51 @@ class TagVectorEngine:
             self.logger.error(f"error loading vector file: {e}")
             self.logger.error(traceback.format_exc())
             return False
+    
+    def _load_vectors_from_sqlite(self) -> bool:
+        """Load tag vectors from SQLite-vec database
+        
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            if not self.sqlite_bridge or not self.sqlite_bridge.db:
+                self.logger.error("SQLite-vec bridge not connected")
+                return False
+            
+            # Check if table exists
+            cursor = self.sqlite_bridge.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tag_vectors'"
+            )
+            if not cursor.fetchone():
+                self.logger.info("SQLite-vec table 'tag_vectors' not found, will create on first save")
+                self.is_initialized = True
+                return True
+            
+            # Load vectors from database
+            cursor = self.sqlite_bridge.db.execute(
+                "SELECT rowid, content FROM tag_vectors"
+            )
+            rows = cursor.fetchall()
+            
+            self.tag_vectors = {}
+            for rowid, tag_name in rows:
+                # Get vector by rowid
+                vector_data = self.sqlite_bridge.get_vector_by_rowid('tag_vectors', rowid)
+                if vector_data and 'embedding' in vector_data:
+                    # Convert binary embedding back to numpy array
+                    embedding_bytes = vector_data['embedding']
+                    vector = np.frombuffer(embedding_bytes, dtype=np.float32)
+                    self.tag_vectors[tag_name] = vector
+            
+            self.is_initialized = True
+            self.logger.info(f"Successfully loaded {len(self.tag_vectors)} tag vectors from SQLite-vec")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error loading vectors from SQLite-vec: {e}")
+            self.logger.error(traceback.format_exc())
+            return False
             
     def find_similar(self, tag_name: str, top_k: int = 5) -> List[Tuple[str, float]]:
         """Finds tags similar to the given tag
@@ -123,6 +217,11 @@ class TagVectorEngine:
         """
         self.logger.info(f"finding similar tags: tag={tag_name}, top_k={top_k}")
         
+        # Use SQLite-vec optimized search if available
+        if self.use_sqlite_vec and self.sqlite_bridge:
+            return self._find_similar_sqlite_vec(tag_name, top_k)
+        
+        # Fallback to traditional method
         # Check vector file
         if not self.is_initialized:
             if not self.vector_file or not os.path.exists(self.vector_file):
@@ -175,6 +274,80 @@ class TagVectorEngine:
         self.logger.info(f"similarity calculation completed, time: {elapsed:.2f} seconds, found {len(results)} similar tags")
         
         return results
+    
+    def _find_similar_sqlite_vec(self, tag_name: str, top_k: int) -> List[Tuple[str, float]]:
+        """Find similar tags using SQLite-vec vector search
+        
+        Args:
+            tag_name: Tag name
+            top_k: Number of results to return
+            
+        Returns:
+            List of similar tags, each element is (tag_name, similarity_score)
+        """
+        try:
+            # Ensure the table exists
+            if not self._ensure_sqlite_table():
+                self.logger.error("Failed to ensure SQLite-vec table exists")
+                return []
+            
+            # Get or generate the target vector
+            if tag_name in self.tag_vectors:
+                target_vector = self.tag_vectors[tag_name]
+                self.logger.info(f"Tag '{tag_name}' vector found in cache")
+            else:
+                self.logger.info(f"Tag '{tag_name}' not in vector library, generating vector...")
+                target_vector = self.model.encode(tag_name)
+                # Add to cache
+                self.tag_vectors[tag_name] = target_vector
+                
+            # Convert to list for SQLite-vec
+            query_vector = target_vector.tolist()
+            
+            # Use SQLite-vec for similarity search
+            start_time = time.time()
+            search_results = self.sqlite_bridge.vector_search('tag_vectors', query_vector, top_k + 1)
+            
+            if not search_results:
+                self.logger.warning("No results from SQLite-vec search")
+                return []
+            
+            # Convert results and filter out the query tag itself
+            results = []
+            for result in search_results:
+                rowid = result['rowid']
+                distance = result['distance']
+                
+                # Get tag name by rowid
+                vector_data = self.sqlite_bridge.get_vector_by_rowid('tag_vectors', rowid)
+                if vector_data and 'content' in vector_data:
+                    result_tag_name = vector_data['content']
+                    
+                    # Skip the query tag itself
+                    if result_tag_name != tag_name:
+                        # SQLite-vec returns squared euclidean distance, convert to cosine similarity
+                        # For normalized vectors, cosine distance = euclidean distance^2 / 2
+                        # Cosine similarity = 1 - cosine distance
+                        cosine_distance = distance / 2.0
+                        similarity = 1.0 - cosine_distance
+                        results.append((result_tag_name, similarity))
+                        self.logger.debug(f"Found similar tag: {result_tag_name}, similarity: {similarity:.4f}")
+                        
+                        # Stop when we have enough results
+                        if len(results) >= top_k:
+                            break
+                    else:
+                        self.logger.debug(f"Skipping query tag itself: {result_tag_name}")
+            
+            elapsed = time.time() - start_time
+            self.logger.info(f"SQLite-vec similarity search completed, time: {elapsed:.2f} seconds, found {len(results)} similar tags")
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in SQLite-vec similarity search: {e}")
+            self.logger.error(traceback.format_exc())
+            return []
         
     def _compute_similarity(self, vec1, vec2) -> float:
         """Computes the similarity between two vectors
@@ -683,7 +856,70 @@ class TagVectorEngine:
             return False
     
     def _save_vectors(self) -> bool:
-        """Save current vectors to file
+        """Save current vectors to storage
+        
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        if self.use_sqlite_vec and self.sqlite_bridge:
+            return self._save_vectors_to_sqlite()
+        else:
+            return self._save_vectors_to_json()
+    
+    def _save_vectors_to_sqlite(self) -> bool:
+        """Save current vectors to SQLite-vec database
+        
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        try:
+            if not self.sqlite_bridge or not self.sqlite_bridge.db:
+                self.logger.error("SQLite-vec bridge not connected")
+                return False
+            
+            # Ensure table exists
+            if not self._ensure_sqlite_table():
+                self.logger.error("Failed to create SQLite-vec table")
+                return False
+            
+            # Clear existing data to avoid duplicates
+            self.sqlite_bridge.db.execute("DELETE FROM tag_vectors")
+            self.sqlite_bridge.db.commit()
+            
+            # Save each vector
+            saved_count = 0
+            for tag_id, vector in self.tag_vectors.items():
+                try:
+                    # Convert vector to list for storage
+                    vector_list = vector.tolist() if isinstance(vector, np.ndarray) else vector
+                    
+                    # Insert vector
+                    success = self.sqlite_bridge.insert_vector(
+                        'tag_vectors',
+                        vector_list,
+                        {'content': tag_id, 'type': 'tag'},
+                        None  # Let SQLite assign rowid
+                    )
+                    
+                    if success:
+                        saved_count += 1
+                    else:
+                        self.logger.warning(f"Failed to save vector for tag: {tag_id}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error saving vector for tag '{tag_id}': {e}")
+                    continue
+            
+            self.logger.info(f"Saved {saved_count}/{len(self.tag_vectors)} vectors to SQLite-vec database")
+            return saved_count > 0
+            
+        except Exception as e:
+            self.logger.error(f"Error saving vectors to SQLite-vec: {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
+    def _save_vectors_to_json(self) -> bool:
+        """Save current vectors to JSON file
         
         Returns:
             True if saved successfully, False otherwise
@@ -711,8 +947,10 @@ class TagVectorEngine:
                 }
             }
             
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self.vector_file), exist_ok=True)
+            # Ensure directory exists if there is a directory path
+            vector_dir = os.path.dirname(self.vector_file)
+            if vector_dir:  # Only create directory if there is a directory path
+                os.makedirs(vector_dir, exist_ok=True)
             
             # Save to file
             with open(self.vector_file, 'w') as f:
@@ -724,6 +962,27 @@ class TagVectorEngine:
         except Exception as e:
             self.logger.error(f"Error saving vectors: {e}")
             self.logger.error(traceback.format_exc())
+            return False
+    
+    def _ensure_sqlite_table(self) -> bool:
+        """Ensure the SQLite-vec table exists
+        
+        Returns:
+            True if table exists or was created successfully
+        """
+        try:
+            if not self.sqlite_bridge:
+                return False
+            
+            # Create table if it doesn't exist
+            return self.sqlite_bridge.create_vector_table(
+                'tag_vectors',
+                384,  # MiniLM-L6 dimension
+                {'content': 'TEXT', 'type': 'TEXT'}
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error ensuring SQLite-vec table: {e}")
             return False
 
     def sync_from_tags(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
