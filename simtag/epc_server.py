@@ -127,7 +127,9 @@ class SimTagServer:
                 # For vector file, we don't require it to exist - it can be created during initialization
                 self.config.vector_file = vector_file
                 # Ensure the directory exists
-                os.makedirs(os.path.dirname(vector_file), exist_ok=True)
+                vector_dir = os.path.dirname(vector_file)
+                if vector_dir:  # 只有当目录路径不为空时才创建
+                    os.makedirs(vector_dir, exist_ok=True)
             
             if db_file:
                 self.logger.info(f"Using specified database file: {db_file}")
@@ -151,7 +153,14 @@ class SimTagServer:
             # 3. Initialize other components
             self.logger.info("Initializing other components...")
             self.entity_extractor = EntityExtractor(self.ollama)
-            self.vector_engine = TagVectorEngine(vector_file=self.config.vector_file)
+            
+            # Initialize vector engine with SQLite-vec support
+            sqlite_db_path = self.config.vector_file.replace('.json', '.db') if self.config.vector_file else None
+            self.vector_engine = TagVectorEngine(
+                vector_file=self.config.vector_file,
+                use_sqlite_vec=True,  # Enable SQLite-vec
+                sqlite_db_path=sqlite_db_path
+            )
             
             # 4. Initialize the vector library with tag data
             self.logger.info("Initializing vector library...")
