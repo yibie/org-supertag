@@ -1,5 +1,14 @@
 * Changelog
 
+* [3.0.3] - 2025-05-30
+** Improvements
+*** Improved sync scope management with automatic node cleanup
+- Added automatic removal of nodes from files outside sync scope
+- Enhanced sync state management to maintain database consistency
+- Improved periodic sync to handle out-of-scope file cleanup
+- Added detailed logging for sync scope changes and node removal
+- Ensured proper cleanup when modifying sync directories
+
 * [3.0.2] - 2025-05-24
 ** Improvements
 *** Enhanced synchronization stability with comprehensive data protection
