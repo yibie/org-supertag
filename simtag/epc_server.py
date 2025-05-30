@@ -65,7 +65,9 @@ class SimTagServer:
             ('sync_library', self.sync_library),
             ('add_tag', self.add_tag),
             ('update_tag', self.update_tag),
-            ('remove_tag', self.remove_tag)
+            ('remove_tag', self.remove_tag),
+            ('batch_vectorize_nodes', self.batch_vectorize_nodes),
+            ('batch_vectorize_nodes_backend', self.batch_vectorize_nodes)
         ]
         
         for name, method in methods:
@@ -676,6 +678,40 @@ class SimTagServer:
             self.logger.error(error_msg)
             self.logger.error(traceback.format_exc())
             return normalize_response(None, "error", error_msg)
+            
+    def batch_vectorize_nodes(self, nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Batch vectorize nodes
+        
+        Args:
+            nodes: List of node data dictionaries, each containing:
+                - node_id: Node ID
+                - content: Content text
+                - title: Node title (optional)
+                - tags: List of tags (optional)
+            
+        Returns:
+            Dictionary with vectorization results
+        """
+        try:
+            # Check initialization status
+            if not self._initialized:
+                self.logger.error("Service not initialized, please call initialize first")
+                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+            
+            # Check vector engine
+            if not self.vector_engine:
+                self.logger.error("Vector engine not initialized")
+                return normalize_response(None, "error", "Vector engine not initialized")
+            
+            # Perform batch vectorization
+            result = self.vector_engine.backend_batch_vectorize_nodes(nodes)
+            return normalize_response(result)
+            
+        except Exception as e:
+            error_msg = f"Batch vectorization failed: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return normalize_response(None, "error", error_msg)
 
 def run_ollama_model(text, model_name="gemma-3b-it"):
     """Run ollama command directly"""
@@ -703,6 +739,7 @@ def main(config: Config):
         
         # Create server instance
         server = SimTagServer(config)
+        
         
         # Start server
         server.start()
@@ -735,4 +772,4 @@ if __name__ == "__main__":
         port=args.port
     )
     
-    main(config) 
+    main(config)

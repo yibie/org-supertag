@@ -1,0 +1,142 @@
+在 **org-supertag** 现有的数据层（节点-关系哈希表 + SQLite 持久化）之上嫁接 GraphRAG，其实不必推倒重来：把 org-supertag 已有的「节点-标签-共现」逻辑看作天然的知识图谱胚胎，再把 InfraNodus 或 LlamaIndex 之类的 GraphRAG 工具链接入，就能让你的 Emacs 笔记具备可视化知识网、结构化检索和 AI 洞察三大能力。下面按 **“先建图 → 再检索 → 后生成”** 的顺序拆解可落地方案，并给出具体代码切入点与开发注意事项。
+
+## 1 | org-supertag 的数据模型 = 可直接映射的知识图
+
+### 1.1 核心实体
+
+| org-supertag 对象 | Graph 节点类型  | 说明                                    |
+| --------------- | ----------- | ------------------------------------- |
+| Node（headline）  | `:node`     | 任一 Org 标题，已记录在数据库中([GitHub][1])       |
+| Tag／#inline     | `:tag`      | 主题或属性概念；同一 Node 与 Tag 相连([GitHub][1]) |
+| Field           | `:field`    | 结构化属性，可建为节点或边属性                       |
+| Behavior        | `:behavior` | 自动化脚本，可视为“过程节点”                       |
+
+### 1.2 天然边关系
+
+* **node —tag**：已有 `org-supertag-db-link` 存储([GitHub][2])
+* **tag —tag**：共现关系（同一 Node 中出现）已在 README 说明，后续查询视图依赖此边([GitHub][1])
+* **node ↔ node**：引用 / backlink 已内置([GitHub][1])
+
+> ★ 结论：org-supertag 的数据库层本身就是一个轻量知识图（Entity-Relationship-Property），可直接导出给任一图数据库或 GraphRAG SDK。
+
+## 2 | GraphRAG 的价值：让标签网络变成 AI 的“推理中枢”
+
+| 能力   | 传统向量 RAG | GraphRAG 增益                                                      |
+| ---- | -------- | ---------------------------------------------------------------- |
+| 语义检索 | 仅按相似度取文本 | 先沿图找相关节点，再补向量，提高精准度([Microsoft][3])                              |
+| 主题概览 | 无全局结构    | 社区检测 → 主题簇摘要([Microsoft][4])                                     |
+| 内容缺口 | 难以发现     | 识别结构洞，自动生成研究问题([InfraNodus][5])                                  |
+| 多跳推理 | 需要递归调用   | 单次查询即可沿边多跳聚合证据（HippoRAG / LlamaIndex KG-RAG 实验）([LlamaIndex][6]) |
+
+## 3 | 集成蓝图：从 org-supertag 到 GraphRAG
+
+### 3.1 导出知识图（Build）
+
+1. **事件钩子**：利用 `org-supertag-db-add-listener` 监听节点/标签增删；每次变更把 `(id type props)` 及 `(from to rel-type)` 追加到本地 JSONL。
+2. **同步脚本**（Python）：
+
+   ```python
+   # pseudocode
+   import json, neo4j
+   for record in jsonl_lines:
+       session.run("MERGE (n:Tag {id:$id})", id=record['tag'])
+       session.run("MATCH (a {id:$n}), (b {id:$tag}) MERGE (a)-[:HAS_TAG]->(b)",
+                   n=record['node'], tag=record['tag'])
+   ```
+3. **图存储选型**
+
+   * 纯离线分析：Neo4j Desktop 或 Memgraph；
+   * 跨设备同步：Azure Cosmos DB Gremlin API（与 MS GraphRAG 栈天然兼容）([Microsoft Learn][7])；
+   * 零运维：InfraNodus 云端 GraphRAG API，上传 JSON 即得到可视化+检索端点([InfraNodus][8])。
+
+### 3.2 检索管道（Retrieve）
+
+```
+Emacs prompt (M-x org-supertag-ai-ask)
+   └▶ Extract query entities  (simple NER or LLaMA via org-supertag-ai.el)
+      └▶ Graph store search:
+          Neo4j → MATCH (n)-[*1..2]-(m) WHERE n.name IN $ents RETURN m,rels
+      └▶ 向量补偿:
+          Supabase/pgvector over org-files for semantic nearest neighbours
+   └▶ Top-k context chunks → feed LLM
+```
+
+* 可直接套用 LlamaIndex **`KnowledgeGraphRAGQueryEngine`**：给它传 Neo4j driver 与 embedding store，即可自动完成子图裁剪和 prompt 拼装([LlamaIndex][9])。
+* 若走 InfraNodus API：POST `/graphAndAdvice` 携带笔记片段，API 返回 `context_snippets` + `research_questions` 字段，二者拼接进 ChatGPT 提示。([InfraNodus][5])
+
+### 3.3 生成阶段（Generate）
+
+* **回答**：LLM 使用「证据片段 + 路径解释」模板，附带 `graph_path` 让用户回溯来源。
+* **洞察**：调用 InfraNodus **`gapQuestions`** 端点或自写中心性-betweenness 分析，产出「盲点问题」列表，推回 Emacs Agenda。
+* **自动笔记**：graph-aware 摘要可写回当前 Org headline 的子节点，或者用 `org-capture` 保存。
+
+## 4 | Emacs / org-supertag 端 UI 与交互
+
+### 4.1 图谱预览
+
+* 在 Emacs 打开 `graphviz-dot-mode` 或 `svg-tag-mode` 渲染子图；点击节点调用 `org-supertag-node-open`。([GitHub][1])
+* 想要 InfraNodus 级 3D 交互，可像 Obsidian 插件那样开启浏览器小窗，URL 带 `graphId=` 指向云端图。([InfraNodus][10])
+
+### 4.2 AI 对话命令
+
+| 快捷键       | 动作                               | 背后流程                           |
+| --------- | -------------------------------- | ------------------------------ |
+| `C-c t q` | **Graph-Ask**：问题 → GraphRAG → 回答 | 调用 `org-supertag-ai-graph-ask` |
+| `C-c t g` | **Gap-Prompt**：列出盲点问题            | 调用 InfraNodus `gapQuestions`   |
+| `C-c t s` | **Subgraph-Summary**：选区 → 主题摘要   | LlamaIndex `graph_summary`     |
+
+### 4.3 自动化行为
+
+利用 org-supertag 的 **Behavior System**：
+
+```elisp
+(org-supertag-behavior-register "@graph-sync"
+  :trigger :on-save
+  :list '("org-supertag-db-export-json" "call-sync-script.sh"))
+```
+
+每次保存笔记自动增量更新图谱——与 InfraNodus 批量 import 或 Neo4j `MERGE` 保持实时一致。([GitHub][1])
+
+## 5 | 开发难点与对策
+
+| 难点                  | 应对措施                                                                          |
+| ------------------- | ----------------------------------------------------------------------------- |
+| **实体消歧**：不同文件同名标识混淆 | 在 export 层拼接 `(id path heading)` 做复合主键，并在 Neo4j 用 `MERGE (n:Node {uid:$uid})` |
+| **实时性能**：大图库查询慢     | 对查询实体先做向量过滤，再对子图跑图遍历（同 MS GraphRAG “local-global”两段式）([Microsoft][11])        |
+| **Emacs 可视化渲染瓶颈**   | 仅加载当前主题簇子图；其余节点降采样，或跳出浏览器渲染。                                                  |
+| **离线隐私**            | 选本地 Neo4j + 本地 LLM（Ollama）；InfraNodus 企业自托管版亦可([InfraNodus][12])              |
+
+## 6 | 分阶段落地路线
+
+1. **P0 ：离线导出 + Neo4j Browser**
+
+   * 导出脚本、Cypher 导入、手动浏览。
+2. **P1 ：Graph-Ask 命令**
+
+   * 接入 LlamaIndex GraphRAG，完成 Emacs 中问答功能。
+3. **P2 ：盲点提问 & 自动摘要**
+
+   * 调用 InfraNodus API 的 `gapQuestions`、`summaryByCommunity`。
+4. **P3 ：实时监听器 + 行为系统**
+
+   * Node/Tag 保存即增量更新；盲点提示自动写回 TODO。
+5. **P4 ：完整交互 UI**
+
+   * Emacs 内嵌可交互 SVG；或像 Obsidian 插件那样弹出云端图谱视图。
+
+---
+
+借助 org-supertag 现成的 **Node-Tag-Relation** 架构，你只需补上“**导出-检索-生成**”三段管道，就能把 Emacs 里的平面笔记升级为可视化、可推理、会提问的知识网络。GraphRAG 让标签真正成为语义节点，使“写笔记”与“和笔记对话”融为一体——写下去，AI 会帮你把散点连成线，再反过来启发下一个想法。
+
+[1]: https://github.com/yibie/org-supertag "GitHub - yibie/org-supertag: Make tag system great again, based on org-mode."
+[2]: https://github.com/yibie/org-supertag/blob/main/org-supertag-db.el "org-supertag/org-supertag-db.el at main · yibie/org-supertag · GitHub"
+[3]: https://www.microsoft.com/en-us/research/blog/graphrag-unlocking-llm-discovery-on-narrative-private-data/?utm_source=chatgpt.com "GraphRAG: Unlocking LLM discovery on narrative private data"
+[4]: https://www.microsoft.com/en-us/research/blog/graphrag-new-tool-for-complex-data-discovery-now-on-github/?utm_source=chatgpt.com "GraphRAG: New tool for complex data discovery now on GitHub"
+[5]: https://infranodus.com/use-case/ai-knowledge-graphs "Portable GraphRAG: Optimize Your LLM RAG with Knowledge Graphs — InfraNodus"
+[6]: https://docs.llamaindex.ai/en/stable/examples/query_engine/knowledge_graph_rag_query_engine/?utm_source=chatgpt.com "Knowledge Graph RAG Query Engine - LlamaIndex"
+[7]: https://learn.microsoft.com/en-us/azure/cosmos-db/gen-ai/cosmos-ai-graph?utm_source=chatgpt.com "AI knowledge graphs | Microsoft Learn"
+[8]: https://infranodus.com/api?utm_source=chatgpt.com "Generate AI-Powered Knowledge Graphs from Text - InfraNodus API"
+[9]: https://docs.llamaindex.ai/en/stable/examples/cookbooks/GraphRAG_v2/?utm_source=chatgpt.com "GraphRAG Implementation with LlamaIndex - V2"
+[10]: https://infranodus.com/obsidian-plugin?utm_source=chatgpt.com "InfraNodus Obsidian Graph View Plugin with AI Insights & Chat"
+[11]: https://www.microsoft.com/en-us/research/publication/from-local-to-global-a-graph-rag-approach-to-query-focused-summarization/?utm_source=chatgpt.com "From Local to Global: A Graph RAG Approach to Query-Focused ..."
+[12]: https://infranodus.com/?utm_source=chatgpt.com "InfraNodus: AI Text Analysis & Insight Tool for Research and ..."

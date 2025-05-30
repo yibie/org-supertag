@@ -81,7 +81,8 @@ class Config:
                  debug: bool = False,
                  log_file: str = None,
                  host: str = '127.0.0.1',
-                 port: int = 0):
+                 port: int = 0,
+                 storage_type: str = 'sqlite-vec'):
         """Initialize the configuration
         
         Args:
@@ -92,6 +93,7 @@ class Config:
             log_file: Log file path
             host: Server address
             port: Server port
+            storage_type: Vector storage type ('json' or 'sqlite-vec')
         """
         # Check the environment
         ensure_environment()
@@ -116,6 +118,7 @@ class Config:
         self.log_level = logging.DEBUG if debug else logging.INFO
         self.host = host
         self.port = port
+        self.storage_type = storage_type
         
         # Initialize missing attributes
         self.is_initialized = False
@@ -132,6 +135,7 @@ class Config:
         logging.info(f"Vector file: {self.vector_file}")
         logging.info(f"Database file: {self.db_file}")
         logging.info(f"Log file: {self.log_file}")
+        logging.info(f"Storage type: {self.storage_type}")
 
     def ensure_ollama(self) -> bool:
         """Ensure Ollama is available"""
@@ -199,7 +203,8 @@ class Config:
             "is_initialized": self.is_initialized,
             "env_vars": self.env_vars,
             "host": self.host,
-            "port": self.port
+            "port": self.port,
+            "storage_type": self.storage_type
         }
         
     def save(self, filepath: str) -> None:
@@ -223,7 +228,8 @@ class Config:
             debug=config_dict.get("debug", False),
             log_file=config_dict.get("log_file"),
             host=config_dict.get("host", '127.0.0.1'),
-            port=config_dict.get("port", 0)
+            port=config_dict.get("port", 0),
+            storage_type=config_dict.get("storage_type", 'json')
         )
         
         config.is_initialized = config_dict.get("is_initialized", False)

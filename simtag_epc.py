@@ -7,6 +7,7 @@ Uses EPC (Emacs RPC) to communicate with Emacs
 import os
 import sys
 import argparse
+import traceback
 
 # Add current directory to Python path
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -39,9 +40,12 @@ def main():
         parser.add_argument('--log-file', help='Path to the log file')
         parser.add_argument('--host', default='127.0.0.1', help='Server address')
         parser.add_argument('--port', type=int, default=0, help='Server port')
+        parser.add_argument('--use-sqlite-vec', action='store_true', help='Use SQLite-vec for vector storage')
+        parser.add_argument('--storage-type', default='json', help='Vector storage type (json or sqlite-vec)')
         args = parser.parse_args()
 
         # Create a configuration object
+        storage_type = 'sqlite-vec' if args.use_sqlite_vec else args.storage_type
         config = Config(
             vector_file=args.vector_file,
             db_file=args.db_file,
@@ -49,7 +53,8 @@ def main():
             debug=args.debug,
             log_file=args.log_file,
             host=args.host,
-            port=args.port
+            port=args.port,
+            storage_type=storage_type
         )
         
         # Make sure all output is flushed

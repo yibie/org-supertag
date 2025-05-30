@@ -1,0 +1,168 @@
+在 **org-supertag** 现有的 SQLite 数据层之上，你可以把 **节点-标签-关系** 三张表直接映射成一张轻量级知识图，再用 **sqlite-vec** 给节点与标签做向量索引，构建一个纯本地、无依赖的 GraphRAG 管线。下面分四步说明：先看 org-supertag 已经具备的数据资产→ 怎样用 sqlite-vec ＋普通 SQL 让它“既是图又能向量检索”→ 查询时怎样把“图遍历 + 向量最近邻”组合成 GraphRAG→ 实际落地的代码骨架与性能注意事项。
+
+---
+
+## 1 org-supertag 已自带的知识图元素
+
+| 现成对象               | Graph 节点 | 主要边                                 | 典型命令/特性                                                           |
+| ------------------ | -------- | ----------------------------------- | ----------------------------------------------------------------- |
+| Node（Org headline） | `:node`  | `(:node)-[:HAS_TAG]->(:tag)`        | `org-supertag-tag-add-tag`                                        |
+| Tag                | `:tag`   | **共现** `(:tag)-[:CO_OCCUR]->(:tag)` | 共现自动记录并支持关系挖掘【([GitHub][1])】                                      |
+| Relation           | `:rel`   | 手动/自动的语义关系                          | `org-supertag-relation-manage` 智能关系面板【([GitHub][2], [Reddit][3])】 |
+| Field/Behavior     | 可选属性节点   | 派生边，如 SCHEDULES、LINKS\_TO           |                                                                   |
+
+> **结论**：org-supertag 的数据库天然就是一个 E-R 图；co-occurrence 与自定义 relation 已把“多跳关联”信息存好了【([Reddit][4])】。
+
+---
+
+## 2 用 sqlite-vec 给图打上“语义坐标”
+
+### 2.1 为什么选 sqlite-vec
+
+* 单 C 文件扩展、跨平台、无需服务进程【([GitHub][5])】
+* 支持 `vec0` 虚拟表，内建 L2 / inner-product KNN 查询【([GitHub][5])】
+
+### 2.2 最小可用 Schema
+
+```sql
+-- 结构表：节点、标签、关系
+CREATE TABLE node  (id INTEGER PRIMARY KEY, title TEXT, body TEXT);
+CREATE TABLE tag   (id INTEGER PRIMARY KEY, name  TEXT);
+CREATE TABLE edge  (src INT, dst INT, type TEXT, weight REAL);
+
+-- 向量表：将节点全文 & 标签名 embed 成 768 维
+.load ./vec0
+CREATE VIRTUAL TABLE vec_node USING vec0(vec BLOB);
+CREATE VIRTUAL TABLE vec_tag  USING vec0(vec BLOB);
+```
+
+* **同步策略**：在 `org-supertag-db` 的监听器里，保存/删除节点时同时
+
+  1. `INSERT/UPDATE node …`
+  2. 计算嵌入（本地 LLM 或 `sqlite-rembed`）再 `INSERT INTO vec_node`【([GitHub][5])】
+
+### 2.3 为何既存边又存向量
+
+Graph 边让你做“概念跳跃”，向量让你做“语义模糊”——二者组合正是 GraphRAG 被证明检索质量明显高于纯向量 RAG 的关键【([Medium][6], [Towards AI][7])】。
+
+---
+
+## 3 查询阶段：本地 GraphRAG 工作流
+
+> **Query → 实体抓取 → 子图扩展 → 向量过滤 → 提示拼装 → LLM**
+
+1. **实体抓取**
+   用一个轻量 NER / 正则把问题里的名词转成候选标签/节点。
+
+2. **子图扩展（Graph 步）**
+
+   ```sql
+   WITH RECURSIVE hop(nid, depth) AS (
+     SELECT id, 0 FROM tag WHERE name IN (:ents)
+     UNION ALL
+     SELECT edge.dst, depth+1 FROM edge JOIN hop ON edge.src=hop.nid
+     WHERE depth < 2 AND edge.type IN ('CO_OCCUR','REL')
+   )
+   SELECT nid FROM hop;
+   ```
+
+   取两跳即可覆盖“话题簇”【([DEV Community][8])】。
+
+3. **向量过滤（Vec 步）**
+
+   ```sql
+   SELECT node.id, distance
+     FROM vec_node, hop
+    WHERE rowid = hop.nid
+      AND vec_node.vec MATCH :query_vec
+    ORDER BY distance LIMIT 8;
+   ```
+
+4. **Prompt 拼装**
+   把选出的节点正文 + 图路径（`edge.type`,`weight`）按 *evidence + path* 模版喂给 GPT。
+   LlamaIndex 的 `KnowledgeGraphRAGQueryEngine` 已帮你封装了 2-4 步，可直接绑定 SQLite driver【([LlamaIndex][9])】。
+
+---
+
+## 4 充分利用 **org-supertag-relation** 的进阶玩法
+
+| 场景       | 做法                                                                           | 价值         |
+| -------- | ---------------------------------------------------------------------------- | ---------- |
+| **语义权重** | 将 `edge.weight` 设为 PMI 或用户手动权重；检索时乘以 `weight` 调整排序【([GitHub][1])】            | 强化重要关系     |
+| **关系分组** | `edge.type` 存入 “因果”“引用”“领域” 等；查询时可 `WHERE type IN (…)` 实现多维过滤【([GitHub][2])】 | 细粒度控制      |
+| **共现发现** | 定期跑 `INSERT INTO edge … SELECT t1.id,t2.id,'CO_OCCUR',pmi …`                 | 自动补图，免手工维护 |
+| **交互命令** | 把 `org-supertag-relation-manage` 返回的结果直接写回 edge 表；Emacs 中按 `C-c t r` 调整图     | 图-笔记 同步    |
+
+---
+
+## 5 落地代码骨架（Emacs Lisp + Python）
+
+```elisp
+(defun ost-sync-node ()
+  "Save current node to SQLite and vec table."
+  (let* ((id   (org-entry-get nil "OST_ID"))
+         (text (org-get-entry)))
+    (call-process "python" nil nil nil "ost_sync.py" id text)))
+;; Hook
+(add-hook 'org-supertag-after-save-node-hook #'ost-sync-node)
+```
+
+```python
+# ost_sync.py
+import sqlite3, sys, json, sentence_transformers
+db = sqlite3.connect("ost.db")
+model = sentence_transformers.SentenceTransformer("all-MiniLM-L6-v2")
+nid, text = sys.argv[1:3]
+emb = model.encode(text).tolist()
+db.execute("REPLACE INTO node(id, body) VALUES(?,?)", (nid, text))
+db.execute("REPLACE INTO vec_node(rowid, vec) VALUES(?, json(?))",
+           (nid, json.dumps(emb)))
+db.commit()
+```
+
+---
+
+## 6 性能与扩展注意事项
+
+* **KNN + JOIN**：SQLite 先 KNN 后 JOIN 才快；用子查询把 `vec_node` 结果裁到 50 条再联表。
+* **并发**：Emacs 单线程写 DB；长文本批量向量建议用外部脚本异步写入。
+* **本地 LLM**：可用 Ollama/LLama.cpp 走 REST，本机完全离线。
+* **规模上限**：几万节点仍可秒级响应；若超 100k，考虑将关系边分层（核心图常驻，冷边外存）。
+
+---
+
+### 回答你的疑问
+
+> **“你的建议似乎是直接将数据库的数据向量化，是这个意思吗？”**
+
+是——**把节点正文、标签名（甚至 relation 描述）生成嵌入写入 sqlite-vec**，再用现有的 `edge` 表保存显式关系。
+检索时先向量 KNN 选 ①语义最相关的 50 条，再沿 `edge` 拓展 1-2 跳，最后把这批证据丢给 LLM。这就是一个完全本地、无云依赖的 GraphRAG，实现方式简洁且与 org-supertag 的数据模型天然契合。
+
+---
+
+## 参考资料
+
+* org-supertag 共现边说明【([GitHub][1])】
+* org-supertag 2.5 关系管理特性【([Reddit][3])】
+* README 中 `org-supertag-relation-manage` 介绍【([GitHub][2])】
+* sqlite-vec 项目概览【([GitHub][5])】
+* sqlite-vec 使用示例（`vec0` 虚拟表）【([GitHub][5])】
+* Dev.to《GraphRAG with SQLite》教程【([DEV Community][8])】
+* GitHub 示例 repo *example-graphrag-with-sqlite*【([GitHub][10])】
+* Medium GraphRAG 实践文章【([Medium][6])】
+* TowardsAI GraphRAG 综述【([Towards AI][7])】
+* Reddit GraphRAG with graph DB 讨论【([Reddit][11])】
+* LlamaIndex `KnowledgeGraphRAGQueryEngine` 文档【([LlamaIndex][9])】
+* org-supertag Co-occurrence Tags 细节【([Reddit][4])】
+
+[1]: https://github.com/yibie/org-supertag "GitHub - yibie/org-supertag: Make tag system great again, based on org-mode."
+[2]: https://github.com/yibie/org-supertag?utm_source=chatgpt.com "yibie/org-supertag: Make tag system great again, based on org-mode."
+[3]: https://www.reddit.com/r/emacs/comments/1j2b2rh/update_orgsupertag_25_a_new_way_think_about_tag/ "(Update) org-supertag 2.5: A new way think about Tag system : r/emacs"
+[4]: https://www.reddit.com/r/orgmode/comments/1j2b2gx/update_orgsupertag_25_a_new_way_think_about_tag/?utm_source=chatgpt.com "(Update) org-supertag 2.5: A new way think about Tag system - Reddit"
+[5]: https://github.com/asg017/sqlite-vec "GitHub - asg017/sqlite-vec: A vector search SQLite extension that runs anywhere!"
+[6]: https://medium.com/data-science/how-to-implement-graph-rag-using-knowledge-graphs-and-vector-databases-60bb69a22759?utm_source=chatgpt.com "How to Implement Graph RAG Using Knowledge Graphs and Vector ..."
+[7]: https://pub.towardsai.net/graphrag-is-the-logical-step-from-rag-so-why-the-sudden-hype-5bd8594c90aa?utm_source=chatgpt.com "GraphRAG Is the Logical Step From RAG — So Why the Sudden ..."
+[8]: https://dev.to/stephenc222/how-to-build-lightweight-graphrag-with-sqlite-53le?utm_source=chatgpt.com "How to Build Lightweight GraphRAG with SQLite - DEV Community"
+[9]: https://docs.llamaindex.ai/en/stable/examples/query_engine/knowledge_graph_rag_query_engine/?utm_source=chatgpt.com "Knowledge Graph RAG Query Engine - LlamaIndex"
+[10]: https://github.com/stephenc222/example-graphrag-with-sqlite?utm_source=chatgpt.com "stephenc222/example-graphrag-with-sqlite - GitHub"
+[11]: https://www.reddit.com/r/LLMDevs/comments/1g1zczh/rag_using_graph_db/?utm_source=chatgpt.com "RAG using graph db : r/LLMDevs - Reddit"

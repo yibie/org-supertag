@@ -33,6 +33,7 @@
 (require 'org)
 (require 'org-element)
 (require 'org-supertag-db)
+(require 'cl-lib)
 
 ;;; Customization
 
@@ -105,6 +106,10 @@ Value: last sync time")
 
 (defvar org-supertag-sync--timer nil
   "Timer for periodic sync checks.")
+
+;; Add a variable to track initialization status
+(defvar org-supertag-sync--initialized nil
+  "Flag indicating whether org-supertag-sync has been initialized.")
 
 ;;; Core Functions - File State Tracking
 
@@ -365,25 +370,77 @@ Ensures node has ID and is properly registered in database."
 ;; State Management
 ;;-------------------------------------------------------------------
 
-(defun org-supertag-sync-save-state ()
-  "Save sync state to file."
-  ;; Clean up non-existent files and files out of sync scope before saving
-  (let ((files-to-remove nil))
-    (maphash (lambda (file _state)
-               (when (or (not (file-exists-p file))
-                        (not (org-supertag-sync--in-sync-scope-p file)))
-                 (push file files-to-remove)))
+(defun org-supertag-sync--cleanup-database ()
+  "Clean up database by removing nodes from files not in sync state."
+  (let ((nodes-to-remove nil)
+        (files-in-db (make-hash-table :test 'equal))
+        (sync-files (make-hash-table :test 'equal)))
+    
+    ;; First, normalize all files in sync state
+    (maphash (lambda (file _)
+               (let ((normalized (expand-file-name file)))
+                 (puthash normalized t sync-files)))
              org-supertag-sync--state)
     
-    ;; Remove files from sync state
+    ;; Collect all unique files in database
+    (maphash (lambda (id node)
+               (when (eq (plist-get node :type) :node)
+                 (let ((file (plist-get node :file-path)))
+                   (when file
+                     (let ((normalized (expand-file-name file)))
+                       (puthash normalized t files-in-db))))))
+             org-supertag-db--object)
+    
+    (message "[org-supertag] Checking %d files from database against %d files in sync state"
+             (hash-table-count files-in-db)
+             (hash-table-count sync-files))
+    
+    ;; Check each file in database against sync state
+    (maphash (lambda (file _)
+               (unless (gethash file sync-files)
+                 (message "[org-supertag] File %s not in sync state, marking its nodes for removal" file)
+                 ;; Collect all nodes from this file
+                 (maphash (lambda (id node)
+                           (when (and (eq (plist-get node :type) :node)
+                                    (string= (expand-file-name (plist-get node :file-path)) file))
+                             (push id nodes-to-remove)))
+                         org-supertag-db--object)))
+             files-in-db)
+    
+    ;; Remove collected nodes
+    (when nodes-to-remove
+      (message "[org-supertag] Removed %d nodes from %d files not in sync state" 
+               (length nodes-to-remove)
+               (- (hash-table-count files-in-db) (hash-table-count sync-files)))
+      (dolist (id nodes-to-remove)
+        (org-supertag-db-remove-object id)))
+    
+    (when (= (length nodes-to-remove) 0)
+      (message "[org-supertag] No nodes need to be removed - all database files are in sync state"))))
+
+(defun org-supertag-sync-save-state ()
+  "Save sync state to file."
+  ;; Clean up non-existent files from sync state only
+  (let ((files-to-remove nil))
+    (message "Debug - Current sync directories: %S" org-supertag-sync-directories)
+    (message "Debug - Current sync state has %d files" (hash-table-count org-supertag-sync--state))
+    
+    (maphash (lambda (file _state)
+               (let ((exists (file-exists-p file))
+                     (in-scope (org-supertag-sync--in-sync-scope-p file)))
+                 (when (or (not exists)
+                          (not in-scope))
+                   (push file files-to-remove))))
+             org-supertag-sync--state)
+    
+    (message "Debug - Files to remove from sync state: %S" files-to-remove)
+    
+    ;; Remove files from sync state only (not from database)
     (dolist (file files-to-remove)
-      (remhash file org-supertag-sync--state)
-      ;; Remove nodes from these files in database
-      (maphash (lambda (id node)
-                 (when (and (eq (plist-get node :type) :node)
-                           (string= (plist-get node :file-path) file))
-                   (org-supertag-db-remove-object id)))
-               org-supertag-db--object)))
+      (remhash file org-supertag-sync--state))
+    
+    (message "Debug - After cleanup, sync state has %d files" 
+             (hash-table-count org-supertag-sync--state)))
   
   (with-temp-file org-supertag-sync-state-file
     (let ((print-length nil)
@@ -404,19 +461,89 @@ If file doesn't exist, initialize empty state."
     (org-supertag-sync-save-state)))
 
 ;; Auto initialization
+(defun org-supertag-sync--ensure-directories ()
+  "Ensure sync directories are properly configured."
+  (unless org-supertag-sync-directories
+    ;; Try to load from custom-file if it exists
+    (when custom-file
+      (condition-case nil
+          (load custom-file t)
+        (error nil)))
+    ;; If still not set, try to load from init file
+    (unless org-supertag-sync-directories
+      (let ((init-file (or user-init-file "~/.emacs")))
+        (when (file-exists-p init-file)
+          (condition-case nil
+              (load init-file t)
+            (error nil)))))
+    ;; If directories are still not set, try to get from symbol-value
+    (unless org-supertag-sync-directories
+      (when-let ((value (get 'org-supertag-sync-directories 'saved-value)))
+        (setq org-supertag-sync-directories (eval (car value))))))
+  
+  ;; Normalize directories if they exist
+  (when org-supertag-sync-directories
+    (setq org-supertag-sync-directories
+          (mapcar (lambda (dir)
+                    (file-name-as-directory (expand-file-name dir)))
+                  org-supertag-sync-directories)))
+  
+  org-supertag-sync-directories)
+
 (defun org-supertag-sync--maybe-auto-init ()
   "Maybe initialize sync system automatically.
 Only initialize if auto-sync is enabled and not already initialized."
-  (when (and org-supertag-sync-directories  ; Only if directories are configured
+  (when (and (not org-supertag-sync--initialized)  ; Not already initialized
+             (org-supertag-sync--ensure-directories)  ; Ensure directories are loaded
              (not org-supertag-sync--timer)) ; Not already running
     (org-supertag-sync-init)))
 
-;; Add to after-init-hook to ensure all variables are loaded
-(add-hook 'after-init-hook #'org-supertag-sync--maybe-auto-init)
+(cl-defun org-supertag-sync-init ()
+  "Initialize sync system."
+  (when org-supertag-sync--initialized
+    (cl-return-from org-supertag-sync-init))
+  
+  ;; Ensure directories are loaded
+  (org-supertag-sync--ensure-directories)
+  
+  ;; Ensure data directory exists
+  (unless (file-exists-p org-supertag-data-directory)
+    (make-directory org-supertag-data-directory t))
+  
+  ;; Load sync state
+  (org-supertag-sync-load-state)
+  
+  ;; Clean up database if loaded and has content
+  (when (and (featurep 'org-supertag-db) 
+             (hash-table-p org-supertag-db--object)
+             (> (hash-table-count org-supertag-db--object) 0))
+    (org-supertag-sync--cleanup-database))
+  
+  ;; Setup buffer hooks
+  (org-supertag-sync-setup-buffer-watch)
+  
+  ;; Initial state for all files
+  (let ((all-files (org-supertag-get-all-files))
+        (new-files (org-supertag-scan-sync-directories)))
+    (dolist (file (append all-files new-files))
+      (when (file-exists-p file)
+        (org-supertag-sync-update-state file))))
+  
+  ;; Save initial state
+  (org-supertag-sync-save-state)
+  
+  ;; Start auto-sync
+  (org-supertag-sync-start-auto-sync)
+  
+  ;; Mark as initialized
+  (setq org-supertag-sync--initialized t))
 
-;; Initialize when package is loaded
-(eval-after-load 'org-supertag
-  '(org-supertag-sync--maybe-auto-init))
+;; Initialize when appropriate
+(add-hook 'after-init-hook #'org-supertag-sync--maybe-auto-init)
+(with-eval-after-load 'org-supertag
+  (org-supertag-sync--maybe-auto-init))
+(when (featurep 'org-supertag)
+  (org-supertag-sync--maybe-auto-init))
 
 ;;-------------------------------------------------------------------
 ;; Automatic Synchronization
@@ -856,52 +983,27 @@ Uses ID-based scanning to ensure reliability."
       updated)))
 
 ;;-------------------------------------------------------------------
-;; Initialization
-;;-------------------------------------------------------------------
-
-(defun org-supertag-sync-init ()
-  "Initialize sync system."
-  ;; Ensure data directory exists
-  (unless (file-exists-p org-supertag-data-directory)
-    (make-directory org-supertag-data-directory t))
-  
-  ;; Load or initialize sync state
-  (org-supertag-sync-load-state)
-  
-  ;; Setup buffer hooks
-  (org-supertag-sync-setup-buffer-watch)
-  
-  ;; Initial state for all files, including new ones
-  (let ((all-files (org-supertag-get-all-files))
-        (new-files (org-supertag-scan-sync-directories)))
-    (dolist (file (append all-files new-files))
-      (when (file-exists-p file)
-        (org-supertag-sync-update-state file))))
-  
-  ;; Save initial state
-  (org-supertag-sync-save-state)
-  
-  ;; Start auto-sync
-  (org-supertag-sync-start-auto-sync))
-
-;;-------------------------------------------------------------------
 ;; Helper Functions
 ;;-------------------------------------------------------------------
 
 (defun org-supertag-sync--in-sync-scope-p (file)
   "Check if FILE is within synchronization scope.
-Returns t if file should be synchronized based on configured directories."
+Returns t if file should be synchronized based on configured directories.
+If no directories are configured, returns t for all org files."
   (when (and file (file-exists-p file))
-    (let* ((file-dir (file-name-directory (expand-file-name file)))
-           (excluded (cl-some (lambda (dir)
-                               (string-prefix-p 
-                                (expand-file-name dir) file-dir))
-                             org-supertag-sync-exclude-directories))
-           (included (and org-supertag-sync-directories
+    (let* ((expanded-file (expand-file-name file))
+           (file-dir (file-name-directory expanded-file))
+           (excluded (and org-supertag-sync-exclude-directories
                          (cl-some (lambda (dir)
-                                   (string-prefix-p 
-                                    (expand-file-name dir) file-dir))
-                                 org-supertag-sync-directories))))
+                                   (let ((expanded-exclude-dir (expand-file-name dir)))
+                                     (string-prefix-p expanded-exclude-dir file-dir)))
+                                 org-supertag-sync-exclude-directories)))
+           (included (if org-supertag-sync-directories
+                        (cl-some (lambda (dir)
+                                  (let ((expanded-dir (expand-file-name dir)))
+                                    (string-prefix-p expanded-dir file-dir)))
+                                org-supertag-sync-directories)
+                      t)))
       (and included
            (not excluded)
            (string-match-p org-supertag-sync-file-pattern file)))))
@@ -909,12 +1011,12 @@ Returns t if file should be synchronized based on configured directories."
 (defun org-supertag-sync-add-directory (dir)
   "Add directory to synchronization scope."
   (interactive "DAdd directory to sync: ")
-  (let ((abs-dir (expand-file-name dir)))
-    (unless (member abs-dir org-supertag-sync-directories)
-      (push abs-dir org-supertag-sync-directories)
+  (let ((normalized-dir (org-supertag-sync--normalize-directory dir)))
+    (unless (member normalized-dir org-supertag-sync-directories)
+      (push normalized-dir org-supertag-sync-directories)
       (customize-save-variable 'org-supertag-sync-directories 
                              org-supertag-sync-directories)
-      (message "Added %s to sync directories" abs-dir))))
+      (message "Added %s to sync directories" normalized-dir))))
 
 (defun org-supertag-sync-remove-directory (dir)
   "Remove directory from synchronization scope."
@@ -929,6 +1031,18 @@ Returns t if file should be synchronized based on configured directories."
                            org-supertag-sync-directories)
     (message "Removed %s from sync directories" abs-dir)))
 
+;;;###autoload
+(defun org-supertag-sync-cleanup-database ()
+  "Manually clean up database by removing nodes from files not in sync state.
+This is useful when files have been removed from sync scope or deleted."
+  (interactive)
+  (if (and (featurep 'org-supertag-db) 
+           (hash-table-p org-supertag-db--object)
+           (> (hash-table-count org-supertag-db--object) 0))
+      (progn
+        (org-supertag-sync--cleanup-database)
+        (message "Database cleanup completed"))
+    (message "Database not loaded or empty, no cleanup needed")))
 
 (provide 'org-supertag-sync)
 

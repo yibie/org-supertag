@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import torch
+from transformers import AutoModel, AutoTokenizer
 
 # Import SQLite-vec bridge for optional vector database support
 try:
@@ -25,20 +26,20 @@ except ImportError:
 class TagVectorEngine:
     """Tag vector engine class"""
     
-    def __init__(self, vector_file: str = None, use_sqlite_vec: bool = False, 
+    def __init__(self, vector_file: str = None, use_sqlite_vec: bool = True, 
                  sqlite_db_path: str = None):
         """Initializes the tag vector engine
         
         Args:
-            vector_file: Path to the vector file (for JSON storage)
-            use_sqlite_vec: Whether to use SQLite-vec for storage
-            sqlite_db_path: Path to SQLite database (for SQLite-vec storage)
+            vector_file: Path to the vector file (for JSON storage, will be used as base for SQLite-vec path)
+            use_sqlite_vec: Whether to use SQLite-vec for storage (defaults to True)
+            sqlite_db_path: Path to SQLite database (if None, will use vector_file with .db extension)
         """
         self.logger = logging.getLogger("simtag.tag_vectors")
         self.vector_file = vector_file
         self.tag_vectors = {}  # Tag vector dictionary
         self.is_initialized = False
-        self.model_name = 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+        self.model_name = 'intfloat/multilingual-e5-small'
         self._model = None
         
         # SQLite-vec support
@@ -61,10 +62,10 @@ class TagVectorEngine:
                     self.sqlite_bridge = None
         
         # Load existing vectors
-        if not self.use_sqlite_vec and vector_file and os.path.exists(vector_file):
-            self.load_vectors(vector_file)
-        elif self.use_sqlite_vec and self.sqlite_bridge:
+        if self.use_sqlite_vec and self.sqlite_bridge:
             self._load_vectors_from_sqlite()
+        elif vector_file and os.path.exists(vector_file):
+            self.load_vectors(vector_file)
             
     @property
     def model(self):
@@ -219,9 +220,36 @@ class TagVectorEngine:
         
         # Use SQLite-vec optimized search if available
         if self.use_sqlite_vec and self.sqlite_bridge:
-            return self._find_similar_sqlite_vec(tag_name, top_k)
+            try:
+                # Generate query vector
+                query_vector = self.model.encode(tag_name)
+                
+                # Search using SQLite-vec
+                results = self.sqlite_bridge.vector_search(
+                    'tag_vectors',
+                    query_vector.tolist(),
+                    top_k
+                )
+                
+                if results:
+                    # Convert results to expected format
+                    similar_tags = [
+                        (result['content'], result['similarity'])
+                        for result in results
+                    ]
+                    return similar_tags
+                else:
+                    self.logger.warning("No similar tags found in SQLite-vec")
+                    return []
+                
+            except Exception as e:
+                self.logger.error(f"SQLite-vec search failed: {e}")
+                self.logger.error(traceback.format_exc())
+                # Fall back to traditional method
         
         # Fallback to traditional method
+        self.logger.warning("Falling back to traditional similarity search")
+        
         # Check vector file
         if not self.is_initialized:
             if not self.vector_file or not os.path.exists(self.vector_file):
@@ -252,27 +280,22 @@ class TagVectorEngine:
         # Calculate similarity
         start_time = time.time()
         similarities = []
-        self.logger.info(f"calculating similarity with {len(self.tag_vectors)} tags...")
-        
         for other_tag, other_vector in self.tag_vectors.items():
-            if other_tag != tag_name:
-                try:
-                    # Calculate cosine similarity
-                    sim = self._compute_similarity(target_vector, other_vector)
-                    similarities.append((other_tag, sim))
-                except Exception as e:
-                    self.logger.error(f"error calculating similarity with tag '{other_tag}': {e}")
-                    continue
+            if other_tag == tag_name:
+                continue
+            
+            # Calculate cosine similarity
+            similarity = np.dot(target_vector, other_vector) / (
+                np.linalg.norm(target_vector) * np.linalg.norm(other_vector)
+            )
+            similarities.append((other_tag, similarity))
         
         # Sort by similarity
         similarities.sort(key=lambda x: x[1], reverse=True)
         
-        # Return top_k results
+        # Return top k results
         results = similarities[:top_k]
-        
-        elapsed = time.time() - start_time
-        self.logger.info(f"similarity calculation completed, time: {elapsed:.2f} seconds, found {len(results)} similar tags")
-        
+        self.logger.info(f"found {len(results)} similar tags in {time.time() - start_time:.3f}s")
         return results
     
     def _find_similar_sqlite_vec(self, tag_name: str, top_k: int) -> List[Tuple[str, float]]:
@@ -406,7 +429,7 @@ class TagVectorEngine:
             if not isinstance(vector, np.ndarray):
                 raise TypeError(f"vector type error: {type(vector)}")
                 
-            if vector.shape[0] != 384:  # MiniLM-L6 dimension
+            if vector.shape[0] != 384:  # E5-small dimension
                 raise ValueError(f"vector dimension error: {vector.shape}")
                 
             self.logger.info("engine test successful")
@@ -422,7 +445,7 @@ class TagVectorEngine:
         
         Args:
             db_file: Path to the database file
-            vector_file: Output path for the vector file
+            vector_file: Output path for the vector file (used for SQLite-vec path)
             tag_data: List of tag data
             
         Returns:
@@ -452,7 +475,20 @@ class TagVectorEngine:
             self.logger.info(f"- vector file: {vector_file}")
             self.logger.info(f"- tag data: {len(tag_data) if tag_data else 'none'}")
             
+            # Set vector file path (will be used for SQLite-vec database)
             self.vector_file = vector_file
+            self.sqlite_db_path = vector_file.replace('.json', '.db')
+            
+            # Initialize SQLite-vec bridge if not already done
+            if self.use_sqlite_vec and not self.sqlite_bridge:
+                self.sqlite_bridge = SqliteVecBridge(self.sqlite_db_path)
+                if not self.sqlite_bridge.connect():
+                    self.logger.error("Failed to connect SQLite-vec bridge")
+                    return {
+                        "status": "error",
+                        "message": "Failed to connect SQLite-vec bridge",
+                        "result": None
+                    }
             
             # Test the engine first
             try:
@@ -485,7 +521,7 @@ class TagVectorEngine:
             try:
                 test_text = "test sentence for model verification"
                 test_vector = self.model.encode(test_text)
-                if not isinstance(test_vector, np.ndarray) or test_vector.shape[0] != 384:  # MiniLM-L6 dimension
+                if not isinstance(test_vector, np.ndarray) or test_vector.shape[0] != 384:  # E5-small dimension
                     raise ValueError(f"model output vector dimension error: {test_vector.shape}")
             except Exception as e:
                 self.logger.error(f"model functionality test failed: {e}")
@@ -499,9 +535,6 @@ class TagVectorEngine:
                     }
                 }
 
-            # Ensure the output directory exists
-            os.makedirs(os.path.dirname(vector_file), exist_ok=True)
-            
             # Parse tag data
             tag_info = {}
             if tag_data:
@@ -513,32 +546,35 @@ class TagVectorEngine:
                         # Convert list to dictionary
                         tag_data_dict = {}
                         for item in tag_dict:
-                            if isinstance(item, (list, tuple)) and len(item) == 2:
-                                key, value = item
-                                # Handle Symbol('.') and other special cases
-                                if hasattr(value, '__name__') and value.__name__ == '.':
-                                    # Skip Symbol('.') entries
-                                    continue
-                                if isinstance(value, list) and len(value) == 1:
-                                    value = value[0]
-                                tag_data_dict[key] = value
-                            elif isinstance(item, (list, tuple)) and len(item) == 3:
-                                # Handle triplet format like ['id', Symbol('.'), 'c_maker']
-                                key, symbol, value = item
-                                if hasattr(symbol, '__name__') and symbol.__name__ == '.':
-                                    # This is a valid triplet with Symbol('.') separator
+                            if isinstance(item, (list, tuple)):
+                                if len(item) == 2:
+                                    # 处理 (key . value) 格式
+                                    key, value = item
+                                    if isinstance(value, list) and len(value) == 1:
+                                        value = value[0]
                                     tag_data_dict[key] = value
-                                else:
-                                    self.logger.warning(f"Unknown triplet format: {item}")
+                                elif len(item) == 3:
+                                    # 处理 ['key', '.', 'value'] 或 ['key', Symbol('.'), 'value'] 格式
+                                    key, symbol, value = item
+                                    # 只要中间是分隔符（'.' 或 Symbol('.')），就接受这个格式
+                                    if (isinstance(symbol, str) and symbol == '.') or \
+                                       (hasattr(symbol, '__name__') and symbol.__name__ == '.'):
+                                        if isinstance(value, list) and len(value) == 1:
+                                            value = value[0]
+                                        tag_data_dict[key] = value
+                                    else:
+                                        self.logger.debug(f"Skipping unknown format: {item}")
+                            else:
+                                self.logger.debug(f"Skipping non-list item: {item}")
                         
                         # If we couldn't convert the list, skip it
                         if not tag_data_dict:
-                            self.logger.warning(f"skipping invalid tag data: {tag_dict}")
+                            self.logger.debug(f"No valid data extracted from: {tag_dict}")
                             continue
                     else:
-                        self.logger.warning(f"skipping invalid tag data: {tag_dict}")
+                        self.logger.debug(f"Skipping unsupported data type: {type(tag_dict)}")
                         continue
-                        
+
                     # Extract tag ID
                     tag_id = tag_data_dict.get('id') or tag_data_dict.get('name')
                     if not tag_id:
@@ -575,46 +611,48 @@ class TagVectorEngine:
                 self.logger.error("no valid tag data found")
                 return {"status": "error", "message": "no valid tag data found"}
             
-            # Generate tag vectors
-            tag_vectors = {}
+            # Ensure SQLite-vec table exists
+            if not self._ensure_sqlite_table():
+                self.logger.error("Failed to create SQLite-vec table")
+                return {
+                    "status": "error",
+                    "message": "Failed to create SQLite-vec table",
+                    "result": None
+                }
+            
+            # Clear existing data
+            self.sqlite_bridge.db.execute("DELETE FROM tag_vectors")
+            self.sqlite_bridge.db.commit()
+            
+            # Generate and save tag vectors
+            saved_count = 0
             for tag_id, info in tag_info.items():
                 try:
                     # Generate vector
                     tag_vector = self.model.encode(tag_id)
-                    tag_vectors[tag_id] = tag_vector
+                    
+                    # Save to SQLite-vec
+                    success = self.sqlite_bridge.insert_vector(
+                        'tag_vectors',
+                        tag_vector.tolist(),
+                        {'content': tag_id, 'type': 'tag'},
+                        None  # Let SQLite assign rowid
+                    )
+                    
+                    if success:
+                        saved_count += 1
+                        # Cache in memory
+                        self.tag_vectors[tag_id] = tag_vector
+                    else:
+                        self.logger.warning(f"Failed to save vector for tag: {tag_id}")
+                        
                 except Exception as e:
-                    self.logger.error(f"error generating tag '{tag_id}' vector: {e}")
+                    self.logger.error(f"Error processing tag '{tag_id}': {e}")
                     continue
             
-            # Build cache data
-            cache_data = {
-                'tags': {
-                    tag_id: {
-                        'name': info['name'],
-                        'vector': tag_vectors[tag_id].tolist() if tag_id in tag_vectors else [],
-                        'info': info
-                    }
-                    for tag_id, info in tag_info.items() if tag_id in tag_vectors
-                },
-                'metadata': {
-                    'total_tags': len(tag_vectors),
-                    'vector_dim': 384,  # MiniLM-L6 dimension
-                    'created_at': datetime.now().isoformat(),
-                    'model_name': 'sentence-transformers/paraphrase-MiniLM-L6-v2'
-                }
-            }
-            
-            # Save to file
-            with open(vector_file, 'w') as f:
-                json.dump(cache_data, f, indent=2)
-                
-            self.logger.info(f"tag library initialized, saved to {vector_file}")
-            self.logger.info(f"file size: {os.path.getsize(vector_file)} bytes")
+            self.logger.info(f"Successfully saved {saved_count}/{len(tag_info)} tag vectors")
             
             # Update status
-            self.tag_vectors = {
-                tag_id: np.array(vector) for tag_id, vector in tag_vectors.items()
-            }
             self.is_initialized = True
             
             return {
@@ -622,9 +660,9 @@ class TagVectorEngine:
                 "result": {
                     "vector_file": vector_file,
                     "db_file": db_file,
-                    "model": 'sentence-transformers/paraphrase-MiniLM-L6-v2',
-                    "tag_count": len(tag_vectors),
-                    "file_size": os.path.getsize(vector_file)
+                    "model": self.model_name,
+                    "tag_count": saved_count,
+                    "file_size": os.path.getsize(self.sqlite_db_path) if os.path.exists(self.sqlite_db_path) else 0
                 }
             }
             
@@ -637,7 +675,7 @@ class TagVectorEngine:
                 "result": {
                     "vector_file": vector_file,
                     "db_file": db_file,
-                    "model": 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+                    "model": self.model_name
                 }
             }
     
@@ -941,7 +979,7 @@ class TagVectorEngine:
                 },
                 'metadata': {
                     'total_tags': len(self.tag_vectors),
-                    'vector_dim': 384,  # MiniLM-L6 dimension
+                    'vector_dim': 384,  # E5-small dimension
                     'updated_at': datetime.now().isoformat(),
                     'model_name': self.model_name
                 }
@@ -965,24 +1003,64 @@ class TagVectorEngine:
             return False
     
     def _ensure_sqlite_table(self) -> bool:
-        """Ensure the SQLite-vec table exists
+        """Ensures the SQLite-vec tables exist with correct schema
         
         Returns:
-            True if table exists or was created successfully
+            True if tables exist or were created successfully, False otherwise
         """
         try:
-            if not self.sqlite_bridge:
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available")
                 return False
             
-            # Create table if it doesn't exist
-            return self.sqlite_bridge.create_vector_table(
-                'tag_vectors',
-                384,  # MiniLM-L6 dimension
-                {'content': 'TEXT', 'type': 'TEXT'}
+            # Check and create tag_vectors table
+            cursor = self.sqlite_bridge.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tag_vectors'"
             )
+            if not cursor.fetchone():
+                self.logger.info("Creating SQLite-vec table 'tag_vectors'")
+                success = self.sqlite_bridge.create_vector_table(
+                    'tag_vectors',
+                    384,  # E5-small dimension
+                    {
+                        'content': 'TEXT',  # tag name
+                        'type': 'TEXT',     # always 'tag'
+                        'metadata': 'TEXT'   # JSON string for additional metadata
+                    }
+                )
+                if not success:
+                    self.logger.error("Failed to create tag_vectors table")
+                    return False
+            
+            # Check and create node_vectors table
+            cursor = self.sqlite_bridge.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='node_vectors'"
+            )
+            if not cursor.fetchone():
+                self.logger.info("Creating SQLite-vec table 'node_vectors'")
+                success = self.sqlite_bridge.create_vector_table(
+                    'node_vectors',
+                    384,  # E5-small dimension
+                    {
+                        'content': 'TEXT',      # node content
+                        'node_id': 'TEXT',      # org node ID
+                        'title': 'TEXT',        # node title
+                        'tags': 'TEXT',         # JSON array of tags
+                        'type': 'TEXT',         # always 'node'
+                        'metadata': 'TEXT',      # JSON string for additional metadata
+                        'created_at': 'TEXT',   # timestamp
+                        'updated_at': 'TEXT'    # timestamp
+                    }
+                )
+                if not success:
+                    self.logger.error("Failed to create node_vectors table")
+                    return False
+            
+            return True
             
         except Exception as e:
-            self.logger.error(f"Error ensuring SQLite-vec table: {e}")
+            self.logger.error(f"Error ensuring SQLite-vec tables: {e}")
+            self.logger.error(traceback.format_exc())
             return False
 
     def sync_from_tags(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -1008,32 +1086,35 @@ class TagVectorEngine:
                     # Convert list to dictionary
                     tag_data_dict = {}
                     for item in tag_dict:
-                        if isinstance(item, (list, tuple)) and len(item) == 2:
-                            key, value = item
-                            # Handle Symbol('.') and other special cases
-                            if hasattr(value, '__name__') and value.__name__ == '.':
-                                # Skip Symbol('.') entries
-                                continue
-                            if isinstance(value, list) and len(value) == 1:
-                                value = value[0]
-                            tag_data_dict[key] = value
-                        elif isinstance(item, (list, tuple)) and len(item) == 3:
-                            # Handle triplet format like ['id', Symbol('.'), 'c_maker']
-                            key, symbol, value = item
-                            if hasattr(symbol, '__name__') and symbol.__name__ == '.':
-                                # This is a valid triplet with Symbol('.') separator
+                        if isinstance(item, (list, tuple)):
+                            if len(item) == 2:
+                                # 处理 (key . value) 格式
+                                key, value = item
+                                if isinstance(value, list) and len(value) == 1:
+                                    value = value[0]
                                 tag_data_dict[key] = value
-                            else:
-                                self.logger.warning(f"Unknown triplet format: {item}")
+                            elif len(item) == 3:
+                                # 处理 ['key', '.', 'value'] 或 ['key', Symbol('.'), 'value'] 格式
+                                key, symbol, value = item
+                                # 只要中间是分隔符（'.' 或 Symbol('.')），就接受这个格式
+                                if (isinstance(symbol, str) and symbol == '.') or \
+                                   (hasattr(symbol, '__name__') and symbol.__name__ == '.'):
+                                    if isinstance(value, list) and len(value) == 1:
+                                        value = value[0]
+                                    tag_data_dict[key] = value
+                                else:
+                                    self.logger.debug(f"Skipping unknown format: {item}")
+                        else:
+                            self.logger.debug(f"Skipping non-list item: {item}")
                     
                     # If we couldn't convert the list, skip it
                     if not tag_data_dict:
-                        self.logger.warning(f"Skipping invalid tag data: {tag_dict}")
+                        self.logger.debug(f"No valid data extracted from: {tag_dict}")
                         continue
                         
                     tag_dict = tag_data_dict
                 else:
-                    self.logger.warning(f"Skipping invalid tag data: {tag_dict}")
+                    self.logger.debug(f"Skipping unsupported data type: {type(tag_dict)}")
                     continue
                 
                 # Extract tag ID and name
@@ -1126,4 +1207,547 @@ class TagVectorEngine:
                 "updated": 0,
                 "removed": 0,
                 "total": len(self.tag_vectors) if hasattr(self, 'tag_vectors') else 0
+            }
+
+    def vectorize_node(self, node_id: str, content: str, title: str = None, tags: List[str] = None) -> bool:
+        """Vectorize a node and store it in the database
+        
+        Args:
+            node_id: Node ID
+            content: Node content
+            title: Node title (optional)
+            tags: List of tags (optional)
+            
+        Returns:
+            True if vectorized successfully, False otherwise
+        """
+        try:
+            self.logger.info(f"Vectorizing node: {node_id}")
+            
+            # Prepare text for vectorization (combine title and content)
+            text_to_encode = f"{title}\n{content}" if title else content
+            
+            # Generate vector
+            node_vector = self.model.encode(text_to_encode)
+            
+            # Prepare metadata
+            metadata = {
+                'vector_model': self.model_name,
+                'vector_dim': len(node_vector),
+                'vectorized_at': datetime.now().isoformat()
+            }
+            
+            # Save to SQLite-vec
+            if self.use_sqlite_vec and self.sqlite_bridge:
+                # Ensure table exists
+                if not self._ensure_sqlite_table():
+                    self.logger.error("Failed to ensure SQLite-vec tables exist")
+                    return False
+                
+                # Convert tags to JSON string
+                tags_json = json.dumps(tags) if tags else '[]'
+                
+                # Current timestamp
+                now = datetime.now().isoformat()
+                
+                # Insert into node_vectors table
+                success = self.sqlite_bridge.insert_vector(
+                    'node_vectors',
+                    node_vector.tolist(),
+                    {
+                        'content': content,
+                        'node_id': node_id,
+                        'title': title or '',
+                        'tags': tags_json,
+                        'type': 'node',
+                        'metadata': json.dumps(metadata),
+                        'created_at': now,
+                        'updated_at': now
+                    },
+                    None  # Let SQLite assign rowid
+                )
+                
+                if success:
+                    self.logger.info(f"Successfully vectorized node: {node_id}")
+                    return True
+                else:
+                    self.logger.error(f"Failed to save vector for node: {node_id}")
+                    return False
+            else:
+                self.logger.error("SQLite-vec not available")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"Error vectorizing node '{node_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+
+    def find_similar_nodes(self, query: str, top_k: int = 5, include_content: bool = True) -> List[Dict[str, Any]]:
+        """Find nodes similar to the query text
+        
+        Args:
+            query: Query text
+            top_k: Number of results to return
+            include_content: Whether to include node content in results
+            
+        Returns:
+            List of similar nodes with metadata
+        """
+        try:
+            self.logger.info(f"Finding nodes similar to query: {query}")
+            
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available")
+                return []
+            
+            # Generate query vector
+            query_vector = self.model.encode(query)
+            
+            # Search using SQLite-vec
+            results = self.sqlite_bridge.vector_search(
+                'node_vectors',
+                query_vector.tolist(),
+                top_k
+            )
+            
+            if not results:
+                self.logger.warning("No similar nodes found")
+                return []
+            
+            # Process results
+            nodes = []
+            for result in results:
+                # 确保所有键都存在，使用get并提供默认值
+                node = {
+                    'node_id': result.get('node_id', 'unknown_node_id'),
+                    'title': result.get('title', ''),
+                    'similarity': result.get('similarity', 0.0),
+                    'tags': json.loads(result.get('tags', '[]')),
+                    'metadata': json.loads(result.get('metadata', '{}'))
+                }
+                if include_content:
+                    node['content'] = result.get('content', '')
+                nodes.append(node)
+            
+            return nodes
+            
+        except Exception as e:
+            self.logger.error(f"Error finding similar nodes: {e}")
+            self.logger.error(traceback.format_exc())
+            return []
+
+    def hybrid_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Hybrid search combining tag and node vectors
+        
+        Args:
+            query: Query text
+            top_k: Number of results to return
+            
+        Returns:
+            List of results with metadata
+        """
+        try:
+            self.logger.info(f"Performing hybrid search for: {query}")
+            
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available")
+                return []
+            
+            # Generate query vector
+            query_vector = self.model.encode(query)
+            
+            # Search both tables
+            tag_results = self.sqlite_bridge.vector_search(
+                'tag_vectors',
+                query_vector.tolist(),
+                top_k
+            )
+            
+            node_results = self.sqlite_bridge.vector_search(
+                'node_vectors',
+                query_vector.tolist(),
+                top_k
+            )
+            
+            # Combine and process results
+            results = []
+            
+            # Process tag results
+            for result in (tag_results or []):
+                results.append({
+                    'type': 'tag',
+                    'content': result.get('content', ''),  # Use get() with default value
+                    'similarity': result.get('similarity', 0.0),
+                    'metadata': json.loads(result.get('metadata', '{}'))
+                })
+            
+            # Process node results
+            for result in (node_results or []):
+                results.append({
+                    'type': 'node',
+                    'node_id': result.get('node_id', ''),
+                    'title': result.get('title', ''),
+                    'content': result.get('content', ''),
+                    'similarity': result.get('similarity', 0.0),
+                    'tags': json.loads(result.get('tags', '[]')),
+                    'metadata': json.loads(result.get('metadata', '{}'))
+                })
+            
+            # Sort by similarity
+            results.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            # Return top_k results
+            return results[:top_k]
+            
+        except Exception as e:
+            self.logger.error(f"Error in hybrid search: {e}")
+            self.logger.error(traceback.format_exc())
+            return []
+
+    def remove_node_vector(self, node_id: str) -> bool:
+        """Remove a node's vector from the database
+        
+        Args:
+            node_id: Node ID
+            
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        try:
+            self.logger.info(f"Removing vector for node: {node_id}")
+            
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available")
+                return False
+            
+            # Delete from node_vectors table
+            cursor = self.sqlite_bridge.db.execute(
+                "DELETE FROM node_vectors WHERE node_id = ?",
+                (node_id,)
+            )
+            self.sqlite_bridge.db.commit()
+            
+            if cursor.rowcount > 0:
+                self.logger.info(f"Successfully removed vector for node: {node_id}")
+                return True
+            else:
+                self.logger.warning(f"No vector found for node: {node_id}")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"Error removing vector for node '{node_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+
+    def update_node_vector(self, node_id: str, content: str, title: str = None, tags: List[str] = None) -> bool:
+        """Update a node's vector in the database
+        
+        Args:
+            node_id: Node ID
+            content: New content
+            title: New title (optional)
+            tags: New tags (optional)
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        try:
+            self.logger.info(f"Updating vector for node: {node_id}")
+            
+            # First remove old vector
+            self.remove_node_vector(node_id)
+            
+            # Then add new vector
+            return self.vectorize_node(node_id, content, title, tags)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating vector for node '{node_id}': {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+
+    def batch_vectorize_nodes(self, nodes: List[Dict[str, Any]], batch_size: int = 50) -> Dict[str, Any]:
+        """Batch vectorize nodes
+        
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - node_id: Node ID
+                - content: Node content
+                - title: Node title (optional)
+                - tags: List of tags (optional)
+            batch_size: Number of nodes to process in each batch
+            
+        Returns:
+            Dictionary with vectorization results
+        """
+        try:
+            self.logger.info(f"Starting batch vectorization of {len(nodes)} nodes")
+            
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available")
+                return {
+                    "status": "error",
+                    "message": "SQLite-vec not available",
+                    "success_count": 0,
+                    "failed_count": 0,
+                    "total": len(nodes)
+                }
+            
+            success_count = 0
+            failed_nodes = []
+            
+            # Process nodes in batches
+            for i in range(0, len(nodes), batch_size):
+                batch = nodes[i:i + batch_size]
+                self.logger.info(f"Processing batch {i//batch_size + 1}, size: {len(batch)}")
+                
+                for node in batch:
+                    try:
+                        # Extract data from node dictionary
+                        node_id = node.get("node_id", "")
+                        content = node.get("content", "")
+                        title = node.get("title", "")
+                        tags = node.get("tags", [])
+                        
+                        # Skip empty nodes
+                        if not content.strip():
+                            self.logger.warning(f"Skipping empty node: {node_id}")
+                            failed_nodes.append(node_id)
+                            continue
+                        
+                        # Generate vector
+                        node_vector = self.model.encode(content)
+                        
+                        # Save to SQLite-vec
+                        if self.use_sqlite_vec and self.sqlite_bridge:
+                            # Convert tags to JSON string
+                            tags_json = json.dumps(tags)
+                            
+                            # Current timestamp
+                            now = datetime.now().isoformat()
+                            
+                            # Insert into node_vectors table
+                            success = self.sqlite_bridge.insert_vector(
+                                'node_vectors',
+                                node_vector.tolist(),
+                                {
+                                    'content': content,
+                                    'node_id': node_id,
+                                    'title': title,
+                                    'tags': tags_json,
+                                    'type': 'node',
+                                    'metadata': '{}',
+                                    'created_at': now,
+                                    'updated_at': now
+                                },
+                                None  # Let SQLite assign rowid
+                            )
+                            
+                            if success:
+                                success_count += 1
+                                self.logger.debug(f"Successfully vectorized node: {node_id}")
+                            else:
+                                failed_nodes.append(node_id)
+                                self.logger.warning(f"Failed to save vector for node: {node_id}")
+                                
+                    except Exception as e:
+                        failed_nodes.append(node.get("node_id", "unknown"))
+                        self.logger.error(f"Error processing node: {e}")
+                        self.logger.debug(traceback.format_exc())
+                        continue
+            
+            self.logger.info(f"Batch vectorization completed. Success: {success_count}, Failed: {len(failed_nodes)}")
+            
+            return {
+                "status": "success",
+                "message": "Batch vectorization completed",
+                "success_count": success_count,
+                "failed_count": len(failed_nodes),
+                "failed_nodes": failed_nodes,
+                "total": len(nodes)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error in batch vectorization: {e}")
+            self.logger.error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": str(e),
+                "success_count": success_count,
+                "failed_count": len(nodes),
+                "total": len(nodes)
+            }
+
+    def batch_vectorize_nodes_backend(self, nodes_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """在后端批量向量化节点
+        
+        Args:
+            nodes_data: List of node dictionaries, each containing:
+                - node_id: Node ID
+                - content: Node content
+                - title: Node title (optional)
+                - tags: List of tags (optional)
+            
+        Returns:
+            Dictionary with vectorization results
+        """
+        try:
+            self.logger.info(f"Starting backend batch vectorization of {len(nodes_data)} nodes.")
+            
+            if not self.use_sqlite_vec or not self.sqlite_bridge:
+                self.logger.error("SQLite-vec not available for batch vectorization.")
+                return {
+                    "status": "error",
+                    "message": "SQLite-vec not available",
+                    "success_count": 0,
+                    "failed_nodes": []
+                }
+            
+            self.logger.info(f"Using SQLite-vec for storage: {self.sqlite_db_path}")
+            success_count = 0
+            failed_nodes_info = [] # Store more info about failed nodes
+            
+            # 批量收集节点文本
+            batch_texts_to_encode = []
+            batch_node_metadata = [] # Store corresponding metadata for each text
+            
+            self.logger.info(f"Preparing {len(nodes_data)} nodes for batch vectorization...")
+            for idx, node_input in enumerate(nodes_data):
+                try:
+                    # Elisp端传递过来的是alist，需要转换
+                    if isinstance(node_input, list):
+                        node = {item[0]: item[2] if len(item) == 3 and item[1] == '.' else item[1] for item in node_input}
+                    elif isinstance(node_input, dict):
+                        node = node_input
+                    else:
+                        self.logger.warning(f"Skipping node with unexpected data type: {type(node_input)} at index {idx}")
+                        failed_nodes_info.append({
+                            "node_id": f"unknown_index_{idx}",
+                            "error": f"Unexpected data type: {type(node_input)}"
+                        })
+                        continue
+
+                    node_id = node.get('node_id', '')
+                    content = node.get('content', '')
+                    title = node.get('title', '')
+                    tags = node.get('tags', [])
+
+                    self.logger.debug(f"Processing node {idx + 1}/{len(nodes_data)}: ID='{node_id}', Title='{title[:30]}...'")
+
+                    if not node_id:
+                        self.logger.warning(f"Skipping node at index {idx} due to missing 'node_id'. Data: {node}")
+                        failed_nodes_info.append({
+                            "node_id": "MISSING_ID",
+                            "original_index": idx,
+                            "error": "Missing node_id"
+                        })
+                        continue
+                    
+                    if not content.strip() and not title.strip():
+                        self.logger.warning(f"Skipping node '{node_id}' due to empty content and title.")
+                        failed_nodes_info.append({
+                            "node_id": node_id,
+                            "error": "Empty content and title"
+                        })
+                        continue
+                    
+                    text_to_encode = f"{title}\n{content}".strip()
+                    batch_texts_to_encode.append(text_to_encode)
+                    batch_node_metadata.append({
+                        'node_id': node_id,
+                        'content': content, # Keep original content for DB
+                        'title': title,
+                        'tags': tags
+                    })
+                    
+                except Exception as e:
+                    self.logger.error(f"Error preparing node at index {idx} (ID: {node.get('node_id', 'unknown')}): {e}", exc_info=True)
+                    failed_nodes_info.append({
+                        "node_id": node.get('node_id', f"error_idx_{idx}"),
+                        "error": f"Preparation error: {str(e)}"
+                    })
+                    continue
+            
+            self.logger.info(f"Prepared {len(batch_texts_to_encode)} texts for encoding.")
+
+            # 批量向量化
+            if batch_texts_to_encode:
+                self.logger.info(f"Encoding {len(batch_texts_to_encode)} texts in a batch...")
+                try:
+                    batch_vectors = self.model.encode(batch_texts_to_encode, batch_size=32) # Adjust batch_size as needed
+                    self.logger.info(f"Successfully encoded {len(batch_vectors)} vectors. Shape of first vector: {batch_vectors[0].shape if len(batch_vectors) > 0 else 'N/A'}")
+                    
+                    # 批量保存到数据库
+                    self.logger.info(f"Attempting to save {len(batch_vectors)} vectors to database...")
+                    for i, node_meta in enumerate(batch_node_metadata):
+                        try:
+                            vector = batch_vectors[i]
+                            tags_json = json.dumps(node_meta['tags'])
+                            now = datetime.now().isoformat()
+                            
+                            db_metadata = {
+                                'content': node_meta['content'], # Store original content
+                                'node_id': node_meta['node_id'],
+                                'title': node_meta['title'],
+                                'tags': tags_json,
+                                'type': 'node',
+                                'metadata': json.dumps({'vectorized_at': now, 'model': self.model_name}), # Store vectorization time and model
+                                'created_at': now, # Assuming new inserts, or should be from node data if available
+                                'updated_at': now
+                            }
+                            
+                            self.logger.debug(f"Inserting vector for node_id: {node_meta['node_id']}")
+                            success = self.sqlite_bridge.insert_vector(
+                                'node_vectors',
+                                vector.tolist(),
+                                db_metadata,
+                                None # Let SQLite assign rowid
+                            )
+                            
+                            if success:
+                                success_count += 1
+                                self.logger.debug(f"Successfully saved vector for node: {node_meta['node_id']}")
+                            else:
+                                self.logger.warning(f"Failed to save vector for node: {node_meta['node_id']} (insert_vector returned False)")
+                                failed_nodes_info.append({
+                                    "node_id": node_meta['node_id'],
+                                    "error": "sqlite_bridge.insert_vector returned False"
+                                })
+                                
+                        except Exception as e:
+                            self.logger.error(f"Error saving vector for node {node_meta['node_id']}: {e}", exc_info=True)
+                            failed_nodes_info.append({
+                                "node_id": node_meta['node_id'],
+                                "error": f"DB insertion error: {str(e)}"
+                            })
+                            
+                except Exception as e:
+                    self.logger.error(f"Batch encoding or saving process failed: {e}", exc_info=True)
+                    # If batch encoding fails, all nodes in this batch are considered failed
+                    for node_meta in batch_node_metadata:
+                        if not any(fn['node_id'] == node_meta['node_id'] for fn in failed_nodes_info):
+                            failed_nodes_info.append({
+                                "node_id": node_meta['node_id'],
+                                "error": f"Batch encoding/saving error: {str(e)}"
+                            })
+            else:
+                self.logger.info("No texts to encode in this batch.")
+            
+            self.logger.info(f"Backend batch vectorization completed. Success: {success_count}, Failed: {len(failed_nodes_info)}")
+            if failed_nodes_info:
+                self.logger.warning(f"Details of failed nodes: {failed_nodes_info}")
+
+            return {
+                "status": "success",
+                "success_count": success_count,
+                "failed_nodes": failed_nodes_info # Return detailed failure info
+            }
+            
+        except Exception as e:
+            error_msg = f"Critical error in backend_batch_vectorize_nodes: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "success_count": 0,
+                "failed_nodes": []
             }

@@ -497,42 +497,24 @@ For normal users, use org-supertag-sim-init as the main entry point."
     (org-supertag-sim-epc-log "Database file: %s" db-file)
     (org-supertag-sim-epc-log "Vector file: %s" org-supertag-sim-epc-vector-file)
     
-      (condition-case err
-      (progn
-        (org-supertag-sim-epc-log "Calling the initialize method...")
-        ;; 使用异步调用避免阻塞，但在这里等待结果
-        (let ((response nil)
-              (max-wait-time 20)  ; 最大等待20秒
-              (wait-time 0)
-              (check-interval 0.1))
-          
-          ;; 发起异步调用
-          (deferred:$
-            (epc:call-deferred org-supertag-sim-epc-manager 
-                              'initialize 
-                              (list org-supertag-sim-epc-vector-file db-file))
-            (deferred:nextc it
-              (lambda (result)
-                (setq response result))))
-          
-          ;; 等待响应，带超时保护
-          (while (and (null response) (< wait-time max-wait-time))
-            (sit-for check-interval)
-            (setq wait-time (+ wait-time check-interval)))
-          
-          (if response
-              (progn
-                (org-supertag-sim-epc-log "Initialization return result: %S" response)
-                (if (string= (plist-get response :status) "success")
-                    (progn
-                      (setq org-supertag-sim-epc-initialized t)
-                      (org-supertag-sim-epc-log "Initialization successful")
-                      (plist-get response :result))
-                  (error "Initialization failed: %S" response)))
-            (error "Initialization timeout after %d seconds" max-wait-time))))
-    (error
-     (org-supertag-sim-epc-log "Initialization process error: %s" (error-message-string err))
-     (error "Initialization process error: %s" (error-message-string err)))))) ;; Modify here, throw an error directly
+    (condition-case err
+        (progn
+          (org-supertag-sim-epc-log "Calling the initialize method...")
+          ;; Pass the file path string directly
+          (let ((response (epc:call-sync org-supertag-sim-epc-manager 
+                                        'initialize 
+                                        (list org-supertag-sim-epc-vector-file 
+                                              db-file))))
+            (org-supertag-sim-epc-log "Initialization return result: %S" response)
+            (if (string= (plist-get response :status) "success")
+                (progn
+                  (setq org-supertag-sim-epc-initialized t)
+                  (org-supertag-sim-epc-log "Initialization successful")
+                  (plist-get response :result))
+              (error "Initialization failed: %S" response))))
+      (error
+       (org-supertag-sim-epc-log "Initialization process error: %s" (error-message-string err))
+       (error "Initialization process error: %s" (error-message-string err)))))) ;; Modify here, throw an error directly
 
 
 (defun org-supertag-sim-epc-restart-server ()
