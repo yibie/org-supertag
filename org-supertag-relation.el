@@ -490,41 +490,51 @@ TAG-ID: The ID of the current tag being edited."
         ;; Update the recommended tag area
         (insert "\n")
         (insert (propertize "Recommended similar tags:\n" 'face '(:weight bold)))
-        (if (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache)
+        (message "Checking recommendations cache for tag: %s" org-supertag-relation--current-tag)
+        (let ((cached-recommendations (gethash org-supertag-relation--current-tag 
+                                               org-supertag-relation--recommendations-cache)))
+          (if (and cached-recommendations (not (null cached-recommendations)))
+              (progn
+                (message "Found %d recommendations in cache" (length cached-recommendations))
+                (dolist (rec cached-recommendations)
+                  (message "Processing recommendation: %S" rec)
+                  (let* ((tag-name (car rec))
+                         (similarity (cdr rec))
+                         (tag-id (org-supertag-tag-get-id-by-name tag-name)))
+                    (message "Tag %s -> ID: %s, Similarity: %s" tag-name tag-id similarity)
+                    (let ((is-selected (member tag-id org-supertag-relation--selected-tags))
+                          (selection-mark (if is-selected 
+                                             (propertize "[✓]" 'face '(:foreground "green"))
+                                           "[ ]")))
+                      (insert " ")
+                      (insert selection-mark)
+                      (insert " ")
+                      (insert-text-button (propertize "[Select]" 'face '(:foreground "green"))
+                                        'action 'org-supertag-relation--select-tag-action
+                                        'other-tag-id tag-id
+                                        'follow-link t
+                                        'help-echo "Click to select this tag to establish a relationship")
+                      (insert " ")
+                      (insert-text-button (propertize "[Mark]" 'face '(:foreground "blue"))
+                                        'action 'org-supertag-relation-toggle-tag-selection
+                                        'other-tag-id tag-id
+                                        'follow-link t
+                                        'help-echo "Mark/unmark this tag for batch operations")
+                      (insert (format " %s (%.2f)\n" tag-name similarity))))))
+            ;; No recommendations, trigger recommendation search
             (progn
-              (dolist (rec (gethash org-supertag-relation--current-tag org-supertag-relation--recommendations-cache))
-                (let* ((tag-name (car rec))
-                       (similarity (cdr rec))
-                       (tag-id (org-supertag-tag-get-id-by-name tag-name))
-                       (is-selected (member tag-id org-supertag-relation--selected-tags))
-                       (selection-mark (if is-selected 
-                                          (propertize "[✓]" 'face '(:foreground "green"))
-                                        "[ ]")))
-                  (insert " ")
-                  (insert selection-mark)
-                  (insert " ")
-                  (insert-text-button (propertize "[Select]" 'face '(:foreground "green"))
-                                    'action 'org-supertag-relation--select-tag-action
-                                    'other-tag-id tag-id
-                                    'follow-link t
-                                    'help-echo "Click to select this tag to establish a relationship")
-                  (insert " ")
-                  (insert-text-button (propertize "[Mark]" 'face '(:foreground "blue"))
-                                    'action 'org-supertag-relation-toggle-tag-selection
-                                    'other-tag-id tag-id
-                                    'follow-link t
-                                    'help-echo "Mark/unmark this tag for batch operations")
-                  (insert (format " %s (%.2f)\n" tag-name similarity)))))
-          ;; No recommendations, trigger recommendation search
-          (progn
-            (insert "  (Getting similar tags...)\n")
-            (let* ((all-tags (org-supertag-get-all-tags))
-                   (other-tag-ids (mapcar #'org-supertag-tag-get-id-by-name 
-                                        (remove (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag) all-tags))))
-              (run-with-timer 0 nil
-                            (lambda ()
-                              (org-supertag-relation--get-recommendations 
-                               org-supertag-relation--current-tag other-tag-ids))))))
+              (message "No recommendations in cache (or empty list), starting search...")
+              (insert "  (Getting similar tags...)\n")
+              (let* ((all-tags (org-supertag-get-all-tags))
+                     (other-tag-ids (mapcar #'org-supertag-tag-get-id-by-name 
+                                          (remove (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag) all-tags))))
+                (message "Starting recommendation search with %d other tags" (length other-tag-ids))
+                ;; Use lower timer delay to be more responsive
+                (run-with-timer 0.05 nil
+                              (lambda ()
+                                (message "Timer triggered to get recommendations")
+                                (org-supertag-relation--get-recommendations 
+                                 org-supertag-relation--current-tag other-tag-ids)))))))
         
         (insert "\n")
         (insert (propertize "Explanation: " 'face '(:weight bold)))
@@ -652,6 +662,7 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
     (define-key map (kbd "M") 'org-supertag-relation-select-all-tags)
     (define-key map (kbd "u") 'org-supertag-relation-unselect-all-tags)
     (define-key map (kbd "b") 'org-supertag-relation-batch-add-selected)
+    (define-key map (kbd "R") 'org-supertag-relation-force-refresh-recommendations)
     map))
 
 (define-derived-mode org-supertag-relation-mode special-mode "Org-Supertag-Relation"
@@ -739,6 +750,35 @@ If VOID-OK is non-nil, allow missing tag IDs."
 ;; Tag recommendation algorithm
 ;;------------------------------------------------------------------------
 
+(defun org-supertag-relation--parse-python-data (data)
+  "Parse data returned from Python server into Emacs Lisp format.
+DATA is the raw data returned from the Python server.
+Returns a list of (tag-name . score) cons cells."
+  (cond
+   ;; 空数据情况
+   ((null data) nil)
+   
+   ;; 已经是正确格式的情况 (tag . score)
+   ((and (consp (car data)) 
+         (stringp (caar data))
+         (numberp (cdar data)))
+    data)
+   
+   ;; Python列表的列表，如 [["tag", score], ...]
+   ((and (listp (car data))
+         (>= (length (car data)) 2))
+    (mapcar (lambda (item)
+              (cons (if (stringp (nth 0 item))
+                       (nth 0 item)
+                      (format "%s" (nth 0 item)))
+                    (float (nth 1 item))))
+            data))
+   
+   ;; 字符串或其他格式
+   (t
+    (message "Unknown data format: %S" data)
+    nil)))
+
 (defun org-supertag-relation--get-recommendations (tag-id other-tags)
   "Get tag relation recommendations.
 TAG-ID: Current tag ID
@@ -746,39 +786,66 @@ OTHER-TAGS: List of other possible related tags"
   (if (or (null tag-id)
           (null other-tags)
           org-supertag-relation--updating-recommendations)  ; Prevent duplicate calls
-      (gethash tag-id org-supertag-relation--recommendations-cache)  ; Return cached recommendations
+      (progn
+        (message "返回缓存的推荐，tag=%s (updating=%s)" 
+                 tag-id org-supertag-relation--updating-recommendations)
+        (gethash tag-id org-supertag-relation--recommendations-cache))  ; Return cached recommendations
     (let ((tag-name (org-supertag-tag-get-name-by-id tag-id)))
+      (message "获取标签推荐: %s (name: %s)" tag-id tag-name)
       (when (and tag-name (fboundp 'org-supertag-sim-find-similar))
+        (message "开始为 %s 查找相似标签" tag-name)
         (setq org-supertag-relation--updating-recommendations t)
-        ;; Use similarity search to get recommendations
-        (org-supertag-sim-find-similar
-         tag-name
-         10  ; Get the top 10 similar tags
-         (lambda (similar-tags)
-           ;; Filter out existing relations
-           (let* ((existing-relations (mapcar 
-                                     (lambda (rel) (plist-get rel :to))
-                                     (org-supertag-relation-get-all tag-id)))
-                  (recommendations
-                   (cl-remove-if
-                    (lambda (tag)
-                      (let ((other-id (org-supertag-tag-get-id-by-name (car tag))))
-                        (or (null other-id)  ; Ignore non-existent tags
-                            (equal other-id tag-id)  ; Ignore self
-                            (member other-id existing-relations))))  ; Ignore existing relations
-                    similar-tags)))
-             ;; Update the recommendation cache
-             (puthash tag-id recommendations org-supertag-relation--recommendations-cache)
-             (setq org-supertag-relation--updating-recommendations nil)
-             ;; Use run-with-timer to delay refreshing the display, avoiding recursion
-             (run-with-timer 0.1 nil
-                            (lambda ()
-                              (when (get-buffer org-supertag-relation-manage--buffer-name)
-                                (with-current-buffer org-supertag-relation-manage--buffer-name
-                                  (let ((inhibit-read-only t))
-                                    (org-supertag-relation--refresh-display))))))))))
-      ;; Return cached recommendations
-      (gethash tag-id org-supertag-relation--recommendations-cache))))
+        
+        ;; 使用更清晰的回调函数，增强调试
+        (condition-case err
+            (org-supertag-sim-find-similar
+             tag-name
+             10  ; Get the top 10 similar tags
+             (lambda (similar-tags)
+               (message "收到相似标签回调，类型=%s, 数量=%d, 数据=%S"
+                        (type-of similar-tags) 
+                        (length similar-tags) 
+                        similar-tags)
+               
+               ;; 确保数据格式正确
+               (let ((parsed-data (org-supertag-relation--parse-python-data similar-tags)))
+                 (message "解析后的数据: %S" parsed-data)
+                 
+                 ;; 处理数据 - 过滤已存在的关系
+                 (let* ((existing-relations (mapcar 
+                                           (lambda (rel) (plist-get rel :to))
+                                           (org-supertag-relation-get-all tag-id)))
+                        (recommendations
+                         (cl-remove-if
+                          (lambda (tag-pair)
+                            (let* ((tag-name (car tag-pair))
+                                   (other-id (org-supertag-tag-get-id-by-name tag-name)))
+                              (message "处理标签: %s -> ID: %s" tag-name other-id)
+                              (or (null other-id)  ; 忽略不存在的标签
+                                  (equal other-id tag-id)  ; 忽略自身
+                                  (member other-id existing-relations))))  ; 忽略已存在的关系
+                          parsed-data)))
+                   
+                   (message "过滤后剩余 %d 个推荐" (length recommendations))
+                   ;; 更新推荐缓存
+                   (puthash tag-id recommendations org-supertag-relation--recommendations-cache)
+                   (message "已将推荐缓存到 tag-id=%s: %S" tag-id recommendations)
+                   (setq org-supertag-relation--updating-recommendations nil)
+                   ;; 延迟刷新显示，避免递归
+                   (run-with-timer 0.1 nil
+                                  (lambda ()
+                                    (message "刷新关系显示...")
+                                    (when (get-buffer org-supertag-relation-manage--buffer-name)
+                                      (with-current-buffer org-supertag-relation-manage--buffer-name
+                                        (when (eq org-supertag-relation--current-tag tag-id)
+                                          (let ((inhibit-read-only t))
+                                            (org-supertag-relation--refresh-display)))))))))))
+          (error
+           (message "查找相似标签时出错: %s" (error-message-string err))
+           (setq org-supertag-relation--updating-recommendations nil))))
+      
+      ;; 不返回缓存值，让回调处理UI更新
+      nil)))
 
 (defun org-supertag-relation--format-recommendations ()
   "Format the recommendation list for display.
@@ -1484,6 +1551,26 @@ This function serves as an independent entry point, directly displaying the isol
   "Close the isolated tags buffer."
   (interactive)
   (kill-buffer "*Org-Supertag Isolated Tags*"))
+
+(defun org-supertag-relation-force-refresh-recommendations ()
+  "Debug function to force refresh the recommendations display.
+This is useful if recommendations are found but not showing in the UI."
+  (interactive)
+  (message "Force refreshing recommendations display...")
+  (when (get-buffer org-supertag-relation-manage--buffer-name)
+    (with-current-buffer org-supertag-relation-manage--buffer-name
+      (let ((inhibit-read-only t))
+        (message "Current tag: %s" org-supertag-relation--current-tag)
+        (let ((cached-recs (gethash org-supertag-relation--current-tag 
+                                    org-supertag-relation--recommendations-cache)))
+          (message "Cached recommendations: %S" cached-recs)
+          (org-supertag-relation--refresh-display)
+          (message "Display refreshed"))))))
+
+;; Add the function to the mode map
+(define-key org-supertag-relation-mode-map (kbd "R") 'org-supertag-relation-force-refresh-recommendations)
+
+
 
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here

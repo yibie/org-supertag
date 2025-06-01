@@ -1,849 +1,644 @@
 ;;; org-supertag-sim-epc.el --- tag similarity service based on EPC -*- lexical-binding: t; -*-
 
-;; 依赖
-(require 'json)
-(require 'org-supertag-db)
+;; Copyright (C) 2024
+
+;; Author: Your Name
+;; Keywords: convenience, tools
+;; Version: 1.0.0
+
+;;; Commentary:
+
+;; This package provides tag similarity service through Python EPC bridge,
+;; designed with architecture patterns inspired by blink-search.
+
+;;; Code:
+
+(require 'epc)
 (require 'cl-lib)
-(require 'epc)  
+(require 'deferred)
+
+;; Define deferred chain macro (from blink-search)
+(cl-defmacro org-supertag-sim-epc-deferred-chain (&rest elements)
+  "Anaphoric function chain macro for deferred chains."
+  (declare (debug (&rest form))
+           (indent 0))
+  `(let (it)
+     ,@(cl-loop for i in elements
+                collect
+                `(setq it ,i))
+     it))
+
+;; =============================================================================
+;; Variables & Constants
+;; =============================================================================
 
 (defgroup org-supertag-sim-epc nil
-  "Tag similarity service based on EPC."
-  :group 'org-supertag)
+  "Tag similarity service via EPC."
+  :group 'convenience
+  :prefix "org-supertag-sim-epc-")
 
-(defcustom org-supertag-sim-epc-python-path 
-  (or (executable-find "python3")
-      (executable-find "python"))
-  "Python interpreter path."
+(defcustom org-supertag-sim-epc-python-command "python"
+  "Python command for starting EPC server."
   :type 'string
   :group 'org-supertag-sim-epc)
 
-(defcustom org-supertag-sim-epc-script-path
-  (expand-file-name "simtag_epc.py"
-                   (file-name-directory
-                    (or load-file-name buffer-file-name)))
-  "simtag_epc.py script path."
-  :type 'string
+(defcustom org-supertag-sim-epc-enable-log nil
+  "Enable logging for debugging."
+  :type 'boolean
   :group 'org-supertag-sim-epc)
 
-(defcustom org-supertag-sim-epc-vector-file
-  (expand-file-name "tag_vectors.json"
-                   (file-name-directory
-                    (if (boundp 'org-supertag-db-file)
-                        org-supertag-db-file
-                      (expand-file-name "supertag-db.el" org-supertag-data-directory))))
-  "Tag vector file path."
-  :type 'string
-  :group 'org-supertag-sim-epc)
-
-(defcustom org-supertag-sim-epc-request-timeout 30
-  "Request timeout (seconds)."
-  :type 'integer
-  :group 'org-supertag-sim-epc)
+;; Internal variables
+(defvar org-supertag-sim-epc-server-process nil
+  "EPC server process.")
 
 (defvar org-supertag-sim-epc-manager nil
-  "EPC manager object.")
+  "EPC manager instance.")
 
-(defvar org-supertag-sim-epc-initialized nil
-  "Whether the tag system has been initialized.")
+(defvar org-supertag-sim-epc-server-port nil
+  "EPC server port.")
 
-(defvar org-supertag-sim-epc--startup-timer nil
-  "Server startup timer.")
-
-(defcustom org-supertag-sim-epc-dir
+(defvar org-supertag-sim-epc-root-directory
   (file-name-directory (or load-file-name buffer-file-name))
-  "SimTag EPC server directory path."
-  :type 'directory
-  :group 'org-supertag-sim-epc)
+  "Root directory of org-supertag-sim-epc.")
 
-(defcustom org-supertag-sim-epc-data-dir
-  (expand-file-name "data" org-supertag-sim-epc-dir)
-  "SimTag data directory path."
-  :type 'directory
-  :group 'org-supertag-sim-epc)
+(defvar org-supertag-sim-epc-venv-dir
+  (expand-file-name ".venv" org-supertag-sim-epc-root-directory)
+  "Virtual environment directory.")
 
-(defcustom org-supertag-sim-epc-venv-dir
-  (expand-file-name ".venv" org-supertag-sim-epc-dir)
-  "Python virtual environment directory."
-  :type 'directory
-  :group 'org-supertag-sim-epc)
+(defvar org-supertag-sim-epc-message-queue nil)
+(defvar org-supertag-sim-epc-message-thread nil)
 
-;; Ensure the data directory exists
-(unless (file-exists-p org-supertag-sim-epc-data-dir)
-  (make-directory org-supertag-sim-epc-data-dir t))
+(defvar org-supertag-sim-epc-server-ready-p nil
+  "Whether EPC server is ready.")
 
-;; Log function
+(defvar org-supertag-sim-epc-connection-established-hook nil
+  "Hook run when EPC connection is successfully established.
+Functions in this hook can safely use EPC methods.")
+
+(defun org-supertag-sim-epc-queue-create ()
+  "Create a thread-safe queue."
+  (cons nil nil))
+
+(defun org-supertag-sim-epc-queue-enqueue (item queue)
+  "Add ITEM to the end of QUEUE."
+  (let ((new-cell (list item)))
+    (if (car queue)
+        (setcdr (cdr queue) new-cell)
+      (setcar queue new-cell))
+    (setcdr queue new-cell)))
+
+(defun org-supertag-sim-epc-queue-dequeue (queue)
+  "Remove and return the first item from QUEUE."
+  (when (car queue)
+    (let ((item (caar queue)))
+      (setcar queue (cdar queue))
+      (unless (car queue)
+        (setcdr queue nil))
+      item)))
+(defvar org-supertag-sim-epc-state-table (make-hash-table :test 'equal))
+
+;; =============================================================================
+;; Core Utility Functions
+;; =============================================================================
+
 (defun org-supertag-sim-epc-log (format-string &rest args)
-  "Log information.
-FORMAT-STRING is the format string
-ARGS is the format parameters"
-  (let ((msg (apply #'format format-string args)))
-    (with-current-buffer (get-buffer-create "*simtag-epc-log*")
+  "Log message with FORMAT-STRING and ARGS if logging is enabled."
+  (when org-supertag-sim-epc-enable-log
+    (with-current-buffer (get-buffer-create "*org-supertag-sim-epc-log*")
       (goto-char (point-max))
-      (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
-      (insert msg)
-      (insert "\n"))
-    (message "SimTag EPC: %s" msg)))
+      (insert (format "[%s] %s\n"
+                     (format-time-string "%Y-%m-%d %H:%M:%S")
+                     (apply #'format format-string args))))))
 
-(defun org-supertag-sim-epc--ensure-db-file ()
-  "Ensure the database file exists and returns its path and tag data."
-  (unless (boundp 'org-supertag-db-file)
-    (error "Database file path is not defined"))
-  (let* ((db-file org-supertag-db-file)
-         (tags (org-supertag-db-find-by-type :tag)))
-    ;; Ensure the database file exists
-    (unless (file-exists-p db-file)
-      (org-supertag-db-save))
-    
-    ;; Convert tag data to list format expected by Python
-    (let ((tag-list
-           (delq nil
-                 (cl-loop for tag in tags
-                          for props = (org-supertag-db-get tag)
-                          for name = (and props (plist-get props :name))
-                          when name
-                          collect (list (cons "id" tag) (cons "name" name))))))
-      (list db-file tag-list))))
+(defun org-supertag-sim-epc-get-python-command ()
+  "Get Python command for virtual environment or system."
+  (let ((venv-python (expand-file-name "bin/python" org-supertag-sim-epc-venv-dir)))
+    (if (file-executable-p venv-python)
+        venv-python
+      org-supertag-sim-epc-python-command)))
 
-(defun org-supertag-sim-epc-debug-env ()
-  "Debug environment variables."
-  (interactive)
-  (let ((debug-info (format "=== Environment Debug ===
-PYTHONPATH: %s
-VIRTUAL_ENV: %s
-PATH: %s
-Python Path: %s
-Base Dir: %s
-Venv Dir: %s
-=== End Debug ==="
-                           (getenv "PYTHONPATH")
-                           (getenv "VIRTUAL_ENV")
-                           (getenv "PATH")
-                           org-supertag-sim-epc-python-path
-                           org-supertag-sim-epc-dir
-                           org-supertag-sim-epc-venv-dir)))
-    (org-supertag-sim-epc-log debug-info)
-    (message debug-info)))
+(defun org-supertag-sim-epc-get-server-script-path ()
+  "Get path to EPC server script."
+  (expand-file-name "simtag/epc_server.py" org-supertag-sim-epc-root-directory))
 
-(defun org-supertag-sim-epc-start-server ()
-  "Start SimTag EPC server."
-  (interactive)
-  ;; Cancel existing startup timer
-  (when org-supertag-sim-epc--startup-timer
-    (cancel-timer org-supertag-sim-epc--startup-timer))
-  
-  ;; Set a new startup timer to execute after 1 second of idle time in Emacs
-  (setq org-supertag-sim-epc--startup-timer
-        (run-with-idle-timer 
-         1 nil  ; Execute after 1 second
-         (lambda ()
-           (condition-case err
-               (org-supertag-sim-epc--start-server-internal)
-             (error
-              (org-supertag-sim-epc-log "服务器启动失败: %s" err)
-              (message "SimTag EPC服务器启动失败，将在下次空闲时重试")))))))
+;; =============================================================================
+;; EPC Server Management
+;; =============================================================================
 
-(defun org-supertag-sim-epc-setup-venv ()
-  "Setup the Python virtual environment."
-  (interactive)
-  (let ((venv-dir (file-name-as-directory org-supertag-sim-epc-venv-dir))
-        (base-dir (file-name-as-directory org-supertag-sim-epc-dir)))
-    ;; 设置环境变量
-    (setq process-environment 
-          (append process-environment
-                  (list (format "PYTHONPATH=%s" base-dir)
-                        (format "VIRTUAL_ENV=%s" venv-dir)
-                        (format "PATH=%s/bin:%s" venv-dir (getenv "PATH")))))
-    
-    (unless (file-exists-p venv-dir)
-      (org-supertag-sim-epc-log "Creating virtual environment...")
-      (make-directory venv-dir t)
-      (shell-command-to-string 
-       (format "python3 -m venv %s" venv-dir)))
-    
-    ;; 安装依赖
-    (let ((pip (expand-file-name "bin/pip" venv-dir)))
-      (org-supertag-sim-epc-log "Installing dependencies...")
-      (shell-command-to-string 
-       (format "%s install epc sentence-transformers torch numpy requests" pip)))
-    
-    ;; 更新 Python 解释器路径
-    (let ((python-path (expand-file-name "bin/python" venv-dir)))
-      (when (file-exists-p python-path)
-        (setq org-supertag-sim-epc-python-path python-path)
-        (org-supertag-sim-epc-log "Python path updated: %s" python-path)))
-    
-    ;; 调试输出
-    (org-supertag-sim-epc-debug-env)))
+(defun org-supertag-sim-epc-server-alive-p ()
+  "Check if EPC server process is alive."
+  (and org-supertag-sim-epc-server-process
+       (process-live-p org-supertag-sim-epc-server-process)))
 
-(defun org-supertag-sim-epc--start-server-internal ()
-  "Internal function: Start SimTag EPC server."
-  (let* ((venv-dir (file-name-as-directory org-supertag-sim-epc-venv-dir))
-         (base-dir (file-name-as-directory org-supertag-sim-epc-dir))
-         (python-exe (expand-file-name "bin/python" venv-dir))  ;; 使用虚拟环境中的 Python
-         (python-file org-supertag-sim-epc-script-path)
-         (vector-file org-supertag-sim-epc-vector-file)
-         (db-file org-supertag-db-file)
-         (default-directory base-dir)
-         (process-buffer (get-buffer-create "*simtag-epc-process*")))
-    
-    ;; 确保环境设置正确
-    (org-supertag-sim-epc-setup-venv)
-    (org-supertag-sim-epc-check-module-structure)
-    
-    ;; 记录启动信息
-    (org-supertag-sim-epc-log "Starting server...")
-    (org-supertag-sim-epc-log "Working directory: %s" default-directory)
-    (org-supertag-sim-epc-debug-env)
-    
-    (org-supertag-sim-epc-log "Starting EPC server...")
-    (org-supertag-sim-epc-log "Python path: %s" python-exe)
-    (org-supertag-sim-epc-log "Script path: %s" python-file)
-    (org-supertag-sim-epc-log "Startup parameters: %S" (list python-file "--vector-file" vector-file "--db-file" db-file "--debug"))
-    
-    ;; Clear the process buffer
-    (with-current-buffer process-buffer
-      (erase-buffer))
-    
-    ;; Create a process
-    (make-process
-     :name "simtag-epc"
-     :buffer process-buffer
-     :command (cons python-exe (list python-file "--vector-file" vector-file "--db-file" db-file "--debug"))
-     :filter (lambda (proc output)
-               (org-supertag-sim-epc-log "Process output: %s" output)
-               (with-current-buffer (process-buffer proc)
-                 (goto-char (point-max))
-                 (insert output))
-               ;; Check the port number
-               (when (string-match "\\([0-9]+\\)[\n\r]" output)
-                 (let ((port (string-to-number (match-string 1 output))))
-                   (org-supertag-sim-epc-log "Found port number: %d" port)
-                   ;; Create EPC connection
-                   (condition-case err
-                       (progn
-                         (setq org-supertag-sim-epc-manager 
-                               (epc:start-epc python-exe (list python-file "--vector-file" vector-file "--db-file" db-file "--debug")))
-                         (org-supertag-sim-epc-log "EPC connection created"))
-                     (error
-                      (org-supertag-sim-epc-log "EPC connection failed: %s" 
-                                               (error-message-string err))))))))))
-
-(defun org-supertag-sim-epc-stop-server ()
-  "Stop SimTag EPC server."
-  (when (and org-supertag-sim-epc-manager
-             (epc:live-p org-supertag-sim-epc-manager))
-    (org-supertag-sim-epc-log "Stopping EPC server...")
-    (epc:stop-epc org-supertag-sim-epc-manager)
-    (org-supertag-sim-epc-log "EPC server stopped"))
-  
-  (setq org-supertag-sim-epc-manager nil
-        org-supertag-sim-epc-initialized nil))
-
-(defun org-supertag-sim-epc-server-running-p ()
-  "Check if the EPC server is running."
+(defun org-supertag-sim-epc-manager-live-p ()
+  "Check if EPC manager connection is live."
   (and org-supertag-sim-epc-manager
        (epc:live-p org-supertag-sim-epc-manager)))
 
-(defun org-supertag-sim-epc-ensure-server ()
-  "Ensure the EPC server is running, start it if not running."
-  (unless (org-supertag-sim-epc-server-running-p)
-    (org-supertag-sim-epc-start-server)))
-
-(defun org-supertag-sim-epc-check-ollama-installed ()
-  "Check if Ollama is installed, similar to the check_ollama_installed function in ollama_bridge.py."
-  (org-supertag-sim-epc-log "Checking if Ollama is installed...")
-  (let ((result 
-         (cond
-          ;; Windows system
-          ((string-match-p "windows" (symbol-name system-type))
-           (let ((possible-paths '("C:/Program Files/Ollama/ollama.exe"
-                                   "C:/Program Files (x86)/Ollama/ollama.exe"
-                                   "~/AppData/Local/Programs/Ollama/ollama.exe"
-                                   "~/scoop/apps/ollama/current/ollama.exe"))
-                 (found nil))
-             (dolist (path possible-paths)
-               (when (file-exists-p (expand-file-name path))
-                 (setq found t)))
-             found))
-          ;; Unix system (Linux/macOS)
-          (t
-           (= 0 (call-process "which" nil nil nil "ollama"))))))
-    
-    (if result
-        (progn
-          (org-supertag-sim-epc-log "Ollama is installed")
-          t)
-      (org-supertag-sim-epc-log "Ollama is not installed")
-      nil)))
-
-(defun org-supertag-sim-epc-get-ollama-install-instruction ()
-  "Get the installation command for Ollama, similar to get_install_command in ollama_bridge.py."
-  (let ((system-type (symbol-name system-type)))
-    (cond
-     ((string-match-p "darwin" system-type)  ;; macOS
-      "curl -fsSL https://ollama.com/install.sh | sh")
-     ((string-match-p "gnu/linux" system-type)  ;; Linux
-      "curl -fsSL https://ollama.com/install.sh | sh")
-     ((string-match-p "windows" system-type)  ;; Windows
-      "Windows installation options:
-1. Use winget (recommended):
-   winget install Ollama.Ollama
-
-2. Use Scoop:
-   scoop bucket add main
-   scoop install ollama
-
-3. Download the installation package directly:
-   Visit https://ollama.com/download")
-     (t
-      "Please visit https://ollama.com for installation guide"))))
-
-(defun org-supertag-sim-epc-check-ollama ()
-  "Check if the Ollama service is running.
-Check方式类似于 ollama_bridge.py中的is_service_running方法."
-  (org-supertag-sim-epc-log "Checking the Ollama service...")
-  (let ((result (condition-case nil
-                    (with-timeout (3)  ;; Set 3 second timeout
-                      (let ((output (shell-command-to-string "curl -s --connect-timeout 2 http://localhost:11434/api/tags")))
-                        (with-temp-buffer
-                          (insert output)
-                          (goto-char (point-min))
-                          ;; Verify if a valid JSON response is returned
-                          (and (> (length output) 2)
-                               (or (looking-at "\\[")    ;; Should start with a JSON array
-                                   (looking-at "{"))))))  ;; Or start with a JSON object
-                  (error nil))))
-    (if result
-        (progn
-          (org-supertag-sim-epc-log "Ollama service is running")
-          t)
-      (org-supertag-sim-epc-log "Failed to connect to the Ollama service! Please ensure Ollama is started")
-      (message "Warning: Failed to connect to the Ollama service! Please ensure Ollama is started")
-      nil)))
-
-(defun org-supertag-sim-epc-start-ollama ()
-  "Start the Ollama service, select the appropriate startup method based on the current system type."
-  (org-supertag-sim-epc-log "Attempting to start the Ollama service...")
-  (let ((system-type (symbol-name system-type)))
-    (cond
-     ((or (string-match-p "darwin" system-type)
-          (string-match-p "gnu/linux" system-type))
-      (start-process "ollama-start" nil "ollama" "serve"))
-     ((string-match-p "windows" system-type)
-      (start-process "ollama-start" nil "ollama.exe" "serve"))
-     (t (message "Unsupported system type: %s" system-type)
-        nil))))
-
-(defun org-supertag-sim-epc-ensure-ollama-running ()
-  "Ensure the Ollama service is running, similar to the _ensure_service process in ollama_bridge.py.
-1. Check if Ollama is installed
-2. If not installed, provide installation instructions
-3. Check if the service is running
-4. If not running, start the service and wait for it to be ready"
-  ;; 1. Check if Ollama is installed
-  (unless (org-supertag-sim-epc-check-ollama-installed)
-    (let ((install-instruction (org-supertag-sim-epc-get-ollama-install-instruction)))
-      (org-supertag-sim-epc-log "Ollama is not installed, please install it first")
-      (message "Ollama is not installed, please run the following command to install:\n%s" install-instruction)
-      (error "Ollama is not installed, cannot continue")))
-  
-  ;; 2. Check if the service is running
-  (unless (org-supertag-sim-epc-check-ollama)
-    (message "Ollama service is not running, starting...")
-    
-    ;; 3. Try to start the service
-    (let ((system-type (symbol-name system-type)))
-      (cond
-       ((or (string-match-p "darwin" system-type)
-            (string-match-p "gnu/linux" system-type))
-        (start-process "ollama-start" nil "ollama" "serve"))
-       ((string-match-p "windows" system-type)
-        (start-process "ollama-start" nil "ollama.exe" "serve"))
-       (t (message "Unsupported system type: %s" system-type))))
-    
-    ;; 4. Wait for the service to start
-    (let ((max-attempts 5)
-          (attempt 0)
-          (success nil))
-      (while (and (< attempt max-attempts) (not success))
-        (setq attempt (1+ attempt))
-        (message "Waiting for Ollama service to start... Attempt %d/%d" attempt max-attempts)
-        (sleep-for 2)  ;; Wait 2 seconds each time
-        (setq success (org-supertag-sim-epc-check-ollama))
-        (when success
-          (message "Ollama service has been successfully started"))
-        (when (and (not success) (= attempt max-attempts))
-          (message "Warning: Ollama service failed to start, please start it manually")
-          (error "Ollama service failed to start, please start it manually"))))))
-
-(defun org-supertag-sim-epc-verify-ollama-model (model-name)
-  "Verify if the Ollama model exists, similar to ensure_model_exists in ollama_bridge.py.
-MODEL-NAME is the name of the model to verify." 
-  (org-supertag-sim-epc-log "Verifying if model %s exists..." model-name)
-  (let ((result (condition-case err
-                    (with-timeout (3)
-                      (let ((output (shell-command-to-string 
-                                     "curl -s --connect-timeout 2 http://127.0.0.1:11434/api/tags")))
-                        (org-supertag-sim-epc-log "API response: %s" (truncate-string-to-width output 100))
-                        (with-temp-buffer
-                          (insert output)
-                          (goto-char (point-min))
-                          ;; Check if the returned JSON contains the specified model
-                          (and (looking-at "{")  ;; Should be a JSON object
-                               (condition-case err
-                                   (let* ((json-object-type 'hash-table)
-                                          (json-array-type 'list)
-                                          (json-key-type 'string)
-                                          (json-data (json-read))
-                                          (models (gethash "models" json-data))
-                                          (found nil))
-                                     ;; Iterate through the models array, check if it contains the specified model
-                                     (when models
-                                       (dolist (model models)
-                                         (let ((name (gethash "name" model)))
-                                           (org-supertag-sim-epc-log "Checking model: %s" name)
-                                           (when (and name (string= name model-name))
-                                             (setq found t)))))
-                                     found)
-                                 (error
-                                  (org-supertag-sim-epc-log "JSON parsing error: %s" (error-message-string err))
-                                  nil))))))
-                  (error
-                   (org-supertag-sim-epc-log "Error verifying model: %s" (error-message-string err))
-                   nil))))
-    (if result
-        (progn
-          (org-supertag-sim-epc-log "Model %s exists" model-name)
-          t)
-      (org-supertag-sim-epc-log "Model %s does not exist" model-name)
-      nil)))
-
-(defun org-supertag-sim-epc-pull-ollama-model (model-name)
-  "Pull the Ollama model, similar to pull_model in ollama_bridge.py.
-MODEL-NAME is the name of the model to pull."
-  (org-supertag-sim-epc-log "Pulling model %s..." model-name)
-  (message "Pulling Ollama model %s, this may take some time..." model-name)
-  (let ((process (start-process "ollama-pull" nil "ollama" "pull" model-name)))
-    (set-process-sentinel 
-     process
-     (lambda (proc event)
-       (if (string-match-p "finished" event)
-           (progn
-             (org-supertag-sim-epc-log "Model %s pulled successfully" model-name)
-             (message "Ollama model %s pulled successfully" model-name))
-         (org-supertag-sim-epc-log "Model %s pull failed: %s" model-name event)
-         (message "Warning: Ollama model %s pull failed: %s" model-name event))))
-    ;; Return the process so it can be tracked
-    process))
-
-(defun org-supertag-sim-epc-ensure-ollama-model (model-name)
-  "Ensure the Ollama model exists and is available, pull it if it doesn't exist.
-MODEL-NAME is the name of the model to ensure, default is gemma-3-4b."
-  (let ((model (or model-name "hf.co/unsloth/gemma-3-4b-it-GGUF:latest")))
-    ;; First ensure the service is running
-    (org-supertag-sim-epc-ensure-ollama-running)
-    
-    ;; Check if the model exists
-    (unless (org-supertag-sim-epc-verify-ollama-model model)
-      (message "Model %s does not exist, pulling..." model)
-      (org-supertag-sim-epc-pull-ollama-model model)
-      ;; Don't wait for the pull to complete, as it may take a long time
-      ;; In actual application, some callback mechanism may be needed
-      )))
-
-;; The complete Ollama check and initialization process
-(defun org-supertag-sim-epc-setup-ollama ()
-  "Complete setup of the Ollama environment, including checking installation, starting the service, and preparing the default model."
+(defun org-supertag-sim-epc-kill-server ()
+  "Kill EPC server process."
   (interactive)
-  (message "Setting up the Ollama environment...")
-  (condition-case err
-      (progn
-        ;; 1. Ensure Ollama is installed
-        (unless (org-supertag-sim-epc-check-ollama-installed)
-          (let ((install-instruction (org-supertag-sim-epc-get-ollama-install-instruction)))
-            (message "Ollama is not installed, please run the following command to install:\n%s" install-instruction)
-            (error "Ollama is not installed")))
-        
-        ;; 2. Ensure the service is running
-        (org-supertag-sim-epc-ensure-ollama-running)
-        
-        ;; 3. Prepare the default model (optional)
-        ;; Here you can choose whether to check and prepare the default model
-        ;; Since model download may take a long time, the default is to check without downloading
-        (when (org-supertag-sim-epc-verify-ollama-model "hf.co/unsloth/gemma-3-4b-it-GGUF:latest")
-          (org-supertag-sim-epc-log "Default model is ready"))
-        
-        (message "Ollama environment setup completed"))
-    (error
-     (message "Ollama environment setup failed: %s" (error-message-string err))
-     nil)))
-
-;; Function interface
-(defun org-supertag-sim-epc-init ()
-  "Initialize the EPC service and Ollama service for tag similarity engine.
-This is an internal function called by org-supertag-sim-init.
-For normal users, use org-supertag-sim-init as the main entry point."
-  (org-supertag-sim-epc-log "Starting initialization...")
-  (org-supertag-sim-epc-ensure-server)
+  (org-supertag-sim-epc-log "Killing EPC server...")
   
-  ;; Ensure the Ollama service is set up and running (no error capture)
-  (org-supertag-sim-epc-log "Ensuring Ollama service is running...")
-  (org-supertag-sim-epc-setup-ollama)
+  ;; Close EPC manager connection
+  (when org-supertag-sim-epc-manager
+    (condition-case err
+        (epc:stop-epc org-supertag-sim-epc-manager)
+      (error (org-supertag-sim-epc-log "Error stopping EPC manager: %s" err)))
+    (setq org-supertag-sim-epc-manager nil))
   
-  (let* ((db-info (org-supertag-sim-epc--ensure-db-file))
-         (db-file (car db-info))
-         (tag-list (cadr db-info)))
-    
-    (org-supertag-sim-epc-log "Database file: %s" db-file)
-    (org-supertag-sim-epc-log "Vector file: %s" org-supertag-sim-epc-vector-file)
-    
+  ;; Kill server process
+  (when (org-supertag-sim-epc-server-alive-p)
     (condition-case err
         (progn
-          (org-supertag-sim-epc-log "Calling the initialize method...")
-          ;; Pass the file path string directly
-          (let ((response (epc:call-sync org-supertag-sim-epc-manager 
-                                        'initialize 
-                                        (list org-supertag-sim-epc-vector-file 
-                                              db-file))))
-            (org-supertag-sim-epc-log "Initialization return result: %S" response)
-            (if (string= (plist-get response :status) "success")
-                (progn
-                  (setq org-supertag-sim-epc-initialized t)
-                  (org-supertag-sim-epc-log "Initialization successful")
-                  (plist-get response :result))
-              (error "Initialization failed: %S" response))))
-      (error
-       (org-supertag-sim-epc-log "Initialization process error: %s" (error-message-string err))
-       (error "Initialization process error: %s" (error-message-string err)))))) ;; Modify here, throw an error directly
-
-
-(defun org-supertag-sim-epc-restart-server ()
-  "Restart the SimTag EPC server."
-  (interactive)
-  (org-supertag-sim-epc-stop-server)
-  (sleep-for 1)  ; Wait for the process to fully terminate
-  (org-supertag-sim-epc-start-server)
-  (when (org-supertag-sim-epc-server-running-p)
-    (message "SimTag EPC server has been restarted")))
-
-(defun org-supertag-sim-epc-show-vector-file-info ()
-  "Show the information of the vector file."
-  (interactive)
-  (message "Vector file path: %s" org-supertag-sim-epc-vector-file)
-  (when (boundp 'org-supertag-db-file)
-    (message "Database file path: %s" org-supertag-db-file))
-  (if (file-exists-p org-supertag-sim-epc-vector-file)
-      (let ((size (nth 7 (file-attributes org-supertag-sim-epc-vector-file)))
-            (mod-time (format-time-string "%Y-%m-%d %H:%M:%S"
-                                          (nth 5 (file-attributes org-supertag-sim-epc-vector-file)))))
-        (message "Vector file exists (size: %d bytes, update time: %s)" size mod-time))
-    (message "Vector file does not exist, will be created during initialization")))
-
-(defun org-supertag-sim-epc-clean-python-cache ()
-  "Clean the Python cache file."
-  (interactive)
-  (let ((script-dir (file-name-directory org-supertag-sim-epc-script-path)))
-    (message "Cleaning Python cache file...")
-    (shell-command (format "find %s -name '__pycache__' -type d -exec rm -rf {} +; find %s -name '*.pyc' -delete" 
-                           script-dir script-dir))
-    (message "Python cache file has been cleaned")))
-
-(defun org-supertag-sim-epc-force-kill ()
-  "Force terminate all SimTag EPC related processes."
-  (interactive)
-  (message "Force terminating SimTag EPC processes...")
+          (delete-process org-supertag-sim-epc-server-process)
+          (setq org-supertag-sim-epc-server-process nil))
+      (error (org-supertag-sim-epc-log "Error deleting process: %s" err))))
   
-  ;; Terminate known processes
-  (when (org-supertag-sim-epc-server-running-p)
-    (org-supertag-sim-epc-stop-server))
+  ;; Reset state
+  (setq org-supertag-sim-epc-server-port nil
+        org-supertag-sim-epc-server-ready-p nil)
   
-  ;; Clean Python processes
-  (message "Terminating related Python processes...")
-  (shell-command "pkill -f 'python.*simtag_epc\\.py' || true")
-  
-  ;; Reset status
-  (setq org-supertag-sim-epc-manager nil)
-  (setq org-supertag-sim-epc-initialized nil)
-  
-  (message "SimTag EPC processes have been terminated"))
+  (org-supertag-sim-epc-log "EPC server killed"))
 
-(defun org-supertag-sim-epc-emergency-restart ()
-  "Emergency restart the EPC server."
-  (interactive)
-  (message "Performing emergency restart...")
-  (org-supertag-sim-epc-force-kill)
-  (sit-for 1)
-  (org-supertag-sim-epc-start-server)
-  (sit-for 2)
-  (if (org-supertag-sim-epc-server-running-p)
-      (message "EPC server has been restarted")
-    (message "EPC server restart failed")))
+(defun org-supertag-sim-epc-message-dispatcher ()
+  "Dispatch messages from Python server."
+  (while (org-supertag-sim-epc-manager-live-p)
+        (let ((msg (org-supertag-sim-epc-queue-dequeue org-supertag-sim-epc-message-queue)))
+      (condition-case err
+          (apply #'org-supertag-sim-epc-handler (car msg) (cdr msg))
+        (error (org-supertag-sim-epc-log "Message handler error: %s" err))))))
 
-(defun org-supertag-sim-epc-echo-test ()
-  "Test the EPC connection."
+(defun org-supertag-sim-epc-handler (method &rest args)
+  "Handle incoming EPC messages."
+  (pcase method
+    ('update_state (apply #'org-supertag-sim-epc-update-state args))
+    ('log_error (org-supertag-sim-epc-log "Server error: %s" (car args)))
+    (_ (org-supertag-sim-epc-log "Unknown method: %s" method))))
+
+(defun org-supertag-sim-epc-update-state (state-name value)
+  "Update state table and trigger handlers."
+  (puthash state-name value org-supertag-sim-epc-state-table)
+  (run-hook-with-args 'org-supertag-sim-epc-state-update-hook state-name value))
+
+(defun org-supertag-sim-epc-start-server ()
+  "Start EPC server process with simplified logic - no threads."
   (interactive)
-  (org-supertag-sim-epc-ensure-server)
+  (org-supertag-sim-epc-log "Starting EPC server (simplified)...")
+  
+  ;; Kill existing server first without complex cleanup
+  (when org-supertag-sim-epc-manager
+    (setq org-supertag-sim-epc-manager nil))
+  (when org-supertag-sim-epc-server-process
+    (ignore-errors (delete-process org-supertag-sim-epc-server-process))
+    (setq org-supertag-sim-epc-server-process nil))
+  
+  ;; Reset state
+  (setq org-supertag-sim-epc-server-port nil
+        org-supertag-sim-epc-server-ready-p nil
+        org-supertag-sim-epc-message-queue nil
+        org-supertag-sim-epc-message-thread nil)
+  
   (condition-case err
-      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'echo '("test"))))
-        (message "Echo test successful: %S" result)
-        t)
+      (let* ((python-command (org-supertag-sim-epc-get-python-command))
+             (server-script (org-supertag-sim-epc-get-server-script-path))
+             (default-directory org-supertag-sim-epc-root-directory)
+             (data-directory (expand-file-name "~/.emacs.d/org-supertag"))
+             ;; 设置必要的环境变量 - 确保正确传递
+             (process-environment
+              (append
+               (list
+                (format "PYTHONPATH=%s" org-supertag-sim-epc-root-directory)
+                (format "ORG_SUPERTAG_DATA_DIRECTORY=%s" data-directory)
+                (format "VIRTUAL_ENV=%s" org-supertag-sim-epc-venv-dir))
+               process-environment)))
+        
+        ;; 确保数据目录存在
+        (unless (file-directory-p data-directory)
+          (make-directory data-directory t))
+        
+        ;; Verify that the server script exists
+        (unless (file-exists-p server-script)
+          (error "EPC server script not found: %s" server-script))
+        
+        (org-supertag-sim-epc-log "Python command: %s" python-command)
+        (org-supertag-sim-epc-log "Server script: %s" server-script)
+        (org-supertag-sim-epc-log "PYTHONPATH: %s" org-supertag-sim-epc-root-directory)
+        (org-supertag-sim-epc-log "ORG_SUPERTAG_DATA_DIRECTORY: %s" data-directory)
+        
+        ;; 创建进程，使用简化的过滤器
+        (setq org-supertag-sim-epc-server-process
+              (make-process
+               :name "org-supertag-sim-epc-server"
+               :buffer (get-buffer-create "*org-supertag-sim-epc-server*")
+               :command (list python-command server-script)
+               :filter #'org-supertag-sim-epc-server-filter
+               :sentinel #'org-supertag-sim-epc-server-sentinel
+               :noquery t))
+        
+        ;; 检查进程是否成功启动
+        (if (and org-supertag-sim-epc-server-process
+                 (process-live-p org-supertag-sim-epc-server-process))
+            (org-supertag-sim-epc-log "Server process started successfully")
+          (error "Failed to start Python EPC server process")))
+    
+    (error 
+     (org-supertag-sim-epc-log "❌ Error starting server: %s" (error-message-string err))
+     (message "Error starting SimTag EPC server: %s" (error-message-string err))
+     (signal (car err) (cdr err)))))
+
+(defun org-supertag-sim-epc-server-filter (process output)
+  "Simplified filter function for EPC server PROCESS with OUTPUT."
+  (let ((buffer (get-buffer-create "*org-supertag-sim-epc-server*")))
+    (with-current-buffer buffer
+      (goto-char (point-max))
+      (insert output))
+    (org-supertag-sim-epc-log "Server output: %s" (string-trim output))
+    
+    ;; 搜索端口信息，找到后立即连接
+    (when (and (null org-supertag-sim-epc-server-port)
+               (string-match "EPC_PORT:\\([0-9]+\\)" output))
+      (let ((port (string-to-number (match-string 1 output))))
+        (setq org-supertag-sim-epc-server-port port)
+        (org-supertag-sim-epc-log "Found EPC server port: %d" port)
+        
+        ;; 使用定时器延迟连接，避免阻塞
+        (run-with-timer 2 nil
+                       (lambda ()
+                         (org-supertag-sim-epc-connect port)))))))
+
+(defun org-supertag-sim-epc-connect (port)
+  "Simple connection to EPC server on PORT without retries."
+  (org-supertag-sim-epc-log "Connecting to EPC server on port %d..." port)
+  
+  (condition-case err
+      (progn
+        ;; 使用正确的EPC连接方式 - epc:connect创建连接，然后手动创建manager
+        (let ((connection (epc:connect "127.0.0.1" port)))
+          (setq org-supertag-sim-epc-manager 
+                (make-epc:manager :server-process nil
+                                 :commands nil
+                                 :title (format "SimTag-EPC:%d" port)
+                                 :port port
+                                 :connection connection
+                                 :methods nil
+                                 :sessions nil
+                                 :exit-hooks nil))
+          
+          (if (and org-supertag-sim-epc-manager
+                   (epc:live-p org-supertag-sim-epc-manager))
+              (progn
+                (setq org-supertag-sim-epc-server-ready-p t)
+                (org-supertag-sim-epc-log "✅ EPC connection established successfully")
+                (message "SimTag EPC server connected on port %d" port)
+                ;; 连接建立后，通知其他模块可以开始使用EPC
+                (run-hooks 'org-supertag-sim-epc-connection-established-hook))
+            (progn
+              (org-supertag-sim-epc-log "❌ EPC connection failed - manager not live")
+              (setq org-supertag-sim-epc-manager nil)))))
+    
     (error
-     (message "Echo test failed: %s" (error-message-string err))
-     nil)))
+     (org-supertag-sim-epc-log "❌ EPC connection error: %s" (error-message-string err))
+     (setq org-supertag-sim-epc-manager nil))))
+
+(defun org-supertag-sim-epc-restart ()
+  "Simple restart using the safe start function."
+  (interactive)
+  (org-supertag-sim-epc-log "Simple restart initiated...")
+  (org-supertag-sim-epc-safe-reset)
+  (org-supertag-sim-epc-start-server)
+  (message "EPC server simple restart completed"))
+
+(defun org-supertag-sim-epc-check-connection ()
+  "定期检查EPC连接状态 - 简化版本"
+  (when (and org-supertag-sim-epc-server-port
+             (null org-supertag-sim-epc-server-ready-p))
+    (condition-case err
+        (org-supertag-sim-epc-connect org-supertag-sim-epc-server-port)
+      (error 
+       (org-supertag-sim-epc-log "连接检查失败: %s" (error-message-string err))))))
+
+(defun org-supertag-sim-epc-server-sentinel (process event)
+  "Sentinel function for EPC server PROCESS with EVENT."
+  (org-supertag-sim-epc-log "EPC server sentinel: %s - %s" process (string-trim event))
+  (unless (process-live-p process)
+    (setq org-supertag-sim-epc-server-process nil
+          org-supertag-sim-epc-server-ready-p nil)))
+
+(defun org-supertag-sim-epc-connect-to-server-with-retry (port retry-times delay)
+  "Connect to EPC server on PORT with RETRY-TIMES retries and DELAY seconds between attempts."
+  (org-supertag-sim-epc-log "Connecting to EPC server on port %d (retries: %d, delay: %ds)..." port retry-times delay)
+  
+  (let ((retry-count 0)
+        (connected nil))
+    
+    (while (and (< retry-count retry-times)
+                (not connected))
+      (setq retry-count (1+ retry-count))
+      (org-supertag-sim-epc-log "Connection attempt %d/%d..." retry-count retry-times)
+      
+      (condition-case err
+          (progn
+            ;; 使用 Blink-Search 风格的连接方式
+            (let ((connection (epc:connect "127.0.0.1" port)))
+              ;; 创建 EPC 管理器
+              (setq org-supertag-sim-epc-manager 
+                    (make-epc:manager :server-process nil
+                                     :commands nil
+                                     :title (format "SimTag-EPC:%d" port)
+                                     :port port
+                                     :connection connection
+                                     :methods nil
+                                     :sessions nil
+                                     :exit-hooks nil))
+              
+              (org-supertag-sim-epc-log "EPC manager created with connection: %S" connection)
+              
+              ;; 检查连接是否成功建立
+              (if (epc:live-p org-supertag-sim-epc-manager)
+                  (progn
+                    (setq org-supertag-sim-epc-server-ready-p t
+                          connected t)
+                    (org-supertag-sim-epc-log "✅ EPC connection established successfully on attempt %d" retry-count)
+                    (message "SimTag EPC server connected on port %d" port))
+                (progn
+                  (org-supertag-sim-epc-log "❌ EPC connection failed on attempt %d - manager not live" retry-count)
+                  (setq org-supertag-sim-epc-manager nil)))))
+        
+        (error
+         (org-supertag-sim-epc-log "❌ EPC connection failed on attempt %d: %s" 
+                                  retry-count (error-message-string err))
+         (setq org-supertag-sim-epc-manager nil)))
+      
+      ;; 如果连接失败且还有重试次数，则等待指定的延迟时间
+      (when (and (not connected) (< retry-count retry-times))
+        (org-supertag-sim-epc-log "Waiting %d seconds before next connection attempt..." delay)
+        (sleep-for delay)))
+    
+    ;; 如果所有重试都失败，则报错
+    (unless connected
+      (org-supertag-sim-epc-log "❌ Failed to connect to EPC server after %d attempts" retry-times)
+      (error "Failed to connect to EPC server after %d attempts (each delayed by %ds)" retry-times delay))))
+
+(defun org-supertag-sim-epc-connect-to-server (port)
+  "Connect to EPC server on PORT (legacy function for compatibility)."
+  (org-supertag-sim-epc-connect-to-server-with-retry port 1 1))
+
+;; =============================================================================
+;; EPC Method Calls (Interface for org-supertag-sim.el)
+;; =============================================================================
+
+(defun org-supertag-sim-epc-call-method (method &rest args)
+  "Call EPC METHOD with ARGS safely with timeout - SIMPLE VERSION."
+  (unless (org-supertag-sim-epc-manager-live-p)
+    (error "EPC manager not live"))
+  
+  (org-supertag-sim-epc-log "Calling EPC method: %s with args: %S" method args)
+  
+  (condition-case err
+      (let ((start-time (current-time))
+            (timeout 10) ;; Configurable timeout
+            (result 'timeout)
+            (deferred-obj (epc:call-deferred org-supertag-sim-epc-manager method args))
+            (done nil))
+        
+        (deferred:nextc deferred-obj
+          (lambda (response)
+            (org-supertag-sim-epc-log "Deferred:nextc - success callback triggered. Response: %S" response)
+            (setq result response done t)))
+        (deferred:error deferred-obj
+          (lambda (err-from-deferred)
+            (org-supertag-sim-epc-log "Deferred:error - error callback triggered. Error: %S" err-from-deferred)
+            (setq result err-from-deferred done t)))
+        
+        (org-supertag-sim-epc-log "Initial deferred object: %S" deferred-obj)
+
+        (while (and (not done)
+                    (< (float-time (time-subtract (current-time) start-time)) timeout))
+          (accept-process-output nil 0.1) ;; Yield and process I/O
+          (when (and done (not (eq result 'timeout)))
+            (org-supertag-sim-epc-log "Loop: 'done' is t, result is: %S. Exiting loop." result)))
+        
+        (if done
+            (progn
+              (org-supertag-sim-epc-log "EPC call final result: %S" result)
+              result)
+          (progn
+            (org-supertag-sim-epc-log "EPC call timeout in wait loop. Deferred object: %S" deferred-obj)
+            (error "EPC call timeout"))))
+    (error
+     (org-supertag-sim-epc-log "EPC call error (outer condition-case): %S" err)
+     (signal (car err) (cdr err)))))
+
+;; Add a purely async version for testing
+(defun org-supertag-sim-epc-call-method-async (method args callback)
+  "Call EPC METHOD with ARGS asynchronously and call CALLBACK with result."
+  (unless (org-supertag-sim-epc-manager-live-p)
+    (error "EPC manager not live"))
+  
+  (org-supertag-sim-epc-log "Calling EPC method async: %s with args: %S" method args)
+  
+  (deferred:$
+    (epc:call-deferred org-supertag-sim-epc-manager method args)
+    (deferred:nextc it
+      (lambda (response)
+        (org-supertag-sim-epc-log "Async EPC method %s succeeded: %S" method response)
+        (when callback (funcall callback response))))
+    (deferred:error it
+      (lambda (err)
+        (org-supertag-sim-epc-log "Async EPC method %s failed: %S" method err)
+        (when callback (funcall callback nil))))))
+
+;; =============================================================================
+;; Public API Functions (Compatible with org-supertag-sim.el)
+;; =============================================================================
+
+(defvar org-supertag-sim-epc-state-update-hook nil
+  "Hook run when server state updates. Functions take two arguments: STATE-NAME and VALUE.")
+
+(defun org-supertag-sim-epc-call-find-similar (tags &optional limit threshold)
+  "Find similar tags to TAGS with optional LIMIT and THRESHOLD."
+  (org-supertag-sim-epc-call-method 'find_similar tags (or limit 10) (or threshold 0.5)))
+
+(defun org-supertag-sim-epc-call-suggest-tags (content &optional limit)
+  "Suggest tags for CONTENT with optional LIMIT."
+  (org-supertag-sim-epc-call-method 'suggest_tags content (or limit 5)))
+
+(defun org-supertag-sim-epc-call-extract-entities (text)
+  "Extract entities from TEXT."
+  (org-supertag-sim-epc-call-method 'extract_entities text))
+
+(defun org-supertag-sim-epc-call-analyze-relations (tags)
+  "Analyze relations between TAGS."
+  (org-supertag-sim-epc-call-method 'analyze_tag_relations tags))
+
+(defun org-supertag-sim-epc-call-get-status ()
+  "Get server status."
+  (org-supertag-sim-epc-call-method 'get_status))
+
+(defun org-supertag-sim-epc-call-get-config ()
+  "Get server configuration."
+  (org-supertag-sim-epc-call-method 'get_config))
+
+;; =============================================================================
+;; Diagnostic & Management Functions
+;; =============================================================================
+
+(defun org-supertag-sim-epc-safe-reset ()
+  "Safely reset EPC connection with minimal blocking operations."
+  (interactive)
+  (org-supertag-sim-epc-log "Starting safe EPC reset...")
+  
+  ;; Simply set all variables to nil - let Emacs GC handle cleanup
+  (setq org-supertag-sim-epc-manager nil
+        org-supertag-sim-epc-server-process nil
+        org-supertag-sim-epc-server-port nil
+        org-supertag-sim-epc-server-ready-p nil
+        org-supertag-sim-epc-message-queue nil
+        org-supertag-sim-epc-message-thread nil)
+  
+  ;; Clear state table if it exists
+  (when (hash-table-p org-supertag-sim-epc-state-table)
+    (clrhash org-supertag-sim-epc-state-table))
+  
+  (org-supertag-sim-epc-log "✅ Safe reset completed.")
+  (message "EPC connection safely reset"))
+
+(defun org-supertag-sim-epc-restart ()
+  "Clean restart of EPC server with full state reset."
+  (interactive)
+  (org-supertag-sim-epc-log "Starting clean restart of EPC server...")
+  
+  ;; Step 1: Reset all state variables
+  (org-supertag-sim-epc-safe-reset)
+  
+  ;; Step 2: Verify Python script exists
+  (let ((server-script (org-supertag-sim-epc-get-server-script-path)))
+    (unless (file-exists-p server-script)
+      (error "EPC server script not found: %s" server-script)))
+  
+  ;; Step 3: Start the server using simplified method
+  (org-supertag-sim-epc-log "Starting new EPC server...")
+  (org-supertag-sim-epc-start-server)
+  
+  (message "EPC server clean restart initiated"))
 
 (defun org-supertag-sim-epc-show-log ()
-  "Show the SimTag EPC log buffer."
+  "Show EPC log buffer."
   (interactive)
-  (let ((log-buffer (get-buffer-create "*simtag-epc-log*")))
-    (with-current-buffer log-buffer
-      (special-mode)  ; Make the buffer read-only
-      (goto-char (point-max)))
-    (display-buffer log-buffer)))
+  (let ((buffer (get-buffer "*org-supertag-sim-epc-log*")))
+    (if buffer
+        (switch-to-buffer buffer)
+      (message "No log buffer found"))))
 
-(defun org-supertag-sim-epc-check-module-structure ()
-  "Check and create the necessary module structure."
+(defun org-supertag-sim-epc-show-server-output ()
+  "Show EPC server output buffer."
   (interactive)
-  (let* ((base-dir org-supertag-sim-epc-dir)
-         (simtag-dir (expand-file-name "simtag" base-dir))
-         (init-file (expand-file-name "__init__.py" simtag-dir)))
-    
-    ;; Create simtag directory
-    (unless (file-exists-p simtag-dir)
-      (make-directory simtag-dir t))
-    
-    ;; Create __init__.py
-    (unless (file-exists-p init-file)
-      (with-temp-file init-file
-        (insert "# SimTag package\n")))
-    
-    ;; Check necessary Python files
-    (dolist (file '("config.py" "epc_server.py"))
-      (let ((file-path (expand-file-name file simtag-dir)))
-        (unless (file-exists-p file-path)
-          (org-supertag-sim-epc-log "Missing necessary file: %s" file-path))))
-    
-    (org-supertag-sim-epc-log "Module structure check completed")))
+  (let ((buffer (get-buffer "*org-supertag-sim-epc-server*")))
+    (if buffer
+        (switch-to-buffer buffer)
+      (message "No server output buffer found"))))
 
-(defun org-supertag-sim-epc-test-server ()
-  "Test the server functionality comprehensively."
+(defun org-supertag-sim-epc-status ()
+  "Display EPC server status information."
   (interactive)
-  (org-supertag-sim-epc-log "Starting server test...")
+  (let* ((process-alive (and org-supertag-sim-epc-server-process
+                            (process-live-p org-supertag-sim-epc-server-process)))
+         (manager-exists (not (null org-supertag-sim-epc-manager)))
+         (manager-live (and org-supertag-sim-epc-manager
+                           (epc:live-p org-supertag-sim-epc-manager)))
+         (info (list
+                (cons "Process alive" process-alive)
+                (cons "Process object" (if org-supertag-sim-epc-server-process 
+                                          (format "<%s>" (process-name org-supertag-sim-epc-server-process))
+                                        "nil"))
+                (cons "Manager exists" manager-exists)
+                (cons "Manager live" manager-live) 
+                (cons "Manager object" (if org-supertag-sim-epc-manager
+                                         (format "<%s>" (type-of org-supertag-sim-epc-manager))
+                                       "nil"))
+                (cons "Server ready" org-supertag-sim-epc-server-ready-p)
+                (cons "Server port" org-supertag-sim-epc-server-port)
+                (cons "Python command" (org-supertag-sim-epc-get-python-command))
+                (cons "Server script" (org-supertag-sim-epc-get-server-script-path))
+                (cons "Virtual env" org-supertag-sim-epc-venv-dir))))
+    (message "EPC server status: %S" info)
+    info))
+
+;; =============================================================================
+;; Setup & Installation Functions
+;; =============================================================================
+
+(defun org-supertag-sim-epc-auto-setup ()
+  "Automatically setup virtual environment and dependencies."
+  (interactive)
+  (let ((setup-script (expand-file-name "simtag/setup.sh" org-supertag-sim-epc-root-directory)))
+    (if (file-exists-p setup-script)
+        (progn
+          (message "Starting automatic setup...")
+          (async-shell-command (format "cd %s && bash simtag/setup.sh" org-supertag-sim-epc-root-directory)))
+      (error "Setup script not found: %s" setup-script))))
+
+;; =============================================================================
+;; Compatibility Layer (Preserve existing function names)
+;; =============================================================================
+
+;; Keep existing function names for backward compatibility
+(defalias 'org-supertag-sim-epc-emergency-restart 'org-supertag-sim-epc-restart)
+(defalias 'org-supertag-sim-epc-restart-server 'org-supertag-sim-epc-restart)
+
+;; Main interface function used by org-supertag-sim.el
+(defun org-supertag-sim-epc-find-similar-tags (tags &optional limit threshold)
+  "Find similar tags (main interface function)."
+  (org-supertag-sim-epc-call-find-similar tags limit threshold))
+
+;; =============================================================================
+;; Initialization & Cleanup
+;; =============================================================================
+
+(defun org-supertag-sim-epc-cleanup ()
+  "Cleanup function for mode disable or package unload."
+  (org-supertag-sim-epc-kill-server))
+
+;; Cleanup on Emacs exit
+(add-hook 'kill-emacs-hook #'org-supertag-sim-epc-cleanup)
+
+(defun org-supertag-sim-epc-reconnect ()
+  "Reconnect to existing EPC server without killing the process."
+  (interactive)
+  (org-supertag-sim-epc-log "Attempting to reconnect to existing EPC server...")
   
-  (condition-case err
-      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'echo '("test"))))
-        (org-supertag-sim-epc-log "Echo test successful: %S" result))
-    (error
-     (org-supertag-sim-epc-log "Echo test failed: %s" (error-message-string err))
-     (error "Echo test failed")))
-  
-  (condition-case err
-      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'check_imports '())))
-        (org-supertag-sim-epc-log "Module import test successful: %S" result))
-    (error
-     (org-supertag-sim-epc-log "Module import test failed: %s" (error-message-string err))
-     (error "Module import test failed")))
-  
-  (condition-case err
-      (let ((result (epc:call-sync org-supertag-sim-epc-manager 'get_config '())))
-        (org-supertag-sim-epc-log "Configuration test successful: %S" result))
-    (error
-     (org-supertag-sim-epc-log "Configuration test failed: %s" (error-message-string err))
-     (error "Configuration test failed")))
-  
-  (org-supertag-sim-epc-log "Server test completed"))
+  (let ((port org-supertag-sim-epc-server-port))
+    (if (not port)
+        (progn
+          (org-supertag-sim-epc-log "No server port found, starting new server...")
+          (org-supertag-sim-epc-start-server))
+      
+      ;; Clear only the manager, keep the process
+      (setq org-supertag-sim-epc-manager nil
+            org-supertag-sim-epc-server-ready-p nil)
+      
+      (org-supertag-sim-epc-log "Reconnecting to port %d..." port)
+      (condition-case err
+          (org-supertag-sim-epc-connect-to-server-with-retry port 3 1)
+        (error
+         (org-supertag-sim-epc-log "Reconnect failed: %s" (error-message-string err))
+         (message "Reconnect failed: %s" (error-message-string err)))))))
 
-(defun org-supertag-sim-epc-extract-entities-async (text callback)
-  "Asynchronously extract entities from TEXT and pass the result to the CALLBACK function.
-TEXT is the text to analyze
-CALLBACK is the callback function that receives the entity list"
-  (org-supertag-sim-epc-log "Asynchronous entity extraction, text length: %d" (length text))
-  (deferred:$
-    (deferred:try
-      (deferred:$
-        (org-supertag-sim-epc-ensure-server)
-        (deferred:nextc it
-          (lambda (_)
-            (epc:call-deferred org-supertag-sim-epc-manager
-                              'extract_entities
-                              (list text))))
-        (deferred:nextc it
-          (lambda (response)
-            (let ((status (plist-get response :status))
-                  (result (plist-get response :result)))
-              (if (string= status "success")
-                  (progn
-                    (org-supertag-sim-epc-log "Entity extraction successful, found %d entities" 
-                                              (length result))
-                    (funcall callback result))
-                (error "Entity extraction failed: %s" 
-                       (or (plist-get response :message) "Unknown error")))))))
-      :catch
-      (lambda (err)
-        (org-supertag-sim-epc-log "Entity extraction error: %s" (error-message-string err))
-        (message "Entity extraction error: %s" (error-message-string err))
-        (funcall callback nil)))))
-
-(defun org-supertag-sim-epc-get-tag-suggestions-async (text limit callback)
-  "Asynchronously get tag suggestions for TEXT.
-TEXT is the text to analyze
-LIMIT is the maximum number of suggestions to return
-CALLBACK is the callback function that receives the suggestions"
-  (org-supertag-sim-epc-log "Asynchronous tag suggestion, text length: %d, limit: %d" 
-                           (length text) limit)
-  (deferred:$
-    (deferred:try
-      (deferred:$
-        (org-supertag-sim-epc-ensure-server)
-        (deferred:nextc it
-          (lambda (_)
-            (epc:call-deferred org-supertag-sim-epc-manager
-                              'suggest_tags
-                              (list text limit))))
-        (deferred:nextc it
-          (lambda (response)
-            (let ((status (plist-get response :status))
-                  (result (plist-get response :result)))
-              (if (string= status "success")
-                  (progn
-                    (org-supertag-sim-epc-log "Tag suggestion successful, found %d suggestions" 
-                                              (length result))
-                    (funcall callback result))
-                (error "Tag suggestion failed: %s" 
-                       (or (plist-get response :message) "Unknown error")))))))
-      :catch
-      (lambda (err)
-        (org-supertag-sim-epc-log "Tag suggestion error: %s" (error-message-string err))
-        (message "Tag suggestion error: %s" (error-message-string err))
-        (funcall callback nil)))))
-
-(defun org-supertag-sim-epc-find-similar-async (tag-name limit callback)
-  "Asynchronously find similar tags to TAG-NAME.
-LIMIT is the maximum number of similar tags to return
-CALLBACK is the callback function that receives the similar tags"
-  (org-supertag-sim-epc-log "Asynchronous similar tag search: %s, limit: %d" tag-name limit)
-  (deferred:$
-    (deferred:try
-      (deferred:$
-        (org-supertag-sim-epc-ensure-server)
-        (deferred:nextc it
-          (lambda (_)
-            (epc:call-deferred org-supertag-sim-epc-manager
-                              'find_similar
-                              (list tag-name limit))))
-        (deferred:nextc it
-          (lambda (response)
-            (let ((status (plist-get response :status))
-                  (result (plist-get response :result)))
-              (if (string= status "success")
-                  (progn
-                    (org-supertag-sim-epc-log "Similar tag search successful, found %d similar tags" 
-                                              (length result))
-                    (funcall callback result))
-                (error "Similar tag search failed: %s" 
-                       (or (plist-get response :message) "Unknown error")))))))
-      :catch
-      (lambda (err)
-        (org-supertag-sim-epc-log "Similar tag search error: %s" (error-message-string err))
-        (message "Similar tag search error: %s" (error-message-string err))
-        (funcall callback nil)))))
-
-(defun org-supertag-sim-epc-interactive-ollama ()
-  "Create a buffer where users can interact with Ollama."
+(defun org-supertag-sim-epc-test-startup ()
+  "Test EPC server startup and check if environment variables are properly set."
   (interactive)
-  (require 'org-supertag-sim)
-  (unless (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
-    (org-supertag-sim-init))
-  (let ((buffer (get-buffer-create "*org-supertag-ollama-chat*")))
-    (switch-to-buffer buffer)
-    (when (= (buffer-size) 0)
-      (insert "===== Ollama 交互式对话 =====\n\n")
-      (insert "在此输入消息，按 C-c C-c 发送\n\n")
-      (insert "系统提示 (可选):\n")
-      (insert "--------------------------\n")
-      (insert "你是一个专注于Emacs和org-mode的AI助手，专为org-supertag项目提供帮助。\n")
-      (insert "--------------------------\n\n")
-      (insert "用户消息:\n")
-      (insert "请输入您的问题...\n")
-      (local-set-key (kbd "C-c C-c") 'org-supertag-sim-epc--send-message)
-      (message "输入您的消息，然后按 C-c C-c 发送给Ollama"))))
-
-(defun org-supertag-sim-epc--send-message ()
-  "Send a message from the interactive Ollama buffer."
-  (interactive)
-  (with-current-buffer "*org-supertag-ollama-chat*"
-    ;; Extract user message and system prompt
-    (let ((system-prompt nil)
-          (user-message nil))
-      
-      ;; Get system prompt
-      (save-excursion
-        (goto-char (point-min))
-        (when (search-forward "--------------------------\n" nil t)
-          (let ((start (point)))
-            (when (search-forward "--------------------------\n" nil t)
-              (setq system-prompt (buffer-substring-no-properties 
-                                  start
-                                  (- (point) 
-                                     (length "--------------------------\n"))))))))
-      
-      ;; Get user message
-      (save-excursion
-        (goto-char (point-min))
-        (when (search-forward "用户消息:\n" nil t)
-          (setq user-message (buffer-substring-no-properties 
-                             (point)
-                             (point-max)))))
-      
-      ;; Clear user message area and prepare to receive reply
-      (let ((inhibit-read-only t))
-        (save-excursion
-          (goto-char (point-min))
-          (when (search-forward "User message:\n" nil t)
-            (delete-region (point) (point-max))
-            (insert user-message)
-            (insert "\n\nWaiting for Ollama response...\n"))))
-      
-      ;; Send message to Ollama
-      (when user-message
-        (deferred:$
-          (deferred:next
-            (lambda ()
-              (let ((args (if system-prompt
-                              (list user-message system-prompt)
-                            (list user-message))))
-                (epc:call-deferred org-supertag-sim-epc-manager
-                                  'run_ollama
-                                  args))))
-          
-          (deferred:nextc it
-            (lambda (response)
-              (with-current-buffer "*org-supertag-ollama-chat*"
-                (save-excursion
-                  (goto-char (point-max))
-                  (let ((status (plist-get response :status))
-                        (result (plist-get response :result))
-                        (message (plist-get response :message)))
-                    (delete-region (- (point-max) 
-                                     (length "\n\nWaiting for Ollama response...\n")) 
-                                  (point-max))
-                    (if (string= status "success")
-                        (progn
-                          (insert "\n\nOllama reply:\n")
-                          (insert result)
-                          (insert "\n\n------\n\nUser message:\n"))
-                      (insert "\n\nError: " (or message "Unknown error") "\n\nUser message:\n"))))
-                (goto-char (point-max)))))
-          
-          (deferred:error it
-            (lambda (err)
-              (with-current-buffer "*org-supertag-ollama-chat*"
-                (save-excursion
-                  (goto-char (point-max))
-                  (delete-region (- (point-max) 
-                                   (length "\n\nWaiting for Ollama response...\n")) 
-                                (point-max))
-                  (insert "\n\nError: " (error-message-string err) "\n\nUser message:\n"))
-                (goto-char (point-max))))))))))
+  (org-supertag-sim-epc-log "Testing EPC server startup...")
+  
+  ;; 首先清理状态
+  (org-supertag-sim-epc-safe-reset)
+  
+  ;; 启动服务器
+  (org-supertag-sim-epc-start-server)
+  
+  ;; 等待服务器启动并连接
+  (message "EPC server startup test initiated. Check *org-supertag-sim-epc-log* buffer for details."))
 
 (provide 'org-supertag-sim-epc)
+
 ;;; org-supertag-sim-epc.el ends here

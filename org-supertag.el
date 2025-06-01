@@ -116,14 +116,7 @@
     ;; 5. Initialize sync system
     (org-supertag-sync-init)
     ;; 6. Initialize similarity system and EPC service
-    (when (featurep 'org-supertag-sim)
-      (condition-case err
-          (progn
-            (require 'org-supertag-sim)
-            (org-supertag-sim-init))
-        (error
-         (message "Failed to initialize similarity system: %s"
-                  (error-message-string err)))))
+    (org-supertag-sim-init)
     ;; 7. Add hooks
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized

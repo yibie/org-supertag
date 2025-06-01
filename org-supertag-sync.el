@@ -184,47 +184,83 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
   "Scan current buffer and collect node information.
 Only process headings with IDs or that meet creation criteria.
 Returns a hash table mapping node IDs to their properties."
-  (let ((nodes (make-hash-table :test 'equal)))
+  (let ((nodes (make-hash-table :test 'equal))
+        (org-element-use-cache nil)  ; Disable element cache
+        (org-startup-folded nil)     ; Ensure all content is visible
+        (org-startup-with-inline-images nil)  ; Disable image loading
+        (org-startup-with-latex-preview nil)  ; Disable latex preview
+        (org-hide-emphasis-markers nil))      ; Show all markers
     (when (org-supertag-sync--in-sync-scope-p buffer-file-name)
-      (org-with-wide-buffer
-       (goto-char (point-min))
-       (while (re-search-forward org-heading-regexp nil t)
-         (when (and (org-at-heading-p)
-                    (not (string-prefix-p "TAGS" (org-get-heading t t t t)))
-                    (not (org-in-commented-heading-p))
-                    (>= (org-current-level) org-supertag-sync-node-creation-level))
-           ;; 只在没有 ID 时创建节点
-           (unless (org-id-get)
-             (condition-case nil
-                 (org-supertag-node-create)
-               (error nil)))
-           (when-let* ((id (org-id-get))
-                      (props (org-supertag-extract-node-props)))
-             (puthash id props nodes))))))
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (let ((case-fold-search t))  ; Make searches case-insensitive
+            (while (re-search-forward org-heading-regexp nil t)
+              (when (and (org-at-heading-p)
+                         (not (string-prefix-p "TAGS" (org-get-heading t t t t)))
+                         (not (org-in-commented-heading-p))
+                         (>= (org-current-level) org-supertag-sync-node-creation-level))
+                (let ((id (org-id-get)))
+                  ;; 只在没有 ID 时创建节点
+                  (unless id
+                    (condition-case nil
+                        (org-supertag-node-create)
+                      (error nil)))
+                  (when-let* ((id (org-id-get))  ; Get ID again after potential creation
+                             (props (condition-case err
+                                       (save-excursion
+                                         (org-back-to-heading t)
+                                         (let ((element (org-element-at-point)))
+                                           (org-supertag-extract-node-props)))
+                                     (error
+                                      (message "Error extracting properties at point %d: %s"
+                                               (point)
+                                               (error-message-string err))
+                                      nil))))
+                    (puthash id props nodes)))))))))
     nodes))
 
 (defun org-supertag-extract-node-props ()
   "Extract properties of node at point.
 Returns a plist of node properties or nil if not at a valid node."
   (when (org-at-heading-p)
-    (let* ((element (org-element-at-point))
-           (raw-value (org-element-property :raw-value element))
-           (props (list :type :node
-                       :id (org-id-get)
-                       :title raw-value
-                       :raw-value raw-value
-                       :tags (org-element-property :tags element)
-                       :todo-type (org-element-property :todo-type element)
-                       :priority (org-element-property :priority element)
-                       :properties (org-entry-properties nil 'all)
-                       :file-path (buffer-file-name)
-                       :level (org-element-property :level element)
-                       :pos (org-element-property :begin element)
-                       :begin (org-element-property :begin element)
-                       :contents-begin (org-element-property :contents-begin element)
-                       :contents-end (org-element-property :contents-end element)
-                       :olp (org-get-outline-path t))))
-      props)))
+    (condition-case err
+        (let* ((element (save-excursion
+                         (org-back-to-heading t)
+                         (let ((org-element-use-cache nil))
+                           (org-element-at-point))))
+               (raw-value (org-element-property :raw-value element)))
+          (unless raw-value
+            (error "Failed to extract raw value from heading"))
+          (let ((props (list :type :node
+                            :id (org-id-get)
+                            :title raw-value
+                            :raw-value raw-value
+                            :tags (org-element-property :tags element)
+                            :todo-type (org-element-property :todo-type element)
+                            :priority (org-element-property :priority element)
+                            :properties (condition-case nil
+                                          (org-entry-properties nil 'all)
+                                        (error nil))
+                            :file-path (buffer-file-name)
+                            :level (or (org-element-property :level element) 1)
+                            :pos (or (org-element-property :begin element) (point))
+                            :begin (or (org-element-property :begin element) (point))
+                            :contents-begin (org-element-property :contents-begin element)
+                            :contents-end (org-element-property :contents-end element)
+                            :olp (condition-case nil
+                                    (org-get-outline-path t)
+                                  (error nil)))))
+            ;; Validate required properties
+            (cl-loop for prop in '(:id :title :file-path :type)
+                     for value = (plist-get props prop)
+                     unless value do
+                     (error "Missing required property %s" prop))
+            props))
+      (error
+       (message "Error extracting node properties: %s" (error-message-string err))
+       nil))))
 
 (defun org-supertag-db-update-buffer ()
   "Update database with all nodes in current buffer.
@@ -233,48 +269,82 @@ Uses a two-pass approach:
 2. Process updates, moves, and deletions"
   (save-excursion
     (let* ((file (buffer-file-name))
-           (current-nodes (org-supertag-scan-buffer-nodes))
+           (current-nodes (make-hash-table :test 'equal))
            (updated 0)
            (deleted 0)
            (moved 0))
       
-      ;; First pass: check for updates and moves
+      ;; First pass: scan buffer and collect nodes
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((org-element-use-cache nil)  ; Disable element cache
+              (org-startup-folded nil)      ; Ensure all content is visible
+              (org-startup-with-inline-images nil)  ; Disable image loading
+              (org-startup-with-latex-preview nil)  ; Disable latex preview
+              (org-hide-emphasis-markers nil))      ; Show all markers
+          (condition-case err
+              (org-map-entries
+               (lambda ()
+                 (let ((id (org-id-get)))
+                   (when (and id
+                            (>= (org-current-level) org-supertag-sync-node-creation-level))
+                     (condition-case err2
+                         (when-let* ((props (org-supertag-extract-node-props)))
+                           (puthash id props current-nodes))
+                       (error
+                        (message "Error extracting properties for node %s: %s"
+                                id (error-message-string err2)))))))
+               t nil)
+            (error
+             (message "Error scanning buffer: %s" (error-message-string err))))))
+      
+      ;; Second pass: process updates and moves
       (maphash
        (lambda (id props)
          (let* ((old-node (org-supertag-db-get id))
                 (old-file (and old-node (plist-get old-node :file-path))))
-           (cond
-            ;; Node moved from another file
-            ((and old-node
-                  (not (string= old-file file)))
-             (let ((preserved-props '(:ref-to :ref-from :ref-count)))
-               (dolist (prop preserved-props)
-                 (when-let* ((value (plist-get old-node prop)))
-                   (setq props (plist-put props prop value)))))
-             (org-supertag-db-add-with-hash id props)
-             (cl-incf moved))
-            ;; Node updated in same file
-            ((and old-node
-                  (org-supertag-node-changed-p old-node props))
-             (let ((preserved-props '(:ref-to :ref-from :ref-count)))
-               (dolist (prop preserved-props)
-                 (when-let* ((value (plist-get old-node prop)))
-                   (setq props (plist-put props prop value)))))
-             (org-supertag-db-add-with-hash id props)
-             (cl-incf updated))
-            ;; New node
-            ((null old-node)
-             (org-supertag-db-add-with-hash id props)
-             (cl-incf updated)))))
+           (condition-case err
+               (cond
+                ;; Node moved from another file
+                ((and old-node
+                      (not (string= old-file file)))
+                 (let ((preserved-props '(:ref-to :ref-from :ref-count)))
+                   (dolist (prop preserved-props)
+                     (when-let* ((value (plist-get old-node prop)))
+                       (setq props (plist-put props prop value)))))
+                 (org-supertag-db-add-with-hash id props)
+                 (cl-incf moved))
+                ;; Node updated in same file
+                ((and old-node
+                      (org-supertag-node-changed-p old-node props))
+                 (let ((preserved-props '(:ref-to :ref-from :ref-count)))
+                   (dolist (prop preserved-props)
+                     (when-let* ((value (plist-get old-node prop)))
+                       (setq props (plist-put props prop value)))))
+                 (org-supertag-db-add-with-hash id props)
+                 (cl-incf updated))
+                ;; New node
+                ((null old-node)
+                 (org-supertag-db-add-with-hash id props)
+                 (cl-incf updated)))
+             (error
+              (message "Error processing node %s: %s"
+                       id (error-message-string err))))))
        current-nodes)
       
-      ;; Second pass: check for deletions
+      ;; Third pass: check for deletions
       (maphash
        (lambda (id node)
          (when (and (string= (plist-get node :file-path) file)
                    (null (gethash id current-nodes)))
-           (org-supertag-db-remove-object id)
-           (cl-incf deleted)))
+           (condition-case err
+               (progn
+                 (org-supertag-db-remove-object id)
+                 (cl-incf deleted))
+             (error
+              (message "Error removing node %s: %s"
+                       id (error-message-string err))))))
        org-supertag-db--object)
       
       ;; Report changes
@@ -525,6 +595,12 @@ Only initialize if auto-sync is enabled and not already initialized."
   ;; Initial state for all files
   (let ((all-files (org-supertag-get-all-files))
         (new-files (org-supertag-scan-sync-directories)))
+    ;; Check for parsing errors in all files
+    (dolist (file (append all-files new-files))
+      (when (and (file-exists-p file)
+                 (> (org-supertag-sync--diagnose-parse-error file) 0))
+        (message "Warning: Found parsing issues in %s" file)))
+    ;; Update state for valid files
     (dolist (file (append all-files new-files))
       (when (file-exists-p file)
         (org-supertag-sync-update-state file))))
@@ -1043,6 +1119,47 @@ This is useful when files have been removed from sync scope or deleted."
         (org-supertag-sync--cleanup-database)
         (message "Database cleanup completed"))
     (message "Database not loaded or empty, no cleanup needed")))
+
+(defun org-supertag-sync--diagnose-parse-error (file)
+  "Diagnose and attempt to fix org-element parsing errors in FILE."
+  (with-current-buffer (find-file-noselect file)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((org-element-use-cache nil)
+              (case-fold-search t)
+              (problematic-regions '()))
+          ;; First pass: try to identify problematic regions
+          (while (re-search-forward org-heading-regexp nil t)
+            (when (org-at-heading-p)
+              (let ((pos (point))
+                    (heading (org-get-heading t t t t)))
+                (condition-case err
+                    (progn
+                      (org-back-to-heading t)
+                      (let ((element (org-element-at-point)))
+                        (unless (and element
+                                   (org-element-property :raw-value element))
+                          (push (list pos heading "Invalid element structure") problematic-regions))))
+                  (error
+                   (push (list pos heading (error-message-string err)) problematic-regions))))))
+          
+          ;; Report findings
+          (when problematic-regions
+            (with-current-buffer (get-buffer-create "*Org Parse Diagnosis*")
+              (erase-buffer)
+              (insert (format "Parse diagnosis for %s\n\n" file))
+              (dolist (region (nreverse problematic-regions))
+                (let ((pos (nth 0 region))
+                      (heading (nth 1 region))
+                      (error-msg (nth 2 region)))
+                  (insert (format "Position %d: %s\n  Error: %s\n\n"
+                                pos heading error-msg))))
+              (display-buffer (current-buffer))))
+          
+          ;; Return number of problems found
+          (length problematic-regions))))))
 
 (provide 'org-supertag-sync)
 

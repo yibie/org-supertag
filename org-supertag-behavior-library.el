@@ -80,7 +80,6 @@ AI error, timeout)."
   (condition-case err
       (progn
         ;; Ensure EPC server is running
-        (org-supertag-sim-epc-ensure-server)
         (unless (org-supertag-sim-epc-server-running-p)
           (error "SimTag EPC server is not running."))
 

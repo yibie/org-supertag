@@ -831,8 +831,6 @@ Returns the final shared-context hash-table after the workflow completes or stop
       (condition-case err
           (progn
             (org-supertag-sim-epc-init)
-            (unless org-supertag-sim-epc-initialized
-              (error "EPC service initialization failed"))
             (message "EPC service initialized successfully"))
         (error
          (message "Warning: Failed to initialize EPC service: %s" (error-message-string err))))))
@@ -946,7 +944,6 @@ if the EPC server is unreachable or the backend fails to get models."
   ;; 1. Ensure EPC Server is ready
   (condition-case err
       (progn
-        (org-supertag-sim-epc-ensure-server)
         (unless (org-supertag-sim-epc-server-running-p)
           (error "SimTag EPC server is not running or failed to start.")))
     (error (error "Failed to ensure EPC server environment: %s" (error-message-string err))))

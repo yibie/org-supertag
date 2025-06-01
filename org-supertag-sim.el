@@ -19,7 +19,7 @@
   :group 'org-supertag)
 
 (defcustom org-supertag-sim-vector-file
-  (org-supertag-data-file "tag_vectors.json")
+  (org-supertag-data-file "supertag_vector.db")
   "Tag vector storage file path."
   :type 'file
   :group 'org-supertag-sim)
@@ -74,15 +74,20 @@
     (unless (file-exists-p db-file)
       (org-supertag-db-save))
     
+    ;; Generate tag data directly in the format expected by Python:
+    ;; a list of [tag-id, tag-name] pairs
     (let ((tag-data
            (delq nil
                  (mapcar (lambda (tag)
-                          (when-let* ((props (org-supertag-db-get tag)))
-                            ;; Only keep tag ID and name
-                            (list
-                             (cons "id" tag)
-                             (cons "name" (plist-get props :name)))))
+                          (when-let* ((props (org-supertag-db-get tag))
+                                      (tag-name (plist-get props :name)))
+                            ;; Return as a simple list [id name] which will be transmitted correctly
+                            (list tag tag-name)))
                         tags))))
+      ;; Log the format being used
+      (message "Prepared %d tags for sync in format: %S" 
+               (length tag-data) 
+               (when (> (length tag-data) 0) (car tag-data)))
       (list db-file tag-data))))
 
 (defun org-supertag-sim--ensure-vector-dir ()
@@ -99,19 +104,20 @@ As a unified entry point, it will initialize the entire system, including the un
   (message "Initializing tag similarity system...")
   (condition-case err
       (progn
-        (unless (org-supertag-sim-epc-server-running-p)
+        (unless (org-supertag-sim-epc-server-alive-p)
           (org-supertag-sim-epc-start-server)
           (sit-for 1))
-        (when (org-supertag-sim-epc-server-running-p)
-          (org-supertag-sim-epc-init)
-
-          (unless org-supertag-sim-epc-initialized
-            (error "EPC service initialization failed"))
+        (when (org-supertag-sim-epc-server-alive-p)
           (org-supertag-db-on 'entity:created #'org-supertag-sim--on-tag-created)
           (org-supertag-db-on 'entity:removed #'org-supertag-sim--on-tag-removed)
           (org-supertag-sim--start-sync-timer)
           (setq org-supertag-sim--initialized t)
-          (message "Tag similarity system initialized")))
+          (message "Tag similarity system initialized")
+          ;; 注册EPC连接建立的hook，立即执行初始同步
+          (add-hook 'org-supertag-sim-epc-connection-established-hook 
+                   #'org-supertag-sim--sync-library)
+          ;; 延迟执行初始同步，等待EPC连接建立
+          (run-with-timer 3 nil #'org-supertag-sim--sync-library)))
     (error
      (message "Tag similarity system initialization failed: %s" (error-message-string err))
      nil)))
@@ -140,8 +146,7 @@ TAG is the tag information."
       (condition-case err
           (epc:call-deferred org-supertag-sim-epc-manager
                             'update_tag
-                            (list (list (cons "id" tag)
-                                      (cons "name" (plist-get tag-props :name)))))
+                            (list (list tag (plist-get tag-props :name))))
         (error
          (message "Update tag vector error: %s" (error-message-string err)))))))
 
@@ -162,12 +167,24 @@ TAG-ID is the tag ID."
     (let* ((db-info (org-supertag-sim--ensure-db-file))
            (db-file (car db-info))
            (tag-data (cadr db-info)))
-      (condition-case err
-          (epc:call-deferred org-supertag-sim-epc-manager
-                            'sync_library
-                            (list db-file tag-data))
-        (error
-         (message "Sync tag library error: %s" (error-message-string err)))))))
+      
+      ;; 添加调试日志
+      (message "Synchronizing tag vector library: %d tags" (length tag-data))
+      
+      (if (org-supertag-sim-epc-manager-live-p)
+          (condition-case err
+              (epc:call-deferred org-supertag-sim-epc-manager
+                               'sync_library
+                               (list db-file tag-data))
+            (error
+             (message "Sync tag library error (during EPC call): %s" (error-message-string err))))
+        ;; 如果EPC管理器未准备好，等待一段时间后重试
+        (message "EPC manager not ready for sync, will retry in 3 seconds...")
+        (run-with-timer 3 nil
+                       (lambda ()
+                         (when (org-supertag-sim-epc-manager-live-p)
+                           (message "Retrying tag library synchronization...")
+                           (org-supertag-sim--sync-library))))))))
 
 (defun org-supertag-sim--start-sync-timer ()
   "Start the periodic synchronization timer."
@@ -186,10 +203,12 @@ If the system is not initialized, it will try to initialize automatically.
 Returns:
 - A deferred object that will be resolved when the system is initialized
 - nil if the system is already initialized"
-  (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
-      ;; If both systems are initialized, return success directly
+  (if (and org-supertag-sim--initialized 
+           (org-supertag-sim-epc-server-alive-p)
+           (org-supertag-sim-epc-manager-live-p))
+      ;; 如果系统已经初始化且连接正常，直接返回成功
       (deferred:next (lambda () t))
-    ;; Otherwise, try to initialize
+    ;; 否则，尝试初始化
     (deferred:$
       (deferred:try
         (deferred:$
@@ -201,31 +220,34 @@ Returns:
                 (condition-case err
                     (progn
                       (org-supertag-sim-init)
-                      ;; 检查初始化是否超时（30秒）
-                      (when (> (float-time (time-subtract (current-time) start-time)) 30)
-                        (error "Initialization timeout after 30 seconds")))
+                      ;; 检查初始化是否超时（10秒）
+                      (when (> (float-time (time-subtract (current-time) start-time)) 10)
+                        (error "Initialization timeout after 10 seconds")))
                   (error
                    (message "Initialization failed: %s" (error-message-string err))
                    (signal (car err) (cdr err)))))))
           (deferred:nextc it
             (lambda (_)
-              ;; Check initialization status again with timeout
-              (let ((max-attempts 10)
+              ;; 再次检查初始化状态，带超时
+              (let ((max-attempts 5)
                     (attempt 0))
                 (while (and (< attempt max-attempts)
-                           (not (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)))
+                            (not (and org-supertag-sim--initialized
+                                      (org-supertag-sim-epc-server-alive-p)
+                                      (org-supertag-sim-epc-manager-live-p))))
                   (sit-for 0.5)
                   (setq attempt (1+ attempt)))
                 
-                (if (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+                (if (and org-supertag-sim--initialized
+                         (org-supertag-sim-epc-server-alive-p)
+                         (org-supertag-sim-epc-manager-live-p))
                     t
                   (error "System initialization failed: EPC server not ready after %d attempts" max-attempts))))))
         :catch
         (lambda (err)
           (message "Initialization error: %s" (error-message-string err))
           ;; 重置初始化状态，避免无限循环
-          (setq org-supertag-sim--initialized nil
-                org-supertag-sim-epc-initialized nil)
+          (setq org-supertag-sim--initialized nil)
           nil)))))
 
 (defun org-supertag-sim-find-similar (tag-name &optional top-k callback)
@@ -235,40 +257,58 @@ TOP-K is the number of similar tags to return, default is 5.
 CALLBACK is an optional callback function that receives the result as a parameter."
   (let ((buffer (current-buffer))
         (limit (or top-k 5)))
-    (message "Searching for similar tags...")
+    (message "Searching for similar tags for '%s'..." tag-name)
     (deferred:$
       (deferred:try
         (deferred:$
           (org-supertag-sim--ensure-initialized)
           (deferred:nextc it
             (lambda (_)
+              (message "Calling EPC method 'find_similar' with tag '%s' and limit %d" tag-name limit)
               (epc:call-deferred org-supertag-sim-epc-manager
                                 'find_similar
                                 (list tag-name limit))))
           (deferred:nextc it
             (lambda (response)
+              (message "Received response: %S" response)
               (let ((status (plist-get response :status))
                     (result (plist-get response :result)))
+                (message "Status: %s, Result type: %s, Result length: %d" 
+                         status 
+                         (type-of result)
+                         (if (listp result) (length result) 0))
                 (if (string= status "success")
                     (when (buffer-live-p buffer)
                       (with-current-buffer buffer
+                        ;; 简化处理 - 直接将[tag, score]转换为(tag . score)
                         (let ((formatted-result
                                (mapcar (lambda (item)
-                                       (cons (car item)
-                                             (float (if (listp (cdr item))
-                                                      (car (cdr item))
-                                                    (cdr item)))))
+                                         (if (listp item)
+                                             (cons (nth 0 item) (float (nth 1 item)))
+                                           (cons (format "%s" item) 1.0)))
                                      result)))
+                          (message "Formatted %d results: %S" (length formatted-result) formatted-result)
                           (if callback
-                              (funcall callback formatted-result)
+                              (progn
+                                (message "Calling callback with %d results" (length formatted-result))
+                                (message "Callback type: %s" (type-of callback))
+                                (condition-case err
+                                    (funcall callback formatted-result)
+                                  (error
+                                   (message "Error in callback: %s" (error-message-string err))
+                                   (message "Callback error stack: %s" 
+                                            (with-output-to-string (backtrace))))))
                             ;; Display results only when there is no callback
-                            (message "Found %d similar tags" (length formatted-result)))
+                            (message "Found %d similar tags: %S" 
+                                     (length formatted-result)
+                                     (mapcar #'car formatted-result)))
                           formatted-result)))
                   (error "Failed to find similar tags: %s" 
                          (or (plist-get response :message) "Unknown error")))))))
         :catch
         (lambda (err)
           (message "Failed to find similar tags: %s" (error-message-string err))
+          (message "Error stack: %s" (with-output-to-string (backtrace)))
           nil)))))
 
 (defun org-supertag-sim-search-tags (query-tags &optional weights callback)
@@ -492,7 +532,7 @@ allowing users to select and apply the tags they need by pressing the space key.
     (user-error "Similarity system not loaded. Please ensure org-supertag-sim is properly initialized"))
   
   (when (and org-supertag-sim-epc-manager
-             (not (org-supertag-sim-epc-server-running-p)))
+             (not (org-supertag-sim-epc-server-alive-p)))
     (user-error "EPC server is not running. Please restart with `org-supertag-sim-epc-emergency-restart`"))
   
   (let* ((node-title (org-get-heading t t t t))
@@ -584,141 +624,6 @@ allowing users to select and apply the tags they need by pressing the space key.
       (with-current-buffer source-buffer
         (org-supertag-sim-auto-tag-node)))))
 
-(defun org-supertag-sim-diagnose ()
-  "Diagnose the current state of the similarity system.
-Provides detailed information about system status and potential issues."
-  (interactive)
-  (let ((result-buffer (get-buffer-create "*Org SuperTag Sim Diagnosis*")))
-    (with-current-buffer result-buffer
-      (erase-buffer)
-      (insert "=== Org SuperTag Similarity System Diagnosis ===\n\n")
-      
-      ;; Check basic system state
-      (insert "1. Basic System State:\n")
-      (insert (format "   - org-supertag-sim--initialized: %s\n" 
-                     (if (boundp 'org-supertag-sim--initialized) 
-                         org-supertag-sim--initialized 
-                         "UNBOUND")))
-      (insert (format "   - org-supertag-sim-epc-initialized: %s\n" 
-                     (if (boundp 'org-supertag-sim-epc-initialized) 
-                         org-supertag-sim-epc-initialized 
-                         "UNBOUND")))
-      (insert (format "   - org-supertag-sim-epc-manager: %s\n" 
-                     (if (boundp 'org-supertag-sim-epc-manager) 
-                         (if org-supertag-sim-epc-manager "EXISTS" "NIL")
-                         "UNBOUND")))
-      
-      ;; Check EPC server status
-      (insert "\n2. EPC Server Status:\n")
-      (condition-case err
-          (if (and (boundp 'org-supertag-sim-epc-manager)
-                   org-supertag-sim-epc-manager)
-              (if (org-supertag-sim-epc-server-running-p)
-                  (insert "   - Server Status: RUNNING\n")
-                (insert "   - Server Status: STOPPED\n"))
-            (insert "   - Server Status: NOT INITIALIZED\n"))
-        (error 
-         (insert (format "   - Server Status: ERROR - %s\n" (error-message-string err)))))
-      
-      ;; Check Python environment
-      (insert "\n3. Python Environment:\n")
-      (condition-case err
-          (let ((python-path (if (boundp 'org-supertag-sim-epc-python-path)
-                                org-supertag-sim-epc-python-path
-                               "UNSET")))
-            (insert (format "   - Python Path: %s\n" python-path))
-            (insert (format "   - Python Executable Exists: %s\n" 
-                           (if (and (stringp python-path) (executable-find python-path))
-                               "YES" "NO"))))
-        (error 
-         (insert (format "   - Python Environment: ERROR - %s\n" (error-message-string err)))))
-      
-      ;; Check dependencies
-      (insert "\n4. Dependencies:\n")
-      (insert (format "   - epc package loaded: %s\n" (if (featurep 'epc) "YES" "NO")))
-      (insert (format "   - deferred package available: %s\n" (if (fboundp 'deferred:$) "YES" "NO")))
-      (insert (format "   - json package available: %s\n" (if (fboundp 'json-encode) "YES" "NO")))
-      
-      ;; Provide recommendations
-      (insert "\n5. Recommendations:\n")
-      (cond
-       ;; Everything seems fine
-       ((and (boundp 'org-supertag-sim--initialized) org-supertag-sim--initialized
-             (boundp 'org-supertag-sim-epc-initialized) org-supertag-sim-epc-initialized
-             (org-supertag-sim-epc-server-running-p))
-        (insert "   ✓ System appears to be working correctly\n"))
-       
-       ;; EPC server issues
-       ((and (boundp 'org-supertag-sim-epc-manager) org-supertag-sim-epc-manager
-             (not (org-supertag-sim-epc-server-running-p)))
-        (insert "   ⚠ EPC server is not running\n")
-        (insert "   → Try: M-x org-supertag-sim-epc-emergency-restart\n"))
-       
-       ;; Initialization issues
-       ((or (not (boundp 'org-supertag-sim--initialized))
-            (not org-supertag-sim--initialized))
-        (insert "   ⚠ System not initialized\n")
-        (insert "   → Try: M-x org-supertag-sim-emergency-reset\n"))
-       
-       ;; General issues
-       (t
-        (insert "   ⚠ Multiple issues detected\n")
-        (insert "   → Try: M-x org-supertag-sim-emergency-reset\n")))
-      
-      (insert "\n6. Emergency Commands:\n")
-      (insert "   - M-x org-supertag-sim-emergency-reset    : Complete system reset\n")
-      (insert "   - M-x org-supertag-sim-epc-emergency-restart : Restart EPC server\n")
-      (insert "   - M-x org-supertag-sim-epc-force-kill     : Force kill all processes\n")
-      (insert "   - M-x org-supertag-sim-epc-show-log       : View detailed logs\n")
-      
-      (special-mode))
-    (display-buffer result-buffer)))
-
-(defun org-supertag-sim-emergency-reset ()
-  "Emergency reset of the entire similarity system.
-This function will:
-1. Stop all running processes
-2. Reset all state variables
-3. Restart the system from scratch"
-  (interactive)
-  (when (yes-or-no-p "This will reset the entire similarity system. Continue? ")
-    (message "Performing emergency reset...")
-    
-    ;; Step 1: Stop everything
-    (condition-case err
-        (progn
-          ;; Cancel any running timers
-          (when (and (boundp 'org-supertag-sim--sync-timer) org-supertag-sim--sync-timer)
-            (cancel-timer org-supertag-sim--sync-timer)
-            (setq org-supertag-sim--sync-timer nil))
-          
-          ;; Stop EPC server
-          (when (featurep 'org-supertag-sim-epc)
-            (org-supertag-sim-epc-force-kill))
-          
-          ;; Reset state variables
-          (setq org-supertag-sim--initialized nil)
-          (when (boundp 'org-supertag-sim-epc-initialized)
-            (setq org-supertag-sim-epc-initialized nil))
-          (when (boundp 'org-supertag-sim-epc-manager)
-            (setq org-supertag-sim-epc-manager nil))
-          
-          (message "System state reset completed"))
-      (error
-       (message "Error during reset: %s" (error-message-string err))))
-    
-    ;; Step 2: Wait and restart
-    (sit-for 2)
-    (message "Restarting similarity system...")
-    
-    (condition-case err
-        (progn
-          ;; Try to reinitialize
-          (org-supertag-sim-init)
-          (message "Emergency reset completed successfully"))
-      (error
-       (message "Error during restart: %s" (error-message-string err))
-       (message "You may need to restart Emacs completely")))))
 
 (defun org-supertag-sim-safe-auto-tag-node ()
   "Safe version of org-supertag-sim-auto-tag-node with comprehensive error handling.
@@ -740,24 +645,240 @@ This function includes all the safety checks and will not cause Emacs to freeze.
     (user-error "Please position the cursor on an org heading"))
    
    ;; Check system state
-   ((not (and (boundp 'org-supertag-sim--initialized)
-              (boundp 'org-supertag-sim-epc-initialized)))
+   ((not org-supertag-sim--initialized)
     (when (yes-or-no-p "Similarity system not initialized. Initialize now? ")
-      (org-supertag-sim-emergency-reset))
-    (unless (and org-supertag-sim--initialized org-supertag-sim-epc-initialized)
+      (org-supertag-sim-init))
+    (unless org-supertag-sim--initialized
       (user-error "System initialization failed")))
    
    ;; Check EPC server
-   ((not (org-supertag-sim-epc-server-running-p))
+   ((not (org-supertag-sim-epc-server-alive-p))
     (when (yes-or-no-p "EPC server not running. Start it now? ")
-      (org-supertag-sim-epc-emergency-restart)
+      (org-supertag-sim-epc-restart)
       (sit-for 2))
-    (unless (org-supertag-sim-epc-server-running-p)
+    (unless (org-supertag-sim-epc-server-alive-p)
       (user-error "EPC server failed to start")))
    
    ;; All checks passed, proceed with tag suggestion
    (t
     (message "All checks passed. Running safe tag suggestion...")
     (org-supertag-sim-auto-tag-node))))
+
+(defun org-supertag-sim-force-sync-library ()
+  "Force synchronization of the tag vector library.
+This function will manually trigger the synchronization process
+to ensure that all tags in the database are properly vectorized."
+  (interactive)
+  
+  ;; First check if the system is initialized
+  (if (not org-supertag-sim--initialized)
+      (when (yes-or-no-p "Similarity system not initialized. Initialize now? ")
+        (org-supertag-sim-init)))
+  
+  ;; Now check if EPC server is running
+  (if (not (org-supertag-sim-epc-server-alive-p))
+      (when (yes-or-no-p "EPC server not running. Start it now? ")
+        (org-supertag-sim-epc-restart)
+        (sit-for 2)))
+  
+  ;; Verify system is ready
+  (unless (and org-supertag-sim--initialized (org-supertag-sim-epc-server-alive-p))
+    (user-error "System is not ready. Please initialize it first"))
+  
+  ;; Trigger synchronization
+  (message "Forcing tag vector library synchronization...")
+  (deferred:$
+    (org-supertag-sim--sync-library)
+    (deferred:nextc it
+      (lambda (result)
+        (let ((status (plist-get result :status))
+              (data (plist-get result :result)))
+          (if (string= status "success")
+              (progn
+                (message "Tag vector library synchronized successfully: %s"
+                         (format "Total: %d, Added: %d, Updated: %d, Removed: %d"
+                                 (cdr (assoc 'total_processed data))
+                                 (cdr (assoc 'added data))
+                                 (cdr (assoc 'updated data))
+                                 (cdr (assoc 'removed data))))
+                data)
+            (message "Synchronization failed: %s" (plist-get result :message))
+            nil)))))
+  t)
+
+(defun org-supertag-sim-debug-find-similar (tag-name)
+  "Debug function to directly test finding similar tags for TAG-NAME.
+This bypasses the callback mechanism and directly logs the results."
+  (interactive 
+   (list (completing-read "Tag name: " (org-supertag-get-all-tags) nil t)))
+  (message "Directly testing find_similar for tag: %s" tag-name)
+  
+  ;; Make sure the system is initialized
+  (unless org-supertag-sim--initialized
+    (message "Initializing system first...")
+    (org-supertag-sim-init))
+  
+  ;; Directly call the EPC function and log the result
+  (deferred:$
+    (deferred:try
+      (deferred:$
+        (epc:call-deferred org-supertag-sim-epc-manager
+                         'find_similar
+                         (list tag-name 10))
+        (deferred:nextc it
+          (lambda (response)
+            (message "Direct EPC call result:")
+            (message "Response: %S" response)
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result)))
+              (message "Status: %s" status)
+              (message "Result: %S" result)
+              
+              ;; Process each result item
+              (when (and (string= status "success") result)
+                (dolist (item result)
+                  (message "Item: %S (type: %s)" item (type-of item))))
+              
+              ;; Add to recommendations cache directly for testing
+              (when (and (string= status "success") result)
+                (message "Adding results directly to recommendations cache")
+                (let* ((tag-id (org-supertag-tag-get-id-by-name tag-name))
+                       (formatted-result
+                        (mapcar (lambda (item)
+                                  (cond
+                                   ;; Format: [tag score]
+                                   ((and (listp item) (= (length item) 2))
+                                    (cons (nth 0 item) (float (nth 1 item))))
+                                   ;; Other formats
+                                   (t (cons (format "%s" (if (listp item) (car item) item)) 1.0))))
+                                result)))
+                  (when tag-id
+                    (puthash tag-id formatted-result org-supertag-relation--recommendations-cache)
+                    (message "Recommendations cached: %S" formatted-result))))
+              response))))
+      :catch
+      (lambda (err)
+        (message "Error in direct EPC call: %s" (error-message-string err))
+        nil))))
+
+(defun org-supertag-sim-quick-test (tag-name)
+  "Run a quick direct test of the similar tags functionality.
+This function bypasses most of the complexity and directly creates test results."
+  (interactive
+   (list (completing-read "Tag name: " (org-supertag-get-all-tags) nil t)))
+  
+  (message "Running quick test for %s" tag-name)
+  
+  ;; Create mock results
+  (let* ((test-results (list 
+                        (list "test_tag_1" 0.95)
+                        (list "test_tag_2" 0.85)
+                        (list "test_tag_3" 0.75)
+                        (list "test_tag_4" 0.65)
+                        (list "test_tag_5" 0.55)))
+         (formatted-results
+          (mapcar (lambda (item) (cons (car item) (cadr item))) test-results))
+         (tag-id (org-supertag-tag-get-id-by-name tag-name)))
+    
+    ;; Store in cache
+    (when tag-id
+      (message "Storing test results in cache for %s" tag-id)
+      (puthash tag-id formatted-results org-supertag-relation--recommendations-cache)
+      
+      ;; Open relation management if needed
+      (unless (get-buffer org-supertag-relation-manage--buffer-name)
+        (org-supertag-relation--show-management-interface tag-id))
+      
+      ;; Force refresh
+      (with-current-buffer org-supertag-relation-manage--buffer-name
+        (when (eq org-supertag-relation--current-tag tag-id)
+          (let ((inhibit-read-only t))
+            (message "Forcing display refresh")
+            (org-supertag-relation--refresh-display)))))
+    
+    ;; Return the formatted results
+    formatted-results))
+
+(defun org-supertag-sim-test-async-epc (tag-name)
+  "Test EPC communication asynchronously without timeout issues."
+  (interactive
+   (list (completing-read "Tag name: " (org-supertag-get-all-tags) nil t)))
+  
+  (message "Testing async EPC call for '%s'..." tag-name)
+  
+  ;; Make sure we're initialized
+  (unless org-supertag-sim--initialized
+    (org-supertag-sim-init))
+  
+  ;; Make direct async call using deferred API
+  (deferred:$
+    (deferred:try
+      (deferred:$
+        (epc:call-deferred org-supertag-sim-epc-manager
+                          'find_similar
+                          (list tag-name 10))
+        (deferred:nextc it
+          (lambda (response)
+            (message "✅ Async EPC call successful!")
+            (message "Response: %S" response)
+            
+            ;; Process the response if successful
+            (let ((status (plist-get response :status))
+                  (result (plist-get response :result)))
+              (if (string= status "success")
+                  (progn
+                    (message "Found %d similar tags" (length result))
+                    ;; Store in cache for testing
+                    (let* ((tag-id (org-supertag-tag-get-id-by-name tag-name))
+                           (formatted-result
+                            (mapcar (lambda (item)
+                                      (cons (nth 0 item) (float (nth 1 item))))
+                                    result)))
+                      (when tag-id
+                        (puthash tag-id formatted-result 
+                                org-supertag-relation--recommendations-cache)
+                        (message "Results cached for tag %s" tag-id)
+                        
+                        ;; Trigger UI refresh if relation management is open
+                        (when (get-buffer org-supertag-relation-manage--buffer-name)
+                          (with-current-buffer org-supertag-relation-manage--buffer-name
+                            (when (eq org-supertag-relation--current-tag tag-id)
+                              (let ((inhibit-read-only t))
+                                (org-supertag-relation--refresh-display))))))))
+                (message "❌ Server returned error: %s" 
+                         (plist-get response :message))))
+            response))))
+      :catch
+      (lambda (err)
+        (message "❌ Async EPC call failed: %s" (error-message-string err))
+        nil)))
+
+(defun org-supertag-sim-test-safe-echo ()
+  "Test EPC echo/ping safely to avoid hanging."
+  (interactive)
+  (message "Testing safe EPC ping (synchronous call)...")
+
+  (unless (org-supertag-sim-epc-manager-live-p)
+    (message "EPC manager not live, attempting to initialize...")
+    (org-supertag-sim-init) ;; This should start/connect to the server
+    (sit-for 2) ;; Give it a moment to initialize
+    (unless (org-supertag-sim-epc-manager-live-p)
+      (message "❌ EPC manager still not live after init attempt.")
+      (error "EPC manager not live")))
+
+  (condition-case err
+      (let ((result (org-supertag-sim-epc-call-method 'ping)))
+        (message "✅ EPC Ping call raw result: %S" result)
+        ;; Check if the result is a plist and has the expected structure
+        (if (and (listp result) (plist-get result :status))
+            (let ((status (plist-get result :status))
+                  (response-data (plist-get result :result)))
+              (if (string= status "success")
+                  (message "✅ Ping successful: %s" response-data)
+                (message "❌ Ping failed (server-side): %s" (plist-get result :message))))
+          (message "ℹ️ Ping response was not in expected plist format: %S" result)))
+    (error
+     (message "❌ EPC Ping call failed (Lisp error): %S" err)
+     (signal (car err) (cdr err)))))
 
 (provide 'org-supertag-sim)

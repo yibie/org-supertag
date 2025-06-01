@@ -66,3 +66,8 @@ test_*.*.*.*.*.*.*.*.*.*.*
 
 # directory
 developing/
+cache/
+simtag/models/
+simtag/__pycache__/
+memory-bank/
+.venv.backup/

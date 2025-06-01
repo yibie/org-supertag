@@ -1,775 +1,474 @@
 """
-SimTag EPC Server Module
-Provides a unified EPC interface to connect Emacs with Python backend functionality
+EPC 服务器入口
+提供与 Emacs 通信的接口，基于更稳定的实现
+参考了 Blink-Search 的架构设计
 """
-
-import os
 import sys
-import json
 import logging
 import traceback
-import argparse
-import subprocess
-from typing import List, Dict, Any, Optional, Tuple
+import os
+import socket
+import socketserver
+import threading
+from epc.server import ThreadingEPCServer
+from simtag.core.storage import VectorStorage
+from simtag.core.tagging import TaggingEngine
 
-from epc.server import EPCServer
-from .config import Config
-from .entity_extractor import EntityExtractor
-from .ollama_bridge import OllamaBridge
-from .tag_vectors import TagVectorEngine
-from .utils.logging import setup_logging
-from .utils.serialization import normalize_response
-from .tag_generator import TagGenerator
-from .tag_relation_analyzer import TagRelationAnalyzer, analyze_tag_relations
-
-logger = logging.getLogger("simtag.epc_server")
-
-class SimTagServer:
-    """SimTag EPC Server Class"""
+# 配置日志
+def setup_logging():
+    # 获取数据目录
+    data_dir = os.environ.get('ORG_SUPERTAG_DATA_DIRECTORY', 
+                            os.path.expanduser('~/.emacs.d/org-supertag'))
     
-    def __init__(self, config: Config):
-        """Initialize server
+    # 确保目录存在
+    os.makedirs(data_dir, exist_ok=True)
+    
+    # 设置日志文件路径
+    log_file = os.path.join(data_dir, 'simtag_epc.log')
+    
+    # 设置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stderr),
+            logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        ]
+    )
+    
+    return logging.getLogger("main"), data_dir, log_file
+
+# 主服务类
+class SimTagEPCServer:
+    def __init__(self, config):
+        """初始化EPC服务器
         
         Args:
-            config: Configuration object
+            config: 配置对象
         """
-        self.logger = logging.getLogger("simtag.epc_server")
         self.config = config
-        self._initialized = False  # Add initialization flag
+        self.logger = logging.getLogger("epc_server")
         
-        # Initialize base components as None
-        self.ollama = None
-        self.tag_generator = None
-        self.entity_extractor = None
-        self.vector_engine = None
+        # 创建向量存储对象
+        self.storage = VectorStorage(config.vector_db_path)
         
-        # Initialize EPC server
-        self.server = EPCServer((self.config.host, self.config.port))
+        # 检查sqlite-vec扩展
+        vec_version = self.storage.check_vec_extension()
+        if vec_version:
+            self.logger.info(f"成功加载sqlite-vec扩展，版本: {vec_version}")
+        else:
+            self.logger.warning("sqlite-vec扩展未加载，向量搜索性能可能受到影响")
+        
+        # 创建标签引擎
+        self.engine = TaggingEngine(config, self.storage)
+        
+        # 创建 EPC 服务器
+        self.server = ThreadingEPCServer(('127.0.0.1', 0), log_traceback=True)
+        self.server.allow_reuse_address = True
+        
+        # 注册方法
         self._register_methods()
         
+        # 创建服务线程
+        self.server_thread = None
+        
+        # 简化状态管理 - 移除复杂的消息队列机制
+        self.state = {}
+
     def _register_methods(self):
-        """Register EPC methods"""
+        """注册 EPC 方法"""
         methods = [
-            ('echo', self.echo),
-            ('status', self.status),
-            ('initialize', self.initialize),
-            ('find_similar', self.find_similar),
+            ('echo', self.echo),  # 添加 echo 方法用于测试
+            ('ping', self.ping),  # 添加心跳检测方法
+            ('initialize', self.initialize),  # 添加初始化方法
             ('suggest_tags', self.suggest_tags),
-            ('suggest_tags_json', self.suggest_tags_json),
+            ('suggest_tags_json', self.suggest_tags_json),  # 添加JSON格式的标签推荐方法
             ('extract_entities', self.extract_entities),
-            ('check_imports', self.check_imports),
-            ('get_config', self.get_config),
-            ('test_engine', self.test_engine),
+            ('find_similar', self.find_similar_tags),  # 修正方法名匹配
+            ('find_similar_tags', self.find_similar_tags),  # 保持兼容性
             ('analyze_tag_relations', self.analyze_tag_relations),
-            ('run_ollama', self.run_ollama),
-            ('sync_library', self.sync_library),
-            ('add_tag', self.add_tag),
-            ('update_tag', self.update_tag),
-            ('remove_tag', self.remove_tag),
-            ('batch_vectorize_nodes', self.batch_vectorize_nodes),
-            ('batch_vectorize_nodes_backend', self.batch_vectorize_nodes)
+            ('sync_library', self.sync_library),  # 添加同步库方法
+            ('update_tag', self.update_tag),  # 添加更新单个标签方法
+            ('remove_tag', self.remove_tag),  # 添加删除标签方法
+            ('get_status', self.get_status),
+            ('check_imports', self.check_imports),  # 添加导入检查方法
+            ('get_config', self.get_config),  # 添加配置获取方法
+            ('update_state', self.update_state)  # 添加状态更新方法
         ]
-        
         for name, method in methods:
-            self.server.register_function(method)
+            self.server.register_function(method, name)
             
-    def start(self):
-        """Start server"""
+    def update_state(self, state_name, value):
+        """更新服务器状态 - 简化版本，不使用消息队列"""
         try:
-            port = self.server.server_address[1]
-            self.logger.info(f"Server port obtained: {port}")
-            
-            # Ensure clean stdout
-            sys.stdout.flush()  # Clear buffer
-            
-            # Important: Output port number on a separate line
-            print(f"{port}", flush=True)
-            self.logger.info(f"Port number output to stdout: {port}")
-            
-            # Start server
-            self.logger.info("Starting serve_forever()...")
-            self.server.serve_forever()
+            self.state[state_name] = value
+            self.logger.info(f"状态更新: {state_name} = {value}")
+            return {"status": "success"}
         except Exception as e:
-            self.logger.error(f"Server startup failed: {e}")
-            raise
-        
-    def echo(self, message: str) -> str:
-        """Echo test method"""
-        self.logger.info(f"Echo test: {message}")
-        return f"Echo: {message}"
-        
-    def status(self) -> Dict[str, Any]:
-        """Get server status
-        
-        Returns:
-            Status information dictionary
-        """
-        status = {
-            "server": {
-                "running": True,
-                "port": self.server.server_address[1]
-            },
-            "components": {
-                "vector_engine": self.vector_engine.status() if self.vector_engine else None,
-                "ollama": self.ollama.status() if self.ollama else None
-            },
-            "config": self.config.to_dict()
-        }
-        return normalize_response(status)
-
-    """def initialize initialization function do not break update"""   
-    def initialize(self, vector_file: str = None, db_file: str = None) -> Dict[str, Any]:
-        """Initialize server components"""
+            self.logger.error(f"状态更新失败: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    def echo(self, message):
+        """回声测试方法 - 极简版本，确保快速响应"""
         try:
-            self.logger.info("Initializing server components...")
-            
-            # Update and validate file paths
-            if vector_file:
-                self.logger.info(f"Using specified vector file: {vector_file}")
-                # For vector file, we don't require it to exist - it can be created during initialization
-                self.config.vector_file = vector_file
-                # Ensure the directory exists
-                vector_dir = os.path.dirname(vector_file)
-                if vector_dir:  # 只有当目录路径不为空时才创建
-                    os.makedirs(vector_dir, exist_ok=True)
-            
-            if db_file:
-                self.logger.info(f"Using specified database file: {db_file}")
-                if not os.path.exists(db_file):
-                    self.logger.error(f"Specified database file does not exist: {db_file}")
-                    return normalize_response(None, "error", f"Database file does not exist: {db_file}")
-                self.config.db_file = db_file
-            
-            # Ensure Ollama is available
-            if not self.config.ensure_ollama():
-                raise Exception("Ollama is not installed or not available")
-            
-            # 1. Initialize Ollama
-            self.logger.info("Initializing Ollama...")
-            self.ollama = OllamaBridge(model=self.config.model_name)
-            
-            # 2. Initialize tag generator
-            self.logger.info("Initializing tag generator...")
-            self.tag_generator = TagGenerator(self.ollama)
-            
-            # 3. Initialize other components
-            self.logger.info("Initializing other components...")
-            self.entity_extractor = EntityExtractor(self.ollama)
-            
-            # Initialize vector engine with SQLite-vec support
-            sqlite_db_path = self.config.vector_file.replace('.json', '.db') if self.config.vector_file else None
-            self.vector_engine = TagVectorEngine(
-                vector_file=self.config.vector_file,
-                use_sqlite_vec=True,  # Enable SQLite-vec
-                sqlite_db_path=sqlite_db_path
-            )
-            
-            # 4. Initialize the vector library with tag data
-            self.logger.info("Initializing vector library...")
-            vector_init_result = self.vector_engine.initialize(
-                self.config.db_file, 
-                self.config.vector_file
-            )
-            
-            if vector_init_result.get("status") != "success":
-                error_msg = f"Vector library initialization failed: {vector_init_result.get('message', 'Unknown error')}"
-                self.logger.error(error_msg)
-                return normalize_response(None, "error", error_msg)
-            
-            # Mark initialization complete
-            self._initialized = True
-            self.logger.info("All components initialized successfully")
-            
-            return normalize_response({
-                "status": "success",
-                "vector_file": self.config.vector_file,
-                "db_file": self.config.db_file,
-                "model": self.config.model_name,
-                "vector_stats": vector_init_result.get("result", {})
-            })
-            
+            self.logger.info(f"Echo收到消息: {message}")
+            # 直接更新状态，不使用消息队列
+            self.state["last_echo"] = message
+            # 返回简单字符串，确保兼容性
+            response = f"Echo: {message}"
+            self.logger.info(f"Echo处理完成，返回: {response}")
+            return response
         except Exception as e:
-            self._initialized = False  # Ensure marked as uninitialized on failure
+            self.logger.error(f"Echo方法出错: {e}")
+            return f"Error in Python echo: {str(e)}"
+    
+    def ping(self):
+        """心跳检测方法 - 简化版本"""
+        try:
+            self.logger.info("收到ping请求，开始处理...")
+            # 直接更新状态，不使用消息队列
+            self.state["last_ping"] = "active"
+            # 临时返回简单字符串测试EPC序列化
+            response = "pong"
+            self.logger.info(f"ping处理完成，返回: {response}")
+            return response
+        except Exception as e:
+            self.logger.error(f"Ping方法出错: {e}")
+            return f"Error: {str(e)}"
+    
+    def initialize(self, vector_file_path, db_file_path):
+        """初始化方法，更新向量文件路径"""
+        try:
+            self.logger.info(f"Initializing with vector_file: {vector_file_path}, db_file: {db_file_path}")
+            
+            # 更新配置
+            if vector_file_path and os.path.isabs(vector_file_path):
+                self.config.vector_db_path = vector_file_path
+                # 需要重新创建存储对象来应用新路径
+                self.storage = VectorStorage(vector_file_path)
+                # 重新初始化引擎
+                self.engine = TaggingEngine(self.config, self.storage)
+                self.logger.info(f"Vector database path updated to: {vector_file_path}")
+            else:
+                self.logger.warning(f"Invalid vector file path: {vector_file_path}, using default: {self.config.vector_db_path}")
+            
+            return {"status": "success", "result": {
+                "vector_db_path": self.config.vector_db_path,
+                "db_file_path": db_file_path
+            }}
+        except Exception as e:
             self.logger.error(f"Initialization failed: {e}")
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", str(e))
-            
-    def find_similar(self, tag_name: str, content: str = "", top_k: int = 5) -> Dict[str, Any]:
-        """Find similar tags
-        
-        Args:
-            tag_name: Tag name
-            content: Related content
-            top_k: Number of results to return
-            
-        Returns:
-            List of similar tags
-        """
-        try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
-            
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-            
-            # Use hybrid search
-            self.logger.info(f"Finding tags similar to '{tag_name}'...")
-            results = self.vector_engine.find_similar(tag_name, top_k)
-            
-            return normalize_response(results)
-            
-        except Exception as e:
-            error_msg = f"Failed to find similar tags: {str(e)}"
-            self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-
-    def suggest_tags(self, text: str, limit: int = 5) -> Dict[str, Any]:
-        """Generate tag suggestions"""
-        try:
-            # If not initialized, try auto-initialization
-            if not self._initialized:
-                self.logger.info("Service not initialized, attempting auto-initialization...")
-                init_result = self.initialize()
-                if init_result.get("status") != "success":
-                    self.logger.error("Auto-initialization failed")
-                    return normalize_response(None, "error", "Service initialization failed")
-            
-            if not self.tag_generator:
-                self.logger.error("Tag generator not initialized")
-                return normalize_response(None, "error", "Tag generator not initialized")
-            
-            # Get tag list
-            self.logger.info("Starting tag generation...")
-            self.logger.debug(f"Input text preview: {text[:100]}...")  # Add input text logging
-            
-            tags = self.tag_generator.suggest_tags(text)
-            
-            # Validate tag list
-            if not tags:
-                self.logger.warning("No tags generated")
-                return normalize_response([])  # Return empty list instead of None
-            
-            if not isinstance(tags, list):
-                self.logger.error(f"Tag generator returned non-list type: {type(tags)}")
-                return normalize_response(None, "error", "Invalid tag format")
-            
-            # Ensure all tags are strings
-            valid_tags = [str(tag).strip() for tag in tags if tag]
-            
-            self.logger.info(f"Successfully generated {len(valid_tags)} tags: {valid_tags}")
-            
-            # Return using normalize_response
-            return normalize_response(valid_tags)
-            
-        except Exception as e:
-            self.logger.error(f"Tag generation failed: {e}")
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", str(e))
-            
-    def extract_entities(self, text: str) -> Dict[str, Any]:
-        """Extract entities (full version)
-        
-        Args:
-            text: Text content
-            
-        Returns:
-            List of entities
-        """
-        try:
-            if not self.entity_extractor:
-                raise Exception("Entity extractor not initialized")
-                
-            entities = self.entity_extractor.extract(text)
-            return normalize_response(entities)
-            
-        except Exception as e:
-            error_msg = f"Failed to extract entities: {str(e)}"
-            self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-            
-
+            return {"status": "error", "message": str(e)}
+    
     def check_imports(self):
-        """Check if required modules are properly imported."""
+        """检查模块导入状态"""
         try:
             import numpy
-            import torch
-            import sentence_transformers
             import requests
-            return {
-                "status": "success",
-                "imports": {
-                    "numpy": numpy.__version__,
-                    "torch": torch.__version__,
-                    "sentence_transformers": sentence_transformers.__version__,
-                    "requests": requests.__version__
-                }
-            }
-        except ImportError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
+            import epc
+            return {"status": "success", "modules": ["numpy", "requests", "epc"]}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    
     def get_config(self):
-        """Return current configuration information."""
+        """获取配置信息"""
         return {
-            "vector_file": self.config.vector_file,
-            "db_file": self.config.db_file,
-            "model_name": self.config.model_name,
-            "debug": self.config.debug
+            "status": "success", 
+            "config": {
+                "vector_db_path": self.config.vector_db_path,
+                "ollama_model": getattr(self.config, 'ollama_model', 'default')
+            }
         }
-
-    def test_engine(self, test_text: str) -> Dict[str, Any]:
-        """Test text vector engine functionality
+    
+    def suggest_tags(self, text, limit=5, use_ai=True):
+        """标签推荐方法 - 统一返回格式"""
+        try:
+            result = self.engine.generate_tags(text, limit, use_ai)
+            return {"status": "success", "result": result}
+        except Exception as e:
+            error_msg = f"标签推荐失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def suggest_tags_json(self, json_data):
+        """使用JSON格式处理标签推荐请求
         
         Args:
-            test_text: Test text
+            json_data: JSON格式的请求数据，应包含content字段
             
         Returns:
-            Vector data
+            标签推荐结果
         """
         try:
-            if not self.vector_engine:
-                raise Exception("Vector engine not initialized")
+            # 解析JSON数据
+            import json
+            if isinstance(json_data, str):
+                data = json.loads(json_data)
+            else:
+                data = json_data
                 
-            # Generate text vector
-            self.logger.info(f"Starting text vector generation: {test_text}")
-            vector = self.vector_engine.model.encode(test_text)
+            # 提取参数
+            content = data.get('content', '')
+            limit = data.get('limit', 5)
+            use_ai = data.get('use_ai', True)
             
-            # Record vector details
-            self.logger.info(f"Vector type: {type(vector)}")
-            self.logger.info(f"Vector shape: {vector.shape if hasattr(vector, 'shape') else len(vector)}")
+            # 参数校验
+            if not content:
+                return {"status": "error", "message": "Content is empty"}
             
-            # Get vector data
-            vector_data = vector.tolist() if hasattr(vector, 'tolist') else vector
-            self.logger.info(f"Vector data length: {len(vector_data)}")
+            # 调用标签生成
+            self.logger.info(f"JSON请求标签推荐: 内容长度={len(content)}, limit={limit}")
+            tags = self.engine.generate_tags(content, limit, use_ai)
             
-            # Return result
-            result = {
-                "vector": vector_data,
-                "dimensions": len(vector_data),
-                "model": self.vector_engine.model_name if hasattr(self.vector_engine, 'model_name') else None
+            # 返回结果
+            return {"status": "success", "result": tags}
+        except Exception as e:
+            error_msg = f"JSON标签推荐失败: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            return {"status": "error", "message": error_msg}
+    
+    def extract_entities(self, text, use_ai=True):
+        """实体提取方法 - 统一返回格式"""
+        try:
+            result = self.engine.extract_entities(text, use_ai)
+            return {"status": "success", "result": result}
+        except Exception as e:
+            error_msg = f"实体提取失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def find_similar_tags(self, tag, limit=10):
+        """查找相似标签
+        
+        Args:
+            tag: 标签名称或ID
+            limit: 返回结果数量上限
+            
+        Returns:
+            带状态的结果字典
+        """
+        try:
+            # 调用引擎查找相似标签
+            self.logger.info(f"开始查找相似标签: {tag}, limit={limit}")
+            similar_tags = self.engine.find_similar_tags(tag, limit)
+            
+            # 记录找到的标签数量和原始数据
+            self.logger.info(f"找到 {len(similar_tags)} 个相似标签")
+            self.logger.info(f"原始数据: {similar_tags}")
+            
+            # 确保结果格式正确，每个元素都是[tag_name, score]格式的列表
+            result = []
+            for tag_id, score in similar_tags:
+                self.logger.info(f"处理标签: {tag_id}, 相似度: {score}")
+                # 使用列表而非元组，更易于JSON序列化
+                result.append([tag_id, float(score)])
+            
+            # 检查结果格式
+            self.logger.info(f"最终结果结构: {type(result)}")
+            self.logger.info(f"第一个结果样例: {result[0] if result else 'None'}")
+            self.logger.info(f"第一个结果类型: {type(result[0]) if result else 'None'}")
+            
+            # 构建完整的响应
+            response = {
+                "status": "success", 
+                "result": result
             }
             
-            return normalize_response(result)
-            
+            self.logger.info(f"返回响应: status={response['status']}, 结果数量={len(response['result'])}")
+            self.logger.info(f"完整响应: {response}")
+            return response
         except Exception as e:
-            error_msg = f"Engine test failed: {str(e)}"
+            error_msg = f"查找相似标签失败: {str(e)}"
             self.logger.error(error_msg)
             self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-
-    def analyze_tag_relations(self, tag: str, tags: list) -> Dict[str, Any]:
-        """Analyze tag relationships
-        
-        Args:
-            tag: Target tag
-            tags: List of tags to analyze
-            
-        Returns:
-            List of tag relationships
-        """
+            return {"status": "error", "message": error_msg}
+    
+    def analyze_tag_relations(self, tag, related_tags, use_ai=True):
+        """标签关系分析方法 - 统一返回格式"""
         try:
-            relations = self.tag_analyzer.analyze_relations(tag, tags)
-            return {
-                "status": "success",
-                "result": relations
+            result = self.engine.analyze_relations(tag, related_tags, use_ai)
+            return {"status": "success", "result": result}
+        except Exception as e:
+            error_msg = f"标签关系分析失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def get_status(self):
+        """获取状态方法 - 简化版本，移除消息队列操作"""
+        try:
+            status = {
+                "ollama_available": self.engine.ollama.available,
+                "storage_ready": True,
+                "storage_stats": self.storage.get_stats(),
+                "server_running": True,
+                "config": {
+                    "vector_db_path": self.config.vector_db_path,
+                    "ollama_model": self.config.ollama_model
+                },
+                "state": self.state  # 添加当前状态
             }
+            # 直接更新状态，不使用消息队列
+            self.state["last_status"] = status
+            return {"status": "success", "result": status}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to analyze tag relationships: {str(e)}"
-            }
-
-    def run_ollama(self, prompt, system=None):
-        """Send message to Ollama and get response
+            error_msg = f"获取状态失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def sync_library(self, db_file, tag_data):
+        """同步标签向量库
         
         Args:
-            prompt: User prompt text
-            system: Optional system prompt text
+            db_file: 数据库文件路径
+            tag_data: 标签数据列表，每个元素是包含id和name的词典
             
         Returns:
-            Dict: Dictionary containing processing results
-        """
-        self.logger.info(f"Received Ollama interaction request, prompt length: {len(prompt)}")
-        
-        # Check initialization status
-        if not self._initialized:
-            self.logger.error("Attempting to use Ollama before initialization")
-            return normalize_response(None, "error", "Service not initialized, please call initialize first")
-        
-        # Check Ollama instance
-        if not self.ollama:
-            self.logger.error("Ollama instance not initialized")
-            return normalize_response(None, "error", "Ollama instance not initialized")
-        
-        try:
-            # Record additional information, avoiding logging long prompts
-            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-            self.logger.info(f"Sending request to Ollama, prompt preview: {prompt_preview}")
-            
-            # Call Ollama
-            response = self.ollama.run(prompt, system=system)
-            
-            # Check response
-            if not response:
-                return normalize_response(None, "error", "Ollama returned empty response")
-            
-            # Record response (partial to avoid large logs)
-            response_preview = response[:100] + "..." if len(response) > 100 else response
-            self.logger.info(f"Received Ollama response, length: {len(response)}, preview: {response_preview}")
-            
-            # Return success response
-            return normalize_response(response, "success")
-            
-        except Exception as e:
-            # Catch and log exception
-            error_message = f"Ollama interaction error: {str(e)}"
-            trace = traceback.format_exc()
-            self.logger.error(f"{error_message}\n{trace}")
-            return normalize_response(None, "error", error_message)
-            
-    def suggest_tags_json(self, json_data: str, limit: int = 5) -> Dict[str, Any]:
-        """Process tag generation request using JSON format
-        
-        Args:
-            json_data: JSON format request data containing text content to analyze
-            limit: Result count limit
-            
-        Returns:
-            List of tags
+            同步结果
         """
         try:
-            # Record received JSON data length
-            self.logger.info(f"Received JSON format request, length: {len(json_data)}")
+            # 记录收到的原始数据类型和大小，以便排查问题
+            self.logger.info(f"同步标签库请求: 数据库文件={db_file}, 标签数据类型={type(tag_data)}, 数据大小={len(tag_data) if isinstance(tag_data, (list, tuple)) else 'unknown'}")
             
-            # Parse JSON data
-            try:
-                import json
-                request = json.loads(json_data)
-                
-                # Ensure JSON format is correct, contains content field
-                if not isinstance(request, dict):
-                    self.logger.error(f"JSON data is not dictionary format: {type(request)}")
-                    return normalize_response(None, "error", "Invalid request format, should be JSON object")
-                
-                text = request.get("content")
-                
-                if not text:
-                    self.logger.error("Request missing content field or empty")
-                    return normalize_response(None, "error", "Request missing text content")
-                
-                self.logger.info(f"Text length extracted from JSON: {len(text)}")
-                text_preview = text[:100] + "..." if len(text) > 100 else text
-                self.logger.info(f"Text preview: {text_preview}")
-                
-            except json.JSONDecodeError as e:
-                self.logger.error(f"JSON parsing failed: {e}")
-                self.logger.error(f"Received JSON data: {json_data[:200]}..." if len(json_data) > 200 else json_data)
-                return normalize_response(None, "error", f"JSON parsing failed: {e}")
+            # 数据安全性检查
+            if not isinstance(tag_data, (list, tuple)):
+                self.logger.warning(f"标签数据不是列表类型: {type(tag_data)}")
+                tag_data = []
             
-            # Process text using standard suggest_tags method
-            return self.suggest_tags(text, limit)
+            # 记录前几个标签的数据格式，用于调试
+            if tag_data and len(tag_data) > 0:
+                sample_tags = tag_data[:min(3, len(tag_data))]
+                self.logger.info(f"标签数据样例: {sample_tags}")
             
+            # 调用引擎进行同步
+            result = self.engine.sync_tags(db_file, tag_data)
+            self.logger.info(f"Sync embedding tag result: {result}")
+            return {"status": "success", "result": result}
         except Exception as e:
-            self.logger.error(f"JSON request processing failed: {e}")
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", str(e))
-
-    def sync_library(self, db_file: str, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Synchronize the vector library with the provided tag data.
-
-        Args:
-            db_file: The path to the source database file (for logging/reference).
-            tag_data: A list of dictionaries, each containing 'id' and 'name' of a tag.
-
-        Returns:
-            A dictionary indicating the status of the operation.
-        """
-        self.logger.info(f"Received sync_library request. DB file: {db_file}, {len(tag_data)} tags received.")
-        
-        try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
-
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-
-            # Perform the synchronization
-            # Assuming vector_engine has a method like sync_from_tags
-            # You might need to adjust this method name based on your TagVectorEngine implementation
-            result = self.vector_engine.sync_from_tags(tag_data)
-            
-            self.logger.info(f"Library synchronization completed. Result: {result}")
-            return normalize_response({"status": "success", "details": result})
-
-        except Exception as e:
-            error_msg = f"Failed to synchronize library: {str(e)}"
+            error_msg = f"同步标签库失败: {str(e)}"
             self.logger.error(error_msg)
             self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-
-    def update_tag(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Update the name of a tag
+            return {"status": "error", "message": error_msg}
+    
+    def update_tag(self, tag_info):
+        """更新单个标签的向量
         
         Args:
-            tag_data: List containing tag information, format: [{"id": tag_id, "name": tag_name}]
+            tag_info: 包含id和name的标签信息，可以是列表/元组 [id, name] 或字典 {"id": id, "name": name}
             
         Returns:
-            Dictionary indicating the status of the operation
+            更新结果
         """
         try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
+            self.logger.info(f"更新标签向量: 数据类型={type(tag_info)}, 值={tag_info}")
             
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-            
-            # Extract tag information
-            if not tag_data or not isinstance(tag_data, list) or len(tag_data) == 0:
-                self.logger.error("Invalid tag data format")
-                return normalize_response(None, "error", "Invalid tag data format")
-            
-            # Get the first tag data item
-            tag_info = tag_data[0]
-            if not isinstance(tag_info, dict):
-                # Handle case where it's passed as a list of tuples
-                if isinstance(tag_info, list):
-                    tag_dict = {}
-                    for item in tag_info:
-                        if isinstance(item, tuple) and len(item) == 2:
-                            key, value = item
-                            tag_dict[key] = value
-                    tag_info = tag_dict
-                else:
-                    self.logger.error(f"Invalid tag info format: {type(tag_info)}")
-                    return normalize_response(None, "error", f"Invalid tag info format: {type(tag_info)}")
-            
-            tag_id = tag_info.get("id")
-            tag_name = tag_info.get("name")
-            
-            if not tag_id:
-                self.logger.error("Missing tag ID")
-                return normalize_response(None, "error", "Missing tag ID")
-            
-            self.logger.info(f"Updating tag: {tag_id} -> '{tag_name}'")
-            
-            # Perform the update
-            result = self.vector_engine.update_tag(tag_id, tag_name)
-            
-            if result:
-                return normalize_response({"status": "success", "tag_id": tag_id, "updated": True})
+            # 兼容不同的数据格式
+            if isinstance(tag_info, (list, tuple)) and len(tag_info) >= 2:
+                # 列表/元组格式 [id, name]
+                tag_id = tag_info[0]
+                tag_name = tag_info[1]
+            elif isinstance(tag_info, dict) and "id" in tag_info and "name" in tag_info:
+                # 字典格式 {"id": id, "name": name}
+                tag_id = tag_info["id"]
+                tag_name = tag_info["name"]
             else:
-                return normalize_response(None, "error", "Tag update failed")
+                self.logger.error(f"无法识别的标签数据格式: {tag_info}")
+                return {"status": "error", "message": "无法识别的标签数据格式"}
             
+            self.logger.info(f"解析标签数据: id={tag_id}, name={tag_name}")
+            result = self.engine.update_tag_vector(tag_id, tag_name)
+            return {"status": "success", "result": result}
         except Exception as e:
-            error_msg = f"Failed to update tag: {str(e)}"
+            error_msg = f"更新标签向量失败: {str(e)}"
             self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-
-    def remove_tag(self, tag_id: str) -> Dict[str, Any]:
-        """Remove a tag from the vector library
+            return {"status": "error", "message": error_msg}
+    
+    def remove_tag(self, tag_id):
+        """删除标签向量
         
         Args:
-            tag_id: ID of the tag to remove
+            tag_id: 标签ID
             
         Returns:
-            Dictionary indicating the status of the operation
+            删除结果
         """
         try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
-            
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-            
-            # Perform the removal
-            result = self.vector_engine.remove_tag(tag_id)
-            
-            if result:
-                return normalize_response({"status": "success", "details": result})
-            else:
-                return normalize_response(None, "error", "Tag removal failed")
-            
+            self.logger.info(f"删除标签向量: id={tag_id}")
+            result = self.engine.remove_tag_vector(tag_id)
+            return {"status": "success", "result": result}
         except Exception as e:
-            error_msg = f"Failed to remove tag: {str(e)}"
+            error_msg = f"删除标签向量失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+    
+    def start(self):
+        """启动 EPC 服务器 - 简化版本"""
+        try:
+            # 获取分配的端口
+            port = self.server.server_address[1]
+            self.logger.info(f"服务器已创建，端口号: {port}")
+            
+            # 输出端口信息到标准输出和错误输出，以便 Emacs 端捕获
+            print(f"EPC_PORT:{port}", flush=True)
+            print(f"EPC_PORT:{port}", file=sys.stderr, flush=True)
+            self.logger.info("端口信息已输出")
+            
+            # 记录环境变量
+            self.logger.info("环境变量:")
+            for key in ["ORG_SUPERTAG_DATA_DIRECTORY", "PYTHONPATH", "VIRTUAL_ENV", "PATH"]:
+                value = os.environ.get(key, "未设置")
+                self.logger.info(f"  {key} = {value}")
+            
+            # 简化服务器启动 - 直接在主线程运行
+            self.logger.info("开始运行服务...")
+            self.server.serve_forever()
+            
+        except KeyboardInterrupt:
+            self.logger.info("收到中断信号，服务器关闭中...")
+            self.shutdown()
+        except Exception as e:
+            error_msg = f"服务启动失败: {str(e)}"
             self.logger.error(error_msg)
             self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
+            print(f"❌ {error_msg}", file=sys.stderr, flush=True)
+            raise
+    
+    def shutdown(self):
+        """安全关闭服务器 - 简化版本"""
+        if self.server:
+            self.logger.info("关闭 EPC 服务器...")
+            self.server.shutdown()
+            self.server.server_close()
+            self.logger.info("EPC 服务器已关闭")
 
-    def add_tag(self, tag_data: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Add a new tag to the vector library
-        
-        Args:
-            tag_data: List containing tag information, format: [{"id": tag_id, "name": tag_name}]
-            
-        Returns:
-            Dictionary indicating the status of the operation
-        """
-        try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
-            
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-            
-            # Extract tag information
-            if not tag_data or not isinstance(tag_data, list) or len(tag_data) == 0:
-                self.logger.error("Invalid tag data format")
-                return normalize_response(None, "error", "Invalid tag data format")
-            
-            # Get the first tag data item
-            tag_info = tag_data[0]
-            if not isinstance(tag_info, dict):
-                # Handle case where it's passed as a list of tuples
-                if isinstance(tag_info, list):
-                    tag_dict = {}
-                    for item in tag_info:
-                        if isinstance(item, tuple) and len(item) == 2:
-                            key, value = item
-                            tag_dict[key] = value
-                    tag_info = tag_dict
-                else:
-                    self.logger.error(f"Invalid tag info format: {type(tag_info)}")
-                    return normalize_response(None, "error", f"Invalid tag info format: {type(tag_info)}")
-            
-            tag_id = tag_info.get("id")
-            tag_name = tag_info.get("name")
-            
-            if not tag_id:
-                self.logger.error("Missing tag ID")
-                return normalize_response(None, "error", "Missing tag ID")
-            
-            self.logger.info(f"Adding tag: {tag_id} -> '{tag_name}'")
-            
-            # Perform the addition
-            result = self.vector_engine.add_tag(tag_id, tag_name)
-            
-            if result:
-                return normalize_response({"status": "success", "tag_id": tag_id, "added": True})
-            else:
-                return normalize_response(None, "error", "Tag addition failed")
-            
-        except Exception as e:
-            error_msg = f"Failed to add tag: {str(e)}"
-            self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
-            
-    def batch_vectorize_nodes(self, nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Batch vectorize nodes
-        
-        Args:
-            nodes: List of node data dictionaries, each containing:
-                - node_id: Node ID
-                - content: Content text
-                - title: Node title (optional)
-                - tags: List of tags (optional)
-            
-        Returns:
-            Dictionary with vectorization results
-        """
-        try:
-            # Check initialization status
-            if not self._initialized:
-                self.logger.error("Service not initialized, please call initialize first")
-                return normalize_response(None, "error", "Service not initialized, please call initialize first")
-            
-            # Check vector engine
-            if not self.vector_engine:
-                self.logger.error("Vector engine not initialized")
-                return normalize_response(None, "error", "Vector engine not initialized")
-            
-            # Perform batch vectorization
-            result = self.vector_engine.backend_batch_vectorize_nodes(nodes)
-            return normalize_response(result)
-            
-        except Exception as e:
-            error_msg = f"Batch vectorization failed: {str(e)}"
-            self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-            return normalize_response(None, "error", error_msg)
 
-def run_ollama_model(text, model_name="gemma-3b-it"):
-    """Run ollama command directly"""
+def main():
+    """主入口点"""
     try:
-        cmd = ["ollama", "run", model_name, text]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to run ollama command: {e}")
-        return None
-
-def main(config: Config):
-    """Main function"""
-    try:
-        # Initialize logging
-        log_level = logging.DEBUG if config.debug else logging.INFO
-        setup_logging(config.log_file, log_level)
+        # 设置日志
+        logger, data_dir, log_file = setup_logging()
+        logger.info("SimTag EPC Server 启动中...")
+        logger.info(f"使用日志文件路径: {log_file}")
         
-        # Record configuration information
-        logger.info("SimTag EPC Server Configuration:")
-        logger.info(f"Vector file: {config.vector_file}")
-        logger.info(f"Database file: {config.db_file}")
-        logger.info(f"Log file: {config.log_file}")
-        logger.info(f"Debug mode: {config.debug}")
+        vector_db_path = os.path.join(data_dir, 'supertag_vector.db')
+        logger.info(f"使用向量数据库路径: {vector_db_path}")
         
-        # Create server instance
-        server = SimTagServer(config)
+        # 创建配置
+        from simtag.config import Config
+        config = Config(vector_db_path=vector_db_path)
         
-        
-        # Start server
+        # 创建并启动服务器
+        server = SimTagEPCServer(config)
+        logger.info("EPC服务器已创建，开始启动...")
         server.start()
         
     except Exception as e:
-        logger.error(f"Server startup failed: {e}")
-        logger.error(traceback.format_exc())
+        error_msg = f"启动失败: {str(e)}"
+        print(f"❌ {error_msg}", file=sys.stderr, flush=True)
+        logging.error(error_msg)
+        logging.error(traceback.format_exc())
         sys.exit(1)
 
-if __name__ == "__main__":
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SimTag EPC Server')
-    parser.add_argument('--vector-file', help='Vector file path')
-    parser.add_argument('--db-file', help='Database file path')
-    parser.add_argument('--model', help='Model name')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--log-file', help='Log file path')
-    parser.add_argument('--host', default='127.0.0.1', help='Server address')
-    parser.add_argument('--port', type=int, default=0, help='Server port')
-    args = parser.parse_args()
 
-    # Create configuration object
-    config = Config(
-        vector_file=args.vector_file,
-        db_file=args.db_file,
-        model_name=args.model,
-        debug=args.debug,
-        log_file=args.log_file,
-        host=args.host,
-        port=args.port
-    )
-    
-    main(config)
+if __name__ == "__main__":
+    main()
