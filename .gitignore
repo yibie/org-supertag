@@ -1,5 +1,6 @@
 # Compiled
 *.elc
+*.pyc
 
 # Packaging
 .cask
@@ -71,3 +72,4 @@ simtag/models/
 simtag/__pycache__/
 memory-bank/
 .venv.backup/
+
