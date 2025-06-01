@@ -415,6 +415,10 @@ def main():
     # This ensures all subsequent operations, including SimTagBridge initialization, are logged.
     setup_simtag_logging(args.data_directory)
 
+    # Set environment variable for config.py to use for its log path
+    os.environ["ORG_SUPERTAG_DATA_DIRECTORY"] = args.data_directory
+    logger.info(f"Set ORG_SUPERTAG_DATA_DIRECTORY environment variable to: {args.data_directory}")
+
     logger.info(f"Starting SimTagBridge with args: Port={args.emacs_epc_port}, DataDir='{args.data_directory}', Host='{args.host}', Profile={args.profile}")
 
     bridge_instance = None # Define bridge_instance to ensure it's in scope for finally block

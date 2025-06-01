@@ -1,59 +1,28 @@
-# Compiled
 *.elc
 *.pyc
-
-# Packaging
 .cask
-
-# pytest
-.pytest_cache/
-
-
-# developing
-.developing/
-cursor-memory-bank/
-
-# venv
-.venv/
-
-# Backup files
 *~
 \#*\#
 .\#*
 *.bak
-
-# Undo-tree save-files
 *.~undo-tree
-
-# Auto-save files
 auto-save-list
 tramp
 .\#*
-
-# etc
 .DS_Store 
-
-# Visual Studio Code
-.vscode/
 .aider*
-
-
-# log files
 *.log
 *.log.*
 *.log.*.*
 *.log.*.*.*
 *.log.*.*.*.*
 *.log.*.*.*.*.*
-
-# test files
 *.test
 *.test.*
 *.test.*.*
 *.test.*.*.*
 *.test.*.*.*.*
 *.test.*.*.*.*.*
-
 test_*.*
 test_*.*.*
 test_*.*.*.*
@@ -64,12 +33,19 @@ test_*.*.*.*.*.*.*.*
 test_*.*.*.*.*.*.*.*.*
 test_*.*.*.*.*.*.*.*.*.*
 test_*.*.*.*.*.*.*.*.*.*.*
+*.el.bak
 
 # directory
+dist/
+.venv/
 developing/
 cache/
 simtag/models/
 simtag/__pycache__/
 memory-bank/
 .venv.backup/
-
+.pytest_cache/
+.developing/
+cursor-memory-bank/
+.vscode/
+simtag/python-bridge/

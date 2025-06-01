@@ -59,8 +59,9 @@ Assumed to be in the same directory as this Elisp file."
   :group 'org-supertag-bridge)
 
 (defcustom org-supertag-bridge-data-directory
-  (expand-file-name ".org-supertag" user-emacs-directory) ; Changed default
-  "Data directory for org-supertag, passed to `simtag_bridge.py`."
+  (expand-file-name "org-supertag" user-emacs-directory) ; Changed default from .org-supertag
+  "Data directory for org-supertag, passed to `simtag_bridge.py`.
+  This will typically be ~/.emacs.d/org-supertag/"
   :type 'directory
   :group 'org-supertag-bridge)
 
