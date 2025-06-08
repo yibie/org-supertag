@@ -502,7 +502,7 @@ TAG-ID: The ID of the current tag being edited."
                          (similarity (cdr rec))
                          (tag-id (org-supertag-tag-get-id-by-name tag-name)))
                     (message "Tag %s -> ID: %s, Similarity: %s" tag-name tag-id similarity)
-                    (let ((is-selected (member tag-id org-supertag-relation--selected-tags))
+                    (let* ((is-selected (member tag-id org-supertag-relation--selected-tags))
                           (selection-mark (if is-selected 
                                              (propertize "[✓]" 'face '(:foreground "green"))
                                            "[ ]")))
@@ -1422,9 +1422,55 @@ Returns a list of tag IDs."
   "Refresh the display of the isolated tags list."
   (interactive)
   (when (get-buffer "*Org-Supertag Isolated Tags*")
-    (let ((point (point)))
-      (org-supertag-relation-show-isolated-tags)
-      (goto-char (min point (point-max))))))
+    (with-current-buffer "*Org-Supertag Isolated Tags*"
+      (let ((inhibit-read-only t)
+            (current-point (point)))
+        (erase-buffer)
+        (insert (propertize "Isolated Tags (No Relations)\n\n" 'face '(:height 1.2 :weight bold)))
+        (insert "Shortcuts: [m] - Manage selected tag, [q] - Quit, [s] - Select/Unselect, [S] - Select All, [U] - Unselect All\n\n")
+
+        (let ((isolated-tags (org-supertag-relation--get-isolated-tags)))
+          (if (null isolated-tags)
+              (insert "No isolated tags found.\n")
+            (dolist (tag-id isolated-tags)
+              (let* ((tag-name (org-supertag-tag-get-name-by-id tag-id))
+                     (is-selected (member tag-id org-supertag-relation--selected-tags)) ; check selected status
+                     (selection-mark (if is-selected
+                                        (propertize "[✓]" 'face '(:foreground "green"))
+                                      "[ ]")))
+                (insert selection-mark) ; Use the mark
+                (insert " ")
+                (insert-text-button (propertize "[Manage]" 'face '(:foreground "blue"))
+                                  'action 'org-supertag-relation--manage-isolated-tag-action
+                                  'tag-id tag-id
+                                  'follow-link t
+                                  'help-echo "Manage relations for this tag")
+                (insert " ")
+                (insert-text-button (propertize "[Select]" 'face (if is-selected '(:foreground "orange") '(:foreground "green")))
+                                  'action 'org-supertag-relation-toggle-isolated-tag-selection
+                                  'tag-id tag-id
+                                  'follow-link t
+                                  'help-echo (if is-selected "Unselect this tag" "Select this tag"))
+                (insert (format " %s\n" tag-name))))))
+        (goto-char current-point)))))
+
+(defun org-supertag-relation-toggle-isolated-tag-selection (button)
+  "Toggle the selection state of an isolated tag for batch operations."
+  (let ((tag-id (button-get button 'tag-id)))
+    (when tag-id
+      (if (member tag-id org-supertag-relation--selected-tags)
+          ;; Unselect
+          (setq org-supertag-relation--selected-tags
+                (delete tag-id org-supertag-relation--selected-tags))
+        ;; Add selection
+        (push tag-id org-supertag-relation--selected-tags))
+      
+      ;; Refresh display to update selection status
+      (org-supertag-relation-refresh-isolated-tags)
+      
+      ;; Show current selection count
+      (message "Selected %d tags" 
+               (length org-supertag-relation--selected-tags)))))
 
 (defun org-supertag-relation-batch-relate-isolated-tags ()
   "Batch create relations for the selected isolated tags."

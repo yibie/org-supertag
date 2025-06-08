@@ -101,10 +101,7 @@
                 :olp         ; Outline path (ancestor titles)
                 :level       ; Level (0 for file level)
                 )         
-     :optional (;; Hash Information
-                :hash        ; Node property hash
-                :content-hash ; Content hash
-                ;; Task Information
+     :optional (;; Task Information
                 :scheduled   ; Scheduled time
                 :deadline    ; Deadline time
                 :todo       ; Todo state
@@ -117,11 +114,7 @@
                 :ref-count  ; Reference count
                 ;; Event Information
                 :created-at  ; Creation time
-                :modified-at ; Modification time
-                ;; Property Information
-                :properties  ; Property drawer contents
-                :raw-value  ; Raw headline value
-                ))
+                :modified-at)) ; Modification time
     
     (:type :tag
      :required (;; Basic Information
@@ -250,24 +243,23 @@ PROPS is the property list
 
 Returns:
 - t if valid
-- Signals error if invalid"
+- nil if invalid"
   (let* ((struct (cl-find type org-supertag-db-object-structure
                          :key (lambda (x) (plist-get x :type))))
-         (required (plist-get struct :required))
-         (missing-props (when required
-                          (cl-remove-if (lambda (key) (plist-member props key))
-                                       required))))
-    (cond
+         (required (plist-get struct :required)))
+    (and
      ;; Check required properties exist
-     (missing-props
-      (error "Invalid object properties for type %S. Missing required keys: %S" type missing-props))
+     (if required
+         (cl-every (lambda (key) (plist-member props key))
+                  required)
+       t)
      ;; Special validation for tag type
-     ((eq type :tag)
-      (let ((fields (plist-get props :fields)))
-        (or (null fields) ; Fields can be empty
-            (org-supertag-db--validate-fields fields))))
-     ;; Default: valid
-     (t t))))
+     (pcase type
+       (:tag
+        (let ((fields (plist-get props :fields)))
+          (or (null fields)  ; Fields can be empty
+              (org-supertag-db--validate-fields fields))))
+       (_ t)))))
 
 (defun org-supertag-db--validate-fields (fields)
   "Validate field definition list.
@@ -419,13 +411,15 @@ Returns:
 ;;---------------------------------------------------------------------------------
 
 (defun org-supertag-db-add (id props)
-  "Add or update entity.
-ID is entity unique identifier
-PROPS is entity properties
+  "Add an object with ID and PROPS to the database.
+If an object with the same ID already exists, it will be updated.
+This function now automatically adds or updates an 'updated-at' timestamp."
+  (org-supertag-db--add-object 
+   id 
+   (plist-put props :updated-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))))
 
-Returns:
-- Success: entity ID
-- Error: throws error"
+(defun org-supertag-db--add-object (id props)
+  "Private function to add object to database."
   (condition-case err
       (let* ((type (plist-get props :type))
              (old-props (org-supertag-db-get id))
@@ -861,7 +855,6 @@ Notes:
              (push file-path files)))))
      org-supertag-db--object)
     (delete-dups (nreverse files))))
-
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
 ;;---------------------------------------------------------------------------------
@@ -934,22 +927,18 @@ Returns:
       (mapcar #'car 
               (org-supertag-db-find base-pred)))))
 
-(defun org-supertag-db-find-nodes-by-tag (tag)
-  "Find all nodes that have TAG.
-TAG can be with or without # prefix.
-Returns a list of node IDs that have the specified tag."
-  (let ((normalized-tag (if (string-prefix-p "#" tag)
-                           (substring tag 1)
-                         tag)))
-    (cl-loop for (id . node) in (ht->alist org-supertag-db--object)
-             when (and (eq (plist-get node :type) :node)
-                      (member normalized-tag 
-                             (mapcar (lambda (t) 
-                                      (if (string-prefix-p "#" t)
-                                          (substring t 1)
-                                        t))
-                                    (plist-get node :tags))))
-             collect id)))
+(defun org-supertag-db-find-nodes-by-tag (tag-id)
+  "Find nodes that use the specified tag.
+TAG-ID is the tag ID to find
+
+Returns:
+- List of node IDs that use the tag
+- nil if no matches found"
+  (let ((links (org-supertag-db-find-links :node-tag nil tag-id)))
+    (message "Found links: %S" links)  ; Debug info
+    (mapcar (lambda (link)
+              (plist-get link :from))
+            links)))
 
 (defun org-supertag-db-find-nodes-by-field-value (field-name value &optional tag-id)
   "Find nodes with the specified field value.
@@ -1210,117 +1199,103 @@ Returns a clean string without any text properties."
 
 (defun org-supertag-db--get-node-title ()
   "Get current node title in plain text format."
-  (condition-case err
-      (org-supertag-db--clean-text
-       (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
-           (save-excursion
-             (org-back-to-heading t)
-             (let ((raw (buffer-substring-no-properties
-                        (line-beginning-position)
-                        (line-end-position))))
-               (replace-regexp-in-string
-                "^\\*+ \\(?:\\[#[A-Z0-9]\\] \\)?\\(?:TODO\\|DONE\\|\\[.*?\\]\\|\\) *" 
-                "" raw)))
-           ""))
-    (error
-     (message "Error getting node title: %s" (error-message-string err))
-     "")))
+  (org-supertag-db--clean-text
+   (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
+       (when-let* ((element (org-element-at-point)))
+         (org-element-property :raw-value element))
+       "")))
 
 (defun org-supertag-db--parse-node-at-point ()
   "Parse node data at current point."
   (save-excursion
-    (condition-case err
-        (let* ((element (org-element-at-point))
-               (type (org-element-type element)))
-          (message "Parsing node at point: type=%s" type)
-          (when (and (eq type 'headline)
-                     ;; Only process nodes with existing ID
-                     (org-entry-get nil "ID"))
-            ;; Parse headline
-            (let* ((title (org-supertag-db--get-node-title))
-                   (level (org-element-property :level element))
-                   (id (org-entry-get nil "ID"))
-                   ;; Task properties - Use more reliable retrieval methods
-                   (todo-state (org-entry-get nil "TODO"))
-                   (priority (org-entry-get nil "PRIORITY"))
-                   (scheduled (condition-case nil
-                                (org-get-scheduled-time (point))
-                              (error nil)))
-                   (deadline (condition-case nil
-                               (org-get-deadline-time (point))
-                             (error nil)))
-                   ;; Get outline path
-                   (olp (org-get-outline-path t))
-                   ;; Other properties
-                   (tags (org-get-tags))
-                   (properties (org-entry-properties nil 'standard))
-                   ;; parse reference relations
-                   (refs-to nil)
-                   (refs-from nil)
-                   ;; Get node content directly
-                   (content (save-excursion
-                             (org-end-of-meta-data t)
-                             (let* ((begin (point))
-                                    (end (org-element-property :contents-end element))
-                                    ;; Find next heading position
-                                    (next-heading (save-excursion
-                                                  (org-next-visible-heading 1)
-                                                  (point))))
-                               ;; go to begin
-                               (goto-char begin)
-                               ;; use more accurate boundary
-                               (let ((content-end (cond
-                                                 ;; if there is a next heading and in the current node content range
-                                                 ((and next-heading end (< next-heading end))
-                                                  (1- next-heading))
-                                                 ;; use the content end position of the node
-                                                 (end end)
-                                                 ;; if none, use the end position of the current node
-                                                 (t (org-entry-end-position)))))
-                                 ;; collect references
-                                 (while (re-search-forward org-link-any-re content-end t)
-                                   (let* ((link (org-element-context))
-                                          (link-type (org-element-property :type link))
-                                          (link-path (org-element-property :path link)))
-                                     (when (and (equal link-type "id")
-                                              (org-uuidgen-p link-path))
-                                       (push link-path refs-to))))
-                                 ;; only return content when begin and end are valid and have content
-                                 (when (and begin content-end (< begin content-end))
-                                   (org-supertag-db--clean-text
-                                    (buffer-substring-no-properties begin content-end)))))))
-                   ;; get other nodes that reference this node (keep existing reference relations)
-                   (existing-node (org-supertag-db-get id))
-                   (refs-from (when existing-node
-                              (plist-get existing-node :ref-from))))
-              
-              (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
-                      id title level todo-state priority (length refs-to))
-              
-              (list :type :node
-                    :id id
-                    :title title
-                    :file-path (buffer-file-name)
-                    :pos (org-element-property :begin element)
-                    :olp olp
-                    :level level
-                    ;; Task properties
-                    :todo todo-state
-                    :priority priority
-                    :scheduled scheduled
-                    :deadline deadline
-                    ;; Other properties
-                    :properties properties
-                    :tags tags
-                    :content content
-                    ;; Reference relations
-                    :ref-to (delete-dups refs-to)
-                    :ref-from (or refs-from nil)
-                    :ref-count (+ (length refs-to) (length refs-from))
-                    :created-at (current-time)))))
-      (error
-       (message "Error parsing node at point: %s" (error-message-string err))
-       nil))))
+    (let* ((element (org-element-at-point))
+           (type (org-element-type element)))
+      (message "Parsing node at point: type=%s" type)
+      (when (and (eq type 'headline)
+                 ;; 只处理已有 ID 的节点
+                 (org-entry-get nil "ID"))
+        ;; Parse headline
+        (let* ((title (org-supertag-db--get-node-title))
+               (level (org-element-property :level element))
+               (id (org-element-property :ID element))
+               ;; Task properties - 使用更可靠的获取方式
+               (todo-state (org-entry-get nil "TODO"))
+               (priority (org-entry-get nil "PRIORITY"))
+               (scheduled (condition-case nil
+                            (org-get-scheduled-time (point))
+                          (error nil)))
+               (deadline (condition-case nil
+                           (org-get-deadline-time (point))
+                         (error nil)))
+               ;; Get outline path
+               (olp (org-get-outline-path t))
+               ;; Other properties
+               (tags (org-get-tags))
+               (properties (org-entry-properties nil 'standard))
+               ;; parse reference relations
+               (refs-to nil)
+               (refs-from nil)
+               ;; Get node content directly
+               (content (save-excursion
+                         (org-end-of-meta-data t)
+                         (let* ((begin (point))
+                                (end (org-element-property :contents-end element))
+                                ;; Find next heading position
+                                (next-heading (save-excursion
+                                              (org-next-visible-heading 1)
+                                              (point))))
+                           ;; go to begin
+                           (goto-char begin)
+                           ;; use more accurate boundary
+                           (let ((content-end (cond
+                                             ;; if there is a next heading and in the current node content range
+                                             ((and next-heading end (< next-heading end))
+                                              (1- next-heading))
+                                             ;; use the content end position of the node
+                                             (end end)
+                                             ;; if none, use the end position of the current node
+                                             (t (org-entry-end-position)))))
+                             ;; collect references
+                             (while (re-search-forward org-link-any-re content-end t)
+                               (let* ((link (org-element-context))
+                                      (link-type (org-element-property :type link))
+                                      (link-path (org-element-property :path link)))
+                                 (when (and (equal link-type "id")
+                                          (org-uuidgen-p link-path))
+                                   (push link-path refs-to))))
+                             ;; only return content when begin and end are valid and have content
+                             (when (and begin content-end (< begin content-end))
+                               (org-supertag-db--clean-text
+                                (buffer-substring-no-properties begin content-end)))))))
+               ;; get other nodes that reference this node (keep existing reference relations)
+               (existing-node (org-supertag-db-get id))
+               (refs-from (when existing-node
+                          (plist-get existing-node :ref-from))))
+          
+          (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
+                  id title level todo-state priority (length refs-to))
+          
+          (list :type :node
+                :id id
+                :title title
+                :file-path (buffer-file-name)
+                :pos (org-element-property :begin element)
+                :olp olp
+                :level level
+                ;; Task properties
+                :todo todo-state
+                :priority priority
+                :scheduled scheduled
+                :deadline deadline
+                ;; Other properties
+                :properties properties
+                :tags tags
+                :content content
+                ;; Reference relations
+                :ref-to (delete-dups refs-to)
+                :ref-from (or refs-from nil)
+                :ref-count (+ (length refs-to) (length refs-from))
+                :created-at (current-time)))))))
 
 (defun org-supertag-db--validate-node-props (props)
   "Validate node property completeness."
@@ -1333,6 +1308,58 @@ Returns a clean string without any text properties."
 ;;------------------------------------------------------------------------------
 ;; Batch Node Parsing
 ;;------------------------------------------------------------------------------    
+
+(defun org-supertag-db--collect-nodes-in-buffer ()
+  "Collect all heading nodes in current buffer.
+Returns a list of parsed nodes."
+  (let ((nodes nil))
+    ;; Only process file buffers
+    (when (buffer-file-name)
+      ;; Collect all heading nodes
+      (org-map-entries
+       (lambda ()
+         (let ((element (org-element-at-point)))
+           ;; Only process heading nodes
+           (when (and (eq (org-element-type element) 'headline)
+                      (org-at-heading-p))
+             (when-let* ((node (org-supertag-db--parse-node-at-point)))
+               (push node nodes)))))
+       t nil))
+    ;; Return collected nodes in original order
+    (nreverse nodes)))
+
+(defun org-supertag-db-update-buffer ()
+  "Update all nodes in current buffer.
+Returns number of nodes updated."
+  (let ((count 0)
+        (file-path (buffer-file-name)))
+    (when file-path
+      ;; Process all nodes
+      (dolist (node (org-supertag-db--collect-nodes-in-buffer))
+        ;; Add or update each node
+        (org-supertag-db-add (plist-get node :id) node)
+        (cl-incf count))
+      count)))
+
+(defun org-supertag-db-update-file (file)
+  "Update all nodes in specified file.
+FILE is the file path.
+Returns number of nodes updated."
+  (when (and file (file-exists-p file))
+    (with-current-buffer (find-file-noselect file)
+      (org-mode)
+      (org-supertag-db-update-buffer))))
+
+(defun org-supertag-db-update-directory (dir)
+  "Update all org files in directory.
+DIR is the directory path.
+Returns total number of nodes updated."
+  (let ((files (directory-files-recursively dir "\\.org$"))
+        (total 0))
+    (dolist (file files)
+      (cl-incf total (org-supertag-db-update-file file)))
+    (message "Updated %d nodes in %d files" total (length files))
+    total))
 
 (defun org-supertag-db-get-pos (node-id)
   "Get buffer position for node with NODE-ID.
@@ -1837,7 +1864,7 @@ Steps:
                       (org-supertag-db--mark-dirty)
                       (org-supertag-db--schedule-save)))
   (org-supertag-db-on 'entity:removed
-                    (lambda (type id entity removed-data)
+                    (lambda (id entity)
                       (org-supertag-db--mark-dirty)
                       (org-supertag-db--schedule-save)))
   (org-supertag-db-on 'link:created
@@ -1845,7 +1872,7 @@ Steps:
                       (org-supertag-db--mark-dirty)
                       (org-supertag-db--schedule-save)))
   (org-supertag-db-on 'link:removed
-                    (lambda (type from to props)
+                    (lambda (type from to)
                       (org-supertag-db--mark-dirty)
                       (org-supertag-db--schedule-save)))
 

@@ -204,9 +204,12 @@ Returns a hash table mapping node IDs to their properties."
                 (let ((id (org-id-get)))
                   ;; 只在没有 ID 时创建节点
                   (unless id
-                    (condition-case nil
+                    (condition-case err
                         (org-supertag-node-create)
-                      (error nil)))
+                      (error 
+                       (message "Failed to create node ID at line %d: %s" 
+                               (line-number-at-pos) 
+                               (error-message-string err)))))
                   (when-let* ((id (org-id-get))  ; Get ID again after potential creation
                              (props (condition-case err
                                        (save-excursion
@@ -1160,6 +1163,89 @@ This is useful when files have been removed from sync scope or deleted."
           
           ;; Return number of problems found
           (length problematic-regions))))))
+
+;;;###autoload
+(defun org-supertag-sync-test-auto-id-creation ()
+  "Test automatic ID creation for headings in current buffer.
+Scans current buffer and attempts to create IDs for all headings
+that meet the criteria. Reports results."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Must be in an org-mode buffer"))
+  
+  (let ((created-count 0)
+        (existing-count 0)
+        (failed-count 0)
+        (errors '()))
+    
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((case-fold-search t))
+          (while (re-search-forward org-heading-regexp nil t)
+            (when (and (org-at-heading-p)
+                       (not (string-prefix-p "TAGS" (org-get-heading t t t t)))
+                       (not (org-in-commented-heading-p))
+                       (>= (org-current-level) org-supertag-sync-node-creation-level))
+              (let ((id (org-id-get))
+                    (heading (org-get-heading t t t t))
+                    (line (line-number-at-pos)))
+                (cond
+                 ;; Already has ID
+                 (id
+                  (cl-incf existing-count)
+                  (message "Line %d: %s [ID exists: %s]" line heading id))
+                 ;; Try to create ID
+                 (t
+                  (condition-case err
+                      (progn
+                        (org-supertag-node-create)
+                        (let ((new-id (org-id-get)))
+                          (if new-id
+                              (progn
+                                (cl-incf created-count)
+                                (message "Line %d: %s [ID created: %s]" line heading new-id))
+                            (cl-incf failed-count)
+                            (push (list line heading "ID creation returned nil") errors)
+                            (message "Line %d: %s [ID creation failed: returned nil]" line heading))))
+                    (error
+                     (cl-incf failed-count)
+                     (let ((err-msg (error-message-string err)))
+                       (push (list line heading err-msg) errors)
+                       (message "Line %d: %s [Error: %s]" line heading err-msg))))))))))))
+    
+    ;; Report results
+    (message "\n=== Auto ID Creation Test Results ===")
+    (message "Total headings processed: %d" (+ created-count existing-count failed-count))
+    (message "IDs created: %d" created-count)
+    (message "IDs already existed: %d" existing-count)
+    (message "Failures: %d" failed-count)
+    
+    (when errors
+      (message "\nErrors encountered:")
+      (dolist (error errors)
+        (message "  Line %d (%s): %s" (nth 0 error) (nth 1 error) (nth 2 error))))
+    
+    ;; Show results in a buffer if there were errors
+    (when errors
+      (with-current-buffer (get-buffer-create "*Org Supertag ID Test Results*")
+        (erase-buffer)
+        (insert "Auto ID Creation Test Results\n")
+        (insert "===============================\n\n")
+        (insert (format "Total headings: %d\n" (+ created-count existing-count failed-count)))
+        (insert (format "IDs created: %d\n" created-count))
+        (insert (format "IDs existing: %d\n" existing-count))
+        (insert (format "Failures: %d\n\n" failed-count))
+        
+        (when errors
+          (insert "Errors:\n")
+          (dolist (error errors)
+            (insert (format "Line %d: %s\n  Error: %s\n\n" 
+                           (nth 0 error) (nth 1 error) (nth 2 error)))))
+        (display-buffer (current-buffer))))
+    
+    (list :created created-count :existing existing-count :failed failed-count :errors errors)))
 
 (provide 'org-supertag-sync)
 

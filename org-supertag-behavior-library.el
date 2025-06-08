@@ -58,8 +58,8 @@
 
 (require 'org)
 (require 'org-supertag-db)
-(require 'org-supertag-sim-epc)
-(require 'epc)
+(require 'org-supertag-bridge) ;; Modern Bridge
+(require 'org-supertag-api)   ;; Modern API
 
 
 ;;------------------------------------------------------------------------------
@@ -68,45 +68,37 @@
 
 (defun org-supertag-behavior--call-ai (prompt &optional system-prompt)
   "Call the configured AI model with PROMPT and optional SYSTEM-PROMPT.
-Uses the EPC connection managed by `org-supertag-sim-epc`.
+Uses the modern `org-supertag-api` via `org-supertag-bridge`.
 
 PROMPT: The main user prompt string.
 SYSTEM-PROMPT: An optional system prompt string to guide the AI's behavior.
+This is currently handled by the Python LLMClient's configuration, but
+the parameter is kept for potential future use.
 
 Returns the AI's text response as a string on success.
-Returns nil and logs an error on failure (e.g., EPC connection error,
-AI error, timeout)."
-  (org-supertag-sim-epc-log "Calling AI with prompt (length %d)..." (length prompt))
+Returns nil and logs an error on failure."
+  (org-supertag-bridge--log "Calling AI with prompt (length %d)..." (length prompt))
   (condition-case err
-      (progn
-        ;; Ensure EPC server is running
-        (unless (org-supertag-sim-epc-server-running-p)
-          (error "SimTag EPC server is not running."))
+      (let* ((full-prompt (if system-prompt (concat system-prompt "\n\n" prompt) prompt))
+             (response (org-supertag-api-generate-text full-prompt)))
 
-        ;; Prepare arguments for the EPC call
-        (let* ((args (if system-prompt
-                         (list prompt system-prompt)
-                       (list prompt)))
-               ;; Assuming 'run_ollama' is the correct Python function name
-               (response (epc:call-sync org-supertag-sim-epc-manager 'run_ollama args)))
+        (org-supertag-bridge--log "AI raw response: %S" response)
 
-          (org-supertag-sim-epc-log "AI raw response: %S" response)
-
-          ;; Check response status
-          (if (and response
-                   (plistp response)
-                   (string= (plist-get response :status) "success"))
-              (let ((result (plist-get response :result)))
-                (org-supertag-sim-epc-log "AI call successful, response length: %d" (if result (length result) 0))
-                result)
-            ;; Handle AI-side error
-            (let ((error-msg (or (plist-get response :message) "Unknown AI error")))
-              (org-supertag-sim-epc-log "AI call failed: %s" error-msg)
-              (error "AI Error: %s" error-msg)
-              nil))))
+        ;; Check response status
+        (if (and (eq (car response) 'success)
+                 (plistp (cdr response))
+                 (string= (plist-get (cdr response) :status) "success"))
+            (let ((result (plist-get (cdr response) :result)))
+              (org-supertag-bridge--log "AI call successful, response length: %d" (if result (length result) 0))
+              result)
+          ;; Handle AI-side error
+          (let ((error-msg (or (plist-get (cdr response) :message) "Unknown AI error")))
+            (org-supertag-bridge--log "AI call failed: %s" error-msg)
+            (error "AI Error: %s" error-msg)
+            nil)))
     ;; Handle Elisp-side errors (EPC connection, timeout, etc.)
     (error
-     (org-supertag-sim-epc-log "Error calling AI: %s" (error-message-string err))
+     (org-supertag-bridge--log "Error calling AI: %s" (error-message-string err))
      (message "Error communicating with AI: %s" (error-message-string err))
      nil)))
 

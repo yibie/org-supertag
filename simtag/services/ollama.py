@@ -97,7 +97,7 @@ class OllamaService:
             resp = requests.post(
                 f"{self.base_url}/api/generate", 
                 json=payload,
-                timeout=45
+                timeout=180  # 增加到3分钟
             )
             resp.raise_for_status()
             

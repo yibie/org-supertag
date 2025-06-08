@@ -4,291 +4,132 @@ Integrates entity extraction, tag generation, and relationship analysis function
 """
 import logging
 from .storage import VectorStorage
-from ..services.ollama import OllamaService
-from ..embeddings import get_embedding_model
+from ..services.llm_client import LLMClient
+from .sync import SyncOrchestrator
+import time
+import traceback
+import sys
+import numpy as np
+from typing import List, Optional
 
 class TaggingEngine:
-    def __init__(self, config, storage: VectorStorage):
+    def __init__(self, config, storage: VectorStorage, llm_client: LLMClient):
         self.config = config
         self.storage = storage
-        self.logger = logging.getLogger("tagging")
-        self.ollama = OllamaService()
-        
-        # Initialize embedding model
-        self.embedding_model = get_embedding_model(config.embedding_model)
-        if self.embedding_model is None:
-            self.logger.error(
-                f"Critical error: Failed to load embedding model '{config.embedding_model}'. Vector-related features will be unavailable."
-            )
-            self.logger.error(
-                "For detailed errors, please check the logs from the 'embeddings' module."
-            )
-            self.logger.error(
-                "Common causes: Network connection issues, proxy configuration errors, or missing dependencies."
-            )
-            self.logger.error(
-                "Recommended action: Check your network/proxy settings and try running the `simtag/setup.sh` script from the project root (e.g., execute `./simtag/setup.sh` or `bash simtag/setup.sh`) for installation and configuration help. If executing directly, ensure the script has execution permissions (can be set using `chmod +x simtag/setup.sh`)."
-            )
-        else:
-            self.logger.info(f"Successfully loaded and using embedding model: {self.embedding_model.model_name}")
-        
-    def generate_tags(self, text: str, limit: int = 5, use_ai: bool = True) -> list:
-        """
-        Generate tags
-        :param use_ai: Whether to use AI generation (otherwise use basic algorithm)
-        """
-        if use_ai and self.ollama.available:
-            self.logger.info("Using Ollama to generate AI tags")
-            return self.ollama.generate_tags(text, limit)
-        
-        # Basic keyword extraction algorithm
-        self.logger.info("Using basic algorithm to generate tags")
-        words = [w.strip() for w in text.split() if len(w) > 3]
-        return list(set(words))[:limit]
-    
-    def extract_entities(self, text: str, use_ai: bool = True) -> list:
-        """Entity recognition"""
-        if use_ai and self.ollama.available:
-            return self.ollama.extract_entities(text)
-        
-        # Basic entity recognition
-        entities = []
-        for i, word in enumerate(text.split()):
-            if word.istitle() and len(word) > 2:
-                entities.append({
-                    "entity": word,
-                    "type": "PROPER_NOUN",
-                    "start": i,
-                    "end": i + len(word)
-                })
-        return entities
-    
-    def analyze_relations(self, tag: str, related_tags: list, use_ai: bool = True) -> list:
-        """Analyze tag relationships"""
-        if use_ai and self.ollama.available:
-            return self.ollama.analyze_relations(tag, related_tags)
-        
-        # Basic relationship analysis
-        return [{
-            "tag": rt,
-            "relation": "RELATED",
-            "reason": f"Frequently co-occurs with {tag}"
-        } for rt in related_tags]
-    
-    def find_similar_tags(self, tag: str, limit: int = 10) -> list:
-        """
-        Find similar tags
-        
+        self.llm_client = llm_client
+        self.logger = logging.getLogger("simtag_bridge.tagging_engine")
+        self.logger.info("TaggingEngine initialized.")
+
+        # Initialize SyncOrchestrator for node vectorization
+        self.sync_orchestrator = SyncOrchestrator(storage=self.storage,
+                                                llm_client=self.llm_client,
+                                                logger=self.logger)
+        self.logger.info("TaggingEngine: SyncOrchestrator initialized for node processing.")
+
+    def _generate_vector_for_text(self, text: str) -> Optional[np.ndarray]:
+        """Generates an embedding vector for a given text string.
+
         Args:
-            tag: Tag name or ID
-            limit: Result count limit
-            
+            text: The text to embed.
+
         Returns:
-            List of similar tags, each element is a (tag_id, similarity_score) tuple
+            A NumPy array of the embedding, or None if generation fails.
         """
-        try:
-            self.logger.info(f"Finding similar tags: {tag}, limit={limit}")
-            
-            # First try to treat input as tag ID, get its vector
-            vector = None
-            
-            # Check if it's a known tag ID
-            if self.storage.has_tag_vector(tag):
-                self.logger.info(f"Found tag ID: {tag}")
-                vector = self.storage.get_tag_vector(tag)
-            else:
-                # If not a known ID, generate vector for tag name
-                self.logger.info(f"Generating vector for tag name: {tag}")
-                vector = self._generate_vector_for_tag(tag)
-            
-            if vector is not None:
-                # Use vector to query similar tags
-                similar_tags = self.storage.find_similar_tags(vector, limit)
-                self.logger.info(f"Found {len(similar_tags)} similar tags")
-                return similar_tags
-            else:
-                self.logger.warning(f"Unable to generate vector for tag: {tag}")
-                return []
-                
-        except Exception as e:
-            self.logger.error(f"Failed to find similar tags: {str(e)}")
-            return []
-    
-    def _generate_vector_for_tag(self, tag_name: str) -> list:
-        """
-        Generate vector for tag name
-        
-        Args:
-            tag_name: Tag name
-            
-        Returns:
-            Tag vector
-        """
-        try:
-            if self.embedding_model is not None:
-                # Use embedding model to generate true semantic vector
-                self.logger.info(f"Using embedding model to generate semantic vector for tag: {tag_name}")
-                vector = self.embedding_model.get_embedding(tag_name)
-                return vector
-            else:
-                # Embedding model unavailable, raise error
-                self.logger.error(f"Embedding model unavailable, cannot generate vector for tag: {tag_name}")
-                raise ValueError(f"Embedding model is not available, cannot generate vector for tag: {tag_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to generate tag vector: {str(e)}")
-            # Re-raise the exception if it's the ValueError we just raised,
-            # otherwise return None or handle other exceptions as before.
-            if isinstance(e, ValueError) and "Embedding model is not available" in str(e):
-                raise
+        if not text or not text.strip():
+            self.logger.warning("_generate_vector_for_text: Input text is empty or whitespace. Skipping embedding.")
             return None
-    
-    def sync_tags(self, db_file: str, tag_data: list) -> dict:
-        """
-        Synchronize tag vector database
-        
-        Args:
-            db_file: Database file path
-            tag_data: Tag data list, each element in [tag_id, tag_name] format
-            
-        Returns:
-            Synchronization result statistics
-        """
-        self.logger.info(f"Starting tag library sync: database={db_file}, tag count={len(tag_data)}")
-        
-        # Record received data type and format sample
-        if tag_data:
-            self.logger.info(f"Received data type: {type(tag_data)}, first data: {tag_data[0]}, type: {type(tag_data[0])}")
-        
-        # Record initial state
-        initial_stats = self.storage.get_stats()
-        
-        # Get current stored tag ID list
-        existing_tag_ids = set(self.storage.list_tag_ids())
-        
-        # Convert incoming tag data to dictionary format {tag_id: tag_name}
-        new_tags = {}
-        for tag_item in tag_data:
-            # Support multiple formats, from simplest to complex processing
-            try:
-                # 1. Array/tuple/list format [id, name]
-                if isinstance(tag_item, (list, tuple)) and len(tag_item) == 2:
-                    tag_id, tag_name = tag_item
-                    
-                # 2. Dictionary format {"id": id, "name": name}
-                elif isinstance(tag_item, dict) and "id" in tag_item and "name" in tag_item:
-                    tag_id = tag_item["id"]
-                    tag_name = tag_item["name"]
-                    
-                # 3. Other serialized formats (try direct parsing)
+        try:
+            if self.llm_client:
+                self.logger.debug(f"Using LLMClient to generate semantic vector for text: '{text[:100]}...'")
+                vector_list = self.llm_client.get_embedding_sync(text)
+                if vector_list:
+                    return np.array(vector_list, dtype=np.float32)
                 else:
-                    self.logger.warning(f"Attempting to parse unknown format tag data: {tag_item}")
-                    # Last attempt: if it's an indexable object
-                    if hasattr(tag_item, "__getitem__"):
-                        tag_id = tag_item[0] if len(tag_item) > 0 else None
-                        tag_name = tag_item[1] if len(tag_item) > 1 else None
-                    else:
-                        # Cannot parse, skip this item
-                        self.logger.error(f"Unparseable tag data format: {tag_item}")
-                        continue
-                    
-                # Ensure data is valid
-                if tag_id and tag_name:
-                    # Convert tag ID and name to strings to ensure type consistency
-                    tag_id = str(tag_id)
-                    tag_name = str(tag_name)
-                    new_tags[tag_id] = tag_name
-            except Exception as e:
-                self.logger.error(f"Error processing tag data item: {e}, data: {tag_item}")
-                continue
-        
-        self.logger.info(f"Processed tag count: {len(new_tags)}")
-        
-        # Calculate tags to add and remove
-        new_tag_ids = set(new_tags.keys())
-        tags_to_add = new_tag_ids - existing_tag_ids
-        tags_to_update = existing_tag_ids & new_tag_ids
-        tags_to_remove = existing_tag_ids - new_tag_ids
-        
-        # Record processing plan
-        self.logger.info(f"Processing plan: add={len(tags_to_add)}, update={len(tags_to_update)}, remove={len(tags_to_remove)}")
-        
-        # Execute add and update operations
-        added_count = 0
-        updated_count = 0
-        for tag_id in tags_to_add:
-            tag_name = new_tags[tag_id]
-            if self.update_tag_vector(tag_id, tag_name):
-                added_count += 1
-        
-        for tag_id in tags_to_update:
-            tag_name = new_tags[tag_id]
-            if self.update_tag_vector(tag_id, tag_name):
-                updated_count += 1
-        
-        # Execute removal operations
-        removed_count = 0
-        for tag_id in tags_to_remove:
-            if self.remove_tag_vector(tag_id):
-                removed_count += 1
-        
-        # Get final state
-        final_stats = self.storage.get_stats()
-        
-        # Return sync results
+                    self.logger.warning(f"_generate_vector_for_text: LLMClient returned None or empty vector for text: '{text[:100]}...'")
+                    return None
+            else:
+                self.logger.error("LLMClient unavailable, cannot generate vector for text.")
+                return None
+        except Exception as e:
+            self.logger.error(f"Failed to generate text vector for '{text[:100]}...': {str(e)}\n{traceback.format_exc()}")
+            return None
+
+    def find_similar_nodes(self, query_input: str, top_k: int = 10) -> list:
+        """Finds similar nodes based on a query input (either a node_id or text).
+
+        Args:
+            query_input: A node_id (str) or a text string (str) to find similar nodes for.
+            top_k: The number of similar nodes to return.
+
+        Returns:
+            A list of tuples, where each tuple is (node_id, distance_score).
+            Returns an empty list if no query vector can be obtained or if an error occurs.
+        """
+        engine_start_time = time.time()
+        self.logger.info(f"[TaggingEngine.find_similar_nodes] Entered for query_input: '{query_input[:100]}...', top_k: {top_k}")
+
+        query_vector: Optional[np.ndarray] = None
+
+        # Attempt to retrieve vector if query_input might be a node_id
+        if self.storage.has_vector_ext:
+            self.logger.debug(f"[TaggingEngine.find_similar_nodes] Checking if '{query_input}' is a node_id with a stored embedding.")
+            potential_vector = self.storage.get_node_embedding_by_id(query_input)
+            if potential_vector is not None:
+                query_vector = potential_vector
+                self.logger.info(f"[TaggingEngine.find_similar_nodes] Using stored embedding for node_id: '{query_input}'.")
+
+        # If no stored vector was found, treat query_input as text and generate embedding
+        if query_vector is None:
+            self.logger.info(f"[TaggingEngine.find_similar_nodes] No stored vector found for '{query_input}'. Treating as text and generating new embedding.")
+            query_vector = self._generate_vector_for_text(query_input)
+
+        # If we have a vector, query the storage
+        if query_vector is not None and query_vector.size > 0:
+            self.logger.debug(f"[TaggingEngine.find_similar_nodes] Querying storage for similar nodes.")
+            storage_query_start_time = time.time()
+            similar_nodes = self.storage.find_similar_nodes(query_vector, top_k=top_k)
+            storage_query_end_time = time.time()
+            self.logger.info(f"[TaggingEngine.find_similar_nodes] Storage query took {storage_query_end_time - storage_query_start_time:.4f}s. Found {len(similar_nodes)} nodes.")
+            return similar_nodes
+        else:
+            self.logger.warning(f"[TaggingEngine.find_similar_nodes] Could not obtain a query vector for input: '{query_input[:100]}...'. Returning empty list.")
+            return []
+
+    def sync_full_snapshot(self, db_snapshot):
+        """
+        Processes a full database snapshot to create or update node embeddings.
+        This has been simplified to only handle node vectorization.
+        """
+        self.logger.info("Starting simplified full snapshot sync for node embeddings.")
+        start_time = time.time()
+
+        nodes_data = db_snapshot.get('nodes', [])
+        if not nodes_data:
+            self.logger.info("No nodes in the snapshot to process.")
+            return {"status": "success", "message": "No nodes to process."}
+
+        # Use SyncOrchestrator to handle the node processing logic
+        summary = self.sync_orchestrator.sync_nodes(nodes_data)
+
+        end_time = time.time()
+        self.logger.info(f"Full snapshot sync for nodes completed in {end_time - start_time:.2f} seconds. "
+                         f"Processed: {summary['processed']}, "
+                         f"Updated: {summary['updated']}, "
+                         f"Skipped: {summary['skipped']}, "
+                         f"Errors: {summary['errors']}.")
+
         return {
-            "initial_count": initial_stats.get("tag_vectors", 0),
-            "final_count": final_stats.get("tag_vectors", 0),
-            "added": added_count,
-            "updated": updated_count,
-            "removed": removed_count,
-            "total_processed": len(tag_data)
+            "status": "success",
+            "message": "Node embedding synchronization complete.",
+            "summary": summary
         }
-    
-    def update_tag_vector(self, tag_id: str, tag_name: str) -> bool:
+
+    def get_node_embedding(self, node_id: str) -> Optional[List[float]]:
         """
-        Update vector for a single tag
-        
-        Args:
-            tag_id: Tag ID
-            tag_name: Tag name
-            
-        Returns:
-            Whether update was successful
+        Retrieves the embedding for a specific node ID.
         """
-        try:
-            self.logger.info(f"Updating tag vector: id={tag_id}, name={tag_name}")
-            
-            # Generate vector
-            vector = self._generate_vector_for_tag(tag_name)
-            
-            if vector is None:
-                return False
-                
-            # Get vector dimension
-            vector_dim = len(vector)
-            
-            # Store vector
-            self.storage.save_tag_vector(tag_id, vector, vector_dim)
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to update tag vector: {str(e)}")
-            return False
-    
-    def remove_tag_vector(self, tag_id: str) -> bool:
-        """
-        Remove tag vector
-        
-        Args:
-            tag_id: Tag ID
-            
-        Returns:
-            Whether removal was successful
-        """
-        try:
-            self.logger.info(f"Removing tag vector: id={tag_id}")
-            self.storage.delete_tag_vector(tag_id)
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to remove tag vector: {str(e)}")
-            return False
+        self.logger.debug(f"Attempting to retrieve embedding for node_id: {node_id}")
+        vector = self.storage.get_node_embedding_by_id(node_id)
+        if vector is not None:
+            return vector.tolist()
+        return None

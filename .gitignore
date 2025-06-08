@@ -49,3 +49,6 @@ memory-bank/
 cursor-memory-bank/
 .vscode/
 simtag/python-bridge/
+simtag/nano-graphrag/
+.cursor/
+.test/
