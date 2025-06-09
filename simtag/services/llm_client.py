@@ -258,20 +258,19 @@ class LLMClient:
                             **kwargs: Any
                            ) -> List[float]:
         """
-        生成单个文本的嵌入向量
+        Async version of get_embedding using EmbeddingService.
         """
-        if not text or not text.strip():
-            logger.warning("get_embedding called with empty text")
+        from .embedding_service import get_embedding_service
+        
+        embedding_service = get_embedding_service()
+        result = await embedding_service.get_embedding(text, model=model)
+        
+        if result.success:
+            return result.embedding or []
+        else:
+            logger.error(f"Embedding failed: {result.error_message}")
             return []
-            
-        # 对于单个文本，直接调用同步方法
-        return await asyncio.to_thread(
-            self.get_embedding_sync,
-            text=text,
-            model=model,
-            **kwargs
-        )
-    
+
     async def get_embeddings_batch(self,
                                  texts: List[str],
                                  model: Optional[str] = None,
@@ -279,192 +278,27 @@ class LLMClient:
                                  **kwargs: Any
                                 ) -> List[List[float]]:
         """
-        批量生成嵌入向量，使用真正的多进程并行处理
-        
-        Args:
-            texts: 文本列表
-            model: 模型名称
-            use_multicore: 是否使用多进程处理
-            
-        Returns:
-            嵌入向量列表
+        Async batch embedding using EmbeddingService.
         """
-        if not texts:
-            return []
-            
-        # 过滤空文本
-        valid_texts = [text for text in texts if text and text.strip()]
-        if not valid_texts:
-            return []
-            
-        # 强制启用多进程处理：阈值降低到3个文本
-        should_use_multicore = (
-            use_multicore and 
-            len(valid_texts) >= 3  # 3个文本就启用多进程
-        )
+        from .embedding_service import get_embedding_service
         
-        if should_use_multicore:
-            logger.info(f"🚀 强制使用多进程处理 {len(valid_texts)} 个文本（阈值：3）")
-            return await self._get_embeddings_multiprocess(valid_texts, model, **kwargs)
-        else:
-            logger.info(f"💤 使用单线程处理 {len(valid_texts)} 个文本（少于3个）")
-            return await self._get_embeddings_sequential(valid_texts, model, **kwargs)
-    
-    async def _get_embeddings_multiprocess(self,
-                                         texts: List[str],
-                                         model: Optional[str] = None,
-                                         **kwargs: Any
-                                        ) -> List[List[float]]:
-        """
-        使用真正的多进程处理嵌入向量生成
-        """
-        from ..multicore_manager import TrueMultiCoreManager
-        from ..config import Config
+        logger.info(f"🚀 批量处理 {len(texts)} 个文本的嵌入")
         
-        # 获取全局配置
-        global_config = Config()
-        embedding_config = global_config.embedding_config
+        embedding_service = get_embedding_service()
+        results = await embedding_service.get_embeddings_batch(texts, model=model)
         
-        # 配置模型 - 根据config中的设置选择后端和模型
-        backend = embedding_config.get("primary_backend", "local")
-        
-        if backend == "local":
-            model_config = {
-                "backend": "local",
-                "local_model": model or embedding_config.get("local_model", "sentence-transformers/all-MiniLM-L6-v2")
-            }
-            logger.info(f"🔧 使用本地嵌入模型: {model_config['local_model']}")
-            
-        elif backend == "ollama":
-            model_config = {
-                "backend": "ollama",
-                "base_url": global_config.llm_client_config.get("base_url", "http://localhost:11434"),
-                "ollama_model": model or embedding_config.get("ollama_model", global_config.llm_client_config.get("default_embedding_model", "nomic-embed-text")),
-                "timeout": embedding_config.get("ollama_timeout", 300)
-            }
-            logger.info(f"🔧 使用Ollama嵌入模型: {model_config['ollama_model']} @ {model_config['base_url']}")
-            
-        else:
-            # 默认回退到本地模型
-            model_config = {
-                "backend": "local",
-                "local_model": "sentence-transformers/all-MiniLM-L6-v2"
-            }
-            logger.warning(f"未知的嵌入后端 '{backend}'，回退到本地模型")
-        
-        # 使用多进程管理器
-        multicore_manager = TrueMultiCoreManager({
-            "enabled": True,
-            "max_workers": None,  # 自动检测
-            "timeout": 300
-        })
-        
-        try:
-            with multicore_manager:
-                results = await multicore_manager.process_embeddings_parallel(
-                    texts=texts,
-                    model_config=model_config
-                )
-                
-                logger.info(f"✅ 多进程嵌入处理完成: {len(results)} 个结果")
-                return results
-                
-        except Exception as e:
-            logger.error(f"❌ 多进程嵌入处理失败，降级到单线程: {e}")
-            return await self._get_embeddings_sequential(texts, model, **kwargs)
-    
-    async def _get_embeddings_sequential(self,
-                                       texts: List[str], 
-                                       model: Optional[str] = None,
-                                       **kwargs: Any
-                                      ) -> List[List[float]]:
-        """
-        顺序处理嵌入向量生成
-        """
+        # 转换为List[List[float]]格式
         embeddings = []
-        for text in texts:
-            embedding = await asyncio.to_thread(
-                self.get_embedding_sync,
-                text=text,
-                model=model,
-                **kwargs
-            )
-            embeddings.append(embedding)
-        return embeddings
-
-    def get_embedding_sync(self,
-                           text: str,
-                           model: Optional[str] = None,
-                           **kwargs: Any
-                          ) -> List[float]:
-        """
-        Synchronous version of get_embedding.
-        Uses the 'requests' library for this synchronous call.
-        """
-        # Add guard against empty/whitespace text
-        if not text or not text.strip():
-            logger.warning("get_embedding_sync called with empty or whitespace-only text. Skipping API call.")
-            return []
-
-        target_model = model if model else self.config.get('default_embedding_model', self.default_model)
-        logger.debug(f"LLMClient.get_embedding_sync (requests) called for model: {target_model}")
-
-        if self.provider != 'ollama':
-            logger.error(f"LLM provider '{self.provider}' not supported for synchronous embeddings.")
-            return []
-
-        api_url = f"{self.base_url}/api/embeddings"
-        payload_dict: Dict[str, Any] = {
-            "model": target_model,
-            "prompt": text
-        }
-        
-        if "options" in kwargs:
-            payload_dict["options"] = kwargs["options"]
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-
-        logger.debug(f"Sending Ollama sync embeddings request (requests). URL: {api_url}, Model: {target_model}")
-        
-        try:
-            response = requests.post(
-                api_url, 
-                json=payload_dict, 
-                headers=headers, 
-                timeout=self.timeout
-            )
-            
-            logger.debug(f"Ollama sync embeddings response status (requests): {response.status_code}")
-            response.raise_for_status()
-            
-            response_json = response.json()
-            embedding = response_json.get("embedding")
-            
-            if embedding and isinstance(embedding, list):
-                logger.debug(f"Successfully retrieved sync embedding (requests) from {target_model}. Dimension: {len(embedding)}")
-                return embedding
+        success_count = 0
+        for result in results:
+            if result.success and result.embedding:
+                embeddings.append(result.embedding)
+                success_count += 1
             else:
-                logger.warning(f"Ollama sync response (requests) for {target_model} did not contain a valid 'embedding' list. Response: {response_json}")
-                return []
-
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"Ollama API HTTPError (requests) for model {target_model}: {e.response.status_code} - Response: {e.response.text}", exc_info=True)
-            return []
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ollama request failed (requests) for model {target_model}: {e}", exc_info=True)
-            return []
-        except json.JSONDecodeError as e:
-            raw_response_text = "N/A"
-            if 'response' in locals() and hasattr(response, 'text'):
-                raw_response_text = response.text
-            logger.error(f"Failed to parse Ollama response JSON (requests) for model {target_model}: {e}. Response text: {raw_response_text}", exc_info=True)
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error (requests) during sync embeddings for model {target_model}: {e}", exc_info=True)
-            return []
+                embeddings.append([])  # 失败时返回空列表
+        
+        logger.info(f"✅ 批量嵌入处理完成: {success_count}/{len(texts)} 成功")
+        return embeddings
 
     async def close(self):
         """Closes the underlying HTTP client and cleans up resources."""
@@ -473,8 +307,12 @@ class LLMClient:
             logger.info("LLMClient HTTP client closed.")
         
         # 清理多核心管理器资源
-        if self.multicore_manager:
-            self.multicore_manager.cleanup()
+        if hasattr(self, 'multicore_manager') and self.multicore_manager:
+            # 使用正确的清理方法（如果有的话）
+            if hasattr(self.multicore_manager, 'close'):
+                self.multicore_manager.close()
+            elif hasattr(self.multicore_manager, 'shutdown'):
+                self.multicore_manager.shutdown()
             logger.info("LLMClient multi-core manager cleaned up.")
 
 

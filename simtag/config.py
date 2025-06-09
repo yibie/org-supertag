@@ -132,15 +132,24 @@ class Config:
         "primary_backend": "llama_cpp",  # 使用 llama.cpp 作为主要后端
         "fallback_backends": ["ollama"],  # 只使用ollama作为备用后端，避免本地模型下载问题
         "cache_enabled": True,
-        "batch_size": 32,
+        "batch_size": 16,  # 减小批处理大小以避免llama.cpp序列ID问题
         "max_retries": 3,  # 增加重试次数
         "local_model": "sentence-transformers/all-MiniLM-L6-v2",  # 保留配置但不使用
         # "ollama_model": "nomic-embed-text",
         # "ollama_timeout": 300,
         "llama_cpp_model_path": "~/.models/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf",  # Qwen3模型路径
         "llama_cpp_binary": "llama-embedding",  # 二进制文件名
-        "llama_cpp_pooling": "mean",  # 池化策略
+        "llama_cpp_pooling": "cls",  # 改为cls池化策略以避免mean pooling的序列ID问题
         "llama_cpp_threads": None,  # 线程数，None表示自动检测
+        "llama_cpp_batch_size": 8,  # 添加llama.cpp专用的批处理大小
+        "llama_cpp_max_context": 512,  # 最大上下文长度
+        
+        # 长文本处理配置
+        "long_text_strategy": "chunk",  # 长文本处理策略: "truncate" | "chunk"
+        "chunk_size": 400,  # 分块大小（字符数）
+        "chunk_overlap": 50,  # 分块重叠（字符数）
+        "chunk_aggregation": "mean",  # 聚合策略: "mean" | "weighted_mean" | "max_pool"
+        "max_chunks": 10,  # 最大分块数量（防止过长文本）
         "force_update": True,  # 强制更新所有内容
         "incremental_update": False,  # 禁用增量更新
         "embedding_enabled": True,  # 强制启用嵌入
@@ -356,11 +365,12 @@ class Config:
             Dict[model_name, description]: 模型名称和描述的映射
         """
         return {
-            "gemma:2b": "Google Gemma 2B - 轻量级，平衡速度和质量",
+            "gemma2:2b": "Google Gemma2 2B - 轻量级，平衡速度和质量",
             "llama3.2:1b": "Meta Llama 3.2 1B - 超快速，适合简单实体识别", 
             "qwen2:0.5b": "Qwen2 0.5B - 最轻量级选择",
             "tinyllama:1.1b": "TinyLlama 1.1B - 极速处理",
-            "phi3:mini": "Microsoft Phi-3 Mini - 高效小模型"
+            "phi3:mini": "Microsoft Phi-3 Mini - 高效小模型",
+            "qwen2.5:0.5b": "Qwen2.5 0.5B - 超快速新版本"
         }
     
     @classmethod 
@@ -372,9 +382,27 @@ class Config:
         """
         return {
             "entity_types": ["person", "concept", "organization", "location"],  # 简化实体类型
-            "llm_model_override": "qwen2.5:1.5b",  # 使用用户偏好的小模型
-            "max_gleaning_rounds": 2,  # 保留精化轮次以保证质量
-            "max_entities_per_extraction": 15,  # 限制实体数量
-            "max_relations_per_extraction": 10,  # 限制关系数量
-            "extraction_prompt_template": None,  # 使用完整版prompt
+            "llm_model_override": "qwen2.5:0.5b",  # 使用最轻量级模型
+            "max_gleaning_rounds": 1,  # 减少精化轮次以提升速度
+            "max_entities_per_extraction": 8,  # 减少每次提取的实体数量
+            "max_relations_per_extraction": 5,  # 减少每次提取的关系数量
+            "llm_timeout": 60,  # 减少超时时间
+            "max_retries": 1,  # 减少重试次数
+            "batch_size": 3,  # 小批次处理
+            "parallel_workers": 2  # 并行处理
         }
+
+    def enable_fast_ner_mode(self):
+        """启用快速NER模式"""
+        logger = logging.getLogger("config")
+        fast_config = self.get_recommended_fast_ner_config()
+        self.entity_extractor_config.update(fast_config)
+        logger.info("已启用快速NER模式")
+        
+        # 同时优化多核心配置
+        self.multicore_config.update({
+            "ner_batch_threshold": 3,  # 降低阈值
+            "chunk_size_factor": 4,    # 减少每个worker处理量
+            "max_workers": 3           # 限制worker数量避免资源竞争
+        })
+        logger.info("已优化多核心处理配置")
