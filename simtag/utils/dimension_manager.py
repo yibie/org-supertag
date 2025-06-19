@@ -266,90 +266,87 @@ class DimensionManager:
                 "🔧 Check sqlite-vec extension installation",
                 "📁 Check database file permissions",
                 "🔄 Reinstall sqlite-vec package"
-                "🔧 检查 sqlite-vec 扩展安装",
-                "📁 检查数据库文件权限",
-                "🔄 重新安装 sqlite-vec 包"
             ])
         
         elif issue == "inconsistent_dimensions":
             suggestions.extend([
-                "🔧 运行自动维度修复工具",
-                "🗑️ 清理并重新创建向量表",
-                "🔄 重新生成所有嵌入向量",
-                "💾 确保使用一致的嵌入模型"
+                "🔧 Run automatic dimension repair tool",
+                "🗑️ Clean and recreate vector tables",
+                "🔄 Regenerate all embedding vectors",
+                "💾 Ensure consistent embedding model usage"
             ])
         
         else:
-            suggestions.append("✅ 当前配置正常")
+            suggestions.append("✅ Configuration is normal")
         
         return suggestions
 
 async def main():
-    """主函数"""
+    """Main function"""
     print("=" * 60)
-    print("🔧 向量维度管理工具")
+    print("🔧 Vector Dimension Management Tool")
     print("=" * 60)
     
     manager = DimensionManager()
     
-    # 1. 检测当前状态
-    print("🔍 检测当前状态...")
+    # 1. Check current status
+    print("🔍 Checking current status...")
     compatibility = manager.check_dimension_compatibility()
     
-    print(f"\n📊 兼容性检查结果:")
-    print(f"   兼容状态: {'✅ 兼容' if compatibility['compatible'] else '❌ 不兼容'}")
-    print(f"   状态信息: {compatibility['message']}")
+    print(f"\n📊 Compatibility check results:")
+    print(f"   Status: {'✅ Compatible' if compatibility['compatible'] else '❌ Incompatible'}")
+    print(f"   Message: {compatibility['message']}")
     
     if not compatibility["compatible"]:
-        print(f"   问题类型: {compatibility.get('issue', '未知')}")
+        print(f"   Issue type: {compatibility.get('issue', 'Unknown')}")
     
-    # 2. 检测模型维度
+    # 2. Detect model dimension
     model_dimension = await manager.detect_model_dimension()
     
     if model_dimension:
         current_db_dim = compatibility.get("current_dimension")
         if current_db_dim and current_db_dim != model_dimension:
-            print(f"⚠️ 维度不匹配: 数据库({current_db_dim}) vs 模型({model_dimension})")
+            print(f"⚠️ Dimension mismatch: Database({current_db_dim}) vs Model({model_dimension})")
     
-    # 3. 获取建议
+    # 3. Get suggestions
     suggestions = manager.get_recovery_suggestions(compatibility)
-    print(f"\n💡 建议操作:")
+    print(f"\n💡 Suggested actions:")
     for suggestion in suggestions:
         print(f"   {suggestion}")
     
-    # 4. 交互式修复
+    # 4. Interactive repair
     if not compatibility["compatible"] or (model_dimension and compatibility.get("current_dimension") != model_dimension):
-        print(f"\n🔧 修复选项:")
-        print("   1. 自动修复维度不匹配")
-        print("   2. 仅显示详细信息")
-        print("   3. 退出")
+        print(f"\n🔧 Repair options:")
+        print("   1. Auto-fix dimension mismatch")
+        print("   2. Show detailed information only")
+        print("   3. Exit")
         
-        choice = input("\n请选择 (1-3): ").strip()
+        choice = input("\nSelect option (1-3): ").strip()
         
         if choice == "1":
             success = await manager.auto_fix_dimension_mismatch(model_dimension)
             if success:
-                print("✅ 维度修复完成！")
-                print("📝 建议：重新生成所有嵌入向量")
-                print("💡 运行：M-x org-supertag-sync-all")
+                print("✅ Dimension repair completed!")
+                print("📝 Suggestion: Regenerate all embedding vectors")
+                print("💡 Run: M-x org-supertag-sync-all")
             else:
-                print("❌ 维度修复失败")
+                print("❌ Dimension repair failed")
         
         elif choice == "2":
-            # 显示详细信息
+            # Show detailed information
             db_info = manager.get_database_info()
-            print(f"\n📋 详细数据库信息:")
+            print(f"\n📋 Detailed database information:")
             for table_name, table_info in db_info.get("tables", {}).items():
                 print(f"   {table_name}:")
-                print(f"     存在: {table_info.get('exists', False)}")
-                print(f"     数据量: {table_info.get('count', 0)}")
-                print(f"     维度: {table_info.get('dimension', '未知')}")
+                print(f"     Exists: {table_info.get('exists', False)}")
+                print(f"     Count: {table_info.get('count', 0)}")
+                print(f"     Dimension: {table_info.get('dimension', 'Unknown')}")
         
         else:
-            print("👋 退出")
+            print("👋 Exiting")
     
     else:
-        print("✅ 当前配置正常，无需修复")
+        print("✅ Current configuration is normal, no repair needed")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

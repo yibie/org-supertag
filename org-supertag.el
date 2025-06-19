@@ -57,8 +57,7 @@
 (require 'org-supertag-backlink)
 (require 'org-supertag-recovery)
 (require 'org-supertag-proactive-engine)
-(require 'org-supertag-background-sync)
-(require 'org-supertag-bridge-sync)
+(require 'org-supertag-background-sync) 
 (require 'org-supertag-auto-tag)
 (require 'org-supertag-ui)
 
@@ -66,6 +65,10 @@
   "Customization options for org-supertag."
   :group 'org
   :prefix "org-supertag-")
+
+(defun org-supertag--log (format-string &rest args)
+  "Log a message with the '[org-supertag]' prefix."
+  (message "[org-supertag] %s" (apply #'format format-string args)))
 
 (defcustom org-supertag-enable-auto-vectorization t
   "Whether to automatically start the vectorization system.
@@ -139,8 +142,10 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
   (condition-case err
       (progn
         (require 'org-supertag-bridge)
-        (org-supertag-bridge-start-process)
-        ;; Python后端现在已启动，通知背景同步系统
+        ;; The bridge is now started by `org-supertag-setup`.
+        ;; This function's role is just to notify other systems
+        ;; that the vectorization part of the setup is happening.
+        ;; (org-supertag-bridge-start-process) ; <<< REMOVED
         (org-supertag--notify-backend-ready))
     (error
      (message "Failed to initialize vectorization system: %s" 
@@ -155,7 +160,7 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
       (org-supertag-background-sync--check-backend))))
 
 (defun org-supertag--enable ()
-  "Enable org-supertag."
+  "Enable the core, non-network parts of org-supertag."
   (unless org-supertag--initialized
     ;; 1. Initialize ID system
     (org-supertag--initialize-id-system)
@@ -163,55 +168,27 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
     (org-supertag-db-ensure-data-directory)
     ;; 3. Initialize database
     (org-supertag-db-init)
-    ;; 4. Setup auto-save
-    (org-supertag-db--setup-auto-save)
-    ;; 5. Initialize sync system
-    (org-supertag-sync-init)
-    ;; 6. Schedule vectorization system initialization (async)
-    (org-supertag--schedule-vectorization-init)
-    ;; 7. Initialize background sync systems
-    (require 'org-supertag-background-sync)
-    (when org-supertag-background-sync-auto-start
-      (org-supertag-background-sync-start))
-    ;; 8. Initialize and start the main vectorization sync timer
-    (require 'org-supertag-bridge-sync)
-    (when (and (boundp 'org-supertag-bridge-sync-interval)
-               org-supertag-bridge-sync-interval)
-      (org-supertag-bridge-sync-start))
-    ;; 9. Add hooks
+    ;; 4. Setup auto-save hook for Emacs exit
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
     ;; Mark as initialized
     (setq org-supertag--initialized t)
-    ;; 统一的初始化完成消息
-    (message "Org SuperTag system initialized")))
+    (org-supertag--log "Core system initialized.")))
 
 (defun org-supertag--disable ()
   "Disable org-supertag."
-  ;; 1. Cancel vectorization init timer if pending
-  (when org-supertag--vectorization-init-timer
-    (cancel-timer org-supertag--vectorization-init-timer)
-    (setq org-supertag--vectorization-init-timer nil))
-  ;; 2. Save database
-  (org-supertag-db-save)
-  ;; 3. Clean up auto-save timer
-  (org-supertag-db--cleanup-auto-save)
-  ;; 4. Clean up sync system
-  (when org-supertag-sync--timer
-    (cancel-timer org-supertag-sync--timer)
-    (setq org-supertag-sync--timer nil))
-  ;; 5. Stop background sync systems
-  (when (featurep 'org-supertag-background-sync)
-    (org-supertag-background-sync-stop))
-  (when (featurep 'org-supertag-bridge-sync)
-    (org-supertag-bridge-sync-stop))
-  ;; 6. Stop Python bridge process
-  (org-supertag-bridge-kill-process)
-  ;; 7. Clear cache
-  (org-supertag-db--cache-clear)
-  ;; 8. Remove hooks
-  (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
-  ;; Reset initialization flag
-  (setq org-supertag--initialized nil))
+  (when org-supertag--initialized
+    (org-supertag--log "Disabling Org SuperTag system...")
+    ;; Try to save db before shutting down
+    (org-supertag-db-save)
+    (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
+    ;; Stop all services that might have been started
+    (when (fboundp 'org-supertag-auto-tag-stop-silent-scan)
+      (org-supertag-auto-tag-stop-silent-scan))
+    (when (fboundp 'org-supertag-background-sync-stop)
+      (org-supertag-background-sync-stop))
+    (when (fboundp 'org-supertag-bridge-kill-process)
+        (org-supertag-bridge-kill-process))
+    (setq org-supertag--initialized nil)))
 
 (defun org-supertag-cleanup ()
   "Clean up org-supertag resources.
@@ -243,11 +220,8 @@ initialization is disabled or failed."
         (message "Initializing vectorization system..."))
       (condition-case err
           (progn
-              (org-supertag-bridge-start-process)
-            (when (called-interactively-p 'any)
-              (message "Vectorization system initialized successfully."))
-            ;; 通知背景同步系统
-            (org-supertag--notify-backend-ready))
+              ;; 通知背景同步系统
+              (org-supertag--notify-backend-ready))
         (error
          (message "Failed to initialize vectorization system: %s" 
                   (error-message-string err)))))))
@@ -255,28 +229,45 @@ initialization is disabled or failed."
 (defun org-supertag--setup ()
   "Internal setup function to configure hooks."
   (interactive)
-  (unless (featurep 'org-supertag)
-    (progn
-      ;; Add org-supertag-mode to org-mode-hook
-      (add-hook 'org-mode-hook #'org-supertag-mode)))
+  ;; Add org-supertag-mode to org-mode-hook (always, not conditional)
+  (add-hook 'org-mode-hook #'org-supertag-mode)
   ;; It's good practice for setup functions to signal completion or success.
-  (message "org-supertag setup complete.%s" 
-           (if org-supertag-mode 
-               " Mode is now active." 
-             " Mode is inactive.")))
+  (when (called-interactively-p 'any)
+    (message "org-supertag setup complete - org-supertag-mode added to org-mode-hook")))
 
 ;;;###autoload
 (defun org-supertag-setup ()
-  "Initialize and activate the Org Supertag system components.
-This includes the database, the proactive engine, and the background sync."
+  "Initialize the full Org SuperTag system in the correct, sequential order.
+This is the recommended entry point for user configurations.
+It ensures that services depending on the Python bridge only start *after*
+the bridge is confirmed to be ready."
   (interactive)
-  (org-supertag-db-init)
-  (org-supertag-proactive-engine-activate)
-  (org-supertag-background-sync-start)
-  (when (featurep 'org-supertag-auto-tag)
-    (org-supertag-auto-tag-mode 1))
-  (message "Org SuperTag setup complete"))
 
+  ;; 1. Enable the core mode, which handles basic, local setup.
+  (org-supertag-mode 1)
+
+  ;; 2. Enable service-specific modes. This just loads them and makes them
+  ;;    available, but does not start their timers or network activities.
+  (when (fboundp 'org-supertag-auto-tag-mode)
+    (org-supertag-auto-tag-mode 1))
+  (when (fboundp 'org-supertag-background-sync-start)
+    (require 'org-supertag-background-sync))
+  
+  ;; 3. Add the service start functions to the 'bridge ready' hook.
+  ;;    These functions will be called automatically by the bridge
+  ;;    once it has successfully connected to the Python backend.
+  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-auto-tag-start-silent-scan)
+  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
+  
+  ;; 4. Finally, start the Python bridge process.
+  ;;    Once ready, it will trigger the hook above.
+  (org-supertag-bridge-start-process)
+
+  (message "Org SuperTag setup initiated. Dependent services will start once Python bridge is ready."))
+
+;; Auto-setup when loading the package
+;; This ensures org-supertag-mode is automatically added to org-mode-hook
+(org-supertag--setup)
 
 (provide 'org-supertag)
 

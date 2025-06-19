@@ -186,13 +186,14 @@ class LlamaCppEmbeddingService:
             )
         
         # 简单的长度检查和截断（node-based 预处理应该已经处理了长度）
-        estimated_tokens = len(text.strip())
-        safe_length = int(self.n_ctx * 0.8)
+        # 使用基础的字符长度检查作为安全保障
+        char_length = len(text.strip())
+        safe_char_length = int(self.n_ctx * 0.6)  # 更保守的字符长度限制
         
-        if estimated_tokens > safe_length:
-            # 如果预处理后的文本仍然超长，说明配置有问题，进行截断并警告
-            logger.warning(f"Text still too long after preprocessing (estimated {estimated_tokens} tokens, max {safe_length}), truncating. This suggests node-based preprocessing needs adjustment.")
-            text = text[:safe_length]
+        if char_length > safe_char_length:
+            # 如果字符长度仍然超长，进行截断并警告
+            logger.warning(f"Text still too long after preprocessing ({char_length} chars, max {safe_char_length}), truncating. This suggests node-based preprocessing needs adjustment.")
+            text = text[:safe_char_length]
             logger.info(f"Truncated text to {len(text)} characters")
         
         # 尝试不同的池化策略来避免llama.cpp的bug

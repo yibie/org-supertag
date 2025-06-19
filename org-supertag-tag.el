@@ -60,26 +60,49 @@ Examples:
               ((> (length parts) 1)))
     (cons (car parts) (mapconcat #'identity (cdr parts) "_"))))
 
+(defun org-supertag-tag-get-id-by-name (tag-name)
+  "Get the tag ID by TAG-NAME.
+TAG-NAME: Tag name."
+  (when (and tag-name (not (string-empty-p tag-name)))
+    (let (result)
+      (maphash
+       (lambda (id entity)
+         (when (and (eq (plist-get entity :type) :tag)
+                   (string= (plist-get entity :name) tag-name))
+           (setq result id)))
+       org-supertag-db--object)
+      result)))
+
+(defun org-supertag-tag-get-name-by-id (tag-id)
+  "Get the name of the tag with the given ID.
+TAG-ID: The ID of the tag."
+  (when tag-id
+    (let ((entity (gethash tag-id org-supertag-db--object)))
+      (when entity
+        (plist-get entity :name)))))
+
 (defun org-supertag-tag-create (tag-name &rest props)
-  "Create a new tag.
+  "Create a new tag with a UUID.
 TAG-NAME: Name of the tag
 PROPS: Additional properties including:
 - :fields      List of field definitions
-- :behaviors   List of behaviors"
-  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
+- :behaviors   List of behaviors
+Returns the new tag's UUID."
+  (let* ((tag-id (org-id-new)) ; Generate a new UUID for the tag
+         (sanitized-name (org-supertag-sanitize-tag-name tag-name))
          ;; Check if this is an extension tag
          (parsed-name (org-supertag-tag--parse-name sanitized-name))
          (base-tag-name (car parsed-name))
          ;; Get new fields
          (new-fields (plist-get props :fields))
          ;; If it's an extension, get base tag fields
-         (base-tag (and base-tag-name 
+         (base-tag (and base-tag-name
                        (org-supertag-tag-exists-p base-tag-name)
                        (org-supertag-tag-get base-tag-name)))
          ;; Combine fields
          (fields (if base-tag
                     ;; Project fields from base tag
-                    (org-supertag-tag--project-fields 
+                    (org-supertag-tag--project-fields
                      base-tag
                      new-fields
                      (plist-get props :field-defaults))
@@ -87,16 +110,24 @@ PROPS: Additional properties including:
                   new-fields))
          ;; Ensure type is set
          (base-props (list :type :tag
-                          :id sanitized-name
+                          :id tag-id ; Use the new UUID
                           :name sanitized-name
                           :fields fields
                           :extend-from base-tag-name
                           :behaviors (plist-get props :behaviors)
                           :created-at (current-time))))
-    
-    (message "Creating tag with fields: %S" fields)
-    (org-supertag-db-add sanitized-name base-props)
-    sanitized-name))
+
+    (message "Creating tag '%s' with ID %s" sanitized-name tag-id)
+    (org-supertag-db-add tag-id base-props) ; Use UUID as key
+    tag-id)) ; Return the new UUID
+
+(defun org-supertag-tag-get-or-create (tag-name)
+  "Get a tag's UUID by its name, creating it if it doesn't exist.
+TAG-NAME: The name of the tag to get or create.
+Returns the tag's UUID."
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    (or (org-supertag-tag-get-id-by-name sanitized-name)
+        (org-supertag-tag-create sanitized-name))))
 
 (defun org-supertag-tag--project-fields (base-tag new-fields defaults)
   "Project fields from base tag and merge with new fields.
@@ -150,20 +181,25 @@ DEFAULTS: Plist of field default value overrides"
     (maphash
      (lambda (id entity)
        (when (and (eq (plist-get entity :type) :tag)
-                 (equal (org-supertag-tag-get-base id) base-tag-name))
+                 (equal (org-supertag-tag-get-base (plist-get entity :name)) base-tag-name))
          (push id extensions)))
      org-supertag-db--object)
     extensions))
 
 (defun org-supertag-tag-get (tag-name)
-  "Get tag definition.
+  "Get tag definition by its name.
 TAG-NAME is the name of the tag to retrieve.
-Returns the tag entity if found and is a valid tag type,
-otherwise returns nil."
-  (let ((entity (org-supertag-db-get tag-name)))
-    (when (and entity 
-               (eq (plist-get entity :type) :tag))
-      entity)))
+Returns the full tag property list if found, otherwise nil."
+  (when (and tag-name (not (string-empty-p tag-name)))
+    (let ((found-tag nil)
+          (sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+      (maphash
+       (lambda (id entity)
+         (when (and (eq (plist-get entity :type) :tag)
+                   (string= (plist-get entity :name) sanitized-name))
+           (setq found-tag entity)))
+       org-supertag-db--object)
+      found-tag)))
 
 (defun org-supertag-get-all-tags ()
   "Get a list of all defined tags."
@@ -194,41 +230,42 @@ otherwise returns nil."
 (defun org-supertag-tag-apply (tag-id)
   "Apply tag to the node at current position."
   (let* ((tag (org-supertag-db-get tag-id))
+         (tag-name (plist-get tag :name))
          ;; Use forced ID if provided
-         (node-id (or org-supertag-force-node-id 
+         (node-id (or org-supertag-force-node-id
                       ;; Otherwise check ID in headline properties
                       (org-entry-get nil "ID"))))
-    
+
     ;; Only log debug info when debugging variable is set
     (when org-supertag-tag-apply-skip-duplicate-id
-      (message "org-supertag-tag-apply: Initial node-id=%s (forced=%s)" 
+      (message "org-supertag-tag-apply: Initial node-id=%s (forced=%s)"
                node-id org-supertag-force-node-id))
-    
+
     ;; Only create new ID if none exists and we're not forcing a specific ID
     (setq node-id (or node-id (org-id-get-create)))
-    
-    (message "Applying tag: %s to node: %s" tag-id node-id)
+
+    (message "Applying tag: %s (%s) to node: %s" tag-name tag-id node-id)
     ;; Validation
     (unless tag
-      (error "Tag %s not found" tag-id))
+      (error "Tag with ID %s not found" tag-id))
     (unless (eq (plist-get tag :type) :tag)
-      (error "Invalid tag type for %s" tag-id))
+      (error "Invalid tag type for ID %s" tag-id))
     (unless (org-supertag-db-get node-id)
       (org-supertag-node-sync-at-point))
-    
+
     ;; Link node and tag
     (org-supertag-node-db-add-tag node-id tag-id)
-    
+
     ;; Apply fields (skip if we're only establishing the relationship)
     (unless org-supertag-skip-text-insertion
       (when-let* ((fields (plist-get tag :fields)))
-        (message "Processing fields for tag %s: %S" tag-id fields)
+        (message "Processing fields for tag %s: %S" tag-name fields)
         (dolist (field fields)
           (let* ((field-name (plist-get field :name))
                  (field-type (plist-get field :type))
                  (type-def (org-supertag-get-field-type field-type))
                  (initial-value (org-supertag-field-get-initial-value field)))
-            (message "Processing field: name=%s type=%s initial=%S" 
+            (message "Processing field: name=%s type=%s initial=%S"
                      field-name field-type initial-value)
             (unless type-def
               (error "Invalid field type: %s" field-type))
@@ -239,15 +276,15 @@ otherwise returns nil."
                                          (format "%s" initial-value))))
               (message "Setting field %s = %s" field-name formatted-value)
               (org-set-property field-name formatted-value)
-              (org-supertag-tag--set-field-value 
+              (org-supertag-tag--set-field-value
                tag-id node-id field-name initial-value))))))
-    
+
     ;; Add tag to node tags (unless skipped for inline tags)
-    (unless (or org-supertag-tag-apply-skip-headline 
+    (unless (or org-supertag-tag-apply-skip-headline
                 org-supertag-skip-text-insertion)
       (let ((tags (org-get-tags)))
-        (org-set-tags (cons (concat "#" tag-id) tags))))
-    
+        (org-set-tags (cons tag-name tags))))
+
     ;; Record tag relationships
     (when (featurep 'org-supertag-relation)
       (org-supertag-relation-record-cooccurrence node-id tag-id))
@@ -262,7 +299,7 @@ otherwise returns nil."
 
 (defun org-supertag-tag--remove (tag-id node-id)
   "Remove a tag from a node.
-TAG-ID: The tag identifier
+TAG-ID: The tag identifier (UUID)
 NODE-ID: The node identifier
 
 This function:
@@ -271,7 +308,7 @@ This function:
   ;; 1. Remove tag-node relationship
   (org-supertag-db-remove-link :node-tag node-id tag-id)
   ;; 2. Remove associated field values
-  (let ((tag (org-supertag-tag-get tag-id)))
+  (let ((tag (org-supertag-db-get tag-id)))
     (dolist (field-def (plist-get tag :fields))
       (org-supertag-field-remove-value field-def node-id tag-id))))
 
@@ -284,44 +321,47 @@ This function:
 3. Removes old tag and applies new tag"
   (interactive)
   (let* ((node-id (org-id-get))
-         (current-tags (org-supertag-node-get-tags node-id)))
-    
+         (current-tag-ids (org-supertag-node-get-tags node-id))
+         (current-tag-names (mapcar #'org-supertag-tag-get-name-by-id current-tag-ids)))
+
     ;; Validation
     (unless node-id
       (error "Not on a valid node"))
-    (unless current-tags
+    (unless current-tag-ids
       (error "No tags on current node"))
-    
+
     ;; Select source tag to change
-    (let* ((source-tag (completing-read "Select tag to change: " 
-                                      current-tags nil t))
+    (let* ((source-tag-name (completing-read "Select tag to change: "
+                                           current-tag-names nil t))
+           (source-tag-id (org-supertag-tag-get-id-by-name source-tag-name))
            ;; Get all existing tags except current node's tags
-           (all-tags (cl-set-difference 
-                     (org-supertag-get-all-tags)
-                     current-tags
-                     :test #'string=))
+           (all-tags (cl-set-difference
+                      (org-supertag-get-all-tags)
+                      current-tag-names
+                      :test #'string=))
            ;; Ensure we have available tags to change to
            (_ (unless all-tags
                 (error "No other existing tags available")))
            ;; Select target tag
-           (target-tag (completing-read 
-                       (format "Change '%s' to: " source-tag)
-                       all-tags nil t)))
-      
+           (target-tag-name (completing-read
+                             (format "Change '%s' to: " source-tag-name)
+                             all-tags nil t))
+           (target-tag-id (org-supertag-tag-get-or-create target-tag-name)))
+
       ;; Execute tag change
       (save-excursion
         ;; 1. Remove old tag
-        (org-supertag-tag--remove source-tag node-id)
+        (org-supertag-tag--remove source-tag-id node-id)
         ;; Remove from org tags
         (let* ((current-org-tags (org-get-tags))
-               (new-org-tags (delete (concat "#" source-tag) 
-                                   current-org-tags)))
+               (new-org-tags (delete source-tag-name
+                                     current-org-tags)))
           (org-set-tags new-org-tags))
-        
+
         ;; 2. Apply new tag
-        (org-supertag-tag-apply target-tag))
-      
-      (message "Changed tag '%s' to '%s'" source-tag target-tag))))
+        (org-supertag-tag-apply target-tag-id))
+
+      (message "Changed tag '%s' to '%s'" source-tag-name target-tag-name))))
 
 
 
@@ -367,31 +407,23 @@ Special input format:
                               (substring tag-name 0 -1)
                             tag-name))
            (sanitized-name (org-supertag-sanitize-tag-name tag-name-clean))
-           (current-tags (org-supertag-node-get-tags node-id)))
+           (current-tag-ids (org-supertag-node-get-tags node-id))
+           (current-tag-names (mapcar #'org-supertag-tag-get-name-by-id current-tag-ids)))
       (message "Adding tag: %s" sanitized-name)
-      ;; Check for duplicate tag
-      (when (member sanitized-name current-tags)
+      ;; Check for duplicate tag by name
+      (when (member sanitized-name current-tag-names)
         (user-error "Tag '%s' is already applied to this node" sanitized-name))
-      
-      (let* ((existing-tag (org-supertag-tag-get sanitized-name))
-             ;; Get or create the tag
-             (tag-id
-              (cond
-               ;; If tag exists, use it
-               (existing-tag
-                sanitized-name)
-               ;; If it's a preset tag, create with preset fields
-               ;; Otherwise create a new empty tag
-               (t
-                ;; If direct creation or confirmed, create tag
-                (if (or direct-create
-                        (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
-                    (org-supertag-tag-create sanitized-name)
-                  (user-error "Tag creation cancelled"))))))
+
+      (let* ((tag-id
+              (or (org-supertag-tag-get-id-by-name sanitized-name)
+                  (if (or direct-create
+                          (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
+                      (org-supertag-tag-create sanitized-name)
+                    (user-error "Tag creation cancelled")))))
         ;; Apply the tag
         (org-supertag-tag-apply tag-id)
         ;; Skip immediate field value input for preset tags
-        (message "Tag '%s' applied. Use `org-supertag-tag-edit-fields' to edit field values." tag-id)))))
+        (message "Tag '%s' applied. Use `org-supertag-tag-edit-fields' to edit field values." sanitized-name)))))
 
 (defun org-supertag-tag-batch-add-tag (tag-name)
   "Batch add tags to selected headlines.
@@ -451,39 +483,43 @@ This function:
 2. Calls internal function to remove tag data"
   (interactive)
   (let* ((node-id (org-id-get))
-         (tags (org-supertag-node-get-tags node-id))
-         (tag-id (completing-read "Select tag to remove: " tags nil t)))
+         (tag-ids (org-supertag-node-get-tags node-id))
+         (tag-names (mapcar #'org-supertag-tag-get-name-by-id tag-ids))
+         (tag-name-to-remove (completing-read "Select tag to remove: " tag-names nil t))
+         (tag-id-to-remove (org-supertag-tag-get-id-by-name tag-name-to-remove)))
     (unless node-id
       (error "Not on a valid node"))
-    (unless tags
+    (unless tag-ids
       (error "No tags on current node"))
     ;; 1. Remove from org tags
     (let* ((current-tags (org-get-tags))
-           (tag-name (concat "#" tag-id))
-           (new-tags (delete tag-name current-tags)))
+           (new-tags (delete tag-name-to-remove current-tags)))
       (org-set-tags new-tags))
     ;; 2. Remove tag data using internal function
-    (org-supertag-tag--remove tag-id node-id)
-    (message "Removed tag '%s' and its fields" tag-id)))
+    (org-supertag-tag--remove tag-id-to-remove node-id)
+    (message "Removed tag '%s' and its fields" tag-name-to-remove)))
 
-(defun org-supertag-tag-delete-at-all (tag-id)
+(defun org-supertag-tag-delete-at-all (tag-name)
   "Delete a tag completely, including removing it from all nodes.
-TAG-ID: The tag identifier to delete.
+TAG-NAME: The name of the tag to delete.
 This will:
 1. Remove the tag from all nodes that have it
 2. Delete all field values associated with this tag
 3. Delete all database entries related to this tag
 4. Delete the tag definition from the database"
   (interactive (list (completing-read "Tag to delete: " (org-supertag-get-all-tags))))
-  (when (yes-or-no-p (format "Delete tag '%s'? This will remove it from all nodes. " tag-id))
-    (let ((nodes (org-supertag-tag-get-nodes tag-id))
-          (tag (org-supertag-tag-get tag-id)))
-      
+  (when (yes-or-no-p (format "Delete tag '%s'? This will remove it from all nodes. " tag-name))
+    (let* ((tag-id (org-supertag-tag-get-id-by-name tag-name))
+           (nodes (org-supertag-tag-get-nodes tag-id))
+           (tag (org-supertag-db-get tag-id)))
+
       ;; Validation
+      (unless tag-id
+        (error "Tag '%s' not found" tag-name))
       (unless tag
-        (error "Tag %s not found" tag-id))
+        (error "Tag with ID %s not found in DB" tag-id))
       (unless (eq (plist-get tag :type) :tag)
-        (error "Invalid tag type for %s" tag-id))
+        (error "Invalid tag type for %s" tag-name))
 
       ;; 1. First remove tag from all nodes in org buffers
       (message "Removing tag from %d nodes in buffers..." (length nodes))
@@ -499,7 +535,7 @@ This will:
                 (org-delete-property field-name)))
             ;; Remove the tag from org tags
             (let* ((current-tags (org-get-tags))
-                   (new-tags (delete (concat "#" tag-id) current-tags)))
+                   (new-tags (delete tag-name current-tags)))
               (org-set-tags new-tags)))))
       
       ;; 2. Find and collect all relationships to be removed
@@ -538,7 +574,7 @@ This will:
       (when (boundp 'org-supertag-after-tag-delete-hook)
         (run-hook-with-args 'org-supertag-after-tag-delete-hook tag-id))
       
-      (message "Deleted tag '%s' and removed it from %d nodes" tag-id (length nodes))))) 
+      (message "Deleted tag '%s' and removed it from %d nodes" tag-name (length nodes))))) 
 
 (defcustom org-supertag-after-tag-delete-hook nil
   "Hook run after a tag is deleted.

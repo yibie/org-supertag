@@ -16,7 +16,17 @@
 (defvar org-supertag-api--session-id nil
   "The current session ID for the conversation.")
 
+(defvar org-supertag-api-tagging-provider "default"
+  "The provider to use for auto-tagging, e.g., 'ollama', 'openai'.")
 
+(defvar org-supertag-api-tagging-model "default"
+  "The specific model to use for auto-tagging.")
+
+(defvar org-supertag-api-tagging-temperature 0.7
+  "The temperature setting for the tagging model.")
+
+(defvar org-supertag-api-tagging-max-tokens 2048
+  "The max tokens setting for the tagging model.")
 
 ;; --- Helper for Async Calls (Optional, for consistent error/result handling) ---
 ;; (defun org-supertag-api--handle-async-response (response callback-fn)
@@ -35,11 +45,14 @@ will be called with the result. Otherwise, the call is synchronous.
 The Python method called is \"ask_question\"."
   (interactive "sQuery: ")
   (org-supertag-bridge-ensure-ready) ; Ensure connection is up
-  (let ((method-name "ask_question")
-        (question-data `(:query_text ,query-text :session_id ,session-id))) ; Constructing QuestionData
+  (let* ((method-name "ask_question")
+         (question-data (let ((ht (make-hash-table :test 'equal)))
+                          (puthash "query_text" query-text ht)
+                          (puthash "session_id" session-id ht)
+                          ht)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn question-data)
-      (org-supertag-bridge-call-sync method-name 30 question-data)))) ; 30s timeout for sync
+        (org-supertag-bridge-call-async method-name question-data callback-fn)
+      (org-supertag-bridge-call-sync method-name question-data 30))))
 
 (defun org-supertag-api-set-dialogue-mode (session-id mode-name &optional callback-fn)
   "Set the dialogue mode for a specific session.
@@ -50,8 +63,8 @@ The Python method called is \"set_dialogue_mode\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "set_dialogue_mode"))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn session-id mode-name)
-      (org-supertag-bridge-call-sync method-name 10 session-id mode-name)))) ; 10s timeout
+        (org-supertag-bridge-call-async method-name (list session-id mode-name) callback-fn)
+      (org-supertag-bridge-call-sync method-name (list session-id mode-name) 10)))) ; 10s timeout
 
 ;; --- Memory Functions ---
 
@@ -66,8 +79,8 @@ The Python method called is \"get_memory_dashboard\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "get_memory_dashboard"))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn)
-      (org-supertag-bridge-call-sync method-name 10)))) ; 10s timeout
+        (org-supertag-bridge-call-async method-name nil callback-fn)
+      (org-supertag-bridge-call-sync method-name nil 10)))) ; 10s timeout
 
 (defun org-supertag-api-memory-store (aspect data &optional callback-fn)
   "Store data for a specific aspect in the memory system.
@@ -79,8 +92,8 @@ The Python method called is \"update_memory_epc\"."
   (let ((method-name "update_memory_epc")
         (update-data `(:action "store" :aspect ,aspect :payload ,data)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn update-data)
-      (org-supertag-bridge-call-sync method-name 10 update-data)))) ; 10s timeout
+        (org-supertag-bridge-call-async method-name update-data callback-fn)
+      (org-supertag-bridge-call-sync method-name update-data 10)))) ; 10s timeout
 
 (defun org-supertag-api-memory-clear (aspect &optional item-id callback-fn)
   "Clear a specific aspect or an item within an aspect from memory.
@@ -93,8 +106,8 @@ The Python method called is \"update_memory_epc\"."
   (let ((method-name "update_memory_epc")
         (update-data `(:action "clear" :aspect ,aspect :item-id ,item-id)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn update-data)
-      (org-supertag-bridge-call-sync method-name 10 update-data)))) ; 10s timeout
+        (org-supertag-bridge-call-async method-name update-data callback-fn)
+      (org-supertag-bridge-call-sync method-name update-data 10)))) ; 10s timeout
 
 ;; --- Dialogue History Functions ---
 
@@ -109,8 +122,8 @@ The Python method called is \"epc_get_dialogue_history\"."
   (let ((method-name "epc_get_dialogue_history")
         (max-turns (if (integerp count) count nil)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn session-id max-turns)
-      (org-supertag-bridge-call-sync method-name 10 session-id max-turns)))) ; 10s timeout
+        (org-supertag-bridge-call-async method-name (list session-id max-turns) callback-fn)
+      (org-supertag-bridge-call-sync method-name (list session-id max-turns) 10)))) ; 10s timeout
 
 (defun org-supertag-api-log-dialogue (session-id user-query assistant-response &optional callback-fn)
   "Log a user query and assistant response to a specific dialogue history.
@@ -125,19 +138,19 @@ The Python method called is \"epc_add_dialogue_turn\"."
 
     ;; Log user query (fire-and-forget or with its own error reporting if needed)
     (org-supertag-bridge-call-async method-name 
+                                    (list session-id user-speaker user-query nil)
                                     (lambda (response) ; Minimal error reporting for user query log
                                       (when (and (listp response) (eq (car response) :error))
-                                        (message "Error logging user query: %s" (plist-get response :message))))
-                                    session-id user-speaker user-query nil)
+                                        (message "Error logging user query: %s" (plist-get response :message)))))
 
     ;; Log assistant response (attach the main callback-fn here if provided)
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn session-id ai-speaker assistant-response nil)
+        (org-supertag-bridge-call-async method-name (list session-id ai-speaker assistant-response nil) callback-fn)
       (org-supertag-bridge-call-async method-name 
+                                      (list session-id ai-speaker assistant-response nil)
                                       (lambda (response) ; Minimal error reporting for AI response log
                                         (when (and (listp response) (eq (car response) :error))
-                                          (message "Error logging AI response: %s" (plist-get response :message))))
-                                      session-id ai-speaker assistant-response nil))))
+                                          (message "Error logging AI response: %s" (plist-get response :message))))))))
 
 ;; --- Tag Similarity Functions ---
 
@@ -149,22 +162,38 @@ Python method called: \"find_similar\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "find_similar"))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn target-tag 10) ; Assuming limit 10
-      (org-supertag-bridge-call-sync method-name 15 target-tag 10)))) ; 15s timeout, limit 10
+        (org-supertag-bridge-call-async method-name (list (list target-tag 10)) callback-fn) ; Assuming limit 10
+      (org-supertag-bridge-call-sync method-name (list (list target-tag 10)) 15)))) ; 15s timeout, limit 10
 
-;; --- NER-based Tag Suggestion Functions ---
+;; --- Unified Entity Extraction for Auto-Tagging ---
 
-(defun org-supertag-api-get-tag-suggestions-for-note (note-content &optional existing-tags callback-fn)
-  "Fetch NER-based tag suggestions for NOTE-CONTENT from the Python backend.
-EXISTING-TAGS is an optional list of current tags on the note.
-If CALLBACK-FN is provided, the call is asynchronous.
-Anticipated Python method: \"get_ner_tag_suggestions_for_note\"."
+(defun org-supertag-api-extract-entities-for-tagging (content &optional node-id existing-tags callback-fn)
+  "Unified API to fetch entity-based tag suggestions.
+This function calls the 'extract_entities_for_tagging' endpoint and
+is the single point of entry for this functionality.
+If CALLBACK-FN is provided, the call is asynchronous."
   (org-supertag-bridge-ensure-ready)
-  (let ((method-name "get_ner_tag_suggestions_for_note")
-        (payload `(:note_content ,note-content :existing_tags ,existing-tags)))
+  (let* ((method-name "extract_entities_for_tagging")
+         ;; The payload is a single alist, which is the standard format
+         ;; expected by the Python backend handler.
+         (payload `(("node_id" . ,(or node-id ""))
+                    ("content" . ,content)
+                    ("existing_tags" . ,(or existing-tags '())))))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn payload)
-      (org-supertag-bridge-call-sync method-name 20 payload)))) ; 20s timeout for NER might be needed
+        ;; We wrap the payload in a list to conform to the bridge contract.
+        (org-supertag-bridge-call-async method-name (list payload) callback-fn)
+      (org-supertag-bridge-call-sync method-name (list payload) 20))))
+
+(defun org-supertag-api-batch-generate-tags (payload callback)
+  "Sends a batch of nodes to the backend for tag suggestion generation.
+PAYLOAD is an alist containing nodes and model configuration.
+CALLBACK is the function to call with the results."
+  (org-supertag-bridge-ensure-ready)
+  (let ((method-name "autotag/batch_get_tags"))
+    (org-supertag-bridge--log "API: Calling batch_get_tags with payload.")
+    ;; The payload from the caller is already an alist.
+    ;; We wrap it in a list to conform to the data contract.
+    (org-supertag-bridge-call-async method-name (list payload) callback)))
 
 ;; --- Tag Relationship Suggestion Functions ---
 
@@ -176,12 +205,14 @@ If CALLBACK-FN is provided, the call is asynchronous.
 Anticipated Python method: \"get_inferred_tag_relationships\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "get_inferred_tag_relationships")
-        (payload `(:target_tag ,target-tag 
-                     :desired_types ,desired-types 
-                     :context ,context)))
+        (payload (let ((ht (make-hash-table :test 'equal)))
+                   (puthash "target_tag" target-tag ht)
+                   (puthash "desired_types" desired-types ht)
+                   (puthash "context" context ht)
+                   ht)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn payload)
-      (org-supertag-bridge-call-sync method-name 20 payload)))) ; 20s for inference
+        (org-supertag-bridge-call-async method-name payload callback-fn)
+      (org-supertag-bridge-call-sync method-name payload 20))))
 
 ;; --- Associated Nodes Functions ---
 
@@ -193,8 +224,8 @@ Python method called: \"get_similar_nodes\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "get_similar_nodes"))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn (or context-id "") 10) ; Pass context, default top_k 10
-      (org-supertag-bridge-call-sync method-name 15 (or context-id "") 10)))) ; 15s timeout, default top_k 10
+        (org-supertag-bridge-call-async method-name (list (or context-id "") 10) callback-fn) ; Pass context, default top_k 10
+      (org-supertag-bridge-call-sync method-name (list (or context-id "") 10) 15)))) ; 15s timeout, default top_k 10
 
 ;; --- Knowledge Archaeology Functions ---
 
@@ -203,30 +234,15 @@ Python method called: \"get_similar_nodes\"."
 QUERY-TEXT is the search term.
 TOP-K is the number of results to return."
   (let ((top-k (or top-k 50)))
-    (org-supertag-bridge-call-sync "knowledge_archaeology_dig" 30 query-text top-k)))
-
-;; --- Sync version for direct tag suggestion (no callback, direct result) ---
-(defun org-supertag-api-get-tag-suggestions-for-note-sync (note-content &optional existing-tags)
-  "[SYNC] Get NER-based tag suggestions for the given note content.
-NOTE-CONTENT is the string content of the note.
-EXISTING-TAGS is an optional list of tags already on the note."
-  (let ((payload `((note_content . ,note-content)
-                   (existing_tags . ,(or existing-tags [])))))
-    (org-supertag-bridge-call-sync "get_ner_tag_suggestions_for_note" 20 payload)))
-
-(defun org-supertag-api-get-tag-relationship-suggestions (note-content)
-  "Discover inferred tag relationships from the given note content.
-NOTE-CONTENT is the string content of the note."
-  (let ((payload `((note_content . ,note-content))))
-    (org-supertag-bridge-call-sync "get_inferred_tag_relationships" 20 payload)))
+    (org-supertag-bridge-call-sync "knowledge_archaeology_dig" (list query-text top-k) 30)))
 
 (defun org-supertag-api-generate-text (prompt &optional callback-fn)
   "Call the generic text generation endpoint.
 PROMPT is the string to send to the LLM.
 If CALLBACK-FN is provided, the call is asynchronous."
   (if callback-fn
-      (org-supertag-bridge-call-async "generate_text" callback-fn prompt)
-    (org-supertag-bridge-call-sync "generate_text" 120 prompt)))
+      (org-supertag-bridge-call-async "generate_text" prompt callback-fn)
+    (org-supertag-bridge-call-sync "generate_text" prompt 120)))
 
 ;;; Memory Synthesis
 
@@ -234,45 +250,81 @@ If CALLBACK-FN is provided, the call is asynchronous."
   "Trigger the memory synthesis process for a given dialogue session.
 SESSION-ID is the ID of the conversation to analyze."
   (if callback-fn
-      (org-supertag-bridge-call-async "trigger_memory_synthesis_for_session" callback-fn session-id)
-    (org-supertag-bridge-call-sync "trigger_memory_synthesis_for_session" 10 session-id)))
+      (org-supertag-bridge-call-async "trigger_memory_synthesis_for_session" session-id callback-fn)
+    (org-supertag-bridge-call-sync "trigger_memory_synthesis_for_session" session-id 10)))
 
 (defun org-supertag-api-get-candidate-memories ()
   "Fetch all pending candidate memories awaiting user review."
-  (org-supertag-bridge-call-sync "get_candidate_memories" 10))
+  (org-supertag-bridge-call-sync "get_candidate_memories" nil 10))
 
 (defun org-supertag-api-process-candidate-memory (candidate-id action)
   "Process a user's decision on a candidate memory.
 CANDIDATE-ID is the ID of the memory candidate.
 ACTION is a string, either \"accept\" or \"reject\"."
-  (org-supertag-bridge-call-sync "process_candidate_memory" 10 candidate-id action))
+  (org-supertag-bridge-call-sync "process_candidate_memory" (list candidate-id action) 10))
 
 ;; --- Proactive Engine Functions ---
 
 (defun org-supertag-api-analyze-node-context (context-data &optional callback-fn)
   "Send the current node's context to the backend for full analysis.
 This includes entity extraction, graph building, vectorization, and checking for conceptual resonance.
-CONTEXT-DATA is an alist containing information like node ID, content, etc.
+CONTEXT-DATA is a plist containing information like node ID, content, etc.
 If CALLBACK-FN is provided, the call is asynchronous.
 The Python method called is \"analyze_node_context\"."
   (org-supertag-bridge-ensure-ready)
-  (let ((method-name "analyze_node_context"))
+  (let* ((method-name "analyze_node_context")
+         (payload (apply #'ht-create context-data)))
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn context-data)
-      (org-supertag-bridge-call-sync method-name 60 context-data)))) ; 60s timeout for potentially long analysis
+        (org-supertag-bridge-call-async method-name payload callback-fn)
+      (org-supertag-bridge-call-sync method-name payload 60))))
 
 ;; --- Bulk Sync Functions ---
 
 (defun org-supertag-api-bulk-process-snapshot (snapshot-data &optional callback-fn)
   "Send a snapshot of incrementally changed nodes and links to the backend.
-SNAPSHOT-DATA is an alist containing :nodes and :links lists.
+SNAPSHOT-DATA must be an alist containing 'nodes' and 'links' keys.
+This function wraps the data in a list to conform to the data contract.
 If CALLBACK-FN is provided, the call is asynchronous.
 The Python method called is \"bulk_process_snapshot\"."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "bulk_process_snapshot"))
+    ;; The validation for hash-table is removed, as we now use alists for reliability.
     (if callback-fn
-        (org-supertag-bridge-call-async method-name callback-fn snapshot-data)
-      (org-supertag-bridge-call-sync method-name 300 snapshot-data)))) ; 300s (5min) timeout for potentially large snapshots
+        ;; Wrap the payload in a list to conform to the data contract.
+        (org-supertag-bridge-call-async method-name (list snapshot-data) callback-fn)
+      (org-supertag-bridge-call-sync method-name (list snapshot-data) 300)))) ; 300s (5min) timeout for potentially large snapshots
+
+(defun org-supertag-api-generate-single-node-tags (node-data callback)
+  "Asynchronously generate tags for a single node.
+NODE-DATA should be a hash-table with node properties.
+CALLBACK is a function that will be called with the result."
+  (if callback
+      (org-supertag-bridge-call-async "generate_single_node_tags" node-data callback)
+    (org-supertag-bridge-call-sync "generate_single_node_tags" node-data 60)))
+
+(defun org-supertag-api-proactive-get-resonance (node-id content callback)
+  "Asynchronously get conceptual resonance for a given content.
+NODE-ID is the ID of the current node.
+CONTENT is the text content to analyze.
+CALLBACK is a function that will be called with the resonance results."
+  (let ((payload `(:node_id ,node-id :content ,content)))
+    (if callback
+        (org-supertag-bridge-call-async "proactive_get_resonance" payload callback)
+      (org-supertag-bridge-call-sync "proactive_get_resonance" payload 30))))
+
+;;;###autoload
+(defun org-supertag-api-diagnostics-get-status (callback)
+  "Get the system status from the Python backend."
+  (if callback
+      (org-supertag-bridge-call-async "get_status" nil callback)
+    (org-supertag-bridge-call-sync "get_status" nil 10)))
+
+(defun org-supertag-api--get-model-config-for-tagging ()
+  "Constructs a plist of the current model configuration for tagging."
+  (list :provider org-supertag-api-tagging-provider
+        :model org-supertag-api-tagging-model
+        :temperature org-supertag-api-tagging-temperature
+        :max_tokens org-supertag-api-tagging-max-tokens))
 
 (provide 'org-supertag-api)
 

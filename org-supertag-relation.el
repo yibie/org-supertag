@@ -10,6 +10,8 @@
 (require 'cl-lib)
 (require 'org-element)
 (require 'org-supertag-db)
+(require 'org-supertag-node nil t)  ;; 为 org-supertag-node-get-tags 函数
+(require 'org-supertag-tag nil t)   ;; 为 org-supertag-tag-get-id-by-name 等函数
 (require 'org-supertag-sim-epc nil t)  ;; 如果可用则加载，否则静默跳过
 
 (defgroup org-supertag-relation nil
@@ -119,15 +121,17 @@ TO-TAG: Target tag ID
 REL-TYPE: Relation type
 STRENGTH: Relation strength (optional, default is 1.0)"
   (interactive
-   (let* ((from-tag (completing-read "Source tag: " (org-supertag-get-all-tags) nil t))
-          (to-tag (completing-read "Target tag: " (org-supertag-get-all-tags) nil t))
+   (let* ((from-tag-name (completing-read "Source tag: " (org-supertag-get-all-tags) nil t))
+          (to-tag-name (completing-read "Target tag: " (org-supertag-get-all-tags) nil t))
+          (from-tag-id (org-supertag-tag-get-id-by-name from-tag-name))
+          (to-tag-id (org-supertag-tag-get-id-by-name to-tag-name))
           (rel-choices (org-supertag-relation--get-relation-type-choices))
-          (rel-type (org-supertag-relation--get-type-from-choice 
-                    (completing-read "Relation type: " rel-choices nil t))))
-     (list 
-      (org-supertag-tag-get-id-by-name from-tag)
-      (org-supertag-tag-get-id-by-name to-tag)
-      rel-type 
+          (rel-type (org-supertag-relation--get-type-from-choice
+                     (completing-read "Relation type: " rel-choices nil t))))
+     (list
+      from-tag-id
+      to-tag-id
+      rel-type
       1.0)))
   ;; Check if the tags are valid
   (cond
@@ -137,96 +141,78 @@ STRENGTH: Relation strength (optional, default is 1.0)"
     (user-error "Target tag cannot be empty"))
    ((equal from-tag to-tag)
     (user-error "Source tag and target tag cannot be the same")))
-  
-  (let* ((from-id (if (org-supertag-db-exists-p from-tag)
-                      from-tag
-                    (org-supertag-tag-get-id-by-name from-tag)))
-         (to-id (if (org-supertag-db-exists-p to-tag)
-                   to-tag
-                 (org-supertag-tag-get-id-by-name to-tag))))
-    
-    ;; Check if both tag IDs are valid
-    (unless from-id
-      (user-error "Invalid source tag: %s" from-tag))
-    (unless to-id
-      (user-error "Invalid target tag: %s" to-tag))
-    
-    (let ((rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
-      ;; Check if relation already exists
-      (unless (gethash rel-id org-supertag-db--link)
-        ;; Add the relation
-        (let ((props (list :from from-id
-                          :to to-id
-                          :type rel-type
-                          :strength (or strength 1.0)
-                          :created-at (current-time))))
-          (puthash rel-id props org-supertag-db--link)
-          (org-supertag-db-emit 'link:created :tag-relation from-id to-id props)
-          (org-supertag-db--mark-dirty)
-          (org-supertag-db--schedule-save)
-          (message "Added relation: %s -[%s]-> %s" 
-                   (org-supertag-tag-get-name-by-id from-id)
-                   rel-type 
-                   (org-supertag-tag-get-name-by-id to-id)))))))
+
+  (let ((rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type)))
+    ;; Check if relation already exists
+    (unless (gethash rel-id org-supertag-db--link)
+      ;; Add the relation
+      (let ((props (list :from from-tag
+                        :to to-tag
+                        :type rel-type
+                        :strength (or strength 1.0)
+                        :created-at (current-time))))
+        (puthash rel-id props org-supertag-db--link)
+        (org-supertag-db-emit 'link:created :tag-relation from-tag to-tag props)
+        (org-supertag-db--mark-dirty)
+        (org-supertag-db--schedule-save)
+        (message "Added relation: %s -[%s]-> %s"
+                 (org-supertag-tag-get-name-by-id from-tag)
+                 rel-type
+                 (org-supertag-tag-get-name-by-id to-tag))))))
 
 (defun org-supertag-relation-remove-relation (from-tag to-tag &optional rel-type)
   "Remove the relation between FROM-TAG and TO-TAG.
 If REL-TYPE is provided, only remove that specific relation type,
 otherwise remove all relations between the tags."
   (interactive
-   (let* ((from-tag (completing-read "Source tag: " (org-supertag-get-all-tags) nil t))
+   (let* ((from-tag-name (completing-read "Source tag: " (org-supertag-get-all-tags) nil t))
+          (from-tag-id (org-supertag-tag-get-id-by-name from-tag-name))
           (to-choices (mapcar
-                     (lambda (rel)
-                       (format "%s (%s)" (car rel) (cdr rel)))
-                     (org-supertag-relation-get-all-from from-tag)))
+                       (lambda (rel)
+                         (format "%s (%s)" (org-supertag-tag-get-name-by-id (car rel)) (cdr rel)))
+                       (org-supertag-relation-get-all-from from-tag-id)))
           (choice (completing-read "Relation to remove: " to-choices nil t))
-          (to-tag (car (split-string choice " ("))))
-     (list from-tag to-tag)))
-  
+          (to-tag-name (car (split-string choice " (")))
+          (to-tag-id (org-supertag-tag-get-id-by-name to-tag-name)))
+     (list from-tag-id to-tag-id)))
+
   (when (and from-tag to-tag)
-    (let* ((from-id (if (org-supertag-db-exists-p from-tag)
-                       from-tag
-                     (org-supertag-tag-get-id-by-name from-tag)))
-           (to-id (if (org-supertag-db-exists-p to-tag)
-                     to-tag
-                   (org-supertag-tag-get-id-by-name to-tag)))
-           (from-name (org-supertag-tag-get-name-by-id from-id))
-           (to-name (org-supertag-tag-get-name-by-id to-id)))
+    (let* ((from-name (org-supertag-tag-get-name-by-id from-tag))
+           (to-name (org-supertag-tag-get-name-by-id to-tag)))
 
       ;; If rel-type is provided, only remove that specific relation
       (if rel-type
-          (let ((rel-id (format ":tag-relation:%s->%s:%s" from-id to-id rel-type)))
+          (let ((rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type)))
             (when (gethash rel-id org-supertag-db--link)
               (remhash rel-id org-supertag-db--link)
-              (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)))
+              (org-supertag-db-emit 'link:removed :tag-relation from-tag to-tag)))
         ;; Otherwise, remove all relations between these tags
         (let ((removed-count 0))
           (maphash
            (lambda (key _)
              (when (and (string-prefix-p ":tag-relation:" key)
-                       (string-match (format ":tag-relation:%s->%s:" from-id to-id) key))
+                       (string-match (format ":tag-relation:%s->%s:" from-tag to-tag) key))
                (remhash key org-supertag-db--link)
-               (org-supertag-db-emit 'link:removed :tag-relation from-id to-id)
+               (org-supertag-db-emit 'link:removed :tag-relation from-tag to-tag)
                (cl-incf removed-count)))
            org-supertag-db--link)))
- 
+
       (org-supertag-db--mark-dirty)
       (org-supertag-db--schedule-save)
       (message "Removed relation: %s -> %s" from-name to-name))))
 
 (defun org-supertag-relation-get (from-tag to-tag &optional rel-type)
   "Get the relation data between FROM-TAG and TO-TAG.
+FROM-TAG and TO-TAG can be names or IDs.
 If REL-TYPE is provided, get the specific relation type,
 otherwise return all relations between the tags.
 Returns a list of relation property lists."
   (when (and from-tag to-tag)
     (let ((result nil)
-          (from-id (if (org-supertag-db-exists-p from-tag)
-                      from-tag
-                    (org-supertag-tag-get-id-by-name from-tag)))
-          (to-id (if (org-supertag-db-exists-p to-tag)
-                    to-tag
-                  (org-supertag-tag-get-id-by-name to-tag))))
+          (from-id (or (org-supertag-db-get from-tag) (org-supertag-tag-get-id-by-name from-tag)))
+          (to-id (or (org-supertag-db-get to-tag) (org-supertag-tag-get-id-by-name to-tag))))
+      (unless from-id (error "Source tag not found: %s" from-tag))
+      (unless to-id (error "Target tag not found: %s" to-tag))
       (maphash
        (lambda (key props)
          (when (and (string-prefix-p ":tag-relation:" key)
@@ -239,7 +225,7 @@ Returns a list of relation property lists."
 
 (defun org-supertag-relation-get-all-from (tag-id)
   "Get all relations from the TAG-ID.
-Return the list of (other-tag . rel-type)."
+Return the list of (other-tag-id . rel-type)."
   (if (null tag-id)
       nil
     (let (result)
@@ -255,7 +241,7 @@ Return the list of (other-tag . rel-type)."
 
 (defun org-supertag-relation-get-all-to (tag-id)
   "Get all relations to the TAG-ID.
-Return the list of (other-tag . rel-type)."
+Return the list of (other-tag-id . rel-type)."
   (if (null tag-id)
       nil
     (let (result)
@@ -337,19 +323,6 @@ Can be 'existing, 'cooccurrence, or 'recommended.")
         (if (null tag-id)
             (user-error "No tag ID found for: %s" tag-name)
           (org-supertag-relation--show-management-interface tag-id))))))
-
-(defun org-supertag-tag-get-id-by-name (tag-name)
-  "Get the tag ID by TAG-NAME.
-TAG-NAME: Tag name."
-  (when (and tag-name (not (string-empty-p tag-name)))
-    (let (result)
-      (maphash
-       (lambda (id entity)
-         (when (and (eq (plist-get entity :type) :tag)
-                   (string= (plist-get entity :name) tag-name))
-           (setq result id)))
-       org-supertag-db--object)
-      result)))
 
 (defun org-supertag-relation--show-management-interface (tag-id)
   "Show the tag relations management interface.
@@ -897,18 +870,19 @@ This function will:
           (org-supertag-relation-add-relation tag-id other-tag 'cooccurrence)
           (org-supertag-relation-add-relation other-tag tag-id 'cooccurrence))))
     
-    ;; 2. Process unidirectional co-occurrence from parent node tags
+    ;; 2. Process bidirectional co-occurrence from parent node tags
     (when parent-tags
       (dolist (parent-tag parent-tags)
         (unless (equal parent-tag tag-id)
-          ;; Only create a unidirectional co-occurrence relationship from parent tag to child tag
+          ;; Create bidirectional co-occurrence relationship between parent tag and child tag
           (let* ((freq (org-supertag-relation--get-cooccurrence-count parent-tag tag-id))
                  (new-freq (+ freq 0.5))  ; The co-occurrence weight from parent to child is 0.5
                  (norm-factor org-supertag-relation-cooccurrence-normalization-factor)
                  (strength (/ new-freq (+ new-freq norm-factor))))
             (org-supertag-relation--set-cooccurrence-count parent-tag tag-id new-freq)
-            ;; Only add a unidirectional relationship from parent to child
-            (org-supertag-relation-add-relation parent-tag tag-id 'cooccurrence)))))))
+            ;; Add bidirectional relationship between parent and child tags
+            (org-supertag-relation-add-relation parent-tag tag-id 'cooccurrence)
+            (org-supertag-relation-add-relation tag-id parent-tag 'cooccurrence)))))))
 
 (defun org-supertag-relation--get-cooccurrence-count (tag1 tag2)
   "Get the number of co-occurrences between TAG1 and TAG2.
@@ -1617,6 +1591,86 @@ This is useful if recommendations are found but not showing in the UI."
 (define-key org-supertag-relation-mode-map (kbd "R") 'org-supertag-relation-force-refresh-recommendations)
 
 
+
+;;----------------------------------------------------------------------
+;; Compatibility functions for org-supertag-auto-tag.el
+;;----------------------------------------------------------------------
+
+(defun org-supertag-relation-set-type (from-tag to-tag rel-type)
+  "为 org-supertag-auto-tag.el 提供的兼容函数，设置标签关系类型.
+FROM-TAG: 源标签ID
+TO-TAG: 目标标签ID
+REL-TYPE: 关系类型"
+  (org-supertag-relation-add-relation from-tag to-tag rel-type))
+
+(defun org-supertag-relation-add-rule (from-tag to-tag rule-type rule-data)
+  "为 org-supertag-auto-tag.el 提供的兼容函数，添加标签关系规则.
+FROM-TAG: 源标签ID
+TO-TAG: 目标标签ID
+RULE-TYPE: 规则类型
+RULE-DATA: 规则数据"
+  ;; 目前只是存储关系，可以后续扩展规则功能
+  (let* ((rel-id (format ":tag-relation:%s->%s:rule" from-tag to-tag))
+         (props (list :from from-tag
+                     :to to-tag
+                     :type rule-type
+                     :rule-data rule-data
+                     :created-at (current-time))))
+    (puthash rel-id props org-supertag-db--link)
+    (org-supertag-db-emit 'link:created :tag-rule from-tag to-tag props)
+    (org-supertag-db--mark-dirty)
+    (org-supertag-db--schedule-save)))
+
+;;----------------------------------------------------------------------
+;; Tag status and rules management functions for org-supertag-auto-tag.el
+;;----------------------------------------------------------------------
+
+(defun org-supertag-tag-get-status (tag-id)
+  "获取标签状态.
+TAG-ID: 标签ID
+返回标签状态，如果没有设置则返回 nil"
+  (when tag-id
+    (let ((entity (gethash tag-id org-supertag-db--object)))
+      (when entity
+        (plist-get entity :status)))))
+
+(defun org-supertag-tag-set-status (tag-id new-status)
+  "设置标签状态.
+TAG-ID: 标签ID
+NEW-STATUS: 新状态"
+  (when tag-id
+    (let ((entity (gethash tag-id org-supertag-db--object)))
+      (when entity
+        (plist-put entity :status new-status)
+        (puthash tag-id entity org-supertag-db--object)
+        (org-supertag-db-emit 'object:updated :tag tag-id entity)
+        (org-supertag-db--mark-dirty)
+        (org-supertag-db--schedule-save)))))
+
+(defun org-supertag-tag-get-rules (tag-id)
+  "获取标签规则.
+TAG-ID: 标签ID
+返回标签规则列表"
+  (when tag-id
+    (let ((entity (gethash tag-id org-supertag-db--object)))
+      (when entity
+        (plist-get entity :rules)))))
+
+(defun org-supertag-tag-add-rule (tag-id rule-name rule-data)
+  "添加标签规则.
+TAG-ID: 标签ID
+RULE-NAME: 规则名称
+RULE-DATA: 规则数据"
+  (when tag-id
+    (let ((entity (gethash tag-id org-supertag-db--object)))
+      (when entity
+        (let* ((current-rules (or (plist-get entity :rules) '()))
+               (new-rules (cons (cons rule-name rule-data) current-rules)))
+          (plist-put entity :rules new-rules)
+          (puthash tag-id entity org-supertag-db--object)
+          (org-supertag-db-emit 'object:updated :tag tag-id entity)
+          (org-supertag-db--mark-dirty)
+          (org-supertag-db--schedule-save))))))
 
 (provide 'org-supertag-relation)
 ;;; org-supertag-relation.el ends here

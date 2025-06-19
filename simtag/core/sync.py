@@ -6,10 +6,13 @@ import logging
 import numpy as np
 import json
 from typing import List, Optional, Dict, Any
+import time
 
 # Forward declare types for type hinting if VectorStorage and LLMClient are complex imports
 # from .storage import VectorStorage # Assuming VectorStorage is in .storage
 # from ..services.llm_client import LLMClient # Assuming LLMClient is in ..services
+
+logger = logging.getLogger(__name__)
 
 class SyncOrchestrator:
     def __init__(self, storage, llm_client, logger: logging.Logger):

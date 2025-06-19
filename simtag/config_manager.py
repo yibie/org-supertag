@@ -49,7 +49,7 @@ def set_long_text_strategy(strategy: str):
 
 def set_chunk_config(size: int = None, overlap: int = None, aggregation: str = None, max_chunks: int = None):
     """设置分块配置"""
-    config = get_config()
+    config = Config()
     
     if size is not None:
         if size < 100 or size > 1000:

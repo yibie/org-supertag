@@ -1,301 +1,310 @@
 ;;; org-supertag-background-sync.el --- Background sync engine for org-supertag -*- lexical-binding: t; -*-
 
-;; 背景同步引擎：负责周期性地将 Elisp 数据同步到 Python 后端
-;; 使用基于哈希值的增量检测机制，而非时间戳
+;; Background sync engine: responsible for periodically syncing Elisp data to Python backend
+;; Uses hash-based incremental detection mechanism, not timestamp
 
 ;;; Commentary:
 ;; 
-;; 此模块实现与 org-supertag-sync.el 解耦的背景同步：
-;; - org-supertag-sync.el: 文件 → Elisp DB（高频，轻量）
-;; - org-supertag-background-sync.el: Elisp DB → Python（低频，重量）
+;; This module implements background sync decoupled from org-supertag-sync.el:
+;; - org-supertag-sync.el: file → Elisp DB (high frequency, lightweight)
+;; - org-supertag-background-sync.el: Elisp DB → Python (low frequency, heavyweight)
 ;;
-;; 关键特性：
-;; 1. 基于哈希值的增量检测（借鉴 org-supertag-sync.el 的机制）
-;; 2. 状态管理，防止并发运行
-;; 3. 详细的同步报告和调试信息
-;; 4. 12小时同步间隔
+;; Key features:
+;; 1. Hash-based incremental detection (inspired by org-supertag-sync.el)
+;; 2. State management, prevent concurrent running
+;; 3. Detailed sync reports and debug information
+;; 4. 12-hour sync interval
 
 ;;; Code:
 
 (require 'org-supertag-db)
 (require 'org-supertag-bridge)
+(require 'org-supertag-api)
+(require 'ht) ;; Ensure ht is required
 
-;;; 配置变量
+;; === Configuration variables ===
 
-(defcustom org-supertag-background-sync-interval (* 12 3600) ; 12小时
-  "背景同步间隔（秒）。"
+(defcustom org-supertag-background-sync-interval (* 12 3600) ; 12 hours
+  "Background sync interval (seconds)."
   :type 'integer
   :group 'org-supertag)
 
 (defcustom org-supertag-background-sync-auto-start t
-  "是否在启动时自动开始背景同步。"
+  "Whether to automatically start background sync on startup."
   :type 'boolean
   :group 'org-supertag)
 
-;;; 运行时变量
+;; === Runtime variables ===
 
 (defvar org-supertag-background-sync--timer nil
-  "背景同步定时器。")
+  "Background sync timer.")
 
 (defvar org-supertag-background-sync--state :idle
-  "背景同步状态。可能的值：
-- :idle            - 空闲状态
-- :waiting-backend - 等待Python后端就绪
-- :syncing         - 正在同步")
+  "Background sync state. Possible values:
+- :idle            - Idle state
+- :waiting-backend - Waiting for Python backend to be ready
+- :syncing         - Syncing")
 
 (defvar org-supertag-background-sync--last-sync-time nil
-  "最后一次成功同步的时间。")
+  "Last successful sync time.")
 
 (defvar org-supertag-background-sync--last-sync-hashes (make-hash-table :test 'equal)
-  "最后一次同步时各对象的哈希值。
-Key: 对象ID
-Value: 哈希值字符串")
+  "Last sync hashes for each object.
+Key: object ID
+Value: hash string")
 
 (defvar org-supertag-background-sync--stats 
   '(:synced-nodes 0 :synced-tags 0 :synced-links 0 :total-objects 0)
-  "最后一次同步的统计信息。")
+  "Last sync statistics.")
 
 (defvar org-supertag-background-sync--backend-check-timer nil
-  "用于检查Python后端状态的定时器。")
+  "Timer for checking Python backend status.")
 
 (defvar org-supertag-background-sync--backend-check-interval 5
-  "检查Python后端状态的间隔（秒）。")
+  "Interval for checking Python backend status (seconds).")
 
 (defvar org-supertag-background-sync--hash-file
-  (expand-file-name "sync_hashes.el" org-supertag-data-directory)
-  "哈希记录的持久化文件路径。")
+  (expand-file-name "sync_hashes.json" org-supertag-data-directory)
+  "Hash record persistence file path.")
 
-;;; 哈希计算函数
+;; === Hash Persistence ===
 
-(defun org-supertag-background-sync--calculate-object-hash (obj-id obj-props)
-  "计算对象的哈希值。
-OBJ-ID: 对象ID
-OBJ-PROPS: 对象属性plist"
-  (let* ((obj-type (plist-get obj-props :type))
-         (hash-content 
-          (cond
-           ;; 节点哈希：使用与 org-supertag-sync.el 相同的方法
-           ((eq obj-type :node)
-            (format "%s%s%s%s%s%s"
-                    (or (plist-get obj-props :raw-value) "")
-                    (or (plist-get obj-props :tags) "")
-                    (or (plist-get obj-props :todo-type) "")
-                    (or (plist-get obj-props :priority) "")
-                    (or (plist-get obj-props :properties) "")
-                    (or (plist-get obj-props :file-path) "")))
-           
-           ;; 标签哈希：基于名称和字段定义
-           ((eq obj-type :tag)
-            (format "%s%s%s"
-                    (or (plist-get obj-props :name) "")
-                    (or (plist-get obj-props :fields) "")
-                    (or (plist-get obj-props :description) "")))
-           
-           ;; 链接哈希：基于类型、源、目标
-           ((eq obj-type :link)
-            (format "%s%s%s%s"
-                    (or (plist-get obj-props :link-type) "")
-                    (or (plist-get obj-props :from) "")
-                    (or (plist-get obj-props :to) "")
-                    (or (plist-get obj-props :value) "")))
-           
-           ;; 其他类型：序列化整个属性
-           (t (format "%s" obj-props)))))
-    (secure-hash 'sha1 hash-content)))
+(defun org-supertag-background-sync--save-hashes ()
+  "Save the current sync hashes to the hash file in JSON format."
+  (interactive)
+  (require 'json)
+  (let ((temp-file (make-temp-file "sync-hashes-json-")))
+    (with-temp-buffer
+      (insert (json-encode org-supertag-background-sync--last-sync-hashes))
+      (write-file temp-file nil))
+    (rename-file temp-file org-supertag-background-sync--hash-file t)
+    (message "[background-sync] Hashes saved to %s" org-supertag-background-sync--hash-file)))
+
+(defun org-supertag-background-sync--load-hashes ()
+  "Load sync hashes from the JSON hash file if it exists."
+  (interactive)
+  (if (file-exists-p org-supertag-background-sync--hash-file)
+      (progn
+        (require 'json)
+        (let* ((json-string (with-temp-buffer
+                              (insert-file-contents org-supertag-background-sync--hash-file)
+                              (buffer-string)))
+               ;; json-read-from-string returns an alist for JSON objects
+               (data-alist (json-read-from-string json-string)))
+          (clrhash org-supertag-background-sync--last-sync-hashes)
+          (dolist (pair data-alist)
+            (puthash (car pair) (cdr pair) org-supertag-background-sync--last-sync-hashes))
+          (message "[background-sync] Hashes loaded from JSON file %s. Total: %d"
+                   org-supertag-background-sync--hash-file
+                   (hash-table-count org-supertag-background-sync--last-sync-hashes))))
+    (message "[background-sync] JSON hash file not found. Starting with empty hash table.")))
+
+;; === Hash calculation functions ===
+
+(defun org-supertag-background-sync--calculate-object-hash (props)
+  "Calculate object hash from its property list."
+  (when (plistp props)
+    (let ((hash-content (format "%S" props)))
+      (secure-hash 'sha1 hash-content))))
 
 (defun org-supertag-background-sync--get-changed-objects ()
-  "获取自上次同步以来发生变化的对象。
-返回 (changed-nodes changed-tags changed-links) 的列表。"
-  (let ((changed-nodes '())
-        (changed-tags '())
-        (changed-links '())
-        (checked-count 0)
+  "Get all changed objects (nodes, tags, links) since the last sync.
+This function iterates over both `org-supertag-db--object` and
+`org-supertag-db--link` to build a complete picture of the changes."
+  (let ((nodes-to-upsert '())
+        (tags-to-upsert '())
+        (links-to-upsert '())
+        (ids-to-delete '())
+        (current-ids (make-hash-table :test 'equal))
         (changed-count 0))
-    
-    ;; 检查变化的节点
-    (maphash 
-     (lambda (id props)
-       (cl-incf checked-count)
-       (let* ((current-hash (org-supertag-background-sync--calculate-object-hash id props))
-              (last-hash (gethash id org-supertag-background-sync--last-sync-hashes)))
-         (unless (string= current-hash (or last-hash ""))
-           (cl-incf changed-count)
-           (push (cons id props) changed-nodes))))
-     org-supertag-db--node)
-    
-    ;; 检查变化的标签
-    (maphash 
-     (lambda (id props)
-       (cl-incf checked-count)
-       (let* ((current-hash (org-supertag-background-sync--calculate-object-hash id props))
-              (last-hash (gethash id org-supertag-background-sync--last-sync-hashes)))
-         (unless (string= current-hash (or last-hash ""))
-           (cl-incf changed-count)
-           (push (cons id props) changed-tags))))
-     org-supertag-db--tag)
-    
-    ;; 检查变化的链接
-    (maphash 
-     (lambda (id props)
-       (cl-incf checked-count)
-       (let* ((current-hash (org-supertag-background-sync--calculate-object-hash id props))
-              (last-hash (gethash id org-supertag-background-sync--last-sync-hashes)))
-         (unless (string= current-hash (or last-hash ""))
-           (cl-incf changed-count)
-           (push (cons id props) changed-links))))
-     org-supertag-db--link)
-    
-    ;; (message "[背景同步] 检查了 %d 个对象，发现 %d 个变化" checked-count changed-count)
-    (list changed-nodes changed-tags changed-links)))
 
-;;; 主同步函数
+    ;; 1. Find created/updated objects from the main object table
+    (maphash
+     (lambda (id props)
+       (puthash id t current-ids) ; Track current IDs
+       (let ((current-hash (org-supertag-background-sync--calculate-object-hash props))
+             (last-hash (gethash id org-supertag-background-sync--last-sync-hashes)))
+         (unless (and current-hash last-hash (string= current-hash last-hash))
+           (cl-incf changed-count)
+           (let ((type (plist-get props :type)))
+             (cond
+              ((eq type :node) (push props nodes-to-upsert))
+              ((eq type :tag) (push props tags-to-upsert))
+              (t nil))))))
+     org-supertag-db--object)
+
+    ;; 2. Find created/updated links from the link table
+    (maphash
+     (lambda (id props)
+       (puthash id t current-ids) ; Also track link IDs
+       (let ((current-hash (org-supertag-background-sync--calculate-object-hash props))
+             (last-hash (gethash id org-supertag-background-sync--last-sync-hashes)))
+         (unless (and current-hash last-hash (string= current-hash last-hash))
+           (cl-incf changed-count)
+           (push props links-to-upsert))))
+     org-supertag-db--link)
+
+    ;; 3. Find deleted objects by comparing old hashes with current IDs
+    (maphash
+     (lambda (id _last-hash)
+       (unless (gethash id current-ids)
+         (cl-incf changed-count)
+         (push id ids-to-delete)))
+     org-supertag-background-sync--last-sync-hashes)
+
+    (message "[background-sync] checked %d objects, found %d changes"
+             (+ (hash-table-count org-supertag-db--object)
+                (hash-table-count org-supertag-db--link))
+             changed-count)
+
+    (list nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete)))
+
+;; === Main sync function ===
 
 (defun org-supertag-background-sync--do-sync ()
-  "执行一次完整的背景同步操作。"
-  ;; (message "[背景同步] 开始同步...")
+  "Perform a full background sync operation."
   (setq org-supertag-background-sync--state :syncing)
-  
-  (condition-case err
+  (condition-case-unless-debug err
       (let* ((start-time (current-time))
              (changes (org-supertag-background-sync--get-changed-objects))
-             (changed-nodes (nth 0 changes))
-             (changed-tags (nth 1 changes))
-             (changed-links (nth 2 changes))
-             (total-changed (+ (length changed-nodes) 
-                              (length changed-tags) 
-                              (length changed-links))))
-        
+             (nodes-to-upsert (nth 0 changes))
+             (tags-to-upsert (nth 1 changes))
+             (links-to-upsert (nth 2 changes))
+             (ids-to-delete (nth 3 changes))
+             (total-changed (+ (length nodes-to-upsert)
+                               (length tags-to-upsert)
+                               (length links-to-upsert)
+                               (length ids-to-delete))))
         (if (= total-changed 0)
             (progn
-              ;; (message "[背景同步] 没有发现变化，跳过同步")
-              ;; 重置状态
+              (message "[background-sync] No changes detected. Sync complete.")
               (setq org-supertag-background-sync--state :idle))
-          
-          ;; (message "[背景同步] 发现变化：节点 %d，标签 %d，链接 %d"
-          ;;          (length changed-nodes) (length changed-tags) (length changed-links))
-          
-          ;; 启动进度跟踪
-          (org-supertag-background-sync--start-progress total-changed)
-          
-          ;; 使用 bulk_process_snapshot 方法进行同步
-          (let* ((nodes-data (org-supertag-background-sync--prepare-nodes-for-python changed-nodes))
-                 (tags-data (org-supertag-background-sync--prepare-tags-for-python changed-tags))
-                 (links-data (org-supertag-background-sync--prepare-links-for-python changed-links))
-                 (snapshot-data `(:objects ,nodes-data :links ,links-data :sync_timestamp ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))))
-            
-            (org-supertag-bridge-call-async
-             "bulk_process_snapshot"
-             (lambda (result)
-               (let ((end-time (current-time)))
-                 (if (and result (string= (plist-get result :status) "success"))
-                     (progn
-                       ;; 更新哈希记录
-                       (org-supertag-background-sync--update-hashes changed-nodes changed-tags changed-links)
-                       
-                       ;; 更新统计信息
-                       (setq org-supertag-background-sync--stats
-                             (list :synced-nodes (length changed-nodes)
-                                   :synced-tags (length changed-tags)
-                                   :synced-links (length changed-links)
-                                   :total-objects total-changed))
-                       
-                       ;; 记录成功时间
-                       (setq org-supertag-background-sync--last-sync-time end-time)
-                       
-                       ;; (let ((duration (float-time (time-subtract end-time start-time))))
-                       ;;   (message "[背景同步] 完成同步：%d 个对象，耗时 %.2f 秒" 
-                       ;;            total-changed duration))
-                       )
-                   
-                   ;; (message "[背景同步] 同步失败：%s" (or (plist-get result :message) "Unknown error"))
-                   )
-                 
-                 ;; 结束进度跟踪
-                 (org-supertag-background-sync--finish-progress)
-                 
-                 ;; 重置状态
-                 (setq org-supertag-background-sync--state :idle)))
-             snapshot-data))))
-    
+          (progn
+            (org-supertag-background-sync--start-progress total-changed)
+            (let* ((nodes-data (org-supertag-background-sync--prepare-nodes-for-python nodes-to-upsert))
+                   (tags-data (org-supertag-background-sync--prepare-tags-for-python tags-to-upsert))
+                   (links-data (org-supertag-background-sync--prepare-links-for-python links-to-upsert))
+                   ;; Build an alist instead of a hash-table for reliable serialization.
+                   (snapshot-data `(("nodes" . ,nodes-data)
+                                    ("links" . ,links-data)
+                                    ("ids_to_delete" . ,ids-to-delete)
+                                    ("sync_timestamp" . ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t)))))
+              ;; We must use the designated API function which handles correct payload wrapping.
+              (org-supertag-api-bulk-process-snapshot
+               snapshot-data
+               (lambda (result)
+                 (let ((end-time (current-time)))
+                   (if (and result (equal (plist-get result :status) "success"))
+                       (progn
+                         (org-supertag-background-sync--update-hashes nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete)
+                         (setq org-supertag-background-sync--stats
+                               (list :synced-nodes (length nodes-to-upsert)
+                                     :synced-tags (length tags-to-upsert)
+                                     :synced-links (length links-to-upsert)
+                                     :deleted-count (length ids-to-delete)
+                                     :total-objects total-changed))
+                         (setq org-supertag-background-sync--last-sync-time end-time)
+                         (message "[background-sync] Sync successful."))
+                     (message "[background-sync] sync failed: %s" (or (plist-get result :message) "Unknown error")))
+                   (org-supertag-background-sync--finish-progress)
+                   (setq org-supertag-background-sync--state :idle))))))))
     (error
      (setq org-supertag-background-sync--state :idle)
      (org-supertag-background-sync--finish-progress)
-     ;; (message "[背景同步] 同步过程中发生错误：%s" (error-message-string err))
-     )))
+     (message "[background-sync] error during sync: %s" (error-message-string err)))))
 
-(defun org-supertag-background-sync--update-hashes (nodes tags links)
-  "更新已同步对象的哈希记录。"
-  (dolist (node-pair nodes)
-    (let* ((id (car node-pair))
-           (props (cdr node-pair))
-           (hash (org-supertag-background-sync--calculate-object-hash id props)))
-      (puthash id hash org-supertag-background-sync--last-sync-hashes)))
+(defun org-supertag-background-sync--deep-prepare-for-python (data)
+  "Recursively convert Elisp data (plist, alist) to a pure hash table, for safe sending to Python.
+This handles nested structures and special data types like time objects."
+  (cond
+   ;; Emacs internal time list (e.g., (26701 18355 90563 0)) -> ISO 8601 string
+   ((and (listp data) (numberp (car data)) (>= (length data) 3))
+    (format-time-string "%Y-%m-%dT%H:%M:%SZ" data t))
+   ;; alist (e.g., '((a . 1) (b . 2))) -> hash-table
+   ((and (listp data) (consp data) (consp (car data)))
+    (let ((table (make-hash-table :test 'equal)))
+      (dolist (pair data)
+        (when (consp pair)
+          (puthash (car pair) (org-supertag-background-sync--deep-prepare-for-python (cdr pair)) table)))
+      table))
+   ;; plist (e.g., '(:a 1 :b 2)) -> hash-table
+   ((and (plistp data) (or (null data) (symbolp (car data))))
+    (let ((table (make-hash-table :test 'equal)))
+      (while data
+        (let ((key (pop data))
+              (value (pop data)))
+          (puthash (symbol-name key) (org-supertag-background-sync--deep-prepare-for-python value) table)))
+      table))
+   ;; list -> list (with values processed)
+   ((listp data)
+    (mapcar #'org-supertag-background-sync--deep-prepare-for-python data))
+   ;; Handle symbols explicitly to prevent sending them raw over EPC.
+   ((symbolp data)
+    ;; `t` and `nil` are handled correctly as booleans by the bridge.
+    ;; Other symbols must be converted to their string representation.
+    (if (memq data '(t nil))
+        data
+      (symbol-name data)))
+   ;; other types -> return as is
+   (t data)))
+
+(defun org-supertag-background-sync--prepare-nodes-for-python (nodes)
+  "Prepare node data for sending to Python, using deep conversion."
+  (mapcar
+   (lambda (node-props)
+     (org-supertag-background-sync--deep-prepare-for-python node-props))
+   nodes))
+
+(defun org-supertag-background-sync--prepare-tags-for-python (tags)
+  "Prepare tag data for sending to Python, using deep conversion."
+  (mapcar
+   (lambda (tag-props)
+     (org-supertag-background-sync--deep-prepare-for-python tag-props))
+   tags))
+
+(defun org-supertag-background-sync--prepare-links-for-python (links)
+  "Prepare link data for sending to Python, using deep conversion."
+  (mapcar
+   (lambda (link-props)
+     (org-supertag-background-sync--deep-prepare-for-python link-props))
+   links))
+
+(defun org-supertag-background-sync--update-hashes (nodes-upserted tags-upserted links-upserted ids-deleted)
+  "Update hash records for synchronized objects and save them."
+  ;; Update hashes for upserted nodes
+  (dolist (props nodes-upserted)
+    (let* ((id (plist-get props :id))
+           (hash (org-supertag-background-sync--calculate-object-hash props)))
+      (when id (puthash id hash org-supertag-background-sync--last-sync-hashes))))
   
-  (dolist (tag-pair tags)
-    (let* ((id (car tag-pair))
-           (props (cdr tag-pair))
-           (hash (org-supertag-background-sync--calculate-object-hash id props)))
-      (puthash id hash org-supertag-background-sync--last-sync-hashes)))
+  ;; Update hashes for upserted tags
+  (dolist (props tags-upserted)
+    (let* ((id (plist-get props :id))
+           (hash (org-supertag-background-sync--calculate-object-hash props)))
+      (when id (puthash id hash org-supertag-background-sync--last-sync-hashes))))
   
-  (dolist (link-pair links)
-    (let* ((id (car link-pair))
-           (props (cdr link-pair))
-           (hash (org-supertag-background-sync--calculate-object-hash id props)))
-      (puthash id hash org-supertag-background-sync--last-sync-hashes)))
+  ;; Update hashes for upserted links
+  (dolist (props links-upserted)
+    (let* ((id (plist-get props :id))
+           (hash (org-supertag-background-sync--calculate-object-hash props)))
+      (when id (puthash id hash org-supertag-background-sync--last-sync-hashes))))
   
-  ;; 保存更新后的哈希记录
+  ;; Remove hashes for deleted objects
+  (dolist (id ids-deleted)
+    (remhash id org-supertag-background-sync--last-sync-hashes))
+  
+  ;; Persist the updated hashes to the file
   (org-supertag-background-sync--save-hashes))
 
 (defun org-supertag-background-sync--ensure-data-directory ()
-  "确保数据目录存在。"
+  "Ensure data directory exists."
   (unless (file-exists-p org-supertag-data-directory)
     (make-directory org-supertag-data-directory t)))
 
-(defun org-supertag-background-sync--save-hashes ()
-  "保存哈希记录到文件。"
-  (when (hash-table-p org-supertag-background-sync--last-sync-hashes)
-    ;; 确保数据目录存在
-    (org-supertag-background-sync--ensure-data-directory)
-    
-    ;; 保存哈希记录
-    (with-temp-file org-supertag-background-sync--hash-file
-      (let ((print-length nil)
-            (print-level nil))
-        (prin1 (let ((data (make-hash-table :test 'equal)))
-                 (maphash (lambda (k v)
-                           (puthash k v data))
-                         org-supertag-background-sync--last-sync-hashes)
-                 data)
-               (current-buffer))))))
-
-(defun org-supertag-background-sync--load-hashes ()
-  "从文件加载哈希记录。"
-  (when (file-exists-p org-supertag-background-sync--hash-file)
-    (condition-case err
-        (let ((loaded-data
-               (with-temp-buffer
-                 (insert-file-contents org-supertag-background-sync--hash-file)
-                 (read (current-buffer)))))
-          (when (hash-table-p loaded-data)
-            (setq org-supertag-background-sync--last-sync-hashes
-                  (make-hash-table :test 'equal))
-            (maphash (lambda (k v)
-                      (puthash k v org-supertag-background-sync--last-sync-hashes))
-                    loaded-data)))
-      (error
-       (message "Error loading hash records: %s" (error-message-string err))
-       ;; 如果加载失败，创建一个新的空哈希表
-       (setq org-supertag-background-sync--last-sync-hashes
-             (make-hash-table :test 'equal)))))
-  ;; 如果文件不存在，创建一个新的空哈希表
-  (unless (file-exists-p org-supertag-background-sync--hash-file)
-    (setq org-supertag-background-sync--last-sync-hashes
-          (make-hash-table :test 'equal))))
-
-;;; 定时器管理
+;; === Timer management ===
 
 (defun org-supertag-background-sync--python-ready-p ()
-  "检查Python后端是否就绪。"
+  "Check if Python backend is ready."
   (and (featurep 'org-supertag-bridge)
        (boundp 'org-supertag-bridge--ready-p)
        org-supertag-bridge--ready-p
@@ -305,19 +314,19 @@ OBJ-PROPS: 对象属性plist"
        (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager)))
 
 (defun org-supertag-background-sync--try-start-backend ()
-  "尝试启动Python后端（如果需要的话）。"
+  "Try to start Python backend (if needed)."
   (when (and (not (org-supertag-background-sync--python-ready-p))
              (fboundp 'org-supertag-init-vectorization))
     (condition-case err
         (org-supertag-init-vectorization)
       (error
-       (org-supertag-background-sync--log-debug "启动Python后端失败：%s" (error-message-string err))))))
+       (org-supertag-background-sync--log-debug "Failed to start Python backend: %s" (error-message-string err))))))
 
 (defun org-supertag-background-sync--wait-for-backend ()
-  "等待Python后端就绪。"
+  "Wait for Python backend to be ready."
   (setq org-supertag-background-sync--state :waiting-backend)
   
-  ;; 尝试启动Python后端（如果还没有启动的话）
+  ;; Try to start Python backend (if not already started)
   (org-supertag-background-sync--try-start-backend)
   
   (setq org-supertag-background-sync--backend-check-timer
@@ -326,123 +335,114 @@ OBJ-PROPS: 对象属性plist"
                         #'org-supertag-background-sync--check-backend)))
 
 (defun org-supertag-background-sync--check-backend ()
-  "检查Python后端状态的定时回调。"
+  "Check Python backend status timer callback."
   (if (org-supertag-background-sync--python-ready-p)
       (progn
-        ;; 后端就绪，停止检查并启动同步
+        ;; Backend ready, stop checking and start sync
         (when org-supertag-background-sync--backend-check-timer
           (cancel-timer org-supertag-background-sync--backend-check-timer)
           (setq org-supertag-background-sync--backend-check-timer nil))
         (org-supertag-background-sync--start-sync-timer))
-    ;; 继续等待
-    (org-supertag-background-sync--log-debug "仍在等待Python后端就绪...")))
+    ;; Continue waiting
+    (org-supertag-background-sync--log-debug "Still waiting for Python backend to be ready...")))
 
 (defun org-supertag-background-sync--start-sync-timer ()
-  "启动实际的同步定时器。"
+  "Start actual sync timer."
   (setq org-supertag-background-sync--state :idle)
   (setq org-supertag-background-sync--timer
-        (run-with-timer 0 ; 立即开始第一次同步
+        (run-with-timer 0 ; Start immediately for the first sync
                         org-supertag-background-sync-interval
                         #'org-supertag-background-sync--timer-function))
-  (org-supertag-background-sync--log-debug "背景同步已启动，间隔 %d 小时" (/ org-supertag-background-sync-interval 3600)))
+  (org-supertag-background-sync--log-debug "Background sync started, interval %d hours" (/ org-supertag-background-sync-interval 3600)))
 
 (defun org-supertag-background-sync--timer-function ()
-  "定时器回调函数。"
+  "Timer callback function."
   (when (eq org-supertag-background-sync--state :idle)
-    ;; 到这里时Python后端应该已经就绪，但为了安全起见还是检查一下
+    ;; Here Python backend should be ready, but just to be safe, check again
     (if (org-supertag-background-sync--python-ready-p)
         (org-supertag-background-sync--do-sync)
-      ;; 如果后端又不可用了，重新进入等待状态
-      ;; (message "[背景同步] Python后端连接丢失，重新等待...")
+      ;; If backend is not available, re-enter waiting state
+      ;; (message "[background-sync] Python backend connection lost, re-waiting...")
       (org-supertag-background-sync--wait-for-backend))))
 
 (defun org-supertag-background-sync-start ()
-  "启动背景同步。"
+  "Start background sync service.
+This function now assumes Python bridge is already ready when called."
   (interactive)
-  ;; 停止现有定时器
-  (org-supertag-background-sync-stop)
-  
-  ;; 检查Python后端状态
-  (if (org-supertag-background-sync--python-ready-p)
-      (org-supertag-background-sync--start-sync-timer)
-    (org-supertag-background-sync--wait-for-backend)))
+  (if (timerp org-supertag-background-sync--timer)
+      (message "[background-sync] Service is already running.")
+    (progn
+      (message "[background-sync] Starting background sync service (interval: %ds)..." org-supertag-background-sync-interval)
+      (setq org-supertag-background-sync--state :idle)
+      (org-supertag-background-sync--load-hashes)
+      (setq org-supertag-background-sync--timer
+            (run-with-timer 0 org-supertag-background-sync-interval
+                            #'org-supertag-background-sync--trigger-sync)))))
 
 (defun org-supertag-background-sync-stop ()
-  "停止背景同步。"
+  "Stop background sync service."
   (interactive)
-  (let ((was-running (or org-supertag-background-sync--timer 
-                        org-supertag-background-sync--backend-check-timer
-                        (not (eq org-supertag-background-sync--state :idle)))))
-    
-    ;; 停止同步定时器
-    (when org-supertag-background-sync--timer
-      (cancel-timer org-supertag-background-sync--timer)
-      (setq org-supertag-background-sync--timer nil))
-    
-    ;; 停止后端检查定时器
-    (when org-supertag-background-sync--backend-check-timer
-      (cancel-timer org-supertag-background-sync--backend-check-timer)
-      (setq org-supertag-background-sync--backend-check-timer nil))
-    
-    ;; 重置状态
+  (when (timerp org-supertag-background-sync--timer)
+    (cancel-timer org-supertag-background-sync--timer)
+    (setq org-supertag-background-sync--timer nil)
     (setq org-supertag-background-sync--state :idle)
-    
-    ;; 只在实际停止了什么东西时才输出消息
-    (when (and was-running (called-interactively-p 'any))
-      ;; (message "[背景同步] 已停止")
-      )))
+    (message "[background-sync] Service stopped.")))
+
+(defun org-supertag-background-sync--trigger-sync ()
+  "Trigger sync entry point, check state."
+  (if (eq org-supertag-background-sync--state :idle)
+      (org-supertag-background-sync--do-sync)
+    (message "[background-sync] Skipping sync run because service is not idle (state: %s)."
+             org-supertag-background-sync--state)))
 
 (defun org-supertag-background-sync-restart ()
-  "重启背景同步。"
+  "Restart background sync."
   (interactive)
   (org-supertag-background-sync-stop)
   (org-supertag-background-sync-start))
 
-;;; 手动同步和状态查询
+;;; Manual sync and status query
 
 (defun org-supertag-background-sync-run-now ()
-  "立即运行一次背景同步。"
+  "Run background sync immediately."
   (interactive)
   (cond 
    ((eq org-supertag-background-sync--state :syncing)
-    ;; (message "[背景同步] 已在运行中，请稍候...")
-    )
+    (message "[background-sync] Already running, please wait..."))
    
    ((eq org-supertag-background-sync--state :waiting-backend)
-    ;; (message "[背景同步] 正在等待Python后端就绪，请稍候...")
-    )
+    (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
    
    ((not (org-supertag-background-sync--python-ready-p))
-    ;; (message "[背景同步] Python后端未就绪。请先启动Python后端：M-x org-supertag-bridge-start-process")
-    )
+    (message "[background-sync] Python backend not ready. Please start Python backend: M-x org-supertag-bridge-start-process"))
    
    (t 
     (org-supertag-background-sync--do-sync))))
 
 (defun org-supertag-background-sync-status ()
-  "显示背景同步状态。"
+  "Display background sync status."
   (interactive)
   (let* ((python-ready (org-supertag-background-sync--python-ready-p))
          (timer-status (cond 
-                       (org-supertag-background-sync--timer "同步定时器运行中")
-                       (org-supertag-background-sync--backend-check-timer "等待后端定时器运行中")
+                       (org-supertag-background-sync--timer "Sync timer running")
+                       (org-supertag-background-sync--backend-check-timer "Waiting for backend timer running")
                        (t "已停止")))
          (status-msg
-          (format "背景同步状态：
-- 状态：%s
-- 定时器：%s
-- Python后端：%s
-- 同步间隔：%d 小时
-- 最后同步：%s
-- 最后同步统计：节点 %d，标签 %d，链接 %d总计 %d
-- 哈希记录数：%d"
+          (format "Background sync status:
+- State: %s
+- Timer: %s
+- Python backend: %s
+- Sync interval: %d hours
+- Last sync: %s
+- Last sync stats: nodes %d, tags %d, links %d, total %d
+- Hash records: %d"
                   org-supertag-background-sync--state
                   timer-status
-                  (if python-ready "已就绪" "未就绪")
+                  (if python-ready "Ready" "Not ready")
                   (/ org-supertag-background-sync-interval 3600)
                   (if org-supertag-background-sync--last-sync-time
                       (format-time-string "%Y-%m-%d %H:%M:%S" org-supertag-background-sync--last-sync-time)
-                    "从未同步")
+                    "Never synced")
                   (plist-get org-supertag-background-sync--stats :synced-nodes)
                   (plist-get org-supertag-background-sync--stats :synced-tags)
                   (plist-get org-supertag-background-sync--stats :synced-links)
@@ -454,53 +454,53 @@ OBJ-PROPS: 对象属性plist"
 ;;; 初始化
 
 (defun org-supertag-background-sync-reset-hashes ()
-  "重置所有哈希记录，强制下次全量同步。"
+  "Reset all hash records, force full sync next time."
   (interactive)
   (clrhash org-supertag-background-sync--last-sync-hashes)
   (setq org-supertag-background-sync--last-sync-time nil)
-  ;; (message "[背景同步] 已重置哈希记录，下次将执行全量同步")
+  ;; (message "[background-sync] Hash records reset, full sync will be triggered next time")
   )
 
 (defun org-supertag-background-sync-initialize ()
-  "初始化背景同步系统。"
-  ;; 加载历史哈希记录
+  "Initialize background sync system."
+  ;; Load history hash records
   (org-supertag-background-sync--load-hashes)
   
   (when org-supertag-background-sync-auto-start
     (org-supertag-background-sync-start)))
 
-;; 这个模块现在通过 org-supertag.el 直接调用初始化
-;; 不需要自动钩子，避免重复初始化
+;; This module is now initialized directly by org-supertag.el
+;; No automatic hooks to avoid duplicate initialization
 
-;;; 调试函数
+;;; Debug functions
 
 (defun org-supertag-background-sync--log-debug (msg &rest args)
-  "输出调试信息，只在启用调试时显示。"
+  "Output debug information, only show when debug is enabled."
   (when (and (boundp 'org-supertag-debug) org-supertag-debug)
-    (apply #'message (concat "[背景同步-调试] " msg) args)))
+    (apply #'message (concat "[background-sync-debug] " msg) args)))
 
 (defun org-supertag-background-sync-debug-hashes (&optional limit)
-  "显示当前哈希记录（用于调试）。
-LIMIT: 最多显示的记录数，默认10。"
+  "Display current hash records (for debugging).
+LIMIT: Maximum number of records to display, default 10."
   (interactive "P")
   (let ((count 0)
         (limit (or limit 10)))
-    (message "哈希记录（最多显示 %d 条）：" limit)
+    (message "Hash records (maximum %d):" limit)
     (maphash 
      (lambda (id hash)
        (when (< count limit)
          (message "  %s: %s" id (substring hash 0 8))
          (cl-incf count)))
      org-supertag-background-sync--last-sync-hashes)
-    (message "总计 %d 条哈希记录" (hash-table-count org-supertag-background-sync--last-sync-hashes))))
+    (message "Total hash records: %d" (hash-table-count org-supertag-background-sync--last-sync-hashes))))
 
-;;; 进度处理
+;;; Progress handling
 
 (defvar org-supertag-background-sync--current-progress nil
-  "当前同步进度信息，格式为 (current total start-time)。")
+  "Current sync progress information, format (current total start-time).")
 
 (defun org-supertag-background-sync--update-progress (current total)
-  "更新同步进度。由Python后端调用。"
+  "Update sync progress. Called by Python backend."
   (when org-supertag-background-sync--current-progress
     (let* ((start-time (nth 2 org-supertag-background-sync--current-progress))
            (elapsed (float-time (time-subtract (current-time) start-time)))
@@ -511,67 +511,27 @@ LIMIT: 最多显示的记录数，默认10。"
       
       (setq org-supertag-background-sync--current-progress (list current total start-time))
       
-      ;; (message "[背景同步] 进度：%d/%d (%.1f%%) - 已用时 %.1fs%s"
+      ;; (message "[background-sync] Progress: %d/%d (%.1f%%) - Elapsed time %.1fs%s"
       ;;          current total percentage elapsed
       ;;          (if (> eta 0) (format " - 预计剩余 %.1fs" eta) ""))
       )))
 
 (defun org-supertag-background-sync--start-progress (total)
-  "开始进度跟踪。"
+  "Start progress tracking."
   (setq org-supertag-background-sync--current-progress 
         (list 0 total (current-time)))
-  ;; (message "[背景同步] 开始同步 %d 个对象..." total)
+  ;; (message "[background-sync] Starting sync of %d objects..." total)
   )
 
 (defun org-supertag-background-sync--finish-progress ()
-  "结束进度跟踪。"
+  "Finish progress tracking."
   (setq org-supertag-background-sync--current-progress nil))
 
-(defun org-supertag-background-sync--prepare-nodes-for-python (changed-nodes)
-  "准备节点数据供Python处理。返回节点数据列表，每个节点包含6个字段。"
-  (let ((nodes-list '()))
-    (dolist (node-pair changed-nodes)
-      (let* ((id (car node-pair))
-             (props (cdr node-pair))
-             ;; 创建包含6个字段的节点数据列表：[ID, TITLE, CONTENT, TAGS, FILE_PATH, MODIFIED_AT]
-             (node-data (list 
-                        id                                          ; node_id
-                        (or (plist-get props :title) "")           ; title
-                        (or (plist-get props :raw-value) "")       ; content
-                        (or (plist-get props :tags) '())           ; tags
-                        (or (plist-get props :file-path) "")       ; file_path
-                        (plist-get props :modified-at))))          ; modified_at
-        (push node-data nodes-list)))
-    (nreverse nodes-list)))
+(when org-supertag-background-sync-auto-start
+  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start))
 
-(defun org-supertag-background-sync--prepare-tags-for-python (changed-tags)
-  "准备标签数据供Python处理。"
-  (let ((tags-list '()))
-    (dolist (tag-pair changed-tags)
-      (let* ((id (car tag-pair))
-             (props (cdr tag-pair))
-             (tag-data (list id
-                           (or (plist-get props :name) "")
-                           (plist-get props :created-at)
-                           (plist-get props :modified-at))))
-        (push tag-data tags-list)))
-    (nreverse tags-list)))
-
-(defun org-supertag-background-sync--prepare-links-for-python (changed-links)
-  "准备链接数据供Python处理。返回链接数据列表，每个链接包含6个字段。"
-  (let ((links-list '()))
-    (dolist (link-pair changed-links)
-      (let* ((id (car link-pair))
-             (props (cdr link-pair))
-             ;; 创建包含6个字段的链接数据列表：[LINK_ID, TYPE, FROM_ID, TO_ID, PROPERTIES, MODIFIED_AT]
-             (link-data (list id                                     ; link_id
-                            (or (plist-get props :type) "")          ; type
-                            (or (plist-get props :from) "")          ; from_id
-                            (or (plist-get props :to) "")            ; to_id
-                            (or (plist-get props :properties) '())   ; properties
-                            (plist-get props :modified-at))))        ; modified_at
-        (push link-data links-list)))
-    (nreverse links-list)))
+;; Load hashes on startup, after all functions are defined.
+(org-supertag-background-sync--load-hashes)
 
 (provide 'org-supertag-background-sync)
 ;;; org-supertag-background-sync.el ends here 

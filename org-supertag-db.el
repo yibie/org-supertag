@@ -8,11 +8,41 @@
 ;; - Entities are nodes in relationships, relationships are connections between nodes
 ;; - Connect entities through relationships - using type, from, to to express relationships
 ;;
+;; Data Source Unification:
+;; To avoid data duplication and object reference issues, this module follows
+;; a unified data source strategy:
+;;
+;; 1. **Single Title Source**: Only :title field, from org-element :raw-value
+;; 2. **Single File Path**: Only :file-path, from buffer-file-name
+;; 3. **Filtered Properties**: Exclude redundant fields (FILE, ITEM, ALLTAGS, TAGS)
+;; 4. **Consistent Object Creation**: Each string field is a unique object
+;;
+;; Node Data Structure (Unified):
+;; (:type :node
+;;  :id "unique-id"           ; From org-element :ID
+;;  :title "title"            ; From org-element :raw-value (unified source)
+;;  :file-path "/path/file"   ; From buffer-file-name (unified source)
+;;  :pos 123                  ; From org-element :begin
+;;  :level 1                  ; From org-element :level
+;;  :olp ("path")             ; From org-get-outline-path
+;;  :todo "TODO"              ; From org-entry-get
+;;  :priority "A"             ; From org-entry-get
+;;  :scheduled time           ; From org-get-scheduled-time
+;;  :deadline time            ; From org-get-deadline-time
+;;  :properties (filtered)    ; Excludes FILE, ITEM, ALLTAGS, TAGS
+;;  :tags ("tag1" "tag2")     ; From org-get-tags
+;;  :content "content"        ; From buffer content
+;;  :ref-to ("id1" "id2")     ; Parsed from org-links
+;;  :ref-from ("id3")         ; Back-references
+;;  :ref-count 3              ; Total reference count
+;;  :created-at time)         ; Creation timestamp
+;;
 ;; Main Features:
 ;; - Entity Management: Create, update, delete, query entities
 ;; - Relationship Management: Create, delete, query relationships  
 ;; - Data Persistence: Save, load, backup data
 ;; - Cache System: Improve query performance
+;; - Data Source Unification: Eliminate redundant data collection
 ;;
 ;; Usage:
 ;; 1. Entity Operations
@@ -32,20 +62,25 @@
 ;;    - Save: (org-supertag-db-save)
 ;;    - Load: (org-supertag-db-load)
 ;;
-;; 5. Event System
+;; 5. Data Source Validation
+;;    - Check Unification: (org-supertag-db-check-data-sources)
+;;    - Check Duplicates: (org-supertag-db-check-duplicates)
+;;    - Fix Issues: (org-supertag-db-fix-duplicates)
+;;
+;; 6. Event System
 ;;    - Add Listener: (org-supertag-db-add-listener event-type function)
 ;;    - Trigger Event: (org-supertag-db-trigger-event event-type)
 ;;
-;; 6. Cache System
+;; 7. Cache System
 ;;    - Set Cache: (org-supertag-db-cache-set key value)
 ;;    - Get Cache: (org-supertag-db-cache-get key)
 ;;    - Remove Cache: (org-supertag-db-cache-remove key)
 ;;
-;; 7. Data Persistence
+;; 8. Data Persistence
 ;;    - Save: (org-supertag-db-save)
 ;;    - Load: (org-supertag-db-load)
 ;;
-;; 8. Backup
+;; 9. Backup
 ;;    - Backup: (org-supertag-db-backup)
 ;;    - Restore: (org-supertag-db-restore)
 
@@ -131,7 +166,12 @@
                 :description ; Description of tag purpose
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
-                :modified-at)) ; Modification time
+                :modified-at ; Modification time
+                ;; Governance Information
+                :tag-status  ; Tag governance status
+                :tag-rules   ; Tag governance rules
+                :tag-history ; Tag governance history records
+                )) ; Modification time
   "Entity structure definitions."))
 
 ;; Link type definition
@@ -166,8 +206,13 @@
      :optional (:relation-type          ; Relation type (:cooccurrence, :parent-child, :causal, etc.)
                 :strength               ; Strength (0.0-1.0)
                 :created-at             ; Creation time
-                :updated-at)))           ; Update time
-  "Entity link structure definitions.")
+                :updated-at             ; Update time
+                ;; Governance Information
+                :tag-rel-type           ; Tag relation governance type
+                :tag-rel-rules          ; Tag relation governance rules
+                :tag-rel-history        ; Tag relation governance history records
+                ))
+  "Entity link structure definitions."))
 
 ;; Behavior System Definitions
 (defconst org-supertag-behavior-timing
@@ -506,62 +551,36 @@ Returns:
 ;; Data Operation: Link
 ;;---------------------------------------------------------------------------------
 
-(defun org-supertag-db-link (type from to &optional props)
-  "Create or update a link between entities.
-TYPE: Link type (:node-tag, :node-field, :tag-ref)
-FROM: Source entity ID
-TO: Target entity ID
-PROPS: Optional link properties
+(defun org-supertag-db-link (type from to &rest props)
+  "Create a link between two objects.
+TYPE is the link type symbol.
+FROM is the source object ID.
+TO is the target object ID.
+PROPS is a plist of additional link properties."
+  (let* ((link-id (format ":%s:%s->%s" type from to))
+         (base-props (list :type type :from from :to to))
+         ;; Intelligently handle props. If it's a list containing a plist, flatten it.
+         (flat-props (if (and (consp props) (plistp (car props)))
+                         (car props)
+                       props))
+         (all-props (append base-props flat-props)))
+    (puthash link-id all-props org-supertag-db--link)
+    (org-supertag-db--mark-dirty)
+    (org-supertag-db--schedule-save)
+    (org-supertag-db-emit 'link:created type from to all-props)
+    link-id))
 
-Returns:
-- Link ID if successful
-- Signals error if validation fails"
-  (let* ((base-props (list :from from :to to))
-         (full-props (if props 
-                        (append base-props props)
-                      base-props))
-         (rel-id (format "%s:%s->%s" type from to)))
-    ;; 1. Validate
-    ;; 1.1 Validate link type
-    (unless (org-supertag-db-valid-link-type-p type)
-      (error "Invalid link type: %s" type))
-    ;; 1.2 Validate link data
-    (unless (org-supertag-db-valid-link-p type from to full-props)
-      (error "Invalid link data"))
-    
-    ;; 2. Check if link already exists
-    (if-let* ((existing (ht-get org-supertag-db--link rel-id)))
-        ;; If exists with same props, return ID
-        (if (equal existing full-props)
-            rel-id
-          ;; Otherwise update link
-          (progn
-            (ht-set! org-supertag-db--link rel-id full-props)
-            rel-id))
-      ;; 3. Create new link if not exists
-      (progn
-        (ht-set! org-supertag-db--link rel-id full-props)
-        ;; 4. Clear caches
-        (org-supertag-db--cache-remove 'link rel-id)
-        (org-supertag-db--cache-remove 'query (format "links:%s:%s" type from))
-        (org-supertag-db--cache-remove 'query (format "links:%s:%s" type to))
-        ;; 5. Clear type-specific caches
-        (pcase type
-          (:node-field
-           (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
-          (:node-tag
-           (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
-          (:tag-ref
-           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
-           (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
-        ;; 6. Trigger event
-        (org-supertag-db-emit 'link:created type from to props)
-        ;; 7. Mark database as dirty
-        (org-supertag-db--mark-dirty)
-        ;; 8. Schedule delayed save
-        (org-supertag-db--schedule-save)
-        ;; 9. Return link ID
-        rel-id))))
+(defun org-supertag-db-remove-link (type from to)
+  "Remove a link between two objects.
+TYPE is the link type symbol.
+FROM is the source object ID.
+TO is the target object ID."
+  (let ((link-id (format ":%s:%s->%s" type from to)))
+    (when (gethash link-id org-supertag-db--link)
+      (remhash link-id org-supertag-db--link)
+      (org-supertag-db--mark-dirty)
+      (org-supertag-db--schedule-save)
+      (org-supertag-db-emit 'link:removed type from to))))
 
 (defun org-supertag-db-unlink (type from to &optional dry-run)
   "Remove a link between entities.
@@ -969,15 +988,11 @@ Returns:
      (and (eq (plist-get v :type) :tag)
           (assoc field-name (plist-get v :fields))))))
 
-(defun org-supertag-db-find-links (type from to)
-  "Find links matching the specified criteria.
-TYPE is the link type to find
-FROM is the optional source node ID
-TO is the optional target node ID
-
-Returns:
-- List of matching links
-- nil if no matches found"
+(defun org-supertag-db-find-links (type &key from to)
+  "Find links matching criteria.
+TYPE is the link type symbol.
+FROM is the optional source object ID.
+TO is the optional target object ID."
   (let (results)
     (ht-map (lambda (k v)
               (when (and (or (null type) (eq (plist-get v :type) type))
@@ -1067,63 +1082,6 @@ Returns nil if entity does not exist"
      (message "Error removing entity %s: %s" id (error-message-string err))
      nil))) ;; Return nil instead of signaling an error
 
-(defun org-supertag-db-remove-link (type from to &optional dry-run)
-  "Remove a specific relationship.
-TYPE: Relationship type (:node-tag, :node-field, :tag-ref)
-FROM: Source entity ID
-TO: Target entity ID
-DRY-RUN: If non-nil, only return data to be deleted without actual deletion
-
-Returns:
-- The deleted relationship data if found and removed
-- nil if relationship does not exist
-- Throws error if validation fails"
-  (condition-case err
-      (let* ((rel-id (format "%s:%s->%s" type from to))
-             (link (ht-get org-supertag-db--link rel-id)))
-        (when link
-          ;; 1. Validate relationship
-          (unless (and (plist-get link :from)
-                      (plist-get link :to)
-                      (org-supertag-db-valid-link-type-p type))
-            (error "Invalid link data: %S" link))
-          ;; 2. Trigger pre-removal event
-          (org-supertag-db-emit 'link:before-remove type from to link)
-          ;; 3. Execute actual deletion if not dry-run
-          (unless dry-run
-            ;; 3.1 Remove relationship
-            (ht-remove! org-supertag-db--link rel-id)
-            ;; 3.2 Clear caches
-            ;; Main cache
-            (org-supertag-db--cache-remove 'link rel-id)
-            ;; Query caches
-            (org-supertag-db--cache-remove 'query (format "links:%s:%s" type from))
-            (org-supertag-db--cache-remove 'query (format "links:%s:%s" type to))
-            ;; 3.3 Clear type-specific caches
-            (pcase type
-              (:node-field
-               ;; Clear node field cache
-               (org-supertag-db--cache-remove 'query (format "node-fields:%s" from)))
-              (:node-tag
-               ;; Clear node tag cache
-               (org-supertag-db--cache-remove 'query (format "node-tags:%s" from)))
-               (:tag-ref
-                ;; Clear tag reference cache
-                (org-supertag-db--cache-remove 'query (format "tag-refs:%s" from))
-                (org-supertag-db--cache-remove 'query (format "tag-refs:%s" to))))
-            ;; 3.4 Trigger completion event
-            (org-supertag-db-emit 'link:removed type from to link)
-            ;; 3.5 Mark database as dirty and schedule save
-            (org-supertag-db--mark-dirty)
-            (org-supertag-db--schedule-save))
-          ;; 4. Return removed data
-          link))
-    ;; Error handling
-    (error
-     (message "Error removing link %s:%s->%s: %s"
-              type from to (error-message-string err))
-              (signal (car err) (cdr err)))))
-
 ;;------------------------------------------------------------------------------  
 ;; Property Operation
 ;;------------------------------------------------------------------------------
@@ -1195,18 +1153,34 @@ Returns a clean string without any text properties."
     (let ((str (if (stringp text)
                    text
                  (format "%s" text))))
-      (substring-no-properties (string-trim str)))))
+      ;; 强制创建新的字符串对象，避免重复引用
+      (copy-sequence (substring-no-properties (string-trim str))))))
 
-(defun org-supertag-db--get-node-title ()
-  "Get current node title in plain text format."
+(defun org-supertag-db--get-unified-title (element)
+  "统一获取节点标题，优先使用 org-element 的 raw-value。
+ELEMENT 是当前的 org-element。"
   (org-supertag-db--clean-text
-   (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
-       (when-let* ((element (org-element-at-point)))
-         (org-element-property :raw-value element))
+   (or (org-element-property :raw-value element)
+       (org-get-heading t t t t)
        "")))
 
+(defun org-supertag-db--filter-properties (properties file-path title)
+  "过滤属性列表，移除与其他字段重复的信息。
+PROPERTIES 是原始属性列表
+FILE-PATH 是文件路径
+TITLE 是节点标题"
+  (let ((filtered-props nil)
+        (exclude-keys '("FILE" "ITEM" "ALLTAGS" "TAGS"))) ; 排除重复字段
+    (dolist (prop properties)
+      (let ((key (car prop))
+            (value (cdr prop)))
+        (unless (member key exclude-keys)
+          ;; 只保留非重复的属性
+          (push prop filtered-props))))
+    (nreverse filtered-props)))
+
 (defun org-supertag-db--parse-node-at-point ()
-  "Parse node data at current point."
+  "解析当前位置的节点数据 - 使用统一数据源策略。"
   (save-excursion
     (let* ((element (org-element-at-point))
            (type (org-element-type element)))
@@ -1214,11 +1188,18 @@ Returns a clean string without any text properties."
       (when (and (eq type 'headline)
                  ;; 只处理已有 ID 的节点
                  (org-entry-get nil "ID"))
-        ;; Parse headline
-        (let* ((title (org-supertag-db--get-node-title))
-               (level (org-element-property :level element))
+        ;; 统一数据源解析
+        (let* (;; 基础信息 - 单一数据源
                (id (org-element-property :ID element))
-               ;; Task properties - 使用更可靠的获取方式
+               (title (org-supertag-db--get-unified-title element))
+               (file-path (buffer-file-name))
+               (level (org-element-property :level element))
+               
+               ;; 位置信息 - 从 element 获取
+               (pos (org-element-property :begin element))
+               (olp (org-get-outline-path t))
+               
+               ;; 任务属性 - 从 org-entry 获取（这些不在 element 中）
                (todo-state (org-entry-get nil "TODO"))
                (priority (org-entry-get nil "PRIORITY"))
                (scheduled (condition-case nil
@@ -1227,35 +1208,31 @@ Returns a clean string without any text properties."
                (deadline (condition-case nil
                            (org-get-deadline-time (point))
                          (error nil)))
-               ;; Get outline path
-               (olp (org-get-outline-path t))
-               ;; Other properties
+               
+               ;; 标签 - 统一从 org-get-tags 获取
                (tags (org-get-tags))
-               (properties (org-entry-properties nil 'standard))
-               ;; parse reference relations
+               
+               ;; 属性 - 过滤重复信息
+               (raw-properties (org-entry-properties nil 'standard))
+               (properties (org-supertag-db--filter-properties 
+                           raw-properties file-path title))
+               
+               ;; 内容和引用
                (refs-to nil)
-               (refs-from nil)
-               ;; Get node content directly
                (content (save-excursion
                          (org-end-of-meta-data t)
                          (let* ((begin (point))
                                 (end (org-element-property :contents-end element))
-                                ;; Find next heading position
                                 (next-heading (save-excursion
                                               (org-next-visible-heading 1)
                                               (point))))
-                           ;; go to begin
                            (goto-char begin)
-                           ;; use more accurate boundary
                            (let ((content-end (cond
-                                             ;; if there is a next heading and in the current node content range
                                              ((and next-heading end (< next-heading end))
                                               (1- next-heading))
-                                             ;; use the content end position of the node
                                              (end end)
-                                             ;; if none, use the end position of the current node
                                              (t (org-entry-end-position)))))
-                             ;; collect references
+                             ;; 收集引用
                              (while (re-search-forward org-link-any-re content-end t)
                                (let* ((link (org-element-context))
                                       (link-type (org-element-property :type link))
@@ -1263,11 +1240,12 @@ Returns a clean string without any text properties."
                                  (when (and (equal link-type "id")
                                           (org-uuidgen-p link-path))
                                    (push link-path refs-to))))
-                             ;; only return content when begin and end are valid and have content
+                             ;; 返回内容
                              (when (and begin content-end (< begin content-end))
                                (org-supertag-db--clean-text
                                 (buffer-substring-no-properties begin content-end)))))))
-               ;; get other nodes that reference this node (keep existing reference relations)
+               
+               ;; 现有引用关系（保持向后兼容）
                (existing-node (org-supertag-db-get id))
                (refs-from (when existing-node
                           (plist-get existing-node :ref-from))))
@@ -1275,35 +1253,28 @@ Returns a clean string without any text properties."
           (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
                   id title level todo-state priority (length refs-to))
           
+          ;; 返回统一的数据结构
           (list :type :node
                 :id id
                 :title title
-                :file-path (buffer-file-name)
-                :pos (org-element-property :begin element)
+                :file-path file-path
+                :pos pos
                 :olp olp
                 :level level
-                ;; Task properties
+                ;; 任务属性
                 :todo todo-state
                 :priority priority
                 :scheduled scheduled
                 :deadline deadline
-                ;; Other properties
+                ;; 过滤后的属性（不包含重复信息）
                 :properties properties
                 :tags tags
                 :content content
-                ;; Reference relations
+                ;; 引用关系
                 :ref-to (delete-dups refs-to)
                 :ref-from (or refs-from nil)
                 :ref-count (+ (length refs-to) (length refs-from))
                 :created-at (current-time)))))))
-
-(defun org-supertag-db--validate-node-props (props)
-  "Validate node property completeness."
-  (let ((required '(:id :title :file-path :type)))
-    (cl-every (lambda (key)
-                (when-let* ((value (plist-get props key)))
-                  (not (string-empty-p (format "%s" value)))))
-                required)))
 
 ;;------------------------------------------------------------------------------
 ;; Batch Node Parsing
@@ -1616,6 +1587,12 @@ Defaults to org-supertag subdirectory under Emacs config directory."
   :type 'directory
   :group 'org-supertag)
 
+(defcustom org-supertag-db-use-print-circle t
+  "Whether to use print-circle when saving database.
+When t, uses circular structure detection to save space but creates #n= references.
+When nil, duplicates string data but makes saved file more readable."
+  :type 'boolean
+  :group 'org-supertag)
 
 (defun org-supertag-db-ensure-data-directory ()
   "Ensure database and backup directories exist."
@@ -1708,7 +1685,7 @@ Returns t on success, nil on failure."
           (with-temp-file org-supertag-db-file
             (let ((print-level nil)
                   (print-length nil)
-                  (print-circle t))
+                  (print-circle org-supertag-db-use-print-circle))
               (insert ";; -*- lexical-binding: t -*-\n")
               (insert ";;; Database file - Do not edit manually\n\n")
               (insert "(require 'ht)\n")
@@ -2010,6 +1987,718 @@ Returns an alist of (key . value) pairs."
     (message "After reload: %S" 
              (mapcar #'car (org-supertag-db-list-metadata)))))
 
+;;------------------------------------------------------------------------------
+;; Data Source Unification 
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-db-check-data-sources ()
+  "Check data source unification and verify if there are any duplicate data source issues.
+Return a report of data source unification."
+  (interactive)
+  (let ((total-objects 0)
+        (unified-objects 0)
+        (issues (make-hash-table :test 'equal))
+        (excluded-properties '("FILE" "ITEM" "ALLTAGS" "TAGS")))
+    
+    ;; Check object table
+    (ht-map (lambda (id props)
+              (cl-incf total-objects)
+              (let ((title (plist-get props :title))
+                    (raw-value (plist-get props :raw-value))
+                    (file-path (plist-get props :file-path))
+                    (properties (plist-get props :properties))
+                    (is-unified t))
+                
+                ;; Check if there are still raw-value fields (should have been removed)
+                (when raw-value
+                  (setq is-unified nil)
+                  (cl-incf (gethash "raw-value-exists" issues 0)))
+                
+                ;; Check if there are still excluded fields in properties
+                (when properties
+                  (dolist (prop properties)
+                    (when (member (car prop) excluded-properties)
+                      (setq is-unified nil)
+                      (cl-incf (gethash (format "excluded-property-%s" (car prop)) issues 0)))))
+                
+                ;; Check if there are duplicate string object references
+                (when (and title file-path properties)
+                  (let ((file-prop (alist-get "FILE" properties nil nil #'equal)))
+                    (when (and file-prop (eq file-path file-prop))
+                      (setq is-unified nil)
+                      (cl-incf (gethash "file-path-duplicate" issues 0)))))
+                
+                (when is-unified
+                  (cl-incf unified-objects))))
+            org-supertag-db--object)
+    
+    ;; Output report
+    (message "\n=== Data Source Unification Report ===")
+    (message "Total objects: %d" total-objects)
+    (message "Unified data source objects: %d" unified-objects)
+    (message "Unification rate: %.1f%%" (* 100.0 (/ (float unified-objects) total-objects)))
+    (message "Found issues:")
+    (if (= 0 (hash-table-count issues))
+        (message "  ✅ All data sources are unified, no duplicate issues")
+      (maphash (lambda (issue count)
+                 (message "  ❌ %s: %d objects" issue count))
+               issues))
+    
+    ;; Return statistics
+    (list :total-objects total-objects
+          :unified-objects unified-objects
+          :unification-rate (/ (float unified-objects) total-objects)
+          :issues issues)))
+
+(defun org-supertag-db-check-duplicates ()
+  "Check for duplicate references in the database.
+Return a report showing the statistics of duplicate references found."
+  (interactive)
+  (let ((duplicate-count 0)
+        (total-objects 0)
+        (duplicate-types (make-hash-table :test 'equal)))
+    
+    ;; Check object table
+    (ht-map (lambda (id props)
+              (cl-incf total-objects)
+              (let ((title (plist-get props :title))
+                    (raw-value (plist-get props :raw-value))
+                    (file-path (plist-get props :file-path))
+                    (properties (plist-get props :properties)))
+                
+                ;; Check if title and raw-value are the same object
+                (when (and title raw-value (eq title raw-value))
+                  (cl-incf duplicate-count)
+                  (cl-incf (gethash "title-raw-value" duplicate-types 0)))
+                
+                ;; Check if file-path and FILE in properties are the same
+                (when (and file-path properties)
+                  (let ((file-prop (alist-get "FILE" properties nil nil #'equal)))
+                    (when (and file-prop (eq file-path file-prop))
+                      (cl-incf duplicate-count)
+                      (cl-incf (gethash "file-path-property" duplicate-types 0)))))))
+            org-supertag-db--object)
+    
+    ;; Output report
+    (message "\n=== Database Duplicate Reference Check Report ===")
+    (message "Total objects: %d" total-objects)
+    (message "Found duplicate references: %d" duplicate-count)
+    (message "Duplicate type statistics:")
+    (maphash (lambda (type count)
+               (message "  %s: %d" type count))
+             duplicate-types)
+    
+    ;; Return statistics
+    (list :total-objects total-objects
+          :duplicate-count duplicate-count
+          :duplicate-types duplicate-types)))
+
+(defun org-supertag-db-fix-duplicates ()
+  "Fix duplicate references in the database.
+This will create new string objects to replace duplicate references."
+  (interactive)
+  (let ((fixed-count 0)
+        (total-objects 0))
+    
+    ;; Fix duplicate references in the object table
+    (ht-map (lambda (id props)
+              (cl-incf total-objects)
+              (let ((modified nil)
+                    (new-props (copy-sequence props)))
+                
+                ;; Fix duplicate title and raw-value
+                (let ((title (plist-get props :title))
+                      (raw-value (plist-get props :raw-value)))
+                  (when (and title raw-value (eq title raw-value))
+                    (setq new-props (plist-put new-props :raw-value (copy-sequence raw-value)))
+                    (setq modified t)))
+                
+                ;; Fix duplicate file-path and properties
+                (let ((file-path (plist-get props :file-path))
+                      (properties (plist-get props :properties)))
+                  (when (and file-path properties)
+                    (let ((file-prop (alist-get "FILE" properties nil nil #'equal)))
+                      (when (and file-prop (eq file-path file-prop))
+                        (let ((new-properties (mapcar (lambda (prop)
+                                                        (if (equal (car prop) "FILE")
+                                                            (cons (car prop) (copy-sequence (cdr prop)))
+                                                          prop))
+                                                      properties)))
+                          (setq new-props (plist-put new-props :properties new-properties))
+                          (setq modified t))))))
+                
+                ;; If there are modifications, update the object
+                (when modified
+                  (ht-set! org-supertag-db--object id new-props)
+                  (cl-incf fixed-count))))
+            org-supertag-db--object)
+    
+    ;; Mark database as dirty and save
+    (when (> fixed-count 0)
+      (org-supertag-db--mark-dirty)
+      (org-supertag-db-save))
+    
+    ;; Output results
+    (message "\n=== Duplicate Reference Fix Report ===")
+    (message "Total objects: %d" total-objects)
+    (message "Fixed objects: %d" fixed-count)
+    (when (> fixed-count 0)
+      (message "Database saved"))
+    
+    fixed-count))
+
+(defun org-supertag-db-migrate-to-unified-format ()
+  "Migrate existing database to unified data source format.
+This will:
+1. Remove raw-value field (use title as unified source)
+2. Remove redundant fields from properties (FILE, ITEM, ALLTAGS, TAGS)
+3. Ensure all string fields are independent objects
+4. Create backup in case of migration issues"
+  (interactive)
+  (when (yes-or-no-p "This will migrate the entire database. Continue? It's recommended to backup first.")
+    (let ((migrated-count 0)
+          (total-objects 0)
+          (excluded-properties '("FILE" "ITEM" "ALLTAGS" "TAGS"))
+          (migration-stats (make-hash-table :test 'equal)))
+      
+      ;; Create backup
+      (message "Creating database backup...")
+      (org-supertag-db-backup)
+      (message "Backup created")
+      
+      ;; Start migration
+      (message "Starting data migration...")
+      (ht-map (lambda (id props)
+                (cl-incf total-objects)
+                (let ((original-props (copy-sequence props))
+                      (new-props (copy-sequence props))
+                      (migrated nil))
+                  
+                  ;; 1. Remove raw-value field (keep title as unified source)
+                  (when (plist-get props :raw-value)
+                    (setq new-props (org-supertag-db--plist-remove new-props :raw-value))
+                    (setq migrated t)
+                    (cl-incf (gethash "raw-value-removed" migration-stats 0)))
+                  
+                  ;; 2. Clean up redundant fields in properties
+                  (let ((properties (plist-get props :properties)))
+                    (when properties
+                      (let ((filtered-properties
+                             (cl-remove-if (lambda (prop)
+                                           (member (car prop) excluded-properties))
+                                         properties)))
+                        (when (not (equal properties filtered-properties))
+                          (setq new-props (plist-put new-props :properties filtered-properties))
+                          (setq migrated t)
+                          ;; Count removed fields
+                          (dolist (prop properties)
+                            (when (member (car prop) excluded-properties)
+                              (cl-incf (gethash (format "property-%s-removed" (car prop)) migration-stats 0))))))))
+                  
+                  ;; 3. Ensure string field independence (copy string objects)
+                  (dolist (field '(:title :file-path :content))
+                    (let ((value (plist-get new-props field)))
+                      (when (stringp value)
+                        (setq new-props (plist-put new-props field (copy-sequence value))))))
+                  
+                  ;; 4. Update object (if there are changes)
+                  (when migrated
+                    (ht-set! org-supertag-db--object id new-props)
+                    (cl-incf migrated-count))))
+              org-supertag-db--object)
+      
+      ;; Mark database as dirty and save
+      (when (> migrated-count 0)
+        (org-supertag-db--mark-dirty)
+        (org-supertag-db-save))
+      
+      ;; Output migration report
+      (message "\n🚀 === Data Migration Completion Report ===")
+      (message "📊 Total objects processed: %d" total-objects)
+      (message "🔄 Migrated objects: %d" migrated-count)
+      (message "📈 Migration rate: %.1f%%" (* 100.0 (/ (float migrated-count) total-objects)))
+      (message "\n📋 Migration statistics:")
+      (maphash (lambda (operation count)
+                 (message
+               migration-stats)
+      
+      (when (> migrated-count 0)
+        (message "\n💾 Database saved")
+        (message "🔍 Run (org-supertag-db-check-data-sources) to verify migration results"))
+      
+      ;; Return migration statistics
+      (list :total-objects total-objects
+            :migrated-objects migrated-count
+            :migration-rate (/ (float migrated-count) total-objects)
+            :statistics migration-stats))))))
+
+(defun org-supertag-db--plist-remove (plist key)
+  "Remove specified key-value pairs from plist.
+PLIST is the property list
+KEY is the key to remove"
+  (let ((result nil))
+    (while plist
+      (let ((current-key (car plist))
+            (current-value (cadr plist)))
+        (unless (eq current-key key)
+          (setq result (append result (list current-key current-value))))
+        (setq plist (cddr plist))))
+    result))
+
+(defun org-supertag-db-toggle-print-circle ()
+  "Toggle print-circle setting and save database.
+This can change the representation of duplicate references in the saved file."
+  (interactive)
+  (setq org-supertag-db-use-print-circle (not org-supertag-db-use-print-circle))
+  (message "Print-circle 设置已切换为: %s" org-supertag-db-use-print-circle)
+  (when (org-supertag-db--dirty-p)
+    (org-supertag-db-save)
+    (message "数据库已使用新设置重新保存")))
+
+(defun org-supertag-db-test-unified-data-sources ()
+  "Test data source unification effectiveness.
+This function will:
+1. Check data source unification
+2. Check duplicate references
+3. Validate data integrity
+4. Display comparison before and after unification"
+  (interactive)
+  (message "\n🔍 === Data Source Unification Test ===")
+  
+  ;; 1. Data source unification check
+  (message "\n📊 1. Data source unification check:")
+  (let ((unification-report (org-supertag-db-check-data-sources)))
+    (let ((rate (plist-get unification-report :unification-rate)))
+      (if (>= rate 1.0)
+          (message "✅ Data source unification: 100%% - Excellent!")
+        (message "⚠️  Data source unification: %.1f%% - Needs improvement" (* 100 rate)))))
+  
+  ;; 2. Duplicate reference check
+  (message "\n🔗 2. Duplicate reference check:")
+  (let ((duplicate-report (org-supertag-db-check-duplicates)))
+    (let ((dup-count (plist-get duplicate-report :duplicate-count)))
+      (if (= dup-count 0)
+          (message "✅ No duplicate references - Excellent!")
+        (message "⚠️  Found %d duplicate references - Suggest fixing" dup-count))))
+  
+  ;; 3. Data integrity check
+  (message "\n📋 3. Data integrity check:")
+  (let ((total-objects 0)
+        (valid-objects 0)
+        (required-fields '(:type :id :title :file-path)))
+    (ht-map (lambda (id props)
+              (cl-incf total-objects)
+              (when (cl-every (lambda (field) (plist-get props field)) required-fields)
+                (cl-incf valid-objects)))
+            org-supertag-db--object)
+    (let ((validity-rate (/ (float valid-objects) total-objects)))
+      (if (>= validity-rate 1.0)
+          (message "✅ Data integrity: 100%% (%d/%d) - Excellent!" valid-objects total-objects)
+        (message "⚠️  Data integrity: %.1f%% (%d/%d) - Needs checking" 
+                (* 100 validity-rate) valid-objects total-objects))))
+  
+  ;; 4. Unification strategy effectiveness summary
+  (message "\n📈 4. Unification strategy effectiveness:")
+  (message "🎯 Unification strategy benefits:")
+  (message "   • Eliminated title/raw-value duplicates")
+  (message "   • Removed redundant fields from properties (FILE, ITEM, ALLTAGS, TAGS)")
+  (message "   • Ensured each string field is an independent object")
+  (message "   • Simplified data structure, improved consistency")
+  
+  ;; 5. Suggested actions
+  (message "\n💡 5. Suggested actions:")
+  (let ((unification-report (org-supertag-db-check-data-sources))
+        (duplicate-report (org-supertag-db-check-duplicates)))
+    (let ((unif-rate (plist-get unification-report :unification-rate))
+          (dup-count (plist-get duplicate-report :duplicate-count)))
+      (cond
+       ((and (>= unif-rate 1.0) (= dup-count 0))
+        (message "🎉 Data source is fully unified! No further action needed."))
+       ((< unif-rate 0.5)
+        (message "🚀 Suggest running batch migration: (org-supertag-db-migrate-to-unified-format)")
+        (message "    This will automatically convert all old format data to unified format"))
+       ((< unif-rate 1.0)
+        (message "🔧 Suggest running: (org-supertag-db-fix-duplicates) to fix remaining issues"))
+       ((> dup-count 0)
+        (message "🔧 Suggest running: (org-supertag-db-fix-duplicates) to fix duplicate references"))
+       (t
+        (message "🎯 Database is in good condition!")))
+      
+      ;; Special note for low unification rate
+      (when (< unif-rate 0.2)
+        (message "⚠️  Data source unification rate is very low (%.1f%%), strongly suggest running batch migration" (* 100 unif-rate)))
+      
+      ;; Optional print-circle setting suggestion
+      (when org-supertag-db-use-print-circle
+        (message "💾 Currently using print-circle=t (compact storage)")
+        (message "    If you prefer a more readable save format, run: (setq org-supertag-db-use-print-circle nil)"))))
+  
+  (message "\n✨ Data source unification test completed!"))
+
+;; Tag Governance Status
+(defconst org-supertag-tag-status
+  '(:draft       ; 初始状态，标签刚创建或修改
+    :review      ; 审核状态，等待确认
+    :active      ; 活跃状态，正常使用
+    :deprecated  ; 废弃状态，不建议使用
+    :merged      ; 已合并到其他标签
+    :split       ; 已拆分为多个标签
+    :archived)   ; 已归档，不再使用
+  "Tag governance status types.")
+
+(defun org-supertag-tag-set-status (tag-id status &optional reason)
+  "Set tag governance status.
+TAG-ID: Tag identifier
+STATUS: New status (must be one of org-supertag-tag-status)
+REASON: Optional reason for status change"
+  (when (and tag-id status)
+    (unless (memq status org-supertag-tag-status)
+      (error "Invalid tag status: %s" status))
+    
+    (let* ((tag (org-supertag-db-get tag-id))
+           (old-status (plist-get tag :tag-status))
+           (history-entry
+            `(:timestamp ,(current-time)
+              :old-status ,old-status
+              :new-status ,status
+              :reason ,reason)))
+      
+      ;; Update tag status
+      (org-supertag-db-add :tag tag-id
+                          (plist-put
+                           (plist-put tag :tag-status status)
+                           :tag-history
+                           (cons history-entry
+                                 (plist-get tag :tag-history))))
+      
+      ;; Emit event
+      (org-supertag-db-emit 'tag:status-changed tag-id status old-status reason)
+      
+      ;; Return new status
+      status)))
+
+(defun org-supertag-tag-get-status (tag-id)
+  "Get tag governance status.
+TAG-ID: Tag identifier
+Returns current status or nil if not set."
+  (when tag-id
+    (org-supertag-db-get-prop tag-id :tag-status)))
+
+(defun org-supertag-tag-get-history (tag-id)
+  "Get tag governance history.
+TAG-ID: Tag identifier
+Returns list of history entries or nil if no history."
+  (when tag-id
+    (org-supertag-db-get-prop tag-id :tag-history)))
+
+;; Tag Governance Rules
+(defconst org-supertag-rule-types
+  '(:naming      ; 命名规则
+    :usage       ; 使用规则
+    :relation    ; 关系规则
+    :lifecycle   ; 生命周期规则
+    :custom)     ; 自定义规则
+  "Tag governance rule types.")
+
+(defun org-supertag-tag-add-rule (tag-id rule-type rule &optional description)
+  "Add a governance rule to tag.
+TAG-ID: Tag identifier
+RULE-TYPE: Rule type (must be one of org-supertag-rule-types)
+RULE: Rule definition (plist or function)
+DESCRIPTION: Optional rule description"
+  (when (and tag-id rule-type rule)
+    (unless (memq rule-type org-supertag-rule-types)
+      (error "Invalid rule type: %s" rule-type))
+    
+    (let* ((tag (org-supertag-db-get tag-id))
+           (rules (or (plist-get tag :tag-rules) (list)))
+           (rule-entry
+            `(:type ,rule-type
+              :rule ,rule
+              :description ,description
+              :created-at ,(current-time))))
+      
+      ;; Update tag rules
+      (org-supertag-db-add :tag tag-id
+                          (plist-put tag :tag-rules
+                                    (cons rule-entry rules)))
+      
+      ;; Emit event
+      (org-supertag-db-emit 'tag:rule-added tag-id rule-type rule)
+      
+      ;; Return rule entry
+      rule-entry)))
+
+(defun org-supertag-tag-remove-rule (tag-id rule-type)
+  "Remove a governance rule from tag.
+TAG-ID: Tag identifier
+RULE-TYPE: Rule type to remove"
+  (when (and tag-id rule-type)
+    (let* ((tag (org-supertag-db-get tag-id))
+           (rules (plist-get tag :tag-rules))
+           (filtered-rules
+            (cl-remove-if (lambda (rule)
+                           (eq (plist-get rule :type) rule-type))
+                         rules)))
+      
+      ;; Update tag rules
+      (when (not (equal rules filtered-rules))
+        (org-supertag-db-add :tag tag-id
+                            (plist-put tag :tag-rules filtered-rules))
+        
+        ;; Emit event
+        (org-supertag-db-emit 'tag:rule-removed tag-id rule-type)))))
+
+(defun org-supertag-tag-get-rules (tag-id &optional rule-type)
+  "Get governance rules for tag.
+TAG-ID: Tag identifier
+RULE-TYPE: Optional rule type to filter by
+Returns list of rule entries or nil if no rules."
+  (when tag-id
+    (let ((rules (org-supertag-db-get-prop tag-id :tag-rules)))
+      (if rule-type
+          (cl-remove-if-not
+           (lambda (rule)
+             (eq (plist-get rule :type) rule-type))
+           rules)
+        rules))))
+
+;; Tag Relation Governance
+(defconst org-supertag-relation-types
+  '(:semantic    ; 语义关联
+    :hierarchy   ; 层级关系
+    :synonym     ; 同义词
+    :antonym     ; 反义词
+    :part-whole  ; 部分-整体
+    :cause-effect ; 因果关系
+    :custom)     ; 自定义关系
+  "Tag relation governance types.")
+
+(defun org-supertag-relation-set-type (from-id to-id rel-type &optional reason)
+  "Set tag relation governance type.
+FROM-ID: Source tag identifier
+TO-ID: Target tag identifier
+REL-TYPE: Relation type (must be one of org-supertag-relation-types)
+REASON: Optional reason for type change"
+  (when (and from-id to-id rel-type)
+    (unless (memq rel-type org-supertag-relation-types)
+      (error "Invalid relation type: %s" rel-type))
+    
+    (let* ((link-id (org-supertag-db-get-link-id :tag-tag from-id to-id))
+           (link (org-supertag-db-get-link link-id))
+           (old-type (plist-get link :tag-rel-type))
+           (history-entry
+            `(:timestamp ,(current-time)
+              :old-type ,old-type
+              :new-type ,rel-type
+              :reason ,reason)))
+      
+      ;; Update relation type
+      (org-supertag-db-add-link :tag-tag from-id to-id
+                               (plist-put
+                                (plist-put link :tag-rel-type rel-type)
+                                :tag-rel-history
+                                (cons history-entry
+                                      (plist-get link :tag-rel-history))))
+      
+      ;; Emit event
+      (org-supertag-db-emit 'tag:relation-type-changed link-id rel-type old-type reason)
+      
+      ;; Return new type
+      rel-type)))
+
+(defun org-supertag-relation-add-rule (from-id to-id rule-type rule &optional description)
+  "Add a governance rule to tag relation.
+FROM-ID: Source tag identifier
+TO-ID: Target tag identifier
+RULE-TYPE: Rule type (must be one of org-supertag-rule-types)
+RULE: Rule definition (plist or function)
+DESCRIPTION: Optional rule description"
+  (when (and from-id to-id rule-type rule)
+    (unless (memq rule-type org-supertag-rule-types)
+      (error "Invalid rule type: %s" rule-type))
+    
+    (let* ((link-id (org-supertag-db-get-link-id :tag-tag from-id to-id))
+           (link (org-supertag-db-get-link link-id))
+           (rules (or (plist-get link :tag-rel-rules) (list)))
+           (rule-entry
+            `(:type ,rule-type
+              :rule ,rule
+              :description ,description
+              :created-at ,(current-time))))
+      
+      ;; Update relation rules
+      (org-supertag-db-add-link :tag-tag from-id to-id
+                               (plist-put link :tag-rel-rules
+                                         (cons rule-entry rules)))
+      
+      ;; Emit event
+      (org-supertag-db-emit 'tag:relation-rule-added link-id rule-type rule)
+      
+      ;; Return rule entry
+      rule-entry)))
+
+(defun org-supertag-relation-get-type (from-id to-id)
+  "Get tag relation governance type.
+FROM-ID: Source tag identifier
+TO-ID: Target tag identifier
+Returns current type or nil if not set."
+  (when (and from-id to-id)
+    (let ((link-id (org-supertag-db-get-link-id :tag-tag from-id to-id)))
+      (when link-id
+        (plist-get (org-supertag-db-get-link link-id) :tag-rel-type)))))
+
+(defun org-supertag-relation-get-rules (from-id to-id &optional rule-type)
+  "Get governance rules for tag relation.
+FROM-ID: Source tag identifier
+TO-ID: Target tag identifier
+RULE-TYPE: Optional rule type to filter by
+Returns list of rule entries or nil if no rules."
+  (when (and from-id to-id)
+    (let* ((link-id (org-supertag-db-get-link-id :tag-tag from-id to-id))
+           (link (when link-id (org-supertag-db-get-link link-id)))
+           (rules (when link (plist-get link :tag-rel-rules))))
+      (if rule-type
+          (cl-remove-if-not
+           (lambda (rule)
+             (eq (plist-get rule :type) rule-type))
+           rules)
+        rules))))
+
+;; Event System
+(defvar org-supertag-db-event-handlers (make-hash-table :test 'equal)
+  "Event handlers registry.")
+
+(defconst org-supertag-db-events
+  '(;; Tag Events
+    tag:created           ; 标签创建
+    tag:updated          ; 标签更新
+    tag:status-changed   ; 标签状态变更
+    tag:rule-added       ; 标签规则添加
+    tag:rule-removed     ; 标签规则移除
+    ;; Relation Events
+    tag:relation-created        ; 标签关系创建
+    tag:relation-updated       ; 标签关系更新
+    tag:relation-type-changed  ; 标签关系类型变更
+    tag:relation-rule-added    ; 标签关系规则添加
+    tag:relation-rule-removed) ; 标签关系规则移除
+  "Available event types.")
+
+(defun org-supertag-db-register-handler (event-type handler)
+  "Register an event handler.
+EVENT-TYPE: Event type symbol
+HANDLER: Handler function that takes event data as argument"
+  (when (and event-type handler)
+    (let ((handlers (gethash event-type org-supertag-db-event-handlers)))
+      (puthash event-type
+               (cons handler handlers)
+               org-supertag-db-event-handlers))))
+
+(defun org-supertag-db-unregister-handler (event-type handler)
+  "Unregister an event handler.
+EVENT-TYPE: Event type symbol
+HANDLER: Handler function to remove"
+  (when (and event-type handler)
+    (let ((handlers (gethash event-type org-supertag-db-event-handlers)))
+      (puthash event-type
+               (remove handler handlers)
+               org-supertag-db-event-handlers))))
+
+(defun org-supertag-db-emit (event-type &rest event-data)
+  "Emit an event to registered handlers.
+EVENT-TYPE: Event type symbol
+EVENT-DATA: Event data to pass to handlers"
+  (when event-type
+    (let ((handlers (gethash event-type org-supertag-db-event-handlers)))
+      (dolist (handler handlers)
+        (condition-case err
+            (apply handler event-data)
+          (error
+           (message "Error in event handler: %s" err)))))))
+
+;; Default Event Handlers
+(defun org-supertag-db--sync-handler (event-type &rest event-data)
+  "Default handler for syncing changes to Python backend.
+EVENT-TYPE: Event type symbol
+EVENT-DATA: Event data"
+  (let ((sync-data `(:event ,event-type :data ,event-data)))
+    (org-supertag-bridge-call-async 'sync_tag_event sync-data)))
+
+;; Register default handlers
+(dolist (event org-supertag-db-events)
+  (org-supertag-db-register-handler event #'org-supertag-db--sync-handler))
+
+(defun org-supertag-db-get-link-by-id (id)
+  "Get link properties by ID."
+  (gethash id org-supertag-db--link))
+
+;; === Hash-based snapshot functions for sync ===
+
+(defun org-supertag-db--calculate-object-hash (props)
+  "Calculate object hash from its property list."
+  (when (plistp props)
+    (let ((hash-content (format "%S" props)))
+      (secure-hash 'sha1 hash-content))))
+
+(defun org-supertag-db-get-all-hashes ()
+  "Get a hash table of all current objects (nodes, tags, links) in the DB."
+  (let ((all-hashes (make-hash-table :test 'equal)))
+    (maphash
+     (lambda (id props)
+       (puthash id (org-supertag-db--calculate-object-hash props) all-hashes))
+     org-supertag-db--object)
+    (maphash
+     (lambda (id props)
+       (puthash id (org-supertag-db--calculate-object-hash props) all-hashes))
+     org-supertag-db--link)
+    all-hashes))
+
+(defun org-supertag-db-get-snapshot-for-sync (last-sync-hashes)
+  "Compare the current DB state against the last sync hashes and return a snapshot of changes.
+The snapshot is a plist containing nodes and links to upsert, and IDs to delete."
+  (let ((nodes-to-upsert '())
+        (links-to-upsert '())
+        (ids-to-delete '())
+        (current-ids (make-hash-table :test 'equal))
+        (all-current-hashes (org-supertag-db-get-all-hashes)))
+
+    ;; 1. Find created/updated objects
+    (maphash
+     (lambda (id current-hash)
+       (puthash id t current-ids) ; Track all current IDs
+       (let ((last-hash (gethash id last-sync-hashes)))
+         (unless (and last-hash (string= current-hash last-hash))
+           ;; Change detected, add the full object to the correct list
+           (let ((props (or (gethash id org-supertag-db--object)
+                            (gethash id org-supertag-db--link))))
+             (when props
+               (let ((type (plist-get props :type)))
+                 (cond
+                  ((eq type :node) (push props nodes-to-upsert))
+                  ((eq type :link) (push props links-to-upsert))
+                  ;; Tags are handled as nodes
+                  ((eq type :tag) (push props nodes-to-upsert)) 
+                  (t nil))))))))
+     all-current-hashes)
+
+    ;; 2. Find deleted objects by comparing old hashes with current IDs
+    (maphash
+     (lambda (id _last-hash)
+       (unless (gethash id current-ids)
+         (push id ids-to-delete)))
+     last-sync-hashes)
+
+    ;; 3. Construct the snapshot plist
+    (let ((snapshot `(:nodes ,(reverse nodes-to-upsert)
+                      :links ,(reverse links-to-upsert)
+                      :ids-to-delete ,ids-to-delete)))
+      (message "[DB] Snapshot created: %d nodes, %d links, %d deletions."
+               (length (plist-get snapshot :nodes))
+               (length (plist-get snapshot :links))
+               (length (plist-get snapshot :ids-to-delete)))
+      snapshot)))
+
 (provide 'org-supertag-db)
+
 ;;; org-supertag-db.el ends here
   

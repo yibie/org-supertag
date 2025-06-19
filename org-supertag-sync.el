@@ -242,7 +242,12 @@ Returns a plist of node properties or nil if not at a valid node."
                             :raw-value raw-value
                             :tags (org-element-property :tags element)
                             :todo-type (org-element-property :todo-type element)
-                            :priority (org-element-property :priority element)
+                            :priority (let ((prio (org-element-property :priority element)))
+                                        (cond
+                                         ((numberp prio) (char-to-string prio))
+                                         ((stringp prio) prio)
+                                         ((null prio) nil)
+                                         (t (format "%S" prio))))
                             :properties (condition-case nil
                                           (org-entry-properties nil 'all)
                                         (error nil))

@@ -136,32 +136,30 @@ The :style can be:
 
 ;; Compose font-lock keywords for highlighting inline tags
 (defvar org-supertag-inline-font-lock-keywords
-  `((,(rx (group "#" (+ (any alnum "-_"))))
-      (0 (let* ((tag-name (match-string-no-properties 1))
-                (prefix "#")
-                (tag-text (substring tag-name 1)))
-           ;; Apply different properties to the prefix and the tag text
-           (when org-supertag-inline-style-hide-prefix
-             (add-text-properties
-              (match-beginning 0) (+ (match-beginning 0) 1)
-              '(invisible org-supertag-prefix display "")))
-           ;; Apply face to the entire tag including prefix if not hidden
-           (add-text-properties
-            (if org-supertag-inline-style-hide-prefix
-                (+ (match-beginning 0) 1)
-              (match-beginning 0))
-            (match-end 0)
-            `(face org-supertag-inline-face
-                  help-echo ,(format "Tag: %s" tag-text)
-                  org-supertag-inline t))
-           ;; Return nil to allow other fontification
-           nil))
-      ;; Don't apply in org src blocks, code blocks, or verbatim sections
-      (0 'org-supertag-inline-face nil
-         (and (not (org-in-src-block-p))
-              (not (org-at-table-p))
-              (not (org-at-commented-p))
-              (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim))))))
+  `((,(rx "#" (+ (any alnum "-_")))
+     (0 (let* ((tag-name (match-string-no-properties 0))
+               (tag-text (substring tag-name 1)))
+          ;; Only apply if not in special contexts
+          (when (and (not (org-in-src-block-p))
+                     (not (org-at-table-p))
+                     (not (org-at-commented-p))
+                     (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
+            ;; Apply different properties to the prefix and the tag text
+            (when org-supertag-inline-style-hide-prefix
+              (add-text-properties
+               (match-beginning 0) (+ (match-beginning 0) 1)
+               '(invisible org-supertag-prefix display "")))
+            ;; Apply face to the entire tag including prefix if not hidden
+            (add-text-properties
+             (if org-supertag-inline-style-hide-prefix
+                 (+ (match-beginning 0) 1)
+               (match-beginning 0))
+             (match-end 0)
+             `(face org-supertag-inline-face
+                   help-echo ,(format "Tag: %s" tag-text)
+                   org-supertag-inline t)))
+          ;; Return nil to allow other fontification
+          nil))))
   "Font-lock keywords for highlighting inline tags.")
 
 ;;;###autoload
@@ -290,9 +288,9 @@ Returns the tag ID."
         (user-error "Tag creation cancelled"))))))
 
 (defun org-supertag-inline--adjust-position (context-info)
-  "Adjust cursor position based on context.
+  "Adjust cursor position based on context with intelligent positioning.
 CONTEXT-INFO is the context analysis from `org-supertag-inline--analyze-context'.
-Handles region deletion and drawer positioning."
+Handles region deletion and smart drawer/content positioning."
   ;; Delete region ONLY if there's an actual visible region
   (when (and (use-region-p) 
              (region-active-p)
@@ -302,28 +300,126 @@ Handles region deletion and drawer positioning."
       (message "Deleting region from %d to %d" region-start region-end)
       (delete-region region-start region-end)))
   
-  ;; Handle cursor position - if in drawer, move after drawer
-  (when (plist-get context-info :in-drawer)
-    (let ((context (plist-get context-info :context)))
-      (when-let ((end-pos (org-element-property :end context)))
-        (goto-char end-pos)))))
+  ;; Smart positioning logic
+  (org-supertag-inline--smart-position-for-insertion))
+
+(defun org-supertag-inline--smart-position-for-insertion ()
+  "Smartly position the cursor for inline tag insertion.
+Rules:
+- If no drawer, create a new line below the heading or find an existing tag line
+- If there's a drawer, position below the drawer
+- If there's an existing tag line, move to the end of the tag line
+- If already in content, create a new line above the content"
+  (org-back-to-heading t)
+  (let ((drawer-end (org-supertag-inline--find-drawer-end))
+        (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
+    (cond
+     ;; 如果找到现有标签行，移动到行尾
+     (existing-tag-line
+      (goto-char existing-tag-line)
+      (end-of-line))
+     ;; 如果有drawer，在drawer后智能定位
+     (drawer-end
+      (goto-char drawer-end)
+      ;; 跳过空行到内容开始
+      (while (and (not (eobp))
+                 (not (org-at-heading-p))
+                 (looking-at-p "^[ \t]*$"))
+        (forward-line 1))
+      ;; 如果已经在内容行，在内容行上方创建新行插入
+      (if (and (not (eobp))
+              (not (org-at-heading-p))
+              (not (looking-at-p "^[ \t]*$")))
+          (progn
+            (beginning-of-line)
+            (open-line 1))
+        ;; 否则在当前位置创建新行
+        (unless (bolp) (insert "\n"))))
+     ;; 如果没有drawer，在标题下方新建一行
+     (t
+      (end-of-line)
+      (insert "\n")))))
+
+(defun org-supertag-inline--find-drawer-end ()
+  "Find the end position of the current node's drawer."
+  (save-excursion
+    (org-back-to-heading t)
+    (forward-line 1)
+    (let ((end-pos nil)
+          (section-end (save-excursion
+                        (org-end-of-subtree t t)
+                        (point))))
+      ;; Find the end position of the last drawer
+      (while (and (< (point) section-end)
+                 (not (org-at-heading-p)))
+        (let ((element (org-element-at-point)))
+          (cond
+           ;; Property drawer
+           ((eq (org-element-type element) 'property-drawer)
+            (setq end-pos (org-element-property :end element))
+            (goto-char end-pos))
+           ;; Other drawers
+           ((eq (org-element-type element) 'drawer)
+            (setq end-pos (org-element-property :end element))
+            (goto-char end-pos))
+           ;; Other elements, continue forward
+           (t
+            (forward-line 1)))))
+      end-pos)))
+
+(defun org-supertag-inline--find-existing-tag-line ()
+  "Find the position of an existing tag line in the current node.
+Returns the tag line position, or nil if not found."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((drawer-end (org-supertag-inline--find-drawer-end))
+          (section-end (save-excursion
+                        (org-end-of-subtree t t)
+                        (point)))
+          (tag-line-pos nil))
+      ;; Start searching from the drawer end position, or from the heading if no drawer
+      (goto-char (or drawer-end (progn (end-of-line) (point))))
+      (forward-line 1)
+      
+      ;; Search for lines containing #tags within the node range
+      (while (and (< (point) section-end)
+                 (not (org-at-heading-p))
+                 (not tag-line-pos))
+        (beginning-of-line)
+        ;; Check if the current line contains #tags (but not comment lines)
+        (when (and (looking-at-p "^[ \t]*#[a-zA-Z0-9_-]+")
+                  (not (looking-at-p "^[ \t]*#\\+")))  ; Exclude org keywords
+          (setq tag-line-pos (point)))
+        (forward-line 1))
+      
+      tag-line-pos)))
 
 (defun org-supertag-inline--insert-tag-text (tag-id)
   "Insert the tag text with intelligent spacing.
 TAG-ID is the tag identifier to insert.
 
 Smart spacing rules:
-- Add space before tag if previous char is alphanumeric
-- Add space after tag ONLY if next char is alphanumeric AND not at line end
-- Never add space at line boundaries or before punctuation"
+- Add space before tag if previous char exists and is not whitespace
+- Add space after tag for future tags (unless at line end with content after)
+- Special handling for tag lines to ensure proper spacing"
   (let* ((prev-char (char-before))
          (next-char (char-after))
-         ;; Need space before if previous character is alphanumeric
+         (at-tag-line (org-supertag-inline--at-tag-line-p))
+         ;; Need space before if:
+         ;; 1. Previous character exists AND
+         ;; 2. Previous char is not whitespace AND
+         ;; 3. We're at a tag line OR previous char is alphanumeric/tag-related
          (need-space-before 
           (and prev-char
-               (or (and (>= prev-char ?a) (<= prev-char ?z))
+               (not (eq prev-char ?\s))
+               (not (eq prev-char ?\t))
+               (not (eq prev-char ?\n))
+               (or at-tag-line
+                   (and (>= prev-char ?a) (<= prev-char ?z))
                    (and (>= prev-char ?A) (<= prev-char ?Z))
-                   (and (>= prev-char ?0) (<= prev-char ?9)))))
+                   (and (>= prev-char ?0) (<= prev-char ?9))
+                   ;; 中文字符
+                   (and (>= prev-char ?\u4e00) (<= prev-char ?\u9fff)))))
          ;; Need space after ONLY if:
          ;; 1. next character exists AND is alphanumeric
          ;; 2. AND we're not at line end (next char is not newline)
@@ -341,9 +437,15 @@ Smart spacing rules:
     ;; Insert the tag
     (insert (concat "#" tag-id))
     
-    ;; Insert space after tag if needed
+    ;; Insert space after tag if needed (but not newline)
     (when need-space-after
       (insert " "))))
+
+(defun org-supertag-inline--at-tag-line-p ()
+  "Check if the current line is a tag line."
+  (save-excursion
+    (beginning-of-line)
+    (looking-at-p "^[ \t]*#[a-zA-Z0-9_-]+")))
 
 (defun org-supertag-inline--establish-relationship (tag-id node-id)
   "Establish relationship between TAG-ID and NODE-ID.
@@ -382,6 +484,9 @@ This function follows a structured approach:
     ;; Process the insertion
     (org-supertag-inline--adjust-position context-info)
     (org-supertag-inline--insert-tag-text tag-id)
+    ;; Ensure tag line ends with newline if not at end of buffer
+    (unless (or (eobp) (looking-at-p "\n"))
+      (insert "\n"))
     (org-supertag-inline--establish-relationship tag-id node-id)
     
     ;; Cleanup
@@ -393,6 +498,97 @@ This function follows a structured approach:
              (if node-id
                  (format " and linked to node %s" node-id)
                ""))))
+
+;;;###autoload
+(defun org-supertag-inline-insert-tags-batch (tag-names)
+  "Insert multiple inline tags in a single line and establish relationships.
+TAG-NAMES is a list of tag names."
+  (when tag-names
+    (let* ((context-info (org-supertag-inline--analyze-context))
+           (node-id (plist-get context-info :node-id))
+           (processed-tags '()))
+      
+      ;; Process and validate all tags
+      (dolist (tag-name tag-names)
+        (condition-case err
+            (let ((tag-id (org-supertag-inline--ensure-tag tag-name)))
+              (push tag-id processed-tags))
+          (error
+           (message "Failed to process tag: %s - %s" tag-name (error-message-string err)))))
+      
+      ;; Insert tags in batch
+      (when processed-tags
+        (setq processed-tags (nreverse processed-tags))
+        (org-supertag-inline--insert-tags-batch processed-tags)
+        
+        ;; Establish relationships
+        (dolist (tag-id processed-tags)
+          (org-supertag-inline--establish-relationship tag-id node-id))
+        
+        (message "Inserted %d tags: %s" 
+                 (length processed-tags)
+                 (string-join processed-tags " "))))))
+
+(defun org-supertag-inline--insert-tags-batch (tags)
+  "Insert multiple tags in a single line."
+  (when tags
+    (let* ((drawer-end (org-supertag-inline--find-drawer-end))
+           (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
+      (cond
+       ;; If there's an existing tag line, add at the end
+       (existing-tag-line
+        (goto-char existing-tag-line)
+        (end-of-line)
+        (dolist (tag tags)
+          (insert (format " #%s" tag)))
+        ;; Ensure tag line ends with newline
+        (unless (looking-at-p "\n")
+          (insert "\n")))
+       ;; If there's a drawer, create a tag line after the drawer
+       (drawer-end
+        (goto-char drawer-end)
+        ;; Skip empty lines
+        (while (and (not (eobp))
+                   (not (org-at-heading-p))
+                   (looking-at-p "^[ \t]*$"))
+          (forward-line 1))
+        ;; If in content line, insert above
+        (if (and (not (eobp))
+                (not (org-at-heading-p))
+                (not (looking-at-p "^[ \t]*$")))
+            (progn
+              (beginning-of-line)
+              (open-line 1))
+          (unless (bolp) (insert "\n")))
+        ;; Insert all tags 
+        (insert (mapconcat (lambda (tag) (format "#%s" tag)) tags " "))
+        (insert "\n"))
+       ;; If no drawer, create a tag line below the heading
+       (t
+        (end-of-line)
+        (insert "\n")
+        (insert (mapconcat (lambda (tag) (format "#%s" tag)) tags " "))
+        (insert "\n"))))))
+
+(defun org-supertag-inline-insert-tag-for-node (node-id tag-name)
+  "Insert an inline tag for a specific node ID.
+This finds the node's file and position, then inserts the tag.
+NODE-ID: The ID of the node.
+TAG-NAME: The name of the tag to insert."
+  (when-let* ((node-data (org-supertag-db-get node-id))
+              (file-path (plist-get node-data :file-path))
+              (pos (plist-get node-data :pos)))
+    (if (and file-path (file-exists-p file-path))
+        (with-current-buffer (find-file-noselect file-path)
+          (goto-char pos)
+          (when (org-at-heading-p)
+            (let ((element (org-element-at-point)))
+              ;; Move to end of the drawer to insert the tag
+              (goto-char (or (org-element-property :contents-end element)
+                             (save-excursion (end-of-line) (point))))
+              (insert "\n#+" (org-supertag-sanitize-tag-name tag-name) " ")
+              (save-buffer))))
+      (message "Node file not found for ID: %s" node-id))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

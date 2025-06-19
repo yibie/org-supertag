@@ -8,11 +8,27 @@ import os.path as osp
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 import toml # <--- NEW: Import toml for dynamic config persistence
+from pydantic import BaseModel
+
+# Define the default analysis config dictionary at the module level
+analysis_config = {
+    "enable_inferred_relations": True,
+    "inference_model": "phi4-mini:3.8b",
+    "processing_workers": 4,
+}
+
+# Define a default for processing_config as well
+processing_config = {
+    "processing_workers": 4, # You can add other defaults here
+}
 
 @dataclass
-class Config:
-    """Configuration class"""
-    
+class Config(BaseModel):
+    """Main configuration class, loaded from simtag.yaml."""
+    config_data: Dict[str, Any] = field(default_factory=dict, repr=False)
+    # --- NEW: Central Data Directory ---
+    data_directory: str = field(default_factory=lambda: os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY", os.path.expanduser("~/.emacs.d/org-supertag")))
+
     # Vector database path
     vector_db_path: str = field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/supertag_vector.db"))
     # --- NEW: Path for dynamic config TOML file ---
@@ -108,7 +124,6 @@ class Config:
         "entity_types": None, # Example: [{'name': 'PERSON', 'description': '...'}]
         "extraction_prompt_template": None, # Optional: Path to a custom prompt template or the template string itself
         "gleaning_prompt_template": None, # Optional
-        "llm_model_override": "qwen2.5:1.5b", # 使用用户偏好的小模型
         "max_gleaning_rounds": 2,  # 保留精化轮次以保证质量
         "max_entities_per_extraction": 15,  # 限制每次提取的实体数量
         "max_relations_per_extraction": 10,   # 限制每次提取的关系数量
@@ -116,15 +131,23 @@ class Config:
         "max_retries": 2     # 最大重试次数
     })
     
+    # --- SmartNER Service Configuration ---
+    use_smart_ner_service: bool = True  # 启用 SmartNERServiceV2 优化实现
+    
     # --- Multicore Processing Configuration ---
     multicore_config: Dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,  # 启用多核心处理
-        "max_workers": None,  # None为自动检测，M4 Max自动设为14
-        "process_type": "thread",  # "process" 或 "thread" - 使用thread避免模型重新加载
-        "embedding_batch_threshold": 10,  # 降低阈值，确保多核心能启动
-        "ner_batch_threshold": 5,  # 降低阈值，确保多核心能启动
-        "chunk_size_factor": 8,  # 每个worker的批次大小倍数
-        "memory_threshold_gb": 2,  # 内存阈值，低于此值降低并发度
+        "max_workers": None,  # 工作进程数：None为自动优化（推荐2），用户可设置1-16
+        "max_ollama_instances": None,  # Ollama实例数：None为自动优化（推荐2），用户可设置1-8
+        "enable_multi_ollama": True,  # 启用多Ollama实例支持
+        "process_type": "process",  # "process" 或 "thread" - 使用process实现真正并行
+        "embedding_batch_threshold": 3,  # 嵌入任务启用多核心的最小任务数
+        "ner_batch_threshold": 2,  # NER任务启用多核心的最小任务数
+        "timeout": 300,  # 任务超时时间（秒）
+        "memory_threshold_percent": 85,  # 内存使用率阈值，超过则禁用多核心
+        # 🎯 基于性能测试的推荐配置（用户可覆盖）
+        "recommended_workers": 2,  # 推荐的工作进程数（基于测试发现的最优值）
+        "recommended_instances": 2,  # 推荐的Ollama实例数（基于测试发现的最优值）
     })
     
     # --- Embedding Service Configuration ---
@@ -155,10 +178,24 @@ class Config:
         "embedding_enabled": True,  # 强制启用嵌入
     })
     
-    def __post_init__(self):
-        """Post-initialization processing"""
-        logger = logging.getLogger("config")
-        
+    # ==============================================================================
+    # Analysis and Post-Processing Configuration
+    # ==============================================================================
+    processing_config: dict = field(default_factory=dict)
+    analysis_config: dict = field(default_factory=dict)
+    retrieval_config: dict = field(default_factory=dict)
+    log_file: Optional[str] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self.llm_client_config = self.config_data.get('llm_client_config', self.llm_client_config)
+        self.processing_config = self.config_data.get('processing_config', processing_config)
+        self.analysis_config = self.config_data.get('analysis_config', analysis_config)
+        self.retrieval_config = self.config_data.get('retrieval_config', {
+            "enable_inferred_relations": True,
+            "inference_model": "phi4-mini:3.8b",
+            "processing_workers": 4,
+        })
         self._dynamic_config_values: Dict[str, Any] = {} 
         self._load_dynamic_config() # <--- NEW: Load dynamic config on init
 
@@ -166,59 +203,50 @@ class Config:
         env_vector_db = os.environ.get("ORG_SUPERTAG_VECTOR_DB")
         if env_vector_db:
             self.vector_db_path = env_vector_db
-            logger.info(f"Loaded vector database path from environment: {self.vector_db_path}")
+            logging.getLogger("config").info(f"Loaded vector database path from environment: {self.vector_db_path}")
             
         # Environment variable overrides for LLM Client Config
         # Example: ORG_SUPERTAG_LLM_PROVIDER, ORG_SUPERTAG_LLM_BASE_URL, etc.
         env_llm_provider = os.environ.get("ORG_SUPERTAG_LLM_PROVIDER")
         if env_llm_provider:
             self.llm_client_config['provider'] = env_llm_provider
-            logger.info(f"LLM Provider set from environment: {env_llm_provider}")
+            logging.getLogger("config").info(f"LLM Provider set from environment: {env_llm_provider}")
 
         env_llm_base_url = os.environ.get("ORG_SUPERTAG_LLM_BASE_URL")
         if env_llm_base_url:
             self.llm_client_config['base_url'] = env_llm_base_url
-            logger.info(f"LLM Base URL set from environment: {env_llm_base_url}")
+            logging.getLogger("config").info(f"LLM Base URL set from environment: {env_llm_base_url}")
 
         env_llm_default_model = os.environ.get("ORG_SUPERTAG_LLM_DEFAULT_MODEL")
         if env_llm_default_model:
             self.llm_client_config['default_model'] = env_llm_default_model
-            logger.info(f"LLM Default Model set from environment: {env_llm_default_model}")
+            logging.getLogger("config").info(f"LLM Default Model set from environment: {env_llm_default_model}")
 
         env_llm_embedding_model = os.environ.get("ORG_SUPERTAG_LLM_EMBEDDING_MODEL")
         if env_llm_embedding_model:
             self.llm_client_config['default_embedding_model'] = env_llm_embedding_model
-            logger.info(f"LLM Default Embedding Model set from environment: {env_llm_embedding_model}")
+            logging.getLogger("config").info(f"LLM Default Embedding Model set from environment: {env_llm_embedding_model}")
         
         env_llm_api_key = os.environ.get("ORG_SUPERTAG_LLM_API_KEY")
         if env_llm_api_key:
             self.llm_client_config['api_key'] = env_llm_api_key
             # Be cautious logging API keys, even parts of them.
-            logger.info(f"LLM API Key loaded from environment (not displaying value).")
+            logging.getLogger("config").info(f"LLM API Key loaded from environment (not displaying value).")
 
-        # Deprecated: Remove old Ollama env var handling
-        # env_ollama_model = os.environ.get("ORG_SUPERTAG_OLLAMA_MODEL")
-        # if env_ollama_model:
-        #     self.ollama_model = env_ollama_model
-        #     logger.info(f"Loaded Ollama model from environment: {self.ollama_model}")
-            
-        # env_embedding_model = os.environ.get("ORG_SUPERTAG_EMBEDDING_MODEL") # This might be redundant if covered by llm_client_config
-        # The above line for env_embedding_model should be removed as the field itself is removed.
-        
         # Environment variable overrides for Entity Extractor Config
         env_ee_entity_types_json = os.environ.get("ORG_SUPERTAG_EE_ENTITY_TYPES_JSON")
         if env_ee_entity_types_json:
             try:
                 import json
                 self.entity_extractor_config['entity_types'] = json.loads(env_ee_entity_types_json)
-                logger.info(f"Loaded Entity Extractor entity types from environment.")
+                logging.getLogger("config").info(f"Loaded Entity Extractor entity types from environment.")
             except json.JSONDecodeError:
-                logger.warning("Failed to parse ORG_SUPERTAG_EE_ENTITY_TYPES_JSON from environment.")
+                logging.getLogger("config").warning("Failed to parse ORG_SUPERTAG_EE_ENTITY_TYPES_JSON from environment.")
 
         env_ee_llm_model_override = os.environ.get("ORG_SUPERTAG_EE_LLM_MODEL_OVERRIDE")
         if env_ee_llm_model_override:
             self.entity_extractor_config['llm_model_override'] = env_ee_llm_model_override
-            logger.info(f"Entity Extractor LLM model override set from environment: {env_ee_llm_model_override}")
+            logging.getLogger("config").info(f"Entity Extractor LLM model override set from environment: {env_ee_llm_model_override}")
 
         # Set log file path
         self.log_file = self.get_log_file_path()
@@ -228,25 +256,25 @@ class Config:
             os.makedirs(log_dir, exist_ok=True)
         
         # Configure file log handler
-        if not logger.handlers:
+        if not logging.getLogger("config").handlers:
             file_handler = logging.FileHandler(self.log_file)
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
+            logging.getLogger("config").addHandler(file_handler)
         
-        logger.info(f"Configuration initialization complete - Log file: {self.log_file}")
+        logging.getLogger("config").info(f"Configuration initialization complete - Log file: {self.log_file}")
         
         # Ensure vector database directory exists
         if self.vector_db_path:
             db_dir = osp.dirname(self.vector_db_path)
             if db_dir:  # Only create if directory path is not empty
                 os.makedirs(db_dir, exist_ok=True)
-                logger.info(f"Created storage directory: {db_dir}")
+                logging.getLogger("config").info(f"Created storage directory: {db_dir}")
     
     def get_log_file_path(self):
         """Get log file path consistent with Emacs configuration"""
         # Get Emacs data directory from environment variable
-        emacs_data_dir = os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY")
+        emacs_data_dir = self.data_directory
         
         if emacs_data_dir:
             # Use Emacs configured directory
@@ -301,7 +329,10 @@ class Config:
             "entity_extractor_config": self.entity_extractor_config,
             "multicore_config": self.multicore_config,
             "embedding_config": self.embedding_config,
-            "debug": self.debug
+            "debug": self.debug,
+            "processing_config": self.processing_config,
+            "analysis_config": self.analysis_config,
+            "retrieval_config": self.retrieval_config
         }
 
     # --- NEW: Methods for dynamic config values like timestamps ---
@@ -365,44 +396,64 @@ class Config:
             Dict[model_name, description]: 模型名称和描述的映射
         """
         return {
-            "gemma2:2b": "Google Gemma2 2B - 轻量级，平衡速度和质量",
-            "llama3.2:1b": "Meta Llama 3.2 1B - 超快速，适合简单实体识别", 
-            "qwen2:0.5b": "Qwen2 0.5B - 最轻量级选择",
+            "qwen2.5:1.5b": "Qwen2.5 1.5B - 轻量级，推荐选择",
+            "gemma3:1b": "Google Gemma3 1B - 超快速处理",
+            "qwen3:0.6b": "Qwen3 0.6B - 最轻量级选择", 
             "tinyllama:1.1b": "TinyLlama 1.1B - 极速处理",
-            "phi3:mini": "Microsoft Phi-3 Mini - 高效小模型",
-            "qwen2.5:0.5b": "Qwen2.5 0.5B - 超快速新版本"
+            "smollm:latest": "SmolLM - 小型语言模型",
         }
     
-    @classmethod 
-    def get_recommended_fast_ner_config(cls) -> Dict[str, Any]:
-        """获取推荐的快速实体识别配置
+    def get_vector_dimension_for_model(self) -> int:
+        """获取当前嵌入模型的向量维度
         
         Returns:
-            Dict: 优化的实体识别配置
+            int: 向量维度
         """
-        return {
-            "entity_types": ["person", "concept", "organization", "location"],  # 简化实体类型
-            "llm_model_override": "qwen2.5:0.5b",  # 使用最轻量级模型
-            "max_gleaning_rounds": 1,  # 减少精化轮次以提升速度
-            "max_entities_per_extraction": 8,  # 减少每次提取的实体数量
-            "max_relations_per_extraction": 5,  # 减少每次提取的关系数量
-            "llm_timeout": 60,  # 减少超时时间
-            "max_retries": 1,  # 减少重试次数
-            "batch_size": 3,  # 小批次处理
-            "parallel_workers": 2  # 并行处理
-        }
-
-    def enable_fast_ner_mode(self):
-        """启用快速NER模式"""
-        logger = logging.getLogger("config")
-        fast_config = self.get_recommended_fast_ner_config()
-        self.entity_extractor_config.update(fast_config)
-        logger.info("已启用快速NER模式")
+        # 获取当前配置的嵌入模型
+        embedding_model = self.llm_client_config.get('default_embedding_model', '')
         
-        # 同时优化多核心配置
-        self.multicore_config.update({
-            "ner_batch_threshold": 3,  # 降低阈值
-            "chunk_size_factor": 4,    # 减少每个worker处理量
-            "max_workers": 3           # 限制worker数量避免资源竞争
-        })
-        logger.info("已优化多核心处理配置")
+        # 预定义的模型维度映射
+        model_dimensions = {
+            # Qwen系列模型
+            'qwen3:0.6b': 1024,
+            'qwen2.5:1.5b': 1536,
+            'qwen2:1.5b': 1536,
+            'qwen:7b': 4096,
+            'qwen:14b': 5120,
+            
+            # Nomic Embed模型
+            'nomic-embed-text': 768,
+            'nomic-embed-text:v1.5': 768,
+            
+            # Sentence Transformers系列
+            'sentence-transformers/all-MiniLM-L6-v2': 384,
+            'sentence-transformers/all-mpnet-base-v2': 768,
+            'sentence-transformers/all-distilroberta-v1': 768,
+            
+            # Ollama其他常见模型
+            'gemma:2b': 2048,
+            'gemma:7b': 3072,
+            'gemma3:1b': 2048,
+            'llama3.2:1b': 2048,
+            'llama3.2:3b': 3072,
+            
+            # 默认维度
+            'default': 768
+        }
+        
+        # 尝试精确匹配
+        if embedding_model in model_dimensions:
+            dimension = model_dimensions[embedding_model]
+            logging.getLogger("config").info(f"Found exact dimension match for {embedding_model}: {dimension}")
+            return dimension
+        
+        # 尝试模糊匹配（处理版本号等）
+        for model_pattern, dimension in model_dimensions.items():
+            if model_pattern != 'default' and model_pattern in embedding_model:
+                logging.getLogger("config").info(f"Found pattern match for {embedding_model} -> {model_pattern}: {dimension}")
+                return dimension
+        
+        # 使用默认维度
+        default_dim = model_dimensions['default']
+        logging.getLogger("config").warning(f"No dimension mapping found for {embedding_model}, using default: {default_dim}")
+        return default_dim

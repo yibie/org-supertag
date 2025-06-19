@@ -621,7 +621,7 @@ class EmbeddingService:
                 "error": f"维度兼容性检查失败: {e}"
             }
 
-    def prepare_node_text_for_embedding(self, node_data, max_total_tokens=300):
+    def prepare_node_text_for_embedding(self, node_data, max_total_tokens=280):
         """
         为 org-supertag node 准备向量化文本
         
@@ -755,7 +755,7 @@ class EmbeddingService:
             words = truncated.split()
             return ' '.join(words[:-1]) + '...' if len(words) > 1 else truncated + '...'
     
-    async def get_node_embedding(self, node_data, max_total_tokens=300):
+    async def get_node_embedding(self, node_data, max_total_tokens=280):
         """
         为 org-supertag node 获取向量表示
         

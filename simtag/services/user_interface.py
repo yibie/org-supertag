@@ -1,19 +1,19 @@
 """
-用户友好交互服务层
+User interface service layer
 
-该模块提供用户友好的交互接口，负责在UUID技术层和用户显示层之间进行转换。
-用户看到的是标题和内容片段，而系统内部依然使用UUID保证精确性。
+This module provides a user-friendly interface, responsible for converting between the UUID technical layer and the user display layer.
+The user sees titles and content snippets, while the system still uses UUIDs for precision.
 """
 
 import logging
 from typing import Dict, List, Any, Optional, Tuple
 import re
-from ..core.storage import VectorStorage
+from ..core.graph_service import GraphService
 
 logger = logging.getLogger(__name__)
 
 class UserFriendlyNode:
-    """用户友好的节点表示"""
+    """User-friendly node representation"""
     def __init__(self, uuid: str, title: str, content_snippet: str, 
                  file_path: str = "", score: float = 0.0, metadata: Dict[str, Any] = None):
         self.uuid = uuid
@@ -24,62 +24,59 @@ class UserFriendlyNode:
         self.metadata = metadata or {}
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式，用于EPC传输"""
+        """Convert to dictionary format, for EPC transmission"""
         return {
             "title": self.title,
             "snippet": self.content_snippet,
             "file_path": self.file_path,
             "score": self.score,
-            "uuid": self.uuid,  # UUID保留但不是主要显示信息
+            "uuid": self.uuid,  # UUID retained but not main display information
             "metadata": self.metadata
         }
 
 class UserInterfaceService:
-    """用户界面服务，提供用户友好的交互方法"""
+    """User interface service, providing user-friendly interaction methods"""
     
-    def __init__(self, storage: VectorStorage):
-        self.storage = storage
-        logger.info("UserInterfaceService 初始化完成")
+    def __init__(self, graph_service: GraphService):
+        self.graph_service = graph_service
+        logger.info("UserInterfaceService initialized")
     
     def _generate_content_snippet(self, content: str, max_length: int = 100) -> str:
-        """生成内容片段用于显示"""
+        """Generate content snippet for display"""
         if not content:
-            return "无内容"
+            return "No content"
         
-        # 清理内容：移除多余的空白和换行
+        # Clean content: remove extra whitespace and newlines
         cleaned = re.sub(r'\s+', ' ', content.strip())
         
         if len(cleaned) <= max_length:
             return cleaned
         
-        # 在单词边界截断
+        # Truncate at word boundary
         truncated = cleaned[:max_length]
         last_space = truncated.rfind(' ')
-        if last_space > max_length * 0.7:  # 如果空格位置合理
+        if last_space > max_length * 0.7:  # If space position is reasonable
             truncated = truncated[:last_space]
         
         return truncated + "..."
     
     def _enhance_node_with_metadata(self, node_uuid: str, base_score: float = 0.0) -> Optional[UserFriendlyNode]:
-        """使用元数据增强节点信息"""
+        """Enhance node information with metadata"""
         try:
-            # 获取节点详细信息
-            node_details = self.storage.get_node_details_by_ids([node_uuid])
-            if not node_details:
-                logger.warning(f"未找到节点元数据: {node_uuid}")
+            # Get node details
+            nodes_details = self.graph_service.get_nodes_by_ids([node_uuid])
+            if not nodes_details:
+                logger.warning(f"Node metadata not found: {node_uuid}")
                 return UserFriendlyNode(
                     uuid=node_uuid,
-                    title=f"节点 {node_uuid[:8]}...",
-                    content_snippet="元数据不可用",
+                    title=f"Node {node_uuid[:8]}...",
+                    content_snippet="Metadata unavailable",
                     score=base_score
                 )
             
-            node_detail = node_details[0]
+            node_detail = nodes_details[0]
             title = node_detail.get('title', '') or f"未命名节点 {node_uuid[:8]}..."
-            
-            # 获取实际内容
-            content_dict = self.storage.get_node_content_by_ids([node_uuid])
-            content = content_dict.get(node_uuid, "")
+            content = node_detail.get("content", "")
             content_snippet = self._generate_content_snippet(content, max_length=100)
             
             return UserFriendlyNode(
@@ -95,11 +92,11 @@ class UserInterfaceService:
             )
             
         except Exception as e:
-            logger.error(f"增强节点元数据时出错 {node_uuid}: {e}")
+            logger.error(f"Error enhancing node metadata {node_uuid}: {e}")
             return UserFriendlyNode(
                 uuid=node_uuid,
-                title=f"节点 {node_uuid[:8]}...",
-                content_snippet="处理错误",
+                title=f"Node {node_uuid[:8]}...",
+                content_snippet="Error processing",
                 score=base_score
             )
     
@@ -109,14 +106,14 @@ class UserInterfaceService:
         include_content: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        将UUID格式的相似节点结果转换为用户友好格式
+        Convert UUID-based similar node results to user-friendly format
         
         Args:
-            uuid_results: [(node_uuid, similarity_score), ...] 格式的结果
-            include_content: 是否包含内容片段
+            uuid_results: [(node_uuid, similarity_score), ...] format results
+            include_content: Whether to include content snippet
             
         Returns:
-            用户友好的节点列表
+            User-friendly node list
         """
         user_friendly_results = []
         
@@ -126,16 +123,16 @@ class UserInterfaceService:
                 if friendly_node:
                     user_friendly_results.append(friendly_node.to_dict())
                 else:
-                    # fallback：基本信息
+                    # fallback: basic information
                     user_friendly_results.append({
-                        "title": f"节点 {node_uuid[:8]}...",
-                        "snippet": "信息不可用",
+                        "title": f"Node {node_uuid[:8]}...",
+                        "snippet": "Information unavailable",
                         "uuid": node_uuid,
                         "score": score,
                         "metadata": {}
                     })
             except Exception as e:
-                logger.error(f"转换节点 {node_uuid} 时出错: {e}")
+                logger.error(f"Error converting node {node_uuid}: {e}")
                 continue
         
         return user_friendly_results
@@ -147,33 +144,33 @@ class UserInterfaceService:
         fuzzy_match: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        根据标题或内容搜索节点（用户友好接口）
+        Search nodes by title or content (user-friendly interface)
         
         Args:
-            query: 搜索查询（可以是标题片段或内容关键词）
-            top_k: 返回结果数量
-            fuzzy_match: 是否启用模糊匹配
+            query: Search query (can be title snippet or content keyword)
+            top_k: Number of results to return
+            fuzzy_match: Whether to enable fuzzy matching
             
         Returns:
-            用户友好的搜索结果
+            User-friendly search results
         """
         try:
-            logger.info(f"用户友好搜索: '{query}', top_k={top_k}")
+            logger.info(f"User-friendly search: '{query}', top_k={top_k}")
             
-            # 使用storage层的搜索功能
-            search_results = self.storage.search_nodes_by_title_content(query, limit=top_k)
+            # Use storage layer's search functionality
+            search_results = self.graph_service.search_nodes_by_title_content(query, limit=top_k)
             
-            # 转换为用户友好格式
+            # Convert to user-friendly format
             user_friendly_results = []
             for result in search_results:
                 content_snippet = self._generate_content_snippet(result.get('content', ''), max_length=100)
                 
                 friendly_result = {
-                    "title": result.get('title', f"节点 {result['node_id'][:8]}..."),
+                    "title": result.get('title', f"Node {result['node_id'][:8]}..."),
                     "snippet": content_snippet,
                     "uuid": result['node_id'],
-                    "score": 1.0,  # 文本搜索给固定分数
-                    "file_path": "",  # 如果有的话可以从metadata获取
+                    "score": 1.0,  # Text search gives fixed score
+                    "file_path": "",  # If available, can be obtained from metadata
                     "metadata": {
                         'document_date': result.get('document_date'),
                         'node_id': result['node_id'],
@@ -183,72 +180,72 @@ class UserInterfaceService:
                 }
                 user_friendly_results.append(friendly_result)
             
-            logger.info(f"搜索 '{query}' 找到 {len(user_friendly_results)} 个结果")
+            logger.info(f"Search '{query}' found {len(user_friendly_results)} results")
             return user_friendly_results
             
         except Exception as e:
-            logger.error(f"搜索节点时出错: {e}")
+            logger.error(f"Error searching nodes: {e}")
             return []
     
     def get_node_context_by_uuid(self, node_uuid: str) -> Optional[Dict[str, Any]]:
         """
-        根据UUID获取节点的完整上下文信息
+        Get complete context information for a node by UUID
         
         Args:
-            node_uuid: 节点UUID
+            node_uuid: Node UUID
             
         Returns:
-            包含节点详细信息和相关上下文的字典
+            Dictionary containing node details and related context
         """
         try:
             friendly_node = self._enhance_node_with_metadata(node_uuid)
             if not friendly_node:
                 return None
             
-            # TODO: 添加相关节点、标签等上下文信息
+            # TODO: Add related nodes, tags, etc. context information
             context = friendly_node.to_dict()
             context.update({
-                "related_nodes": [],  # 相关节点
-                "tags": [],          # 相关标签
-                "references": [],    # 引用关系
+                "related_nodes": [],  # Related nodes
+                "tags": [],          # Related tags
+                "references": [],    # Reference relationships
             })
             
             return context
             
         except Exception as e:
-            logger.error(f"获取节点上下文时出错 {node_uuid}: {e}")
+            logger.error(f"Error getting node context {node_uuid}: {e}")
             return None
     
     def resolve_user_input_to_uuid(self, user_input: str) -> Optional[str]:
         """
-        将用户输入（标题片段、内容关键词等）解析为具体的节点UUID
+        Parse user input (title snippet, content keyword, etc.) into specific node UUID
         
         Args:
-            user_input: 用户输入的查询
+            user_input: User input query
             
         Returns:
-            最匹配的节点UUID，如果没有找到则返回None
+            Most matching node UUID, or None if not found
         """
         try:
-            # 检查是否已经是UUID格式
+            # Check if already UUID format
             if self._is_uuid_format(user_input):
                 return user_input
             
-            # 尝试通过标题搜索找到最匹配的节点
-            search_results = self.storage.search_nodes_by_title_content(user_input, limit=1)
+            # Try to find the most matching node by title search
+            search_results = self.graph_service.search_nodes_by_title_content(user_input, limit=1)
             if search_results:
                 best_match = search_results[0]
-                logger.info(f"解析用户输入 '{user_input}' 为UUID: {best_match['node_id']}")
+                logger.info(f"Parsed user input '{user_input}' to UUID: {best_match['node_id']}")
                 return best_match['node_id']
             
-            logger.info(f"无法解析用户输入为UUID: '{user_input}'")
+            logger.info(f"Cannot parse user input to UUID: '{user_input}'")
             return None
             
         except Exception as e:
-            logger.error(f"解析用户输入时出错: {e}")
+            logger.error(f"Error parsing user input: {e}")
             return None
     
     def _is_uuid_format(self, text: str) -> bool:
-        """检查文本是否为UUID格式"""
+        """Check if text is in UUID format"""
         uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         return bool(re.match(uuid_pattern, text.lower())) 

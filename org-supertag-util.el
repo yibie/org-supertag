@@ -37,22 +37,22 @@
   :group 'org-supertag)
 
 (defun org-supertag-util-ensure-directory (dir)
-  "确保目录 DIR 存在，如果不存在则创建它。"
+  "Make sure directory DIR exists, create it if it doesn't."
   (unless (file-directory-p dir)
     (make-directory dir t)))
 
 (defun org-supertag-util-get-data-dir ()
-  "获取 org-supertag 的数据目录。"
+  "Get org-supertag data directory."
   (let ((data-dir (expand-file-name "org-supertag" user-emacs-directory)))
     (org-supertag-util-ensure-directory data-dir)
     data-dir))
 
 (defun org-supertag-util-get-hash-file ()
-  "获取哈希文件的路径。"
+  "Get hash file path."
   (expand-file-name "hashes.el" (org-supertag-util-get-data-dir)))
 
 (defun org-supertag-util-save-hash (node-id hash content-hash)
-  "保存节点 NODE-ID 的哈希值 HASH 和内容哈希值 CONTENT-HASH。"
+  "Save node NODE-ID hash value HASH and content hash value CONTENT-HASH."
   (let* ((hash-file (org-supertag-util-get-hash-file))
          (hash-data (if (file-exists-p hash-file)
                        (with-temp-buffer
@@ -67,8 +67,8 @@
       (prin1 hash-data (current-buffer)))))
 
 (defun org-supertag-util-load-hash (node-id)
-  "加载节点 NODE-ID 的哈希值。
-返回一个包含 node-hash 和 content-hash 的哈希表，如果不存在则返回 nil。"
+  "Load node NODE-ID hash value.
+Return a hash table containing node-hash and content-hash, or nil if not found."
   (let* ((hash-file (org-supertag-util-get-hash-file)))
     (when (file-exists-p hash-file)
       (let* ((hash-data (with-temp-buffer
@@ -77,28 +77,28 @@
         (gethash node-id hash-data)))))
 
 (defun org-supertag-util-clear-hash ()
-  "清除所有哈希记录。"
+  "Clear all hash records."
   (let ((hash-file (org-supertag-util-get-hash-file)))
     (when (file-exists-p hash-file)
       (delete-file hash-file))))
 
 (defun org-supertag-util-get-node-content-for-llm ()
-  "获取当前节点的内容，格式化为适合 LLM 处理的格式。
-返回一个包含节点标题和内容的字符串。"
+  "Get current node content, formatted for LLM processing.
+Return a string containing node title and content."
   (save-excursion
     (save-restriction
       (org-narrow-to-subtree)
-      (let* ((title (org-get-heading t t t t))  ; 获取干净的标题（无 TODO/tags/priority）
+      (let* ((title (org-get-heading t t t t))  ; Get clean title (no TODO/tags/priority)
              (content-start (save-excursion
-                            (org-end-of-meta-data t)  ; 跳过属性抽屉和其他元数据
+                            (org-end-of-meta-data t)  ; Skip property drawer and other metadata
                             (point)))
              (content-end (point-max))
              (raw-content (buffer-substring-no-properties content-start content-end))
-             ;; 清理内容：移除多余空行，修剪空白
+             ;; Clean content: remove extra empty lines, trim whitespace
              (cleaned-content (replace-regexp-in-string
-                             "\\([\\n]\\)[\\n]+" "\\1"  ; 将多个空行替换为单个空行
+                             "\\([\\n]\\)[\\n]+" "\\1"  ; Replace multiple empty lines with single empty line
                              (string-trim raw-content))))
-        ;; 组合标题和内容
+         ;; Combine title and content
         (concat "# " title "\n\n" cleaned-content)))))
 
 (provide 'org-supertag-util)

@@ -1,0 +1,5 @@
+numpy
+python-dotenv
+sexpdata
+requests
+dependency-injector 

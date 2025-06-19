@@ -40,12 +40,6 @@ Assumed that `org-supertag-bridge.el` is in the project root, and the script is 
   :type 'file
   :group 'org-supertag-bridge)
 
-(defcustom org-supertag-bridge-data-directory
-  (expand-file-name "org-supertag" user-emacs-directory)
-  "Data directory for org-supertag, passed to `simtag_bridge.py`."
-  :type 'directory
-  :group 'org-supertag-bridge)
-
 (defcustom org-supertag-bridge-process-buffer-name "*simtag-bridge-py-output*"
   "Name of the buffer for `simtag_bridge.py`'s output."
   :type 'string
@@ -95,6 +89,10 @@ Assumed that `org-supertag-bridge.el` is in the project root, and the script is 
 
 (defvar org-supertag-bridge--ready-p nil
   "Non-nil if the bridge to Python is fully initialized and ready.")
+
+(defvar org-supertag-bridge-ready-hook nil
+  "Hook run after the Python bridge is successfully initialized.
+Functions added to this hook will be run without arguments.")
 
 ;; =============================================================================
 ;; Logging
@@ -173,24 +171,25 @@ This server allows Python to call methods defined in Emacs."
 (defun org-supertag-bridge--handle-python-server-ready-signal (python-server-port)
   "Handles `simtag-bridge/report-ready` call from Python.
 PYTHON-SERVER-PORT is the port the Python EPC server is listening on.
-Establishes the main EPC connection from Emacs TO the Python server."
+Establishes the main EPC connection from Emacs TO the Python server and runs the ready hook."
   (org-supertag-bridge--log "Python server reported ready. Listening on its port: %s" python-server-port)
   (condition-case-unless-debug err
       (progn
         (setq org-supertag-bridge--python-epc-manager
-              (make-org-supertag-bridge-epc-manager ; From -epc.el
-               :server-process org-supertag-bridge--python-process ; Associate with the running script
+              (make-org-supertag-bridge-epc-manager
+               :server-process org-supertag-bridge--python-process
                :commands (cons org-supertag-bridge--python-program-to-run org-supertag-bridge--python-program-args)
                :title (format "OrgSuperTagBridge-Client-to-Python:%s" python-server-port)
-               :port python-server-port ; Port of the Python server
+               :port python-server-port
                :connection (org-supertag-bridge-epc-connect "127.0.0.1" python-server-port)))
         
         (if (and org-supertag-bridge--python-epc-manager (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager))
             (progn
-              (org-supertag-bridge-epc-init-epc-layer org-supertag-bridge--python-epc-manager) ; Initialize protocol layer
+              (org-supertag-bridge-epc-init-epc-layer org-supertag-bridge--python-epc-manager)
               (setq org-supertag-bridge--ready-p t)
               (message "[OrgSuperTagBridge] Successfully connected to SimTagBridge Python server on port %s." python-server-port)
-              (org-supertag-bridge--log "✅ Connection FROM Emacs TO SimTagBridge Python server established."))
+              (org-supertag-bridge--log "✅ Connection FROM Emacs TO SimTagBridge Python server established. Running ready hook...")
+              (run-hooks 'org-supertag-bridge-ready-hook))
           (progn
             (setq org-supertag-bridge--ready-p nil)
             (error (format "[OrgSuperTagBridge] Failed to establish live connection to Python server on port %s" python-server-port)))))
@@ -207,10 +206,12 @@ Establishes the main EPC connection from Emacs TO the Python server."
 (cl-defun org-supertag-bridge-start-process ()
   "Start the `simtag_bridge.py` process if it isn't already running and connected."
   (interactive)
-  (if (and org-supertag-bridge--python-epc-manager (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager) org-supertag-bridge--ready-p)
+  ;; Use a more robust check based on the actual process object.
+  (if (and (processp org-supertag-bridge--python-process)
+           (process-live-p org-supertag-bridge--python-process))
       (progn
-        (org-supertag-bridge--log "SimTagBridge Python connection already live and ready.")
-        (message "[OrgSuperTagBridge] Already connected."))
+        (org-supertag-bridge--log "SimTagBridge Python process is already live. Skipping new process start.")
+        (message "[OrgSuperTagBridge] Process already running."))
     (org-supertag-bridge--log "Attempting to start SimTagBridge process pipeline...")
     
     ;; 1. Ensure Emacs-side EPC server is running for Python to connect back
@@ -227,7 +228,7 @@ Establishes the main EPC connection from Emacs TO the Python server."
     (setq org-supertag-bridge--ready-p nil) ; Reset readiness flag
     (let* ((python-cmd org-supertag-bridge-python-command)
            (emacs-port-str (number-to-string org-supertag-bridge--emacs-epc-server-port))
-           (data-dir org-supertag-bridge-data-directory)
+           (data-dir org-supertag-data-directory)
            (profile-arg (when org-supertag-bridge-enable-profile (list "--profile")))
            (default-directory (expand-file-name ".." (file-name-directory org-supertag-bridge-python-script))))
 
@@ -238,31 +239,34 @@ Establishes the main EPC connection from Emacs TO the Python server."
         (org-supertag-bridge--log "Created data directory: %s" data-dir))
       
       (setq org-supertag-bridge--python-program-to-run python-cmd)
-      (setq org-supertag-bridge--python-program-args 
-            (append (list "-m" "simtag.simtag_bridge" emacs-port-str data-dir) profile-arg))
+      (setq org-supertag-bridge--python-program-args
+            (append (list "-m" "simtag.simtag_bridge"
+                          "--emacs-epc-port" emacs-port-str
+                          "--data-directory" data-dir)
+                    profile-arg))
 
       (org-supertag-bridge--log "DEBUG: Using Python command from org-supertag-bridge-python-command: '%s'" python-cmd)
-      (org-supertag-bridge--log "Launching SimTagBridge: %s %s" 
-                                org-supertag-bridge--python-program-to-run 
-                                (mapconcat #'identity org-supertag-bridge--python-program-args " "))
+      (org-supertag-bridge--log "Starting Python process with command: %s %s"
+                                org-supertag-bridge--python-program-to-run
+                                (string-join org-supertag-bridge--python-program-args " "))
       (org-supertag-bridge--log "  Working directory for script: %s" default-directory)
       
       (let ((current-process-environment process-environment) ; Save current
             (process-connection-type nil)) ; For stdio pipes
         (setq process-environment current-process-environment) ; Restore for other Emacs processes
+        (org-supertag-bridge--log "Starting Python process with command: %s %s"
+                                  org-supertag-bridge--python-program-to-run
+                                  (string-join org-supertag-bridge--python-program-args " "))
         (setq org-supertag-bridge--python-process
-              (apply #'start-file-process
+              (apply #'start-process
                      "simtag-bridge-py"
-                     org-supertag-bridge-process-buffer-name
-                     python-cmd
-                     "-m" "simtag.simtag_bridge" emacs-port-str data-dir
-                     profile-arg)))
-        (when org-supertag-bridge--python-process
-           (set-process-query-on-exit-flag org-supertag-bridge--python-process nil)
-           ;; Set process working directory if `start-file-process` doesn't have a direct arg for it
-           ;; (process-put org-supertag-bridge--python-process :cwd script-working-dir) ; Example if needed
-           (org-supertag-bridge--log "SimTagBridge Python process started. Waiting for it to connect back and report ready..."))
-        org-supertag-bridge--python-process)))
+                     (get-buffer-create org-supertag-bridge-process-buffer-name)
+                     org-supertag-bridge--python-program-to-run
+                     org-supertag-bridge--python-program-args)))
+
+      (when (process-live-p org-supertag-bridge--python-process)
+        (org-supertag-bridge--log "SimTagBridge Python process started. Waiting for it to connect back and report ready..."))
+      org-supertag-bridge--python-process)))
 
 (defun org-supertag-bridge-kill-process ()
   "Stop the SimTagBridge Python process and clean up related EPC resources."
@@ -274,7 +278,7 @@ Establishes the main EPC connection from Emacs TO the Python server."
     (org-supertag-bridge--log "Sending 'cleanup' request to SimTagBridge Python server...")
     (let ((debug-on-error nil)) ; Temporarily disable debugger for this specific call
       (condition-case err
-          (org-supertag-bridge-call-sync "cleanup" 5) ; Add a timeout, e.g. 5 seconds
+          (org-supertag-bridge-call-sync "cleanup" nil 5) ; Add a timeout, e.g. 5 seconds
         (error 
          (org-supertag-bridge--log "Error/timeout during Python 'cleanup' call (or connection already down): %S" err)))))
 
@@ -322,64 +326,93 @@ Establishes the main EPC connection from Emacs TO the Python server."
 ;; =============================================================================
 ;; Public API: Calling Python Server Methods
 ;; =============================================================================
-(defun org-supertag-bridge--normalize-parameters (params)
-  "Ensure parameters are in a format serializable by EPC.
-This version simply returns the parameters as-is, to avoid unwanted
-conversions from alist to plist, which was causing issues with Python dict expectations."
-  (identity params))
+(defun org-supertag-bridge-ready-p ()
+  "Return non-nil if the bridge to Python is fully initialized and ready."
+  org-supertag-bridge--ready-p)
 
-(defun org-supertag-bridge-call-sync (method-name &optional timeout &rest args)
-  "Call METHOD-NAME on SimTagBridge Python server synchronously with ARGS.
-Wait for TIMEOUT seconds.
-Returns the result from Python or signals an error."
-  (unless (and org-supertag-bridge--python-epc-manager (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager) org-supertag-bridge--ready-p)
-    (org-supertag-bridge--log "Bridge to Python not live/ready for sync call: %s" method-name)
-    (error (format "SimTagBridge to Python not live/ready for sync call: %s" method-name)))
+(defun org-supertag-bridge-call-async (method-name params callback)
+  "Asynchronously call a Python METHOD-NAME via EPC.
 
-  (org-supertag-bridge--log "Calling sync Python method '%s' with timeout %ds, args: %S" method-name timeout args)
-  (condition-case-unless-debug err
-      (let ((result (org-supertag-bridge-epc-call-sync
-                       org-supertag-bridge--python-epc-manager
-                       (intern method-name) ; Method name as symbol
-                       (org-supertag-bridge--normalize-parameters args) ; Normalized arguments
-                       timeout)))            ; Timeout in seconds
-        (org-supertag-bridge--log "Sync Python method '%s' result: %S" method-name result)
-        result)
-    (error
-     (org-supertag-bridge--log "ERROR calling sync Python method '%s': %S" method-name err)
-     (signal (car err) (cdr err))))) ; Re-signal the error
+The caller is responsible for ensuring that PARAMS adheres to the
+established data contract: for complex data, it must be an
+association list (alist) wrapped in a single-element list, e.g.,
+`(list payload-alist)`.
 
-(cl-defun org-supertag-bridge-call-async (method-name callback &rest args)
-  "Call METHOD-NAME on SimTagBridge Python server asynchronously with ARGS.
-CALLBACK is a function of one arg (the result or error structure)."
-  (unless (and org-supertag-bridge--python-epc-manager (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager) org-supertag-bridge--ready-p)
-    (org-supertag-bridge--log "Bridge to Python not live/ready for async call: %s" method-name)
-    (when callback (funcall callback (list :status :error :message "SimTagBridge to Python not live/ready")))
-    (cl-return-from org-supertag-bridge-call-async nil))
-  
-  (org-supertag-bridge--log "Calling async Python method '%s' with args: %S" method-name args)
-  (let ((captured-calling-buffer (current-buffer))
-        (deferred (org-supertag-bridge-epc-call-deferred org-supertag-bridge--python-epc-manager 
-                                                     (intern method-name)
-                                                     ;; Apply the same normalization as sync calls
-                                                     (org-supertag-bridge--normalize-parameters args))))
-    ;; First form in let body: Attach the callback
-    (org-supertag-bridge-deferred-nextc deferred
-      (lambda (response) 
-        (when org-supertag-bridge-enable-verbose-async-debug
-          (org-supertag-bridge--log "[BRIDGE_ASYNC_CB] Outer callback in bridge.el received: %S" response))
-        (if (buffer-live-p captured-calling-buffer)
-            (with-current-buffer captured-calling-buffer
-              (if callback 
-                  (progn
-                    (when org-supertag-bridge-enable-verbose-async-debug
-                      (org-supertag-bridge--log "[BRIDGE_ASYNC_CB] Calling inner callback for method %s" method-name))
-                    (funcall callback response))
-                (message "Async call to %s returned (no inner callback): %S" method-name response)))
-          (org-supertag-bridge--log "[BRIDGE_ASYNC_CB] Calling buffer for method %s (%S) no longer live." 
-                                    method-name captured-calling-buffer))))
-    ;; Second form in let body: Return the deferred object itself
-    deferred))
+See `simtag/utils/unified_tag_processor.py` for the definitive data contract.
+
+METHOD-NAME: A symbol or string for the Python method name.
+PARAMS: A list containing all positional arguments for the Python method.
+CALLBACK: A function to handle the async result. It will be called
+          with one argument: either the result from Python, or a
+          list like '(:error \"description\")' on failure."
+
+  ;; 确保 EPC 连接已就绪
+  (unless (org-supertag-bridge--ensure-server-running)
+    (when callback
+      (funcall callback (list :error "Python server is not running.")))
+    (error "Python server is not running."))
+
+  ;; 进行异步调用
+  (let ((d (org-supertag-bridge-epc-call-deferred
+            org-supertag-bridge--python-epc-manager
+            (intern method-name)
+            (or params nil))))
+    ;; 只有在提供回调时才注册成功/失败处理
+    (when callback
+      (org-supertag-bridge-deferred-nextc d
+        (lambda (result)
+          (when org-supertag-bridge-enable-verbose-async-debug
+            (org-supertag-bridge--log "Async SUCCESS for '%s': %S" method-name result))
+          (funcall callback result)))
+      (org-supertag-bridge-deferred-error d
+        (lambda (err)
+          (message "[OrgSuperTagBridge] Async error from Python: %s" err)
+          (funcall callback (list :error err)))))
+    d))
+
+(defun org-supertag-bridge--ensure-server-running ()
+  "Check if the bridge is ready, and try to start it if not.
+Returns t if ready, nil otherwise."
+  (or org-supertag-bridge--ready-p
+      (progn
+        (org-supertag-bridge--log "Server not ready. Attempting to start...")
+        (org-supertag-bridge-start-process)
+        ;; After attempting to start, we check readiness again.
+        ;; There might be a delay, so a better implementation might involve
+        ;; waiting or checking status differently, but this is a start.
+        org-supertag-bridge--ready-p)))
+
+(defun org-supertag-bridge-call-sync (method-name params &optional timeout)
+  "Synchronously call a Python METHOD-NAME via EPC.
+
+The caller is responsible for ensuring that PARAMS adheres to the
+established data contract: for complex data, it must be an
+association list (alist) wrapped in a single-element list, e.g.,
+`(list payload-alist)`.
+
+See `simtag/utils/unified_tag_processor.py` for the definitive data contract.
+
+METHOD-NAME: A symbol or string for the Python method name.
+PARAMS: A list containing all positional arguments for the Python method.
+TIMEOUT: Timeout in seconds (default 60)."
+
+  (org-supertag-bridge--log "Sync Call to '%s' with params: %S (timeout %s)" method-name params timeout)
+  (unless (org-supertag-bridge-ready-p)
+    (org-supertag-bridge--log "Bridge not ready for sync call. Starting process.")
+    (org-supertag-bridge-start-process))
+
+  (org-supertag-bridge-epc-call-sync
+   org-supertag-bridge--python-epc-manager
+   (intern method-name)
+   (or params nil)
+   (or timeout 60)))
+
+;; =============================================================================
+;; Helper functions to call into EPC layer
+;; =============================================================================
+;; NOTE: These helper functions were incorrect and have been removed.
+;; The main public API functions now call the EPC layer directly.
+
 
 ;; =============================================================================
 ;; Convenience and Auto-start
@@ -389,19 +422,19 @@ CALLBACK is a function of one arg (the result or error structure)."
 Returns t if ready, nil otherwise. Waits up to TIMEOUT seconds (default 10)."
   (interactive)
   (let ((wait-timeout (or timeout 10))) ; Default timeout 10 seconds
-    (if (and org-supertag-bridge--python-epc-manager 
-             (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager) 
+    (if (and org-supertag-bridge--python-epc-manager
+             (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager)
              org-supertag-bridge--ready-p)
         t ; Already ready
       (progn
         (org-supertag-bridge-start-process) ; Attempt to start if not already
         ;; Wait for readiness
         (let ((attempts 0)
-              (max-attempts (* wait-timeout 2))) ; Check every 0.5 seconds
+              (max-attempts (* wait-timeout 10))) ; Check every 0.1 seconds
           (while (and (not org-supertag-bridge--ready-p) (< attempts max-attempts))
             (sit-for 0.1)
             (setq attempts (1+ attempts))
-            (when (= 0 (% attempts 4)) ; Log every 2 seconds
+            (when (= 0 (% attempts 20)) ; Log every 2 seconds
                 (org-supertag-bridge--log "Waiting for bridge readiness... (attempt %d/%d)" attempts max-attempts)))
           (if org-supertag-bridge--ready-p
               (progn (org-supertag-bridge--log "Bridge became ready after %d attempts." attempts) t)
@@ -419,310 +452,6 @@ Returns t if ready, nil otherwise. Waits up to TIMEOUT seconds (default 10)."
   (interactive)
   (remove-hook 'post-command-hook #'org-supertag-bridge-ensure-ready t) ; Remove local hook
   (message "[OrgSuperTagBridge] Auto-start disabled."))
-
-;; =============================================================================
-;; New: lightweight pull-based catalog for Python
-;; =============================================================================
-
-(defun org-supertag-bridge--format-ts (time-val)
-  "返回 ISO 字符串, 若 `org-supertag-mirror--format-timestamp-for-payload' 可用则复用.
-若不可用, 则尝试将 Emacs 时间列表转换为 YYYY-MM-DD HH:MM:SS 格式."
-  (cond
-   ((fboundp 'org-supertag-mirror--format-timestamp-for-payload)
-    (org-supertag-mirror--format-timestamp-for-payload time-val))
-   ((stringp time-val) ; Already a string, assume it's correct
-    time-val)
-   ((and (listp time-val) (time-less-p nil time-val)) ; Check if it's a valid Emacs time list
-    (format-time-string "%Y-%m-%d %H:%M:%S" time-val))
-   (t ; Fallback if not a string or valid time list
-    (org-supertag-bridge--log "Warning: Could not format timestamp: %S" time-val)
-    nil)))
-
-(defun org-supertag-bridge--get-node-snapshot (&optional since-time)
-  "Get all nodes modified since SINCE-TIME.
-If SINCE-TIME is nil, get all nodes.
-This prepares node data for Python, excluding bulky fields."
-  (let ((nodes '()))
-    (maphash
-     (lambda (id node-data)
-       (when (eq (plist-get node-data :type) :node)
-         (let ((updated-at (plist-get node-data :updated-at)))
-           (when (or (not since-time)
-                     (and updated-at (string< since-time updated-at)))
-             (push (org-supertag-bridge--prepare-object-for-python node-data) nodes)))))
-     org-supertag-db--object)
-    (nreverse nodes)))
-
-(defun org-supertag-bridge--get-tag-snapshot (&optional since-time)
-  "Get all tags modified since SINCE-TIME.
-If SINCE-TIME is nil, get all tags.
-This prepares tag data for Python, excluding bulky fields."
-  (let ((tags '()))
-    (maphash
-     (lambda (id tag-data)
-       (when (eq (plist-get tag-data :type) :tag)
-         (let ((updated-at (plist-get tag-data :updated-at)))
-           (when (or (not since-time)
-                     (and updated-at (string< since-time updated-at)))
-             (push (org-supertag-bridge--prepare-object-for-python tag-data) tags)))))
-     org-supertag-db--object)
-    (nreverse tags)))
-
-(defun org-supertag-bridge--get-link-catalog (&optional since-time)
-  "返回边目录 ((LINK-ID TYPE FROM-ID TO-ID PROPERTIES MODIFIED))."
-  (when (and (hash-table-p org-supertag-db--link) 
-             (= 0 (hash-table-count org-supertag-db--link)) 
-             (fboundp 'org-supertag-db-load))
-    (org-supertag-bridge--log "Get-link-catalog: org-supertag-db--link is empty, attempting to load DB...")
-    (condition-case err
-        (org-supertag-db-load)
-      (error (org-supertag-bridge--log "Get-link-catalog: Error during org-supertag-db-load: %S" err))))
-  
-  (org-supertag-bridge--log "Get-link-catalog called. since-time: %S. DB-link size: %S"
-                           since-time
-                           (if (hash-table-p org-supertag-db--link)
-                               (hash-table-count org-supertag-db--link)
-                             "org-supertag-db--link is not a hash-table or is nil"))
-  
-  (let (result)
-    (if (not (hash-table-p org-supertag-db--link))
-        (progn
-          (org-supertag-bridge--log "Get-link-catalog: Error - org-supertag-db--link is not a hash-table or is nil!")
-          nil)
-      (maphash
-       (lambda (lid plist)
-         (let* ((mtime (org-supertag-bridge--format-ts (plist-get plist :modified-at)))
-                (include-p (or (null since-time) 
-                             (and mtime (string> mtime since-time)))))
-           (when include-p
-             (push (list (format "%s" lid)
-                        (format "%s" (plist-get plist :type))
-                        (format "%s" (plist-get plist :from))
-                        (format "%s" (plist-get plist :to))
-                        (or (plist-get plist :properties) '())
-                        mtime)
-                   result))))
-       org-supertag-db--link))
-    (org-supertag-bridge--log "Get-link-catalog: Returning %d links." (length result))
-    (nreverse result)))
-
-(defun org-supertag-bridge--ping ()
-  "Internal ping function for Python bridge to check Emacs readiness.
-Returns 'pong' to indicate Emacs is ready."
-  (message "[org-supertag-bridge--ping] Received ping from Python bridge.")
-  "pong")
-
-(defun org-supertag-bridge--should-sync-node-p (props)
-  "Return non-nil if the node with PROPS should be synced."
-  ;; For now, we sync all nodes. This can be extended with filters.
-  (eq (plist-get props :type) :node))
-
-(defun org-supertag-bridge--sync-single-node-to-python (id props)
-  "Sync a single node's PROPS to the Python bridge using the new simplified API.
-The PROPS plist is sent directly, and Python handles the data transformation."
-  (org-supertag-bridge--log (format "Syncing node to Python: %s" id))
-  ;; The props plist is already in a format that the EPC bridge can serialize
-  ;; correctly into a Python dictionary.
-  (org-supertag-bridge--call-async 'sync_node_from_elisp props))
-
-;;;###autoload
-(defun org-supertag-bridge-init ()
-  "Initialize the bridge and its connections to the database."
-  (interactive)
-  (org-supertag-bridge--log "Initializing bridge and DB listeners...")
-  ;; Add a listener to sync node changes to Python
-  (org-supertag-db-add-listener
-   'entity:changed
-   (lambda (id props)
-     (when (org-supertag-bridge--should-sync-node-p props)
-       (org-supertag-bridge--sync-single-node-to-python id props)))))
-
-(defun org-supertag-bridge--call-python-epc-sync (method-name &rest args)
-  (apply #'epc:call-sync org-supertag-bridge--epc-connection method-name args))
-
-;; --- Incremental Sync Helpers ---
-
-(defun org-supertag-bridge--get-node-snapshot (&optional since-time)
-  "Get all nodes modified since SINCE-TIME.
-If SINCE-TIME is nil, get all nodes.
-This prepares node data for Python, excluding bulky fields."
-  (let ((nodes '()))
-    (maphash
-     (lambda (id node-data)
-       (when (eq (plist-get node-data :type) :node)
-         (let ((updated-at (plist-get node-data :updated-at)))
-           (when (or (not since-time)
-                     (and updated-at (string< since-time updated-at)))
-             (push (org-supertag-bridge--prepare-object-for-python node-data) nodes)))))
-     org-supertag-db--object)
-    (nreverse nodes)))
-
-(defun org-supertag-bridge--get-tag-snapshot (&optional since-time)
-  "Get all tags modified since SINCE-TIME.
-If SINCE-TIME is nil, get all tags.
-This prepares tag data for Python, excluding bulky fields."
-  (let ((tags '()))
-    (maphash
-     (lambda (id tag-data)
-       (when (eq (plist-get tag-data :type) :tag)
-         (let ((updated-at (plist-get tag-data :updated-at)))
-           (when (or (not since-time)
-                     (and updated-at (string< since-time updated-at)))
-             (push (org-supertag-bridge--prepare-object-for-python tag-data) tags)))))
-     org-supertag-db--object)
-    (nreverse tags)))
-
-(defun org-supertag-bridge--get-link-catalog (&optional since-time)
-  "Get all links modified since SINCE-TIME.
-If SINCE-TIME is nil, get all links."
-  (let ((links '()))
-    (maphash
-     (lambda (id link-data)
-       (let ((updated-at (plist-get link-data :updated-at)))
-         (when (or (not since-time)
-                   (and updated-at (string< since-time updated-at)))
-           (push (org-supertag-bridge--prepare-object-for-python link-data) links))))
-     org-supertag-db--link)
-    (nreverse links)))
-
-(defun org-supertag-bridge--prepare-object-for-python (props)
-  "Prepare a plist PROPS for sending to Python.
-Removes Elisp-specific properties like buffer objects."
-  (let ((clean-props (copy-sequence props)))
-    ;; Remove any properties that are not serializable or useful for Python
-    (dolist (key '(:buffer))
-      (setq clean-props (org-supertag-bridge--plist-remove key clean-props)))
-    
-    ;; 确保有哈希值
-    (unless (plist-get clean-props :hash)
-      (setq clean-props 
-            (plist-put clean-props :hash 
-                      (org-supertag-node-hash clean-props))))
-    
-    ;; 如果启用了内容检查，确保有内容哈希
-    (when org-supertag-sync-check-contents
-      (unless (plist-get clean-props :content-hash)
-        (setq clean-props
-              (plist-put clean-props :content-hash
-                        (org-supertag-node-content-hash clean-props)))))
-    
-    clean-props))
-
-(defun org-supertag-bridge--plist-remove (key plist)
-  "Remove KEY from PLIST and return the modified plist."
-  (let ((result '())
-        (tail plist))
-    (while tail
-      (let ((current-key (car tail))
-            (current-value (cadr tail)))
-        (unless (eq current-key key)
-          (setq result (append result (list current-key current-value))))
-        (setq tail (cddr tail))))
-    result))
-
-(defun org-supertag-bridge-sync-incremental (changed-nodes changed-tags changed-links)
-  "发送增量变化到Python后端进行同步。
-CHANGED-NODES: 变化的节点列表，格式为 ((id . props) ...)
-CHANGED-TAGS: 变化的标签列表，格式为 ((id . props) ...)  
-CHANGED-LINKS: 变化的链接列表，格式为 ((id . props) ...)
-
-返回同步结果plist，包含 :success 和 :error 字段。"
-  (condition-case err
-      (let* ((nodes-for-python (mapcar 
-                               (lambda (pair)
-                                 (let* ((id (car pair))
-                                        (props (cdr pair))
-                                        (title (or (plist-get props :title) ""))
-                                        (content (or (plist-get props :content) ""))
-                                        (tags (or (plist-get props :tags) '()))
-                                        (file-path (or (plist-get props :file-path) ""))
-                                        (modified-at (or (plist-get props :modified-at) "")))
-                                   ;; 使用与 bulk_process_snapshot 兼容的格式
-                                   (list id title content tags file-path modified-at)))
-                               changed-nodes))
-             (links-for-python (mapcar
-                               (lambda (pair)
-                                 (let* ((id (car pair))
-                                        (props (cdr pair)))
-                                   ;; 转换链接格式
-                                   (list id
-                                         (plist-get props :type)
-                                         (plist-get props :from)
-                                         (plist-get props :to)
-                                         (plist-get props :properties)
-                                         (plist-get props :modified-at))))
-                               changed-links))
-             (sync-data `((:nodes . ,nodes-for-python)
-                         (:links . ,links-for-python)
-                         (:sync_timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))))
-             ;; 使用现有的 bulk_process_snapshot 方法
-             (result (org-supertag-bridge-call-sync "bulk_process_snapshot" 120 sync-data)))
-        
-        (if (and result (plist-get result :status))
-            (cond 
-             ((string= (plist-get result :status) "success")
-              `(:success t :message ,(or (plist-get result :message) "Incremental sync completed")))
-             (t 
-              `(:success nil :error ,(plist-get result :message))))
-          `(:success nil :error "Invalid response from Python backend")))
-    
-    (error
-     `(:success nil :error ,(error-message-string err)))))
-
-(defun org-supertag-bridge-sync-incremental-async (changed-nodes changed-tags changed-links callback)
-  "异步发送增量变化到Python后端进行同步。
-CHANGED-NODES: 变化的节点列表，格式为 ((id . props) ...)
-CHANGED-TAGS: 变化的标签列表，格式为 ((id . props) ...)  
-CHANGED-LINKS: 变化的链接列表，格式为 ((id . props) ...)
-CALLBACK: 回调函数，接收同步结果plist，包含 :success 和 :error 字段。"
-  (condition-case err
-      (let* ((nodes-for-python (mapcar 
-                               (lambda (pair)
-                                 (let* ((id (car pair))
-                                        (props (cdr pair))
-                                        (title (or (plist-get props :title) ""))
-                                        (content (or (plist-get props :content) ""))
-                                        (tags (or (plist-get props :tags) '()))
-                                        (file-path (or (plist-get props :file-path) ""))
-                                        (modified-at (or (plist-get props :modified-at) "")))
-                                   ;; 使用与 bulk_process_snapshot 兼容的格式
-                                   (list id title content tags file-path modified-at)))
-                               changed-nodes))
-             (links-for-python (mapcar
-                               (lambda (pair)
-                                 (let* ((id (car pair))
-                                        (props (cdr pair)))
-                                   ;; 转换链接格式
-                                   (list id
-                                         (plist-get props :type)
-                                         (plist-get props :from)
-                                         (plist-get props :to)
-                                         (plist-get props :properties)
-                                         (plist-get props :modified-at))))
-                               changed-links))
-             (sync-data `((:nodes . ,nodes-for-python)
-                         (:links . ,links-for-python)
-                         (:sync_timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t)))))
-        
-        ;; 使用异步调用
-        (org-supertag-bridge-call-async 
-         "bulk_process_snapshot"
-         (lambda (result)
-           (let ((processed-result
-                  (if (and result (plist-get result :status))
-                      (cond 
-                       ((string= (plist-get result :status) "success")
-                        `(:success t :message ,(or (plist-get result :message) "Incremental sync completed")))
-                       (t 
-                        `(:success nil :error ,(plist-get result :message))))
-                    `(:success nil :error "Invalid response from Python backend"))))
-             (when callback
-               (funcall callback processed-result))))
-         sync-data))
-    
-    (error
-     (when callback
-       (funcall callback `(:success nil :error ,(error-message-string err)))))))
 
 (provide 'org-supertag-bridge)
 

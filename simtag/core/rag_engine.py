@@ -8,13 +8,14 @@ import asyncio
 import logging
 from typing import Dict, List, Any, Optional, Tuple, TypedDict
 import os
+import numpy as np
+import tempfile # For temporary vector DB
 
 # Corrected and new imports
 from simtag.config import Config
-from .graph_store import OrgSupertagKnowledgeGraph, Entity as GraphEntity, Relation as GraphRelation # Renamed to avoid conflict if any local Entity
-from .storage import VectorStorage
-from ..services.llm_client import LLMClient # Assuming simtag/services/llm_client.py
-from .entity_extractor import ExtractedEntity
+from .graph_service import GraphService
+from ..services.llm_client import LLMClient
+from .entity_extractor import LLMEntityExtractor, ExtractedEntity
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,8 @@ class StructuredContextOutput(TypedDict):
     """
     Defines the structured output from retrieval methods.
     """
-    entities: List[GraphEntity]
-    relations: List[GraphRelation]
+    entities: List[Dict[str, Any]] # Changed from GraphEntity
+    relations: List[Dict[str, Any]] # Changed from GraphRelation
     documents: List[Dict[str, Any]] # Existing document format
 
 
@@ -35,8 +36,7 @@ class OrgSupertagRAGEngine:
     """
 
     def __init__(self,
-                 knowledge_graph: OrgSupertagKnowledgeGraph,
-                 vector_storage: VectorStorage,
+                 graph_service: GraphService,
                  llm_client: LLMClient,
                  config: Config
                  ):
@@ -44,40 +44,62 @@ class OrgSupertagRAGEngine:
         Initializes the OrgSupertagRAGEngine.
 
         Args:
-            knowledge_graph: Instance of OrgSupertagKnowledgeGraph.
-            vector_storage: Instance of a vector storage solution.
+            graph_service: Instance of the unified GraphService.
             llm_client: Client for interacting with an LLM for generation.
             config: Configuration object.
         """
-        self.knowledge_graph = knowledge_graph
-        self.vector_storage = vector_storage
+        self.graph_service = graph_service
         self.llm_client = llm_client
         self.config = config
+        
+        # Use the new, unified LLMEntityExtractor
+        self.entity_extractor = LLMEntityExtractor(
+            llm_client=llm_client,
+            config=config.analysis_config # Use the analysis config block
+        )
+        
         logger.info("OrgSupertagRAGEngine initialized.")
 
     async def _naive_retrieval(
         self,
         query_text: str,
-        query_embedding: Optional[List[float]], # Kept for now, as vector_storage might use it
+        query_embedding: Optional[np.ndarray],
         top_k: int
-    ) -> StructuredContextOutput: # Changed return type
+    ) -> StructuredContextOutput:
         """Performs naive vector store retrieval."""
         logger.debug(f"Performing naive retrieval for query: '{query_text[:50]}...'")
-        if not self.vector_storage:
-            logger.warning("Vector storage is not available for naive retrieval.")
+        
+        if not self.graph_service.has_vector_ext:
+            logger.warning("Vector extension is not available for naive retrieval.")
             return StructuredContextOutput(entities=[], relations=[], documents=[])
 
-        raw_documents = await self.vector_storage.query(query_text, top_k=top_k)
+        if query_embedding is None:
+            logger.debug("No pre-computed embedding, generating one for the query.")
+            query_embedding = await self.llm_client.get_embedding(query_text)
+            if query_embedding is None:
+                logger.error("Failed to generate embedding for query.")
+                return StructuredContextOutput(entities=[], relations=[], documents=[])
         
+        # Find similar node IDs
+        similar_node_tuples = self.graph_service.find_similar_nodes(query_embedding, top_k=top_k)
+        if not similar_node_tuples:
+            return StructuredContextOutput(entities=[], relations=[], documents=[])
+
+        node_ids = [node_id for node_id, score in similar_node_tuples]
+        scores_map = {node_id: score for node_id, score in similar_node_tuples}
+
+        # Get node details
+        nodes_data = self.graph_service.get_nodes_by_ids(node_ids)
+
         standardized_documents: List[Dict[str, Any]] = []
-        for i, doc_data in enumerate(raw_documents):
+        for doc_data in nodes_data:
+            node_id = doc_data.get("node_id")
             standardized_doc = {
-                "id": doc_data.get("id", f"naive_{query_text[:10]}_{i}"), # Fallback ID generation
-                "text": doc_data.get("text", doc_data.get("content", "Content unavailable")),
-                "score": doc_data.get("score", 0.0),
+                "id": node_id,
+                "text": doc_data.get("content", "Content unavailable"),
+                "score": scores_map.get(node_id, 0.0), # Use score from similarity search
                 "retrieval_source_type": "vector_search",
-                # Preserve other fields from doc_data
-                **{k: v for k, v in doc_data.items() if k not in ["id", "text", "score", "retrieval_source_type"]}
+                **{k: v for k, v in doc_data.items() if k not in ["id", "text", "score"]}
             }
             standardized_documents.append(standardized_doc)
         
@@ -87,8 +109,8 @@ class OrgSupertagRAGEngine:
     async def _light_retrieval(
         self,
         query_text: str,
-        query_embedding: Optional[List[float]], # Kept Optional for consistency
-        extracted_entities: List[ExtractedEntity],
+        query_embedding: Optional[np.ndarray],
+        extracted_entities: List[Dict[str, Any]],
         top_k: int,
         max_neighbor_depth: int,
         vector_graph_ratio: Optional[float] = None # New parameter for balancing
@@ -96,8 +118,8 @@ class OrgSupertagRAGEngine:
         """Performs light retrieval: naive search + K-hop graph neighbors for context."""
         logger.debug(f"Performing light retrieval for query: '{query_text[:50]}...', ratio: {vector_graph_ratio}")
 
-        final_entities: List[GraphEntity] = []
-        final_relations: List[GraphRelation] = [] # Remains empty for now
+        final_entities: List[Dict[str, Any]] = []
+        final_relations: List[Dict[str, Any]] = [] # Remains empty for now
         combined_documents: List[Dict[str, Any]] = []
 
         # Determine split for naive vs graph results
@@ -120,48 +142,40 @@ class OrgSupertagRAGEngine:
             naive_output = StructuredContextOutput(entities=[], relations=[], documents=[]) # Ensure naive_output is defined
 
         # 2. Enhance with graph context (K-hop neighbors)
-        graph_enhanced_docs_raw: List[Dict[str, Any]] = [] # Renamed to raw
-        start_entities_for_graph: List[GraphEntity] = []
+        graph_enhanced_docs_raw: List[Dict[str, Any]] = []
+        start_entities_for_graph: List[Dict[str, Any]] = []
 
         if extracted_entities:
-            start_entity_ids = [e.id for e in extracted_entities if e.id] 
-            
+            # Convert extracted entities to a simpler dict format for consistency
             for ext_entity in extracted_entities:
-                if ext_entity.id: 
-                    graph_entity_candidate: GraphEntity = {
-                        "id": ext_entity.id,
-                        "name": ext_entity.name,
-                        "type": ext_entity.entity_type, 
-                        "description": ext_entity.attributes.get("description", "") if ext_entity.attributes else ""
-                    }
-                    start_entities_for_graph.append(graph_entity_candidate)
-            
+                if ext_entity.get('id'): 
+                    # We first need to check if this entity exists in our graph to get its full data
+                    graph_entity = await self.graph_service.get_tag_by_name(ext_entity.get('name')) # Assuming tags are the main entities for now
+                    if graph_entity:
+                        start_entities_for_graph.append(graph_entity)
+
             final_entities.extend(start_entities_for_graph)
+            
+            start_entity_ids = [e['id'] for e in start_entities_for_graph]
 
             if start_entity_ids and num_graph_results_target > 0:
-                max_neighbors_calc = num_graph_results_target // len(start_entity_ids) if len(start_entity_ids) > 0 else num_graph_results_target
-                max_neighbors_per_node_val = max(1, max_neighbors_calc) 
-                
-                # Assuming get_neighbor_documents returns a list of document-like dicts
-                raw_neighbor_docs = await self.knowledge_graph.get_neighbor_documents(
-                    start_entity_ids,
-                    depth=max_neighbor_depth,
-                    max_neighbors_per_node=max_neighbors_per_node_val 
-                )
-                # Standardize raw_neighbor_docs
-                for i, doc_data in enumerate(raw_neighbor_docs):
-                    standardized_neighbor_doc = {
-                        "id": doc_data.get("id", f"neighbor_{ext_entity.id}_{i}"), # Fallback ID
-                        "text": doc_data.get("text", doc_data.get("content", "Neighbor content unavailable")),
-                        "score": doc_data.get("score", 0.70), # Default score for graph neighbors
-                        "retrieval_source_type": "graph_neighbor",
-                        # Preserve other fields
-                        **{k: v for k, v in doc_data.items() if k not in ["id", "text", "score", "retrieval_source_type"]}
-                    }
-                    graph_enhanced_docs_raw.append(standardized_neighbor_doc) # Append to standardized list
+                neighbor_nodes = []
+                for start_id in start_entity_ids:
+                    # NOTE: get_neighbors is a simplified replacement for the old get_neighbor_documents
+                    # max_neighbor_depth is not used yet, would require recursive calls.
+                    neighbors = self.graph_service.get_neighbors(start_id)
+                    neighbor_nodes.extend(neighbors)
 
-            elif not start_entity_ids and num_graph_results_target > 0:
-                logger.debug("Light retrieval: Graph enhancement intended but no start_entity_ids available.")
+                # Standardize neighbor_nodes to document format
+                for i, node_data in enumerate(neighbor_nodes):
+                    standardized_neighbor_doc = {
+                        "id": node_data.get("node_id", f"neighbor_{i}"),
+                        "text": node_data.get("content", "Neighbor content unavailable"),
+                        "score": 0.70, # Default score for graph neighbors
+                        "retrieval_source_type": "graph_neighbor",
+                        **{k: v for k, v in node_data.items() if k not in ["id", "text", "score"]}
+                    }
+                    graph_enhanced_docs_raw.append(standardized_neighbor_doc)
         
         # Add graph-enhanced documents, avoiding duplicates
         # combined_documents already contains standardized docs from naive_output
@@ -186,7 +200,7 @@ class OrgSupertagRAGEngine:
     async def _mini_retrieval(
         self,
         query_text: str,
-        extracted_entities: List[ExtractedEntity],
+        extracted_entities: List[Dict[str, Any]],
         target_entity_types: Optional[List[str]],
         top_k: int, # Overall top_k if specific ones aren't provided
         max_reasoning_depth: int,
@@ -199,11 +213,11 @@ class OrgSupertagRAGEngine:
         """
         logger.debug(f"_mini_retrieval called with query: '{query_text}', entities: {extracted_entities}, types: {target_entity_types}")
 
-        final_entities: List[GraphEntity] = []
-        final_relations: List[GraphRelation] = []
+        final_entities: List[Dict[str, Any]] = []
+        final_relations: List[Dict[str, Any]] = []
         final_documents: List[Dict[str, Any]] = []
         
-        entity_names_from_query = [entity.name for entity in extracted_entities if entity.name]
+        entity_names_from_query = [entity.get('name') for entity in extracted_entities if entity.get('name')]
 
         # Determine top_k for paths and vector search
         _top_k_paths = top_k_reasoning_paths if top_k_reasoning_paths is not None else top_k
@@ -225,66 +239,55 @@ class OrgSupertagRAGEngine:
 
         # 1. Find reasoning paths from the knowledge graph
         if _top_k_paths > 0:
-            path_nodes_data, path_relations_str_desc, path_description_docs_raw = \
-                await self.knowledge_graph.find_reasoning_paths_with_details(
-                    entity_names_from_query,
-                    target_entity_types,
-                    max_paths=_top_k_paths, 
-                    max_depth=max_reasoning_depth
-                )
-            
+            logger.warning("Reasoning path retrieval is currently stubbed out in this refactoring phase.")
+            # path_nodes_data, path_relations_data, path_description_docs_raw = \
+            #     await self.graph_service.find_reasoning_paths_with_details(
+            #         entity_names_from_query,
+            #         target_entity_types,
+            #         max_paths=_top_k_paths, 
+            #         max_depth=max_reasoning_depth
+            #     )
+            # Faking the output to avoid breaking the flow
+            path_nodes_data, path_relations_data, path_description_docs_raw = [], [], []
+
             seen_entity_ids = set()
             for node_data in path_nodes_data:
                 if node_data and node_data.get('id') not in seen_entity_ids:
-                    final_entities.append(node_data) 
+                    final_entities.append(node_data)
                     seen_entity_ids.add(node_data.get('id'))
             
-            logger.debug(f"Path relations description (string): {path_relations_str_desc[:200]}...")
-            # Standardize path_description_docs
-            for doc_data in path_description_docs_raw:
-                standardized_path_doc = {
-                    "id": doc_data.get("id", f"path_{len(final_documents)}"), # Ensure ID
-                    "text": doc_data.get("text", doc_data.get("content", "Path description unavailable")),
-                    "score": doc_data.get("score", 0.75), # Default score for paths if not present
-                    "retrieval_source_type": "reasoning_path",
-                    # Preserve other fields from doc_data if any
-                    **{k: v for k, v in doc_data.items() if k not in ["id", "text", "score", "retrieval_source_type"]}
-                }
-                final_documents.append(standardized_path_doc)
+            seen_relation_ids = set()
+            for rel_data in path_relations_data:
+                if rel_data and rel_data.get('id') not in seen_relation_ids:
+                    final_relations.append(rel_data)
+                    seen_relation_ids.add(rel_data.get('id'))
+
+            final_documents.extend(path_description_docs_raw)
         else:
             path_relations_str_desc = "" 
             # path_description_docs_raw = [] # Not needed if not fetched
 
-        # 2. Vector search for additional relevant documents
-        if self.vector_storage and _top_k_vector > 0:
-            vector_results_docs_raw = await self.vector_storage.query(query_text, top_k=_top_k_vector)
+        # 2. Supplement with a naive vector search
+        if _top_k_vector > 0:
+            # Embedding is passed as None to let _naive_retrieval generate it
+            vector_supplement_output = await self._naive_retrieval(query_text, None, _top_k_vector)
             
-            seen_doc_ids_for_vector = {doc.get('id') for doc in final_documents if doc.get('id')}
-            for doc_data in vector_results_docs_raw:
-                if doc_data.get('id') not in seen_doc_ids_for_vector:
-                    standardized_vector_doc = {
-                        "id": doc_data.get("id"),
-                        "text": doc_data.get("text", doc_data.get("content", "Content unavailable")),
-                        "score": doc_data.get("score", 0.0),
-                        "retrieval_source_type": "vector_search",
-                        # Preserve other fields from doc_data
-                        **{k: v for k, v in doc_data.items() if k not in ["id", "text", "score", "retrieval_source_type"]}
-                    }
-                    final_documents.append(standardized_vector_doc)
-        else:
-            if not self.vector_storage and _top_k_vector > 0:
-                logger.warning("Vector store not available for _mini_retrieval vector supplement.")
-            # vector_results_docs_raw = [] # Not needed if not fetched
+            # Combine results, avoiding duplicates
+            seen_doc_ids = {doc['id'] for doc in final_documents if doc.get('id')}
+            for doc in vector_supplement_output['documents']:
+                if doc.get('id') not in seen_doc_ids:
+                    final_documents.append(doc)
+                    seen_doc_ids.add(doc.get('id'))
 
-        logger.info(f"_mini_retrieval found {len(final_entities)} entities, {len(final_relations)} relations (from str: '{path_relations_str_desc[:50]}...'), and {len(final_documents)} documents (before final sort/truncate).")
+        # Simple sort by score, can be more sophisticated
+        sorted_documents = sorted(final_documents, key=lambda x: x.get('score', 0.0), reverse=True)
         
-        # TODO: Consider re-sorting all final_documents if scores are comparable, then truncating to an overall top_k if needed.
-        # For now, returning all collected documents up to the sum of _top_k_paths (indirectly) and _top_k_vector.
+        logger.debug(f"Mini retrieval found {len(final_entities)} entities, {len(final_relations)} relations, and {len(sorted_documents)} documents.")
 
         return StructuredContextOutput(
             entities=final_entities,
-            relations=final_relations, 
-            documents=final_documents
+            relations=final_relations,
+            documents=sorted_documents[:top_k]
         )
 
     async def retrieve_context(
@@ -300,42 +303,55 @@ class OrgSupertagRAGEngine:
         top_k_vector_supplement: Optional[int] = None # For mini strategy
     ) -> StructuredContextOutput:
         """
-        Retrieves context based on the specified strategy.
-        All strategy-specific methods now return StructuredContextOutput.
+        Main entry point for retrieving context using a specified strategy.
         """
+        # Set defaults from config if not provided
+        cfg_top_k = top_k if top_k is not None else self.config.retrieval_config.get('default_top_k', 5)
+        cfg_max_reasoning_depth = max_reasoning_depth if max_reasoning_depth is not None else self.config.retrieval_config.get('default_max_reasoning_depth', 3)
+        cfg_max_neighbor_depth = max_neighbor_depth if max_neighbor_depth is not None else self.config.retrieval_config.get('default_max_neighbor_depth', 2)
+
+        query_embedding: Optional[np.ndarray] = None
+        extracted_entities: List[Dict[str, Any]] = []
+
+        # Generate embedding and extract entities if needed by the strategy
+        if strategy in ["light", "mini", "naive"]: # naive needs embedding now
+            # In parallel for efficiency
+            tasks = []
+            if strategy in ["light", "mini"]:
+                # The new extractor returns a dict, not just entities
+                tasks.append(self.entity_extractor.extract(query_text))
+            
+            tasks.append(self.llm_client.get_embedding(query_text))
+            
+            results = await asyncio.gather(*tasks)
+            
+            if strategy in ["light", "mini"]:
+                extraction_result = results.pop(0)
+                # Adapt to the new return format
+                extracted_entities = extraction_result.get("entities", [])
+            
+            query_embedding = results.pop(0)
+
         logger.info(f"Retrieving context for query '{query_text[:50]}...' with strategy '{strategy}'")
-        
-        query_embedding: Optional[List[float]] = None
-        if strategy != "mini": # _mini_retrieval no longer takes query_embedding directly
-            query_embedding = await self.llm_client.get_embedding(query_text)
-            if query_embedding is None:
-                logger.error("Failed to get query embedding.")
-                # Return empty structured context on failure
-                return StructuredContextOutput(entities=[], relations=[], documents=[])
-
-        # Entity extraction - common for light and mini strategies
-        _extracted_entities: List[ExtractedEntity] = []
-        if strategy in ["light", "mini"]:
-            _extracted_entities = await self.entity_extractor.extract_entities_from_text(query_text)
-            logger.debug(f"Extracted entities for '{strategy}' strategy: {[e.name for e in _extracted_entities]}")
-
-        cfg_top_k = top_k if top_k is not None else self.config.rag_default_top_k
 
         if strategy == "naive":
-            # _naive_retrieval expects Optional[List[float]] for query_embedding
             return await self._naive_retrieval(query_text, query_embedding, cfg_top_k)
         
         elif strategy == "light":
-            cfg_max_neighbor_depth = max_neighbor_depth if max_neighbor_depth is not None else self.config.rag_light_max_neighbor_depth
-            # _light_retrieval expects Optional[List[float]] for query_embedding
-            return await self._light_retrieval(query_text, query_embedding, _extracted_entities, cfg_top_k, cfg_max_neighbor_depth, vector_graph_ratio)
+            return await self._light_retrieval(
+                query_text,
+                query_embedding,
+                extracted_entities,
+                cfg_top_k,
+                cfg_max_neighbor_depth,
+                vector_graph_ratio
+            )
         
         elif strategy == "mini":
-            cfg_max_reasoning_depth = max_reasoning_depth if max_reasoning_depth is not None else self.config.rag_mini_max_reasoning_depth
             _target_entity_types = target_entity_types if target_entity_types is not None else getattr(self.config, 'rag_mini_default_target_types', ['concept', 'project', 'method'])
             return await self._mini_retrieval(
-                query_text, 
-                _extracted_entities, 
+                query_text,
+                extracted_entities, 
                 _target_entity_types, 
                 cfg_top_k, 
                 cfg_max_reasoning_depth,
@@ -482,118 +498,3 @@ class OrgSupertagRAGEngine:
         
         return response_text
 
-# Example usage / test function
-async def main_test_rag_engine():
-    import asyncio
-    import tempfile # For temporary vector DB
-    from simtag.config import Config
-    from simtag.core.graph_store import OrgSupertagKnowledgeGraph, Entity as GraphEntity, Relation as GraphRelation
-    from simtag.core.storage import VectorStorage
-    from simtag.services.llm_client import LLMClient # For mocking or real use
-    from simtag.core.entity_extractor import ExtractedEntity # For query_entities
-
-    # Basic logger for test output
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    test_logger = logging.getLogger("rag_engine_test")
-    test_logger.info("Starting RAG Engine Test")
-
-    # 1. Setup Mocks and Real Components
-    config = Config()
-    if not config.llm_client_config.get('base_url'): 
-        config.llm_client_config['base_url'] = "http://localhost:11434"
-        config.llm_client_config['default_model'] = "gemma:2b"
-        config.llm_client_config['default_embedding_model'] = "nomic-embed-text"
-
-    # Mock LLMClient methods
-    async def mock_get_embedding(text: str, model: Optional[str] = None) -> List[float]:
-        test_logger.info(f"Mock LLM get_embedding called for: '{text[:50]}...'")
-        # Return a fixed-size vector based on text length for simplicity
-        return [float(len(text) % 100) / 100.0] * 10 # Dummy 10-dim embedding
-
-    async def mock_generate_response(prompt: str, model: Optional[str] = None) -> str:
-        test_logger.info(f"Mock LLM generate_response called with prompt (first 100): {prompt[:100]}...")
-        return f"Mocked LLM response to: {prompt.splitlines()[-1][:50]}..."
-
-    mock_llm_client = LLMClient(llm_config=config.llm_client_config) # Init real one to pass around
-    mock_llm_client.get_embedding = mock_get_embedding
-    mock_llm_client.generate = mock_generate_response # Overwrite with mock
-
-    # Setup in-memory KnowledgeGraph
-    knowledge_graph = OrgSupertagKnowledgeGraph(config=config) # Assumes in-memory for now
-    await knowledge_graph.upsert_entities([
-        GraphEntity(id="concept_ml", type="concept", name="Machine Learning", description="Field of AI", source_nodes={"node1"}),
-        GraphEntity(id="tool_python", type="tool", name="Python", description="Programming language", source_nodes={"node1"}),
-        GraphEntity(id="method_dl", type="method", name="Deep Learning", description="Subfield of ML", source_nodes={"node2"})
-    ])
-    await knowledge_graph.upsert_relations([
-        GraphRelation(id="rel1", source_entity_id="method_dl", target_entity_id="concept_ml", type="IS_SUBFIELD_OF", source_nodes={"node2"})
-    ])
-
-    # Setup temporary VectorStorage
-    temp_db_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    vector_storage_path = temp_db_file.name
-    temp_db_file.close() # Close it so VectorStorage can open it
-    vector_storage = VectorStorage(db_path=vector_storage_path)
-    vector_storage.ensure_table_exists()
-    # Add some sample vectors
-    await vector_storage.add_item("doc1", "Machine Learning is cool", await mock_get_embedding("Machine Learning is cool"), {'type': 'concept', 'source_node':'node1'})
-    await vector_storage.add_item("doc2", "Python is a versatile language", await mock_get_embedding("Python is a versatile language"), {'type': 'tool', 'source_node':'node1'})
-    await vector_storage.add_item("doc3", "Deep Learning models are powerful", await mock_get_embedding("Deep Learning models are powerful"), {'type': 'method', 'source_node':'node2'})
-
-    # 2. Initialize RAG Engine
-    rag_engine = OrgSupertagRAGEngine(
-        knowledge_graph=knowledge_graph,
-        vector_storage=vector_storage,
-        llm_client=mock_llm_client,
-        config=config
-    )
-
-    # 3. Test retrieve_context
-    test_query = "Tell me about Deep Learning and its relation to ML."
-    test_query_embedding = await mock_get_embedding(test_query)
-    # Mock extracted entities from the query for 'mini' strategy
-    mock_query_entities = [
-        ExtractedEntity(id="q_dl", name="Deep Learning", type="method"),
-        ExtractedEntity(id="q_ml", name="ML", type="concept") # Assuming ML is an alias or variant
-    ]
-
-    test_logger.info(f"\n--- Testing retrieve_context with query: '{test_query}' ---")
-    for strategy in ["naive", "light", "mini"]:
-        test_logger.info(f"  Strategy: {strategy}")
-        try:
-            context_docs = await rag_engine.retrieve_context(
-                query_text=test_query,
-                strategy=strategy,
-                top_k=3
-            )
-            test_logger.info(f"    Retrieved {len(context_docs)} documents:")
-            for i, doc in enumerate(context_docs):
-                test_logger.info(f"      Doc {i+1}: ID={doc.get('id')}, Score={doc.get('score', 'N/A')}, Text='{doc.get('text','')[:50]}...'")
-        except Exception as e:
-            test_logger.error(f"    Error retrieving context with strategy {strategy}: {e}", exc_info=True)
-
-    # 4. Test generate_response
-    test_logger.info(f"\n--- Testing generate_response with query: '{test_query}' ---")
-    # Use context from a previous retrieval (e.g., 'light' strategy)
-    sample_context_for_generation = await rag_engine.retrieve_context(
-        query_text=test_query, strategy="light", top_k=2
-    )
-    try:
-        response_text = await rag_engine.generate_response(
-            query_text=test_query,
-            structured_context=sample_context_for_generation
-        )
-        test_logger.info(f"  Generated response: {response_text}")
-    except Exception as e:
-        test_logger.error(f"    Error generating response: {e}", exc_info=True)
-
-    # Cleanup temporary vector DB file
-    if os.path.exists(vector_storage_path):
-        os.remove(vector_storage_path)
-        test_logger.info(f"Cleaned up temporary vector DB: {vector_storage_path}")
-
-    await mock_llm_client.close() # Close the httpx client if it were real
-    test_logger.info("RAG Engine Test Finished")
-
-if __name__ == '__main__':
-    asyncio.run(main_test_rag_engine()) 

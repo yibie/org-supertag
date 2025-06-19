@@ -96,32 +96,32 @@ List of tag IDs, or nil if node doesn't exist"
                                               :from id))))
 
 (defun org-supertag-node-db-add-tag (node-id tag-id)
-  "Add a tag to a node.
-NODE-ID is the node identifier
-TAG-ID is the tag identifier"
-  (when (and (org-supertag-node-db-exists-p node-id)
-             (org-supertag-db-exists-p tag-id))
-    ;; Add relationship, note parameter order
-    (org-supertag-db-link :node-tag 
-                         node-id 
-                         tag-id 
-                         ;; Add relationship properties
-                         `(:created-at ,(current-time)))
-    ;; Trigger event
-    (run-hook-with-args 'org-supertag-node-tag-added-hook
-                        node-id tag-id)))
+  "Add a tag to a node in the database and notify backend."
+  (let* ((node-props (org-supertag-db-get node-id))
+         (tags (plist-get node-props :tags)))
+    (unless (member tag-id tags)
+      (let* ((new-tags (cons tag-id tags))
+             (new-props (copy-list node-props))
+             (sync-data (make-hash-table :test 'equal)))
+        (plist-put new-props :tags new-tags)
+        (org-supertag-db-put new-props)
+        (puthash "event_type" "tag_added" sync-data)
+        (puthash "node_id" node-id sync-data)
+        (puthash "tag_id" tag-id sync-data)
+        (org-supertag-bridge-call-async "sync_node_event" (lambda (response) nil) sync-data)
+        t))))
 
 (defun org-supertag-node-db-remove-tag (node-id tag-id)
-  "Remove a tag from a node.
-NODE-ID is the node identifier
-TAG-ID is the tag identifier"
+  "Remove a tag from a node in the database and notify backend."
   (when (and (org-supertag-node-db-exists-p node-id)
              (org-supertag-db-exists-p tag-id))
     ;; Remove relationship
     (org-supertag-db-remove-link :node-tag node-id tag-id)
     ;; Trigger event
     (run-hook-with-args 'org-supertag-node-tag-removed-hook
-                        node-id tag-id)))
+                        node-id tag-id)
+    ;; Schedule save
+    (org-supertag-db-save)))
 
 (defun org-supertag-node-db--get-candidates ()
   "Get list of all referenceable node candidates.
@@ -146,6 +146,15 @@ Notes:
           (lambda (a b)
             (string< (car a) (car b))))))
 
+(defun org-supertag-node-get-all ()
+  "Get a list of all node IDs from the database."
+  (let ((nodes '()))
+    (maphash (lambda (id props)
+               (when (eq (plist-get props :type) :node)
+                 (push id nodes)))
+             org-supertag-db--object)
+    (nreverse nodes)))
+
 (defun org-supertag-node-get-tags (node-id)
   "Get list of all tag IDs associated with a node.
 NODE-ID is the node identifier"
@@ -164,6 +173,13 @@ Returns the first tag ID found for the node."
   (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
     (car node-tags)))
 
+(defun org-supertag-node-get-at-point ()
+  "Get the node plist from the database corresponding to the Org headline at point.
+Returns the node's property list, or nil if not at a valid node."
+  (save-excursion
+    (when (org-at-heading-p)
+      (when-let ((id (org-id-get)))
+        (org-supertag-db-get id)))))
 
 (defun org-supertag-node--ensure-sync ()
   "Ensure current node is properly synced with database.
@@ -233,23 +249,47 @@ List of field values, each element is (field-id . value)"
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-sync-at-point ()
-  "Synchronize current node with database."
+  "Synchronize current node with database, including reference links."
   (when (org-at-heading-p)
     (let* ((node-id (org-id-get-create))
            (old-node (org-supertag-db-get node-id))
-           ;; use more accurate boundary
+           (old-refs-to (or (plist-get old-node :ref-to) '()))
+           ;; Parse node data from buffer
            (node-data (org-supertag-db--parse-node-at-point))
-           ;; keep existing reference relations
-           (refs-from (when old-node (plist-get old-node :ref-from)))
-           ;; merge properties
+           (content (plist-get node-data :content))
+           (new-refs-to (org-supertag-node--extract-links-from-content content))
+           ;; Get tag names from headline, convert to IDs
+           (tag-names (org-get-tags))
+           (tag-ids (mapcar #'org-supertag-tag-get-or-create tag-names))
+           ;; Determine added and removed references
+           (added-refs (seq-difference new-refs-to old-refs-to #'string=))
+           (removed-refs (seq-difference old-refs-to new-refs-to #'string=))
+           ;; Merge properties for the current node
            (props (append node-data
-                         (list :ref-from (or refs-from nil)
-                               :created-at (or (and old-node 
+                         (list :ref-to new-refs-to ; Update with new refs
+                               :ref-from (or (plist-get old-node :ref-from) '())
+                               :tags tag-ids ; Store tag UUIDs
+                               :created-at (or (and old-node
                                                  (plist-get old-node :created-at))
                                             (current-time))))))
+
+      ;; --- Bidirectional Link Maintenance ---
+      ;; 1. For each newly added reference, update the target node's :ref-from
+      (dolist (target-id added-refs)
+        (when-let* ((target-node (org-supertag-db-get target-id)))
+          (let* ((current-ref-from (or (plist-get target-node :ref-from) '()))
+                 (new-ref-from (adjoin node-id current-ref-from :test #'string=)))
+            (org-supertag-db-add target-id (plist-put target-node :ref-from new-ref-from)))))
+
+      ;; 2. For each removed reference, update the target node's :ref-from
+      (dolist (target-id removed-refs)
+        (when-let* ((target-node (org-supertag-db-get target-id)))
+          (let* ((current-ref-from (plist-get target-node :ref-from))
+                 (new-ref-from (remove node-id current-ref-from :test #'string=)))
+            (org-supertag-db-add target-id (plist-put target-node :ref-from new-ref-from)))))
       
       (message "Debug - props: %S" props)
-      ;; Update database
+      ;; Update the current node in the database
       (org-supertag-db-add node-id props)
       ;; Return node ID
       node-id)))
@@ -276,7 +316,8 @@ Notes:
       ;; Update properties drawer
       (org-set-property "ID" node-id)
       ;; Update other display states
-      (let ((tags (plist-get node :tags))
+      (let ((tag-ids (plist-get node :tags))
+            (tags (mapcar #'org-supertag-tag-get-name-by-id tag-ids))
             (todo (plist-get node :todo)))
         (when tags
           (org-set-tags tags))
@@ -690,16 +731,6 @@ Returns:
           (message "Node deleted: %s" node-id)))
     (user-error "No node found at current position")))
 
-(defun org-supertag-node--ensure-id-system ()
-  "Ensure org-id system is properly initialized."
-  (require 'org-id)
-  (unless (and (boundp 'org-id-locations)
-               (hash-table-p org-id-locations))
-    (setq org-id-locations (make-hash-table :test 'equal))
-    (when (file-exists-p org-id-locations-file)
-      (org-id-locations-load))))
-
-
 (defun org-supertag-node-update ()
   "Update node at current position.
 Uses org-supertag-node-sync-at-point to perform a complete node synchronization."
@@ -929,6 +960,22 @@ TO-ID is the target node"
 ;; Node Reference Functions
 ;;------------------------------------------------------------------------------  
 
+(defun org-supertag-node--extract-links-from-content (content)
+  "Extract all [[id:...]] link UUIDs from a string.
+CONTENT is the string to parse.
+Returns a list of unique UUIDs found in the content."
+  (let ((links '())
+        (pos 0))
+    (with-temp-buffer
+      (insert content)
+      (goto-char (point-min))
+      (while (re-search-forward org-link-any-re nil t)
+        (let* ((element (org-element-context))
+               (type (org-element-property :type element))
+               (path (org-element-property :path element)))
+          (when (and (equal type "id") (org-uuidgen-p path))
+            (push path links)))))
+    (delete-dups (nreverse links))))
 
 (defun org-supertag-node--insert-reference (node-id)
   "Insert node reference at current position and update relationships.
