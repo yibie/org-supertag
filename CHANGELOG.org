@@ -1,0 +1,518 @@
+* Changelog
+
+* [3.0.4] - 2025-05-30
+** Bug Fixes
+*** Fixed database cleanup path matching issues
+- Fixed path normalization in database cleanup to prevent aggressive node removal
+- Normalized all file paths to absolute paths using `expand-file-name` for accurate comparison
+- Created separate `sync-files` hash table to ensure precise path matching
+- Ensured only nodes from files truly not in sync state are removed
+- Prevented accidental removal of nodes from files still in sync scope
+- Improved logging and debugging information for path comparison process
+
+* [3.0.3] - 2025-05-30
+** Improvements
+*** Improved sync scope management with automatic node cleanup
+- Added automatic removal of nodes from files outside sync scope
+- Enhanced sync state management to maintain database consistency
+- Improved periodic sync to handle out-of-scope file cleanup
+- Added detailed logging for sync scope changes and node removal
+- Ensured proper cleanup when modifying sync directories
+
+* [3.0.2] - 2025-05-24
+** Improvements
+*** Enhanced synchronization stability with comprehensive data protection
+- Added preservation and restoration of non-node entities during sync operations
+- Enhanced protection for field definitions, tag relations, and link data
+- Improved `org-supertag-sync-force-all` to preserve all critical data structures
+- Strengthened `org-supertag-sync-all-nodes` with comprehensive data backup
+- Ensured database consistency during intensive sync operations
+
+*** Fixed tag vector database update mechanism
+- Resolved issues with tag_vector library updates
+- Improved vector database synchronization reliability
+- Enhanced tag similarity computation stability
+
+*** Fixed AI auto-tagging system freezing issues
+- Resolved `org-supertag-sim-auto-tag-node` causing Emacs to freeze
+- Added comprehensive timeout protection for all AI operations
+- Replaced blocking EPC calls with asynchronous implementations
+- Added initialization state validation to prevent infinite loops
+- Enhanced error handling with automatic recovery mechanisms
+
+** Features
+*** Added comprehensive database recovery system
+- Introduced `org-supertag-recovery` methods for database restoration
+- Provided automated recovery workflows for corrupted data
+- Added diagnostic tools for database integrity checking
+- Enhanced backup and restore capabilities
+
+*** Added AI system diagnostic and emergency tools
+- Added `org-supertag-sim-diagnose` for comprehensive system health checking
+- Added `org-supertag-sim-emergency-reset` for complete system recovery
+- Added `org-supertag-sim-safe-auto-tag-node` as a safer alternative to auto-tagging
+- Provided detailed troubleshooting guidance and emergency commands
+
+** Maintenance
+*** Codebase cleanup and organization
+- Removed deprecated protection scope checking utilities
+- Removed redundant recovery process files
+- Updated `.gitignore` to exclude development directory
+- Streamlined codebase for better maintainability
+
+* [3.0.1] - 2025-04-26
+** Features
+*** Add Backlink panel for node references
+- Add ~org-supertag-backlink-show~ command to display node references
+- Show both referenced and referencing nodes
+- Display node content with proper formatting
+- Support keyboard navigation and node viewing
+
+* [3.0.0] - 2025-04-05
+** Features
+*** Add AI backend for tag auto suggestion
+*** Add Bidirectional tag relation management
+*** Add Table View
+
+*** Refactor sync-mechanism
+* [2.5.3] - 2025-03-11
+** Features
+*** Enhanced multi-column view with relation-based tag management
+- Added ~org-supertag-view-add-related-tag-to-column~ for adding related tags to existing columns
+- Improved tag relation integration in column view:
+  - Select source column and relation group
+  - Choose from available related tags
+  - Add selected tag to existing column
+- Enhanced user interface with clear feedback messages
+- Added comprehensive error handling for edge cases
+
+** Improvements
+*** Better user interaction in multi-column view
+- Clearer operation instructions and feedback
+- Improved error messages and edge case handling
+- Better integration with tag relation system
+
+* [2.5.2] - 2025-03-10
+** Features
+*** Improved inline tag support with enhanced visual styling
+- Improved inline tag fontification with adaptive theming
+- Enhanced tag appearance with slight elevation and proper spacing
+- Fixed compatibility issues with font-lock implementation
+- Optimized tag recognition in various contexts
+- Improved tag insertion with better completion support
+- Added support for hiding # prefix symbol with customizable option
+
+The inline tag system now provides:
+- More reliable tag highlighting in all contexts
+- Better visual distinction between tags and regular text
+- Smoother integration with org-mode's native styling
+- Improved performance for documents with many tags
+
+*** Added comprehensive customization options for inline tags
+New variables for complete control over tag appearance:
+- `org-supertag-inline-enable-fontification`: Toggle tag highlighting
+- `org-supertag-inline-light-theme-colors`: Color settings for light themes
+- `org-supertag-inline-dark-theme-colors`: Color settings for dark themes
+- `org-supertag-inline-text-properties`: Control font size, weight, and spacing
+- `org-supertag-inline-tag-regexp`: Customize pattern for matching tags
+- `org-supertag-inline-hide-hash`: Option to hide/show the # prefix
+- `org-supertag-inline-excluded-contexts`: Control where tags are highlighted
+
+These customization options allow users to tailor the appearance of inline tags 
+to match their preferences and theme setup, ensuring optimal readability
+and visual harmony with the rest of their document.
+
+* [2.5.1] - 2025-03-03
+** Bug Fixes
+*** Fix org-supertag-tag-delete-at-all to ensure complete cleanup
+- Replace org-supertag-db-remove-object with direct remhash for reliable deletion
+- Add comprehensive cleanup of all tag-related database entries
+- Implement proper cleanup sequence for tag removal
+- Add debug logging for deletion process tracking
+*** Fix org-supertag-tag-set-field-and-value for not working
+
+* [2.5.0] - 2024-03-03
+** Features
+*** (org-supertag-inline.el) Add inline tag support for content tagging 
+- Enable users to tag specific content within org nodes using #hashtag style
+- Seamlessly insert tags in text with ~C-c t i~:
+  - Choose from existing tags through completion
+  - Create new tags on the fly by adding '#' suffix
+  - Quick access to preset tags marked with [P]
+- Tags in content maintain proper spacing for readability
+- Tags automatically link to current node without cluttering headlines
+- Natural writing flow with minimal disruption:
+  "Meeting with Owen who is my #friend about the #project"
+
+This feature allows for more granular content organization while maintaining
+a clean document structure. Users can now tag specific parts of their notes
+without adding tags to headlines, making the tagging system more flexible
+and context-aware.
+
+
+
+* [2.4.0] - 2025-03-02
+** Featuresf
+*** org-supertag-view-discovery: Discover and explore your tags naturally
+Introducing Tag Discovery View - a new way to explore and understand your tag ecosystem:
+
+- Start from any tag and discover related content:
+  "Starting with #project, what other tags frequently appear with it?"
+- See the bigger picture of your tag usage:
+  - How many notes use this combination of tags?
+  - Which tags often appear together?
+  - What are the relationships between different tags?
+- Build your tag filters progressively:
+  - Add more tags to narrow down your focus
+  - Remove tags to broaden your view
+  - Reset and start a new exploration path
+- Preview and access content directly:
+  - See matching notes with their titles and status
+  - View complete note content with a single click
+  - Understand tag relationships in context
+- Smooth keyboard-driven operation:
+  - ~a~ - Add tag to filter
+  - ~d~ - Remove tag from filter
+  - ~r~ - Reset all filters
+  - ~v~ - View selected node
+  - ~m~ - Manage tag relations
+  - ~g~ - Refresh view
+  - ~q~ - Quit
+
+*** org-supertag-view-column: Compare and analyze with Multi-column Tag View
+A powerful new way to analyze your tagged content side by side:
+
+- Compare different tag combinations simultaneously:
+  "Show me all #project tasks alongside #urgent items and #delegated work"
+- Build your analysis view flexibly:
+  - Start with any tag combination
+  - Add new columns for different perspectives
+  - Add related tags based on actual usage patterns
+  - Remove columns you don't need anymore
+- See your content from multiple angles:
+  - Compare todo states across different tag combinations
+  - Track related items across different categories
+  - Identify patterns and relationships in your notes
+- Stay in control with keyboard shortcuts:
+  - ~a~ - Add a new column
+  - ~A~ - Add a column with related tag
+  - ~t~ - Add tag to current column
+  - ~T~ - Add related tag to column
+  - ~d~ - Remove unwanted column
+  - ~r~ - Start fresh
+  - ~v~ - View node details
+  - ~m~ - Manage tag relations
+  - ~q~ - Quit
+
+These new views work together to help you:
+- Understand how your tags are connected
+- Find relevant content more efficiently
+- Discover patterns in your note organization
+- Make better decisions about tag usage
+
+
+** Change
+*** Original `org-supertag-view-tag` chang to `org-supertag-view-tag-only`
+
+* [2.3.0] - 2025-03-01
+** Features
+*** Add tag relationship management module (org-supertag-relation.el)
+- Implement sophisticated tag relationship system with symbolic representation
+  - Add 10 relationship types with intuitive symbols (A ⊃ B, A → B, A ⋈ B, etc.)
+  - Support relationship categories: hierarchical, causal, associative, co-occurrence
+- Enable automatic discovery of relationships based on usage patterns
+  - Statistical analysis of tag co-occurrences with strength metrics
+  - Real-time incremental updates when tags are added/removed
+- Provide intelligent tag recommendations based on contextual relevance
+- Create dedicated management interface for visualizing and editing relationships
+- Support customizable relation groups for organizing related tags
+- Add relationship strength thresholds to filter insignificant relationships
+
+* [2.2.13] - 2025-02-18
+** Bug Fixes
+*** Fix node movement failing due to missing file path
+- Fixed node sync to properly save file path information
+- Added comprehensive debug logging for node operations
+- Improved error handling in node movement process
+- Enhanced node property validation before movement
+* [2.2.12] - 2024-02-16
+** Features
+*** Enhanced reference creation with duplicate detection
+- Added smart node reference creation that checks for existing nodes
+- Reuses existing nodes when title matches exactly
+- Prevents duplicate node creation for same content
+- Improves reference management efficiency
+** Bug Fixes
+*** Fix field edit mode keymap and key bindings
+- Fixed keymap initialization in org-supertag-field-edit-mode
+- Simplified mode definition by removing unnecessary syntax-table
+- Fixed key bindings for field editing operations (e, d)
+- Improved error handling in field operations
+
+* [2.2.11] - 2024-02-12
+** Features
+*** Enhanced org-supertag-view with field value display
+- Added field value support in tag view table
+- Implemented case-insensitive field name matching
+- Added comprehensive field value lookup
+- Display field values in dedicated columns
+- Improved table formatting for better readability
+
+* [2.2.10] - 2024-02-03
+** Fix
+**** Fix tag company completion not working in heading
+**** Fix field edit mode not working
+
+* [2.2.9] - 2024-02-03
+** Features
+*** Added
+- New component: org-supertag-view.el
+  - Provides visualization system for tag content
+  - Smart command ~org-supertag-view-tag~ that:
+    - Shows tag content directly when cursor is on a tag
+    - Offers tag completion when not on a tag
+  - Table-based view showing:
+    - Node titles
+    - Node types
+    - Creation dates
+
+* [2.2.8] - 2024-02-03
+** Bug Fixes
+*** Fix tag deletion to ensure complete cleanup
+- Replace org-supertag-db-remove-object with direct remhash for reliable deletion
+- Add comprehensive cleanup of all tag-related database entries
+- Implement proper cleanup sequence for tag removal
+- Add debug logging for deletion process tracking
+- Add org-supertag-after-tag-delete-hook for post-deletion customization
+
+* [2.2.7] - 2025-02-02
+** Features
+*** Improve node movement(org-supertag-node-move-node) with outline path display
+- Show complete outline structure when moving nodes
+- Display paths in "filename / outline-path / title" format
+- Improve target location selection with clear hierarchy view
+- Keep existing insertion options (file start/end, under/same level)
+
+* [2.2.6] - 2024-1-31
+** Features
+*** Add comprehensive node finding system
+- Add ~org-supertag-node-find~ command for interactive node finding
+- Add ~org-supertag-node-find-other-window~ for other window display
+- Show complete node path in format "filename / outline-path / title"
+- Add robust error handling for missing metadata
+- Sort results alphabetically for easier navigation
+- Improve node visibility with automatic expansion
+
+* [2.2.5] - 2024-1-30
+** Features
+*** Add company-mode completion for supertags
+
+This commit adds interactive tag completion using company-mode:
+- Add company backend for supertag completion
+- Trigger completion with '#' prefix
+- Integrate with existing tag management system
+- Simplify implementation by reusing org-supertag-tag-add-tag
+- Add tag deletion functionality (org-supertag-tag-delete)
+
+The completion system provides a smoother user experience for adding
+supertags to org headlines, with proper tag formatting and handling
+of preset tags.
+
+* [2.2.4] - 2024-1-29
+** Refactor
+**** Change field type tag-reference to direct node reference
+
+BREAKING CHANGE: Completely redesign the tag-reference field type to 
+reference nodes directly instead of referencing other tag's field values.
+
+Before:
+- tag-reference pointed to another tag's field value
+- Used for value inheritance between different tags
+
+After:
+- tag-reference now directly points to org nodes
+- Uses org-mode's link format ([[id:NODE-ID][TITLE]])
+- Enables direct node relationships
+
+Changes:
+1. Rewritten org-supertag-field--convert-value to handle org-mode link format
+2. Modified org-supertag-validate-tag-reference to validate node existence
+3. Added node title lookup for better link display
+
+Note: This is a breaking change. Existing tag-reference fields will need 
+to be migrated to the new format.
+
+
+* [2.2.3] - 2025-01-28
+** Features
+**** Improve field type selection and display
+- Add help message showing available field types with descriptions
+- Use all field types from org-supertag-field-types instead of hardcoded list
+- Format field display with fixed-width alignment for better readability
+- Clean up help buffer after type selection
+- Improve field editing interface with consistent formatting
+
+* [2.2.2] - 2025-01-26
+** Bug Fixes
+**** Fix node movement and link creation
+- Completely replace original heading with link reference
+- Remove redundant title text in reference link
+- Maintain proper heading level and spacing
+- Ensure link insertion starts at beginning of line
+- Add proper error handling for nil values
+- Update documentation for modified behavior
+
+* [2.2.1] - 2025-01-26
+** Refactor: Improve query history handling and fix node navigation
+
+- Fix history saving for multi-keyword queries
+- Store complete search queries in history
+- Fix recenter error in node navigation
+- Improve error handling in node lookup
+- Add proper return values for navigation functions
+- Update documentation for modified functions
+
+
+* [2.2.0] - 2025-01-25
+** Features
+**** Add automatic node creation for org headlines
+- Add ~org-supertag-sync-auto-create-node~ to control auto creation
+- Add ~org-supertag-sync-node-creation-level~ for minimum level
+- Modify ~org-supertag-db-update-buffer~ to handle auto creation
+- Update ~org-supertag-sync--process-node~ for auto conversion
+
+This change enables automatic conversion of org headlines to nodes
+during synchronization, making node creation more seamless while
+maintaining control through customization options.
+
+**** Add directory scope control for synchronization
+- Add org-supertag-sync-directories for monitored directories
+- Add org-supertag-sync-exclude-directories for excluded paths
+- Add org-supertag-sync-file-pattern for file matching
+- Add helper functions for directory management:
+  - ~org-supertag-sync-add-directory~
+  - ~org-supertag-sync-remove-directory~
+  - ~org-supertag-sync-list-directories~
+
+*** Improve 
+**** File organization
+- Move org-supertag-sync-state.el to org-supertag-data-directory
+  - Add directory existence check in org-supertag-sync-init
+  - Keep data files organized under ~/.emacs.d/org-supertag/
+
+*** Bug Fixes
+**** Fix node movement reference format
+- Now completely replaces original heading with link reference
+- Removes redundant title text in reference link
+- Maintains proper heading level and spacing
+
+
+* [2.1.0] - 2025-01-18
+
+** Features
+*** Node: Enhanced node movement functionality
+**** Added interactive node movement command
+- Added ~org-supertag-node-move-node~ for direct node movement
+- Support comprehensive insertion positions:
+  - File start (after org-mode header)
+  - File end
+  - Under selected heading
+  - Same level as selected heading
+- Added clear error messages and operation feedback
+**** Added file start position support
+- Added helper function to locate content start after org-mode header
+- Added "File Start" option for node movement and export operations
+- Improved file header preservation during node operations
+- Better integration with existing query and export features
+
+* [2.0.0] - 2025-01-13
+
+** Features
+*** Behavior: Added schedule trigger and deadline management system
+**** Implemented cron-style scheduling for behaviors
+- Format: "minute hour day month weekday"
+- Examples:
+  - "0 9 * * 1-5" (weekdays at 9:00)
+  - "30 * * * *" (every hour at :30)
+  - "0 0 1 * *" (first day of each month)
+**** Added native org-mode timestamp integration
+- Support for SCHEDULED and DEADLINE timestamps
+- Support for absolute timestamps (<2024-03-20 Wed>)
+- Support for relative time expressions (now+2h, now-1d)
+- Support for property-based timing (${prop:DEADLINE}-2h)
+**** Added deadline check behavior (@deadline-check)
+**** Added derived behaviors for deadline management:
+- @overdue-urgent: Set high priority for overdue tasks
+- @upcoming-deadline: Mark tasks due in next 3 days
+- @overdue-archive: Archive overdue completed tasks
+
+*** Field: Enhanced timestamp handling
+- Improved org-mode timestamp format support
+- Date fields now use active timestamps (<...>) for agenda visibility
+- Timestamp fields use inactive timestamps ([...]) for historical records
+- Added automatic format conversion between different timestamp styles
+
+*** Behavior Template: Added template variable system for behaviors
+**** Added support for dynamic variable expansion
+- ${input:prompt} for user input
+- ${date:format} for date operations
+- ${prop:name} for property access
+- ${context:key} for shared data
+**** Added conditional execution with {if:condition}
+**** Added relative date calculations (now+1d, now-1w)
+**** Added simple context object for data sharing
+
+*** Node Management: Added new node operations
+- Added ~org-supertag-move-node-and-link~ command for node relocation with reference
+- Added ~org-supertag-delete-node~ command for complete node cleanup
+- Added flexible node movement behaviors
+- Support for keeping links at original location
+- Interactive target selection
+
+*** Sync: Added automatic synchronization system
+- Added file state tracking
+- Added buffer modification monitoring
+- Added automatic sync with conflict detection
+- Added state persistence and error recovery
+- Added node-level conflict analysis command
+- Added file analysis tools for debugging sync issues
+
+*** Query: Enhanced query system
+- Added cursor-based node insertion in query buffer
+- Added history support for query keywords
+- Added customizable history size
+- Preserved last used keywords
+
+*** Reference: Improved reference system
+- Added reference type tracking (ref-from)
+- Added reference count tracking
+
+*** Tag: Added improved tag change functionality
+
+*** Performance: Added asynchronous face refresh mechanism
+
+** Bug Fixes
+*** Fixed tag prefix matching issues (#9)
+- Improved tag completion with custom completion function
+- Added TAB completion support
+*** Fixed field type options insertion
+*** Fixed behavior system event handling
+*** Improved error handling in node operations
+*** Enhanced synchronization stability
+
+** Refactoring
+*** Query: Rewritten query results display using ewoc for better performance
+*** Query: Implemented query buffer reuse for cursor insertion
+*** Behavior: Improved behavior system architecture with detach support
+*** Sync: Enhanced file synchronization architecture
+
+** Internal Changes
+- Added scheduler system with task management
+- Added robust file synchronization mechanism
+- Optimized reference handling with better metadata tracking
+- Optimized query result caching
+- Improved node deletion with comprehensive cleanup
+- Enhanced query system with history management
+- Improved code organization and modularity
+- Enhanced documentation and examples
+
