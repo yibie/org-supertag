@@ -4,9 +4,12 @@ from platform import node
 from typing import List, Dict, Any, Optional
 from dependency_injector.wiring import inject, Provide
 
-from ..utils.unified_tag_processor import TagResult, normalize_payload
+from ..utils.unified_tag_processor import TagResult
 
 logger = logging.getLogger(__name__)
+
+# 注意：_parse_autotag_payload 函数已被移除
+# 现在 Elisp 端遵循统一数据合约，使用标准的 normalize_payload 处理数据
 
 class AutotagHandler:
     """处理自动标签生成的业务逻辑 (异步)"""
@@ -19,82 +22,52 @@ class AutotagHandler:
         self.ner_service = ner_service
         logger.info("AutotagHandler initialized with injected dependencies")
 
-    async def batch_generate_tags(self, *args) -> Dict[str, Any]:
+    async def batch_generate_tags(self, payload) -> Dict[str, Any]:
         """
         批量生成标签 (异步版本)
         
-        The bridge passes the raw Elisp payload here. We use normalize_payload
-        to convert it into a standard Python dictionary.
+        使用原始的 normalize_payload 处理数据
         """
         try:
-            logger.debug(f"batch_generate_tags received raw args tuple: {args}")
-            logger.debug(f"args length: {len(args)}")
-            if args:
-                logger.debug(f"first arg type: {type(args[0])}")
-                logger.debug(f"first arg content: {args[0]}")
+            logger.debug(f"batch_generate_tags received payload of type: {type(payload)}")
             
-            # The entire payload is passed as the first argument.
-            if not args:
-                raise ValueError("No arguments provided to batch_generate_tags")
-            
-            # Use the new, unified payload normalizer.
-            # The EPC bridge should already wrap the payload in a list.
-            data_dict = normalize_payload(list(args))
-            logger.debug(f"Normalized data_dict: {data_dict}")
-            logger.debug(f"data_dict keys: {list(data_dict.keys()) if isinstance(data_dict, dict) else 'not a dict'}")
-
-            if 'error' in data_dict:
-                raise ValueError(f"Payload normalization failed: {data_dict.get('message')}")
+            # 使用原始的统一数据处理方式
+            from ..utils.unified_tag_processor import normalize_payload
+            data_dict = normalize_payload(payload)
             
             nodes_data = data_dict.get('nodes', [])
             model_config = data_dict.get('model_config', {})
             
-            # Fix: Handle case where nodes_data is a dict instead of list
+            logger.debug(f"Extracted {len(nodes_data)} nodes and model_config with keys: {list(model_config.keys()) if isinstance(model_config, dict) else type(model_config)}")
+            
+            if not nodes_data:
+                logger.warning("No nodes found in autotag payload.")
+                logger.warning(f"Available keys in data_dict: {list(data_dict.keys())}")
+                logger.warning(f"Full data_dict content: {data_dict}")
+                return {'suggestions': [], 'failed_count': 0, 'total_processed': 0, 'successful': 0}
+
+            # 确保 nodes_data 是列表格式
             if isinstance(nodes_data, dict):
-                # If it's a single node dict, wrap it in a list
                 nodes_list = [nodes_data]
-                logger.debug(f"Single node detected, wrapped in list")
             elif isinstance(nodes_data, list):
                 nodes_list = nodes_data
-                logger.debug(f"Node list detected with {len(nodes_list)} items")
             else:
-                logger.warning(f"Unexpected nodes data type: {type(nodes_data)}")
-                nodes_list = []
-            
-            # Fix: Handle case where model_config is a list instead of dict
-            if isinstance(model_config, list):
-                # Convert plist-style list to dict
-                config_dict = {}
-                for i in range(0, len(model_config), 2):
-                    if i + 1 < len(model_config):
-                        key = model_config[i]
-                        value = model_config[i + 1]
-                        config_dict[key] = value
-                model_config = config_dict
-                logger.debug(f"Converted model_config list to dict: {model_config}")
-            
-            logger.debug(f"Final nodes_list length: {len(nodes_list)}")
-            logger.debug(f"Final model_config: {model_config}")
-            
-            if not nodes_list:
-                logger.warning("No nodes found in payload for batch tag generation.")
-                logger.warning(f"Available keys in data_dict: {list(data_dict.keys()) if isinstance(data_dict, dict) else 'not a dict'}")
-                logger.warning(f"Original nodes_data type: {type(nodes_data)}, value: {nodes_data}")
-                return {'results': [], 'total_processed': 0, 'successful': 0, 'failed': 0}
+                logger.warning(f"Unexpected nodes_data type: {type(nodes_data)}")
+                return {'suggestions': [], 'failed_count': 0, 'total_processed': 0, 'successful': 0}
 
             logger.info(f"Processing batch tag generation for {len(nodes_list)} nodes")
 
-            # Use asyncio.gather to run all tag generations concurrently
+            # 使用 asyncio.gather 并发处理所有节点
             tasks = [self._generate_tags_for_node(node_data, model_config) for node_data in nodes_list]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Process results
+            # 处理结果
             final_results = []
             for i, res in enumerate(results):
                 node_data = nodes_list[i]
                 node_id = "unknown"
                 try:
-                    node_id = dict(node_data).get('id', f'node_{i}')
+                    node_id = node_data.get('id', f'node_{i}') if isinstance(node_data, dict) else f'node_{i}'
                 except (TypeError, ValueError):
                     logger.warning(f"Could not extract node_id from node_data at index {i}")
 
@@ -113,38 +86,64 @@ class AutotagHandler:
                         'status': 'success'
                     })
             
+            # Convert to the format expected by ELisp callback
+            suggestions = []
+            failed_count = 0
+            
+            for result in final_results:
+                if result['status'] == 'success' and result['tags']:
+                    # Convert tag format for ELisp
+                    node_suggestions = []
+                    for tag in result['tags']:
+                        node_suggestions.append({
+                            'tag_name': tag.get('tag_name', ''),
+                            'confidence': tag.get('confidence', 0.5),
+                            'reasoning': tag.get('reasoning', '')
+                        })
+                    
+                    if node_suggestions:  # Only add if there are actual suggestions
+                        suggestions.append({
+                            'node_id': result['node_id'],
+                            'suggestions': node_suggestions
+                        })
+                elif result['status'] == 'error':
+                    failed_count += 1
+            
             return {
-                'results': final_results,
+                'suggestions': suggestions,
+                'failed_count': failed_count,
                 'total_processed': len(nodes_list),
-                'successful': len([r for r in final_results if r['status'] == 'success']),
-                'failed': len([r for r in final_results if r['status'] == 'error'])
+                'successful': len([r for r in final_results if r['status'] == 'success'])
             }
             
         except Exception as e:
             logger.error(f"Error in batch_generate_tags: {str(e)}", exc_info=True)
             return {
                 'error': str(e),
-                'results': [],
+                'suggestions': [],
+                'failed_count': 0,
                 'total_processed': 0,
-                'successful': 0,
-                'failed': 0
+                'successful': 0
             }
 
-    async def suggest_tags_for_single_node_elisp(self, *args) -> Dict[str, Any]:
+    async def suggest_tags_for_single_node_elisp(self, payload) -> Dict[str, Any]:
         """
-        为单个节点生成标签 (异步版本), a new wrapper for the EPC call.
+        为单个节点生成标签 (异步版本)，使用原始的 normalize_payload。
         """
         try:
-            logger.debug(f"suggest_tags_for_single_node_elisp received raw args tuple: {args}")
+            logger.debug(f"suggest_tags_for_single_node_elisp received payload of type: {type(payload)}")
             
-            if not args:
-                raise ValueError("No arguments provided")
+            # 使用原始的统一数据处理方式
+            from ..utils.unified_tag_processor import normalize_payload
+            data_dict = normalize_payload(payload)
 
-            data_dict = normalize_payload(list(args))
-            if 'error' in data_dict:
-                raise ValueError(f"Payload normalization failed: {data_dict.get('message')}")
-
+            # 对于单节点，可能直接在 nodes 中，或者在 node 键中
             node = data_dict.get('node')
+            if not node:
+                nodes = data_dict.get('nodes', [])
+                if nodes and len(nodes) > 0:
+                    node = nodes[0]  # 取第一个节点
+            
             model_config = data_dict.get('model_config', {})
 
             if not isinstance(node, dict):

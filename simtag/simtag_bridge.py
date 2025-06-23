@@ -424,8 +424,18 @@ class SimTagBridge:
         Processes a batch of items to generate tags by running the async handler.
         """
         logger.debug(f"Bridge batch_generate_tags received {len(args)} arguments")
+        
+        # 详细打印每个参数的信息
+        for i, arg in enumerate(args):
+            logger.debug(f"Argument {i}: type={type(arg)}, content={arg}")
+            if hasattr(arg, 'value') and callable(arg.value):
+                logger.debug(f"Argument {i} is Symbol with value: {arg.value()}")
+        
         try:
-            coro = handler.batch_generate_tags(*args)
+            # According to unified data contract, pass the arguments as a single parameter
+            # If multiple args are received, take the first one as the payload
+            payload = args[0] if args else None
+            coro = handler.batch_generate_tags(payload)
             return self._run_async(coro)
         except Exception as e:
             logger.error(f"Error running async batch_generate_tags: {e}", exc_info=True)
@@ -438,7 +448,10 @@ class SimTagBridge:
         """
         logger.debug(f"Bridge received generate_single_node_tags, forwarding to async handler.")
         try:
-            coro = handler.suggest_tags_for_single_node_elisp(*args)
+            # According to unified data contract, pass the arguments as a single parameter
+            # If multiple args are received, take the first one as the payload
+            payload = args[0] if args else None
+            coro = handler.suggest_tags_for_single_node_elisp(payload)
             return self._run_async(coro)
         except Exception as e:
             logger.error(f"Error calling async generate_single_node_tags handler: {e}", exc_info=True)

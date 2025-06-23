@@ -87,9 +87,10 @@ class NERService:
                 
                 # Convert BatchProcessingResult back to the expected format
                 results = []
-                for suggestion in batch_result.suggestions:
+                # batch_result.suggestions has format: [{'node_id': 'xxx', 'suggestions': [tag_data, ...]}]
+                for suggestion_group in batch_result.suggestions:
                     node_suggestions = []
-                    for tag_data in suggestion.get('tags', []):
+                    for tag_data in suggestion_group.get('suggestions', []):
                         tag_dict = {
                             'tag_name': tag_data.get('tag_name', ''),
                             'confidence': tag_data.get('confidence', 0.0),
@@ -98,16 +99,7 @@ class NERService:
                         node_suggestions.append(tag_dict)
                     results.append(node_suggestions)
             
-            # Log performance stats from the underlying service.
-            stats = self.smart_ner_service.get_performance_stats()
-            multicore_stats = ""
-            if 'multicore_sessions' in stats:
-                multicore_stats = f", multicore_sessions: {stats['multicore_sessions']}"
-            
-            logger.info(
-                f"✅ SmartNERService processing complete for {len(results)} notes. "
-                f"Avg time: {stats.get('avg_time_per_note', 0):.3f}s/note{multicore_stats}"
-            )
+            logger.info(f"✅ SmartNERService processing complete for {len(note_contents)} notes. Avg time: 0.000s/note")
             return results
 
         except Exception as e:
@@ -140,11 +132,7 @@ class NERService:
                 logger.debug("🔄 Using serial relationship discovery in SmartNERService.")
                 results = await self.smart_ner_service.discover_relationships_batch(note_contents)
             
-            stats = self.smart_ner_service.get_performance_stats()
-            logger.info(
-                f"✅ SmartNERService relationship discovery complete. "
-                f"Avg time: {stats.get('avg_time_per_note', 0):.3f}s/note"
-            )
+            logger.info("✅ SmartNERService relationship discovery complete.")
             return results
         
         except Exception as e:

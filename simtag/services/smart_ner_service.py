@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BatchProcessingResult:
-    """批量处理结果"""
+    """Batch processing result"""
     generated_count: int
     failed_count: int
     failed_nodes: List[str]
@@ -24,7 +24,7 @@ class BatchProcessingResult:
 
 @dataclass
 class NodeProcessingTask:
-    """节点处理任务"""
+    """Node processing task"""
     node_id: str
     title: str
     content: str
@@ -65,21 +65,21 @@ class SmartNERService:
         self.entity_types = self.config.get('entity_types', DEFAULT_ENTITY_TYPES)
         self.unified_processor = UnifiedTagProcessor()
         
-        # 批量处理配置
-        self.max_workers = self.config.get('max_workers', 2)  # 2线程
-        self.max_retries = self.config.get('max_retries', 3)  # 重试3次
-        self.confidence_threshold_first = self.config.get('confidence_threshold_first', 0.3)  # 第一轮阈值
-        self.confidence_threshold_final = self.config.get('confidence_threshold_final', 0.6)  # 最终阈值
-        self.batch_size = self.config.get('batch_size', 10)  # 批处理大小
+        # Batch processing configuration
+        self.max_workers = self.config.get('max_workers', 2)  # 2 threads
+        self.max_retries = self.config.get('max_retries', 3)  # 3 retries
+        self.confidence_threshold_first = self.config.get('confidence_threshold_first', 0.3)  # First round threshold
+        self.confidence_threshold_final = self.config.get('confidence_threshold_final', 0.6)  # Final threshold
+        self.batch_size = self.config.get('batch_size', 10)  # Batch size
         
-        # 进度回调
+        # Progress callback
         self.progress_callback = None
         
         logger.info(f"SmartNERService initialized with {self.max_workers} workers, "
                    f"confidence thresholds: {self.confidence_threshold_first}/{self.confidence_threshold_final}")
 
     def set_progress_callback(self, callback: Optional[Callable[[Dict[str, Any]], None]]):
-        """设置进度回调函数"""
+        """Sets the progress callback function"""
         self.progress_callback = callback
 
     async def get_tags_for_content(
@@ -146,24 +146,24 @@ class SmartNERService:
 
     async def batch_generate_tags(self, nodes_data: List[Dict[str, Any]]) -> BatchProcessingResult:
         """
-        批量生成标签建议
+        Generates tag suggestions in batches.
         
         Args:
-            nodes_data: 节点数据列表，每个元素包含：
-                - id: 节点ID
-                - title: 节点标题
-                - content: 节点内容
-                - file_path: 文件路径
-                - level: 节点层级
-                - existing_tags: 现有标签列表
+            nodes_data: List of node data, each element containing:
+                - id: Node ID
+                - title: Node title
+                - content: Node content
+                - file_path: File path
+                - level: Node level
+                - existing_tags: List of existing tags
         
         Returns:
-            BatchProcessingResult: 批量处理结果
+            BatchProcessingResult: The batch processing result
         """
         start_time = time.time()
-        logger.info(f"开始批量处理 {len(nodes_data)} 个节点")
+        logger.info(f"Starting batch processing for {len(nodes_data)} nodes")
         
-        # 转换为处理任务
+        # Convert to processing tasks
         tasks = []
         for node_data in nodes_data:
             task = NodeProcessingTask(
@@ -176,25 +176,25 @@ class SmartNERService:
             )
             tasks.append(task)
         
-        # 执行批量处理
+        # Execute batch processing
         result = await self._process_tasks_in_batches(tasks)
         
         processing_time = time.time() - start_time
         result.processing_time = processing_time
         
-        logger.info(f"批量处理完成: 生成 {result.generated_count} 个建议, "
-                   f"失败 {result.failed_count} 个节点, 耗时 {processing_time:.2f}s")
+        logger.info(f"Batch processing finished: Generated {result.generated_count} suggestions, "
+                   f"failed {result.failed_count} nodes, took {processing_time:.2f}s")
         
         return result
 
     async def _process_tasks_in_batches(self, tasks: List[NodeProcessingTask]) -> BatchProcessingResult:
-        """分批处理任务"""
+        """Processes tasks in batches"""
         total_tasks = len(tasks)
         generated_count = 0
         failed_nodes = []
         all_suggestions = []
         
-        # 分批处理
+        # Process in batches
         for i in range(0, total_tasks, self.batch_size):
             batch = tasks[i:i + self.batch_size]
             batch_results = await self._process_batch_with_threading(batch, i, total_tasks)
@@ -203,7 +203,7 @@ class SmartNERService:
             failed_nodes.extend(batch_results['failed_nodes'])
             all_suggestions.extend(batch_results['suggestions'])
             
-            # 更新进度
+            # Update progress
             if self.progress_callback:
                 progress_data = {
                     'current': min(i + self.batch_size, total_tasks),
@@ -215,24 +215,24 @@ class SmartNERService:
                 try:
                     self.progress_callback(progress_data)
                 except Exception as e:
-                    logger.warning(f"进度回调失败: {e}")
+                    logger.warning(f"Progress callback failed: {e}")
         
         return BatchProcessingResult(
             generated_count=generated_count,
             failed_count=len(failed_nodes),
             failed_nodes=failed_nodes,
-            processing_time=0.0,  # 将在上层设置
+            processing_time=0.0,  # Will be set in the calling function
             suggestions=all_suggestions
         )
 
     async def _process_batch_with_threading(self, batch: List[NodeProcessingTask], 
                                           batch_start_idx: int, total_tasks: int) -> Dict[str, Any]:
-        """使用多线程处理一批任务"""
-        logger.debug(f"处理批次 {batch_start_idx//self.batch_size + 1}, 包含 {len(batch)} 个任务")
+        """Processes a batch of tasks using multi-threading"""
+        logger.debug(f"Processing batch {batch_start_idx//self.batch_size + 1}, containing {len(batch)} tasks")
         
-        # 使用线程池执行批处理
+        # Use a thread pool to execute the batch
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 创建异步任务
+            # Create asynchronous tasks
             futures = []
             for task in batch:
                 future = asyncio.get_event_loop().run_in_executor(
@@ -242,10 +242,10 @@ class SmartNERService:
                 )
                 futures.append(future)
             
-            # 等待所有任务完成
+            # Wait for all tasks to complete
             results = await asyncio.gather(*futures, return_exceptions=True)
         
-        # 统计结果
+        # Aggregate results
         generated_count = 0
         failed_nodes = []
         suggestions = []
@@ -253,21 +253,21 @@ class SmartNERService:
         for i, result in enumerate(results):
             task = batch[i]
             if isinstance(result, Exception):
-                logger.error(f"任务处理异常 {task.node_id}: {result}")
+                logger.error(f"Task processing exception for {task.node_id}: {result}")
                 failed_nodes.append(task.node_id)
             elif result is None:
-                logger.warning(f"任务处理失败 {task.node_id}: 返回None")
+                logger.warning(f"Task processing failed for {task.node_id}: Returned None")
                 failed_nodes.append(task.node_id)
             else:
-                # 成功处理
+                # Successfully processed
                 task_suggestions = result.get('suggestions', [])
                 if task_suggestions:
                     generated_count += len(task_suggestions)
                     suggestions.extend(task_suggestions)
                 else:
-                    logger.debug(f"节点 {task.node_id} 未生成标签建议")
+                    logger.debug(f"Node {task.node_id} generated no tag suggestions")
         
-        # 按节点组织建议
+        # Organize suggestions by node
         suggestions_by_node = {}
         for suggestion in suggestions:
             node_id = suggestion.get('node_id')
@@ -276,7 +276,7 @@ class SmartNERService:
                     suggestions_by_node[node_id] = []
                 suggestions_by_node[node_id].append(suggestion)
         
-        # 转换为Elisp期望的格式
+        # Convert to the format expected by Elisp
         organized_suggestions = []
         for node_id, node_suggestions in suggestions_by_node.items():
             organized_suggestions.append({
@@ -291,9 +291,9 @@ class SmartNERService:
         }
 
     def _process_single_task_sync(self, task: NodeProcessingTask) -> Optional[Dict[str, Any]]:
-        """同步处理单个任务（在线程池中运行）"""
+        """Synchronously processes a single task (runs in a thread pool)"""
         try:
-            # 在新的事件循环中运行异步处理
+            # Run the asynchronous processing in a new event loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -301,34 +301,34 @@ class SmartNERService:
             finally:
                 loop.close()
         except Exception as e:
-            logger.error(f"同步任务处理失败 {task.node_id}: {e}", exc_info=True)
+            logger.error(f"Synchronous task processing failed for {task.node_id}: {e}", exc_info=True)
             return None
 
     async def _process_single_task_async(self, task: NodeProcessingTask) -> Optional[Dict[str, Any]]:
-        """异步处理单个任务"""
+        """Asynchronously processes a single task"""
         max_retries = self.max_retries
         last_error = None
         
         for attempt in range(max_retries):
             try:
-                # 第一阶段：生成候选标签
+                # Stage 1: Generate candidate tags
                 candidate_tags = await self._generate_candidate_tags(task)
                 if not candidate_tags:
-                    logger.debug(f"节点 {task.node_id} 未生成候选标签")
+                    logger.debug(f"Node {task.node_id} generated no candidate tags")
                     return {'suggestions': []}
                 
-                # 第二阶段：置信度评估
+                # Stage 2: Evaluate confidence
                 evaluated_tags = await self._evaluate_tag_confidence(task, candidate_tags)
                 
-                # 过滤低置信度标签
+                # Filter low confidence tags
                 final_tags = [tag for tag in evaluated_tags 
                              if tag.confidence >= self.confidence_threshold_final]
                 
                 if not final_tags:
-                    logger.debug(f"节点 {task.node_id} 所有标签置信度过低")
+                    logger.debug(f"Node {task.node_id}: All tags below final confidence threshold")
                     return {'suggestions': []}
                 
-                # 转换为建议格式
+                # Convert to suggestion format
                 suggestions = []
                 for tag in final_tags:
                     suggestion = {
@@ -341,88 +341,88 @@ class SmartNERService:
                     }
                     suggestions.append(suggestion)
                 
-                logger.debug(f"节点 {task.node_id} 生成 {len(suggestions)} 个标签建议")
+                logger.debug(f"Node {task.node_id} generated {len(suggestions)} tag suggestions")
                 return {'suggestions': suggestions}
                 
             except Exception as e:
                 last_error = e
-                logger.warning(f"处理节点 {task.node_id} 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                logger.warning(f"Processing node {task.node_id} failed (Attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1)  # 重试前等待
+                    await asyncio.sleep(1)  # Wait before retrying
         
-        logger.error(f"节点 {task.node_id} 处理最终失败: {last_error}")
+        logger.error(f"Node {task.node_id} processing ultimately failed: {last_error}")
         return None
 
     async def _generate_candidate_tags(self, task: NodeProcessingTask) -> List[TagResult]:
-        """第一阶段：生成候选标签"""
+        """Stage 1: Generates candidate tags"""
         content = f"{task.title}\n\n{task.content}".strip()
         if not content:
             return []
         
-        # 使用现有的标签提取逻辑
+        # Use the existing tag extraction logic
         tags = await self.get_tags_for_content(
             content=content,
             node_id=task.node_id,
             existing_tags=task.existing_tags
         )
         
-        # 第一轮过滤：只保留置信度较高的候选标签
+        # First round filtering: Keep only candidate tags with higher confidence
         candidate_tags = [tag for tag in tags 
                          if tag.confidence >= self.confidence_threshold_first]
         
-        logger.debug(f"节点 {task.node_id} 生成 {len(candidate_tags)} 个候选标签")
+        logger.debug(f"Node {task.node_id} generated {len(candidate_tags)} candidate tags")
         return candidate_tags
 
     async def _evaluate_tag_confidence(self, task: NodeProcessingTask, 
                                      candidate_tags: List[TagResult]) -> List[TagResult]:
-        """第二阶段：评估标签置信度"""
+        """Stage 2: Evaluates tag confidence"""
         if not candidate_tags:
             return []
         
-        # 构建置信度评估提示
+        # Build the confidence evaluation prompt
         evaluation_prompt = self._create_confidence_evaluation_prompt(task, candidate_tags)
         
         try:
-            # 调用LLM进行置信度评估
+            # Call LLM for confidence evaluation
             llm_response = await self.llm_async_callable(evaluation_prompt)
             
-            # 解析评估结果
+            # Parse the evaluation result
             evaluated_tags = self._parse_confidence_evaluation(candidate_tags, llm_response)
             
-            logger.debug(f"节点 {task.node_id} 完成置信度评估，{len(evaluated_tags)} 个标签")
+            logger.debug(f"Node {task.node_id} completed confidence evaluation, {len(evaluated_tags)} tags")
             return evaluated_tags
             
         except Exception as e:
-            logger.warning(f"置信度评估失败 {task.node_id}: {e}")
-            # 评估失败时返回原始标签
+            logger.warning(f"Confidence evaluation failed for {task.node_id}: {e}")
+            # Return original tags if evaluation fails
             return candidate_tags
 
     def _create_confidence_evaluation_prompt(self, task: NodeProcessingTask, 
                                            candidate_tags: List[TagResult]) -> str:
-        """创建置信度评估提示"""
+        """Creates the confidence evaluation prompt"""
         content = f"{task.title}\n\n{task.content}".strip()
         tag_list = [f"- {tag.tag_name}: {tag.reasoning}" for tag in candidate_tags]
         
         prompt = f"""
-请评估以下标签对于给定内容的相关性和质量，为每个标签提供0-1之间的置信度分数。
+Please evaluate the relevance and quality of the following tags for the given content, providing a confidence score between 0 and 1 for each tag.
 
-内容:
+Content:
 {content}
 
-候选标签:
+Candidate Tags:
 {chr(10).join(tag_list)}
 
-现有标签: {', '.join(str(tag) for tag in task.existing_tags) if task.existing_tags else '无'}
+Existing Tags: {', '.join(str(tag) for tag in task.existing_tags) if task.existing_tags else 'None'}
 
-评估标准:
-1. 相关性：标签是否准确描述内容主题
-2. 特异性：标签是否足够具体，避免过于宽泛
-3. 实用性：标签是否有助于知识组织和检索
-4. 避重复：避免与现有标签重复或过于相似
+Evaluation Criteria:
+1. Relevance: Does the tag accurately describe the content's topic?
+2. Specificity: Is the tag specific enough, avoiding being too broad?
+3. Utility: Will the tag help with knowledge organization and retrieval?
+4. Avoid Duplication: Avoid tags that are redundant or too similar to existing tags.
 
-请以JSON格式返回评估结果:
+Please return the evaluation results in JSON format:
 [
-  {{"tag_name": "标签名", "confidence": 0.8, "reasoning": "评估理由"}},
+  {{"tag_name": "Tag Name", "confidence": 0.8, "reasoning": "Evaluation reason"}},
   ...
 ]
 """
@@ -430,28 +430,28 @@ class SmartNERService:
 
     def _parse_confidence_evaluation(self, candidate_tags: List[TagResult], 
                                    llm_response: str) -> List[TagResult]:
-        """解析置信度评估结果"""
+        """Parses the confidence evaluation result"""
         try:
-            # 使用统一处理器解析响应
+            # Use the unified processor to parse the response
             note_results = self.unified_processor.process_llm_response(
                 response_str=llm_response,
                 note_ids=['evaluation']
             )
             
             if not note_results or note_results[0].error:
-                logger.warning("置信度评估解析失败，使用原始标签")
+                logger.warning("Confidence evaluation parsing failed, using original tags")
                 return candidate_tags
             
             evaluated_tags = note_results[0].tags
             
-            # 将评估结果映射回原始标签
+            # Map evaluation results back to original tags
             tag_map = {tag.tag_name: tag for tag in candidate_tags}
             final_tags = []
             
             for eval_tag in evaluated_tags:
                 if eval_tag.tag_name in tag_map:
                     original_tag = tag_map[eval_tag.tag_name]
-                    # 更新置信度和推理
+                    # Update confidence and reasoning
                     original_tag.confidence = eval_tag.confidence
                     original_tag.reasoning = eval_tag.reasoning or original_tag.reasoning
                     final_tags.append(original_tag)
@@ -459,5 +459,5 @@ class SmartNERService:
             return final_tags
             
         except Exception as e:
-            logger.warning(f"置信度评估解析异常: {e}")
+            logger.warning(f"Confidence evaluation parsing exception: {e}")
             return candidate_tags 

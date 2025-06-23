@@ -176,26 +176,56 @@ process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
   "Extract content from given node IDs and send asynchronously to the backend.
 The data is structured according to the unified data contract."
   (let ((nodes-to-process '()))
-    ;; 1. Create a list of alists, where each alist represents a node.
+    ;; 1. Create a simplified data structure that EPC can properly serialize
     (dolist (node-id node-ids)
       (when-let* ((node-data (org-supertag-db-get node-id))
                   (content (org-supertag-auto-tag--get-node-content node-data)))
         (when (>= (length content) org-supertag-auto-tag-batch-min-content-length)
-          ;; Use an alist `'(("key" . value) ...)` for each node. This is robust.
-          (let ((node-alist `(("id" . ,node-id)
-                              ("content" . ,content))))
-            (push node-alist nodes-to-process)))))
+          ;; Use list of pairs instead of alist - EPC serializes this as Python dict
+          (let ((node-dict `(("id" ,node-id)
+                            ("content" ,content))))
+            (push node-dict nodes-to-process)))))
 
     ;; 2. Only send data to backend when there are eligible nodes.
     (if nodes-to-process
         (progn
           (message "Auto-tag: Preparing to send %d eligible nodes to backend for processing..." (length nodes-to-process))
-          ;; Construct the final payload as a top-level alist, conforming to the unified data contract.
+          ;; Construct the final payload using list format for proper EPC serialization  
           (let* ((reversed-nodes (reverse nodes-to-process))
                  (model-config (org-supertag-api--get-model-config-for-tagging))
-                 ;; The final payload is a single alist.
-                 (payload `(("nodes" . ,reversed-nodes)
-                            ("model_config" . ,model-config))))
+                 ;; Use list format instead of alist - EPC serializes this as Python dict
+                 (payload `(("nodes" ,reversed-nodes)
+                           ("model_config" ,model-config))))
+            
+            ;; 详细的数据收集和调试输出
+            (message "=== ELISP DEBUG: DATA COLLECTION (LIST FORMAT) ===")
+            (message "Total nodes to process: %d" (length reversed-nodes))
+            (message "Model config: %S" model-config)
+            
+            ;; 打印前5个节点的详细信息
+            (let ((node-count 0))
+              (dolist (node reversed-nodes)
+                (when (< node-count 5)
+                  (message "--- Node %d ---" (1+ node-count))
+                  (message "Node structure type: %s" (type-of node))
+                  (message "Node is list with length: %d" (length node))
+                  (dolist (pair node)
+                    (when (listp pair)
+                      (message "  %S => %S (type: %s)" (car pair) (cadr pair) (type-of (cadr pair)))))
+                  (cl-incf node-count))))
+            
+            (message "--- Final Payload Structure ---")
+            (message "Payload type: %s" (type-of payload))
+            (message "Payload is list with length: %d" (length payload))
+            (dolist (top-pair payload)
+              (when (listp top-pair)
+                (message "  Top-level %S => type: %s" (car top-pair) (type-of (cadr top-pair)))
+                (when (string= (car top-pair) "nodes")
+                  (message "    Nodes count: %d" (length (cadr top-pair))))
+                (when (string= (car top-pair) "model_config")
+                  (message "    Model config: %S" (cadr top-pair)))))
+            (message "=== END ELISP DEBUG ===")
+            
             ;; (message "Auto-tag DEBUG: Sending payload with %d nodes to API layer." (length reversed-nodes))
             ;; The API layer will wrap this payload in a list before sending.
             (org-supertag-api-batch-generate-tags

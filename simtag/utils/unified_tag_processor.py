@@ -148,11 +148,21 @@ def _parse_elisp_data(data: Any) -> Any:
         for item in data:
             if not item: continue # Skip empty lists in the alist
             
+            # Special case: if item[0] is a list, this might be a list of objects (not an alist)
+            # e.g., [[['id', '.', 'value'], ['content', '.', 'value']], [...]] for nodes
+            if isinstance(item[0], list):
+                # This is likely a list of objects, not an alist
+                # We should treat this as a plain list and return it as such
+                return [_parse_elisp_data(item) for item in data]
+            
             key = _parse_elisp_data(item[0])
             value = None
             
-            # Check for dotted pair `(key . val)`
-            if len(item) == 3 and isinstance(item[1], Symbol) and item[1].value() == '.':
+            # Check for dotted pair `(key . val)` - handle both Symbol and string representations
+            if len(item) == 3 and (
+                (isinstance(item[1], Symbol) and item[1].value() == '.') or 
+                (isinstance(item[1], str) and item[1] == '.')
+            ):
                 value = _parse_elisp_data(item[2])
             else:
                 # Handle `(key val_part_1 val_part_2 ...)`
@@ -180,6 +190,7 @@ def _is_alist(data: list) -> bool:
     if not data:
         return True
     return all(isinstance(item, list) for item in data)
+
 
 def _parse_hash_table_list(data_list: list) -> dict:
     """Helper to parse the [Symbol('hash-table'), ..., [k,v,...]] structure."""
