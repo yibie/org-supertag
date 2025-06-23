@@ -191,7 +191,7 @@ CALLBACK is the function to call with the results."
   (org-supertag-bridge-ensure-ready)
   (let ((method-name "batch_generate_tags"))
     (org-supertag-bridge--log "API: Calling batch_generate_tags with payload.")
-    ;; The payload from the caller is already an alist.
+    ;; The payload from the caller is already a hash-table.
     ;; We wrap it in a list to conform to the data contract.
     (org-supertag-bridge-call-async method-name (list payload) callback)))
 
