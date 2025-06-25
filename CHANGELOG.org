@@ -1,4 +1,12 @@
 * Changelog
+* [3.0.5] - 2025-06-25
+** Features
+*** Decouple metadata and adopt a database-first architecture
+- Fields are no longer synchronized with the Org :PROPERTIES: drawer. All field data is now read from and written directly to the database.
+- Support for headline :TAGS: has been completely removed. The system now exclusively uses org-supertag's inline-tag format for visual representation in files, while the actual tag relationships are managed solely by the database.
+- This view is now the central and sole interface for viewing and editing all metadata associated with a node. Users can modify field values directly within this view, creating a closed loop for data manipulation.
+- The :tag field type has been significantly upgraded to natively support one or more tag values (e.g., a movie with multiple directors). The UI accepts comma-separated input and formats the display cleanly (e.g., TagA / TagB / TagC).
+- The legacy List and Range field types have been deprecated to streamline the data model and reduce complexity.
 
 * [3.0.4] - 2025-05-30
 ** Bug Fixes
