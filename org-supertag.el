@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 3.0.0
+;; Version: 3.0.5
 ;; Package-Requires: ((emacs "28.1") (org "9.6"))
 ;; URL: https://github.com/yibie/org-supertag
 
@@ -59,7 +59,6 @@
 (require 'org-supertag-proactive-engine)
 (require 'org-supertag-background-sync) 
 (require 'org-supertag-auto-tag)
-(require 'org-supertag-ui)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -170,6 +169,7 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
     (org-supertag-db-init)
     ;; 4. Setup auto-save hook for Emacs exit
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
+
     ;; Mark as initialized
     (setq org-supertag--initialized t)
     (org-supertag--log "Core system initialized.")))
@@ -181,6 +181,7 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
     ;; Try to save db before shutting down
     (org-supertag-db-save)
     (remove-hook 'kill-emacs-hook #'org-supertag-db-save)
+
     ;; Stop all services that might have been started
     (when (fboundp 'org-supertag-auto-tag-stop-silent-scan)
       (org-supertag-auto-tag-stop-silent-scan))
