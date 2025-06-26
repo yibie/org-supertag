@@ -650,36 +650,41 @@ class GraphService:
             self.logger.error(f"Could not retrieve node embedding for id {node_id}: {e}", exc_info=True)
             return None
 
-    def find_similar_nodes(self, query_vector: np.ndarray, top_k: int = 10) -> List[Tuple[str, float]]:
-        """
-        Finds similar nodes using vector search.
-        It now searches only text nodes.
-        """
-        if not self.has_vector_ext or not NP_AVAILABLE:
-            self.logger.warning("Vector search is disabled.")
+    def find_similar_nodes(self, query_vector, top_k=10):
+        if not self.has_vector_ext:
+            logger.warning("Vector extension not available, cannot find similar nodes.")
+            return []
+        
+        # The query_vector is now an EmbeddingResult object.
+        # We need to extract the embedding data from it.
+        if not query_vector or not query_vector.success:
+            logger.error("Invalid or failed EmbeddingResult received.")
+            return []
+        
+        embedding_list = query_vector.embedding
+        if not embedding_list:
+            logger.error("EmbeddingResult contains no embedding data.")
             return []
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        query_vector_list = query_vector.tolist()
-        
-        # Find similar vectors in the VSS table and join with nodes table to get node_id
-        # and filter for only 'TEXT' type nodes.
-        sql = f"""
-            SELECT n.node_id, v.distance
-            FROM node_embeddings_vss v
-            JOIN nodes n ON v.rowid = n.rowid
-            WHERE n.type = 'TEXT'
-            ORDER BY vec_distance(v.embedding, json(?))
-            LIMIT ?
+        sql = """
+            SELECT
+                n.node_id,
+                t.distance
+            FROM
+                (SELECT rowid, distance FROM node_embeddings_vss WHERE embedding MATCH ? LIMIT ?) t
+            JOIN
+                nodes n ON n.rowid = t.rowid
         """
-        
         try:
-            results = cursor.execute(sql, (json.dumps(query_vector_list), top_k)).fetchall()
-            return [(row[0], 1 - row[1]) for row in results]  # Convert distance to similarity
+            # The C-extension expects a JSON string of a list of floats.
+            query_vector_json = json.dumps(embedding_list)
+            
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql, (query_vector_json, top_k))
+            return cursor.fetchall()
         except Exception as e:
-            self.logger.error(f"Failed to find similar nodes: {e}", exc_info=True)
+            logger.error(f"Failed to find similar nodes: {e}", exc_info=True)
             return []
 
     def upsert_node_embedding(self, node_id: str, embedding: np.ndarray):
@@ -719,16 +724,16 @@ class GraphService:
 
     # --- Graph Traversal ---
 
-    def get_neighbors(self, node_id: str, relation_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_neighbors(self, node_id: str, link_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves neighbor nodes of a given node, based on stored relations."""
         conn = self._get_connection()
         cursor = conn.cursor()
         
         placeholders = '?'
         params = [node_id]
-        if relation_type:
+        if link_type:
             sql += " AND type = ?"
-            params.append(relation_type)
+            params.append(link_type)
         
         cursor.execute(sql, params)
         neighbor_ids = [row[0] for row in cursor.fetchall()]

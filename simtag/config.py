@@ -5,10 +5,10 @@ Provides project configuration and state management
 import os
 import logging
 import os.path as osp
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Optional, Dict, Any, List
 import toml # <--- NEW: Import toml for dynamic config persistence
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Define the default analysis config dictionary at the module level
 analysis_config = {
@@ -22,20 +22,19 @@ processing_config = {
     "processing_workers": 4, # You can add other defaults here
 }
 
-@dataclass
 class Config(BaseModel):
     """Main configuration class, loaded from simtag.yaml."""
-    config_data: Dict[str, Any] = field(default_factory=dict, repr=False)
+    config_data: Dict[str, Any] = Field(default_factory=dict, repr=False)
     # --- NEW: Central Data Directory ---
-    data_directory: str = field(default_factory=lambda: os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY", os.path.expanduser("~/.emacs.d/org-supertag")))
+    data_directory: str = Field(default_factory=lambda: os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY", os.path.expanduser("~/.emacs.d/org-supertag")))
 
     # Vector database path
-    vector_db_path: str = field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/supertag_vector.db"))
+    vector_db_path: str = Field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/supertag_vector.db"))
     # --- NEW: Path for dynamic config TOML file ---
-    dynamic_config_file_path: str = field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/runtime_config.toml"))
+    dynamic_config_file_path: str = Field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/runtime_config.toml"))
     
     # --- LLM Client Configuration ---
-    llm_client_config: Dict[str, Any] = field(default_factory=lambda: {
+    llm_client_config: Dict[str, Any] = Field(default_factory=lambda: {
         'provider': 'ollama', # Default provider
         'base_url': 'http://localhost:11434', # Default for Ollama
         'default_model': 'hf.co/unsloth/gemma-3-4b-it-GGUF', # Default generation model
@@ -75,7 +74,7 @@ class Config(BaseModel):
     rag_context_core_content_ratio: float = 0.4
     rag_context_supplementary_ratio: float = 0.35
     rag_context_background_ratio: float = 0.25
-    rag_context_priorities: List[str] = field(default_factory=lambda: [
+    rag_context_priorities: List[str] = Field(default_factory=lambda: [
         "current_node",
         "recent_nodes",
         "high_frequency_concepts",
@@ -87,7 +86,7 @@ class Config(BaseModel):
 
     # --- Dialogue Mode RAG Presets ---
     # Stored as a dictionary mapping mode name to a dict of RAG config overrides
-    rag_mode_presets: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+    rag_mode_presets: Dict[str, Dict[str, Any]] = Field(default_factory=lambda: {
         "normal": {
             "rag_retrieval_mode": "precise",
             "rag_graph_depth": 1,
@@ -120,7 +119,7 @@ class Config(BaseModel):
     memory_token_budget_dialogue_history: float = 0.10
 
     # --- Entity Extractor Configuration ---
-    entity_extractor_config: Dict[str, Any] = field(default_factory=lambda: {
+    entity_extractor_config: Dict[str, Any] = Field(default_factory=lambda: {
         "entity_types": None, # Example: [{'name': 'PERSON', 'description': '...'}]
         "extraction_prompt_template": None, # Optional: Path to a custom prompt template or the template string itself
         "gleaning_prompt_template": None, # Optional
@@ -135,7 +134,7 @@ class Config(BaseModel):
     use_smart_ner_service: bool = True  # 启用 SmartNERServiceV2 优化实现
     
     # --- Multicore Processing Configuration ---
-    multicore_config: Dict[str, Any] = field(default_factory=lambda: {
+    multicore_config: Dict[str, Any] = Field(default_factory=lambda: {
         "enabled": True,  # 启用多核心处理
         "max_workers": None,  # 工作进程数：None为自动优化（推荐2），用户可设置1-16
         "max_ollama_instances": None,  # Ollama实例数：None为自动优化（推荐2），用户可设置1-8
@@ -151,7 +150,7 @@ class Config(BaseModel):
     })
     
     # --- Embedding Service Configuration ---
-    embedding_config: Dict[str, Any] = field(default_factory=lambda: {
+    embedding_config: Dict[str, Any] = Field(default_factory=lambda: {
         "primary_backend": "llama_cpp",  # 使用 llama.cpp 作为主要后端
         "fallback_backends": ["ollama"],  # 只使用ollama作为备用后端，避免本地模型下载问题
         "cache_enabled": True,
@@ -181,16 +180,16 @@ class Config(BaseModel):
     # ==============================================================================
     # Analysis and Post-Processing Configuration
     # ==============================================================================
-    processing_config: dict = field(default_factory=dict)
-    analysis_config: dict = field(default_factory=dict)
-    retrieval_config: dict = field(default_factory=dict)
+    processing_config: dict = Field(default_factory=dict)
+    analysis_config: dict = Field(default_factory=dict)
+    retrieval_config: dict = Field(default_factory=dict)
     log_file: Optional[str] = None
 
     def __init__(self, **data):
         super().__init__(**data)
         self.llm_client_config = self.config_data.get('llm_client_config', self.llm_client_config)
-        self.processing_config = self.config_data.get('processing_config', processing_config)
-        self.analysis_config = self.config_data.get('analysis_config', analysis_config)
+        self.processing_config = self.config_data.get('processing_config', processing_config.copy())
+        self.analysis_config = self.config_data.get('analysis_config', analysis_config.copy())
         self.retrieval_config = self.config_data.get('retrieval_config', {
             "enable_inferred_relations": True,
             "inference_model": "phi4-mini:3.8b",

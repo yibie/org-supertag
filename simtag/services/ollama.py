@@ -35,6 +35,8 @@ class OllamaService:
             return []
         
         try:
+            # TODO: Refactor this prompt to use a centralized prompt management system
+            # like the one in `prompts.py` to improve maintainability.
             # Build generation prompt
             prompt = f"""
             Extract {limit} most relevant tags from the following text, return only comma-separated tag list:
@@ -76,6 +78,8 @@ class OllamaService:
             return []
         
         try:
+            # TODO: Refactor this prompt to use a centralized prompt management system
+            # like the one in `prompts.py` to improve maintainability.
             # Entity recognition system prompt
             system_prompt = """
             You are an entity recognition expert, please identify the following entity types in the text:
@@ -117,6 +121,8 @@ class OllamaService:
             return []
         
         try:
+            # TODO: Refactor this prompt to use a centralized prompt management system
+            # like the one in `prompts.py` to improve maintainability.
             # Relationship analysis prompt
             prompt = f"""
             Analyze the relationship between "{tag}" and the following tags:

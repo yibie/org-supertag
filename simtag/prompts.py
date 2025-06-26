@@ -32,6 +32,7 @@ You should focus on identifying entities belonging to the following categories. 
     - `note_index`: (For batch processing ONLY) The 0-based index of the note this tag belongs to.
 4.  **Output**: Return your findings as a single, flat JSON array containing all the tag objects. Do not include any other text, explanations, or formatting outside of this JSON array.
 5.  **Avoid Duplicates**: If a list of existing tags is provided for a note, do not suggest the same tags again.
+6.  **Only extract 5 tags or less tags per note**: If there are more than 5 tags, select the 5 most relevant tags.
 
 -Critical Output Format-
 The final output MUST be a valid JSON array, structured exactly as shown in the examples below.
@@ -72,6 +73,7 @@ You are an expert metadata annotator for Org-mode. Your goal is to extract high-
   - `tag_name` MUST be `lower_case_with_underscores`.
   - EXCLUDE: machine IDs (UUIDs), file paths, timestamps, generic terms, existing tags.
   - FOCUS: Meaningful nouns that aid knowledge organization and retrieval.
+  - **Only extract 5 tags or less tags per note**: If there are more than 5 tags, select the 5 most relevant tags.
 
 - Output:
   - Return a single JSON array of objects with tag_name, confidence, and reasoning fields.

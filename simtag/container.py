@@ -18,8 +18,8 @@ from simtag.module.diagnostics_handler import DiagnosticsHandler
 from simtag.module.autotag_handler import AutotagHandler
 from simtag.services.smart_ner_service import SmartNERService
 from simtag.module.resonance_handler import ResonanceHandler
+from simtag.module.rag_handler import RAGHandler
 import asyncio
-import dataclasses
 
 class AppContainer(containers.DeclarativeContainer):
     config = providers.Configuration()
@@ -27,7 +27,7 @@ class AppContainer(containers.DeclarativeContainer):
     config_obj = providers.Factory(
         lambda config_dict: Config(**{
             key: config_dict[key]
-            for key in [f.name for f in dataclasses.fields(Config) if f.init]
+            for key in list(Config.model_fields.keys())
             if key in config_dict
         }),
         config_dict=config
@@ -74,7 +74,7 @@ class AppContainer(containers.DeclarativeContainer):
     content_processor = providers.Singleton(ContentProcessor, config=config_obj)
     
     # Engines
-    rag_engine = providers.Singleton(OrgSupertagRAGEngine, graph_service=graph_service, llm_client=llm_client, config=config_obj)
+    rag_engine = providers.Singleton(OrgSupertagRAGEngine, graph_service=graph_service, llm_client=llm_client, embedding_service=embedding_service, config=config_obj)
     memory_engine = providers.Singleton(MemoryEngine, config=config_obj, llm_client=llm_client)
     memory_synthesizer = providers.Singleton(MemorySynthesizer, config=config_obj, memory_engine=memory_engine, llm_client=llm_client)
     engine = providers.Singleton(TaggingEngine, config=config_obj, graph_service=graph_service, llm_client=llm_client)
@@ -88,4 +88,5 @@ class AppContainer(containers.DeclarativeContainer):
     query_handler = providers.Factory(QueryHandler, engine=engine, user_interface=user_interface, graph_service=graph_service, emacs_client=config.emacs_client)
     diagnostics_handler = providers.Factory(DiagnosticsHandler, config=config_obj, llm_client=llm_client, graph_service=graph_service, memory_engine=memory_engine, entity_extractor=entity_extractor, rag_engine=rag_engine, emacs_client=config.emacs_client, data_dir=config.data_dir, content_processor=content_processor)
     autotag_handler = providers.Factory(AutotagHandler, llm_client=llm_client, ner_service=ner_service)
-    resonance_handler = providers.Factory(ResonanceHandler, graph_service=graph_service, llm_client=llm_client, config=config_obj) 
+    resonance_handler = providers.Factory(ResonanceHandler, graph_service=graph_service, llm_client=llm_client, config=config_obj)
+    rag_handler = providers.Factory(RAGHandler, rag_engine=rag_engine, llm_client=llm_client) 

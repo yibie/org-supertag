@@ -1235,20 +1235,6 @@ Returns t if valid, signals error if invalid."
 
 
 ;;------------------------------------------------------------------------------
-;; API Functions
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-behavior-get (tag-id)
-  "Get behavior definition for TAG-ID."
-  (when-let* ((tag (org-supertag-tag-get tag-id)))
-    (org-supertag-tag-get-field-value tag "_behavior")))
-
-(defun org-supertag-behavior-refresh-node (node-id)
-  "Refresh behaviors for NODE-ID."
-  (dolist (tag-id (org-supertag-db-get-tags node-id))
-    (org-supertag-behavior--safe-execute node-id tag-id :add)))
-
-;;------------------------------------------------------------------------------
 ;; Minor Mode
 ;;------------------------------------------------------------------------------
 

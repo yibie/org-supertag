@@ -1,4 +1,4 @@
-;;; org-supertag-migration.el --- Migrate standard Org tags to supertags -*- lexical-binding: t; -*-
+;;; org-supertag-migration.el --- Data migration utilities for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Provides functionality to migrate standard Org mode tags (e.g., :tag:)
@@ -10,6 +10,7 @@
 (require 'org-element)
 (require 'org-supertag-sync) ; Need access to sync directories and helpers
 (require 'cl-lib) ; For cl-lib functions like cl-loop, cl-incf
+(require 'org-supertag-db)
 
 (defun org-supertag--get-files-in-scope ()
   "Return a list of all .org files within the sync scope.
@@ -143,6 +144,46 @@ FILES before proceeding."
           (warn "Encountered %d errors during migration:" (length errors))
           (dolist (err-msg errors) (message "- %s" err-msg))
           (message "Please check the affected files manually."))))))
+
+;;;###autoload
+(defun org-supertag-migrate-properties-to-db ()
+  "Migrate custom field properties from Org file drawers to the org-supertag database."
+  (interactive)
+  (if (not (y-or-n-p "This will migrate properties from your .org files to the database and remove them from the files. This is a one-way operation. Continue? "))
+      (message "Migration cancelled.")
+    (let ((migrated-count 0)
+          (processed-nodes 0)
+          (files (org-supertag-sync--get-all-files-in-scope)))
+      (message "Starting migration for %d files..." (length files))
+      (dolist (file files)
+        (with-current-buffer (find-file-noselect file t)
+          (message "Processing file: %s" file)
+          (save-excursion
+            (save-restriction
+              (widen)
+              (goto-char (point-min))
+              (while (re-search-forward org-heading-regexp nil t)
+                (when-let ((node-id (org-id-get)))
+                  (cl-incf processed-nodes)
+                  (let* ((all-props (org-entry-properties))
+                         (custom-props (cl-remove-if (lambda (key)
+                                                       (member key '("ID" "DEADLINE" "SCHEDULED" "CLOSED" "CLOCK" "Effort" "LAST_REPEAT")))
+                                                     (mapcar #'car all-props))))
+                    (dolist (prop-name custom-props)
+                      (let ((prop-value (org-entry-get nil prop-name)))
+                        (when (and prop-value (not (string-empty-p prop-value)))
+                          (message "Migrating property '%s' for node %s" prop-name node-id)
+                          ;; Call the centralized field setter, passing nil for tag-id.
+                          (org-supertag-field-set-value node-id prop-name prop-value nil)
+                          ;; Remove the property from the file
+                          (org-delete-property prop-name)
+                          (cl-incf migrated-count))))))))))
+      (when (> migrated-count 0)
+        ;; Saving is handled by the set-value function,
+        ;; so we don't need to explicitly save here.
+        (message "Migration complete. Migrated %d properties from %d nodes." migrated-count processed-nodes))
+      (unless (= migrated-count 0)
+        (message "No properties found to migrate."))))))
 
 (provide 'org-supertag-migration)
 

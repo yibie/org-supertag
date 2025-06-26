@@ -2,7 +2,7 @@
 
 (require 'org-supertag-db)
 (require 'org-supertag-api)
-(require 'org-supertag-ui-conversation)
+
 
 (defgroup org-supertag-proactive-engine nil
   "Settings for the proactive intelligence engine."

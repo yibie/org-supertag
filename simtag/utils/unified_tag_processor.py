@@ -45,7 +45,7 @@
 import json
 import logging
 import re
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from dataclasses import dataclass, asdict, field
 from sexpdata import Symbol 
 
@@ -95,178 +95,81 @@ class TagRelationData:
 
 # ====== 最终的、健壮的数据转换逻辑 (V7) ======
 
+def _is_alist(data: list) -> bool:
+    """
+    Deterministically checks if a list has the structure of an Elisp alist.
+    An alist is a list of lists/tuples.
+    """
+    if not data:
+        return True
+    return all(isinstance(item, (list, tuple)) for item in data)
+
 def _parse_elisp_data(data: Any) -> Any:
     """
     Recursively and robustly parses Elisp data structures into Python equivalents.
-    V9: The truly, absolutely final version. Handles string-based keywords.
     """
-    # Base case: data is not a list.
-    if not isinstance(data, list):
+    if not isinstance(data, (list, tuple)):
         if isinstance(data, Symbol):
             val = data.value()
             if val == 't': return True
             if val == 'nil': return None
+            # Handle keywords by stripping the leading ':'
             if val.startswith(':'):
                 return val[1:]
             return val
-        
-        # THIS IS THE FINAL FIX: Handle strings that are formatted like keywords.
-        if isinstance(data, str) and data.startswith(':'):
-            return data[1:]
-        
         return data
 
-    # Recursive case: data is a list.
     if not data:
         return []
-    
-    # Special case: Emacs time list format
-    # Emacs time lists are typically [high low microsecs picosecs] or [high low microsecs]
-    if (len(data) in [3, 4] and 
-        all(isinstance(x, (int, float)) for x in data) and
-        len([x for x in data if isinstance(x, int) and x >= 0]) == len(data)):
-        # This looks like an Emacs time list, convert to ISO string
-        # For now, just return a string representation
-        # In the future, we could convert to actual datetime
-        return f"emacs-time:{data}"
 
-    # Case 1: #s-prefixed structure for objects or empty hash-tables
-    if isinstance(data[0], Symbol) and data[0].value() == '#s':
-        # Handles #s() -> {}
-        if len(data) == 2 and isinstance(data[1], list) and not data[1]:
-            return {}
-        # Handles #s(...) -> list of objects
-        return [_parse_elisp_data(item) for item in data if not (isinstance(item, Symbol) and item.value() == '#s')]
-
-    # Case 2: A hash-table representation
-    if isinstance(data[0], Symbol) and data[0].value() == 'hash-table':
-        return _parse_hash_table_list(data)
-
-    # Case 3: An association list (alist) - THIS IS THE KEY FIX
+    # Check if it's an alist
     if _is_alist(data):
+        # This check is to differentiate a list of alists (like nodes) from a single alist
+        if any(isinstance(item[0], (list, tuple)) for item in data if item):
+             return [_parse_elisp_data(item) for item in data]
+        
         result_dict = {}
         for item in data:
-            if not item: continue # Skip empty lists in the alist
-            
-            # Special case: if item[0] is a list, this might be a list of objects (not an alist)
-            # e.g., [[['id', '.', 'value'], ['content', '.', 'value']], [...]] for nodes
-            if isinstance(item[0], list):
-                # This is likely a list of objects, not an alist
-                # We should treat this as a plain list and return it as such
-                return [_parse_elisp_data(item) for item in data]
+            if not item: continue
             
             key = _parse_elisp_data(item[0])
-            value = None
             
-            # Check for dotted pair `(key . val)` - handle both Symbol and string representations
-            if len(item) == 3 and (
-                (isinstance(item[1], Symbol) and item[1].value() == '.') or 
-                (isinstance(item[1], str) and item[1] == '.')
-            ):
+            # Handle dotted pair `(key . val)`
+            if len(item) == 3 and isinstance(item[1], Symbol) and item[1].value() == '.':
                 value = _parse_elisp_data(item[2])
             else:
-                # Handle `(key val_part_1 val_part_2 ...)`
                 value_parts = item[1:]
-                if len(value_parts) == 1:
-                    value = _parse_elisp_data(value_parts[0])
-                else:
-                    # Recursively parse the entire tail of the list as the value
-                    value = _parse_elisp_data(value_parts)
+                value = _parse_elisp_data(value_parts[0]) if len(value_parts) == 1 else _parse_elisp_data(value_parts)
             
-            if isinstance(key, (str, int, float, bool, type(None))):
-                result_dict[key] = value
-            else:
-                logger.warning(f"Skipping unhashable key of type {type(key)} in alist: {key}")
+            result_dict[key] = value
         return result_dict
 
-    # Case 4: A plain list of items
+    # Otherwise, it's a plain list
     return [_parse_elisp_data(item) for item in data]
-
-def _is_alist(data: list) -> bool:
-    """
-    Deterministically checks if a list has the structure of an Elisp alist.
-    An alist is a list of lists.
-    """
-    if not data:
-        return True
-    return all(isinstance(item, list) for item in data)
-
-
-def _parse_hash_table_list(data_list: list) -> dict:
-    """Helper to parse the [Symbol('hash-table'), ..., [k,v,...]] structure."""
-    if len(data_list) < 4: return {}
-
-    kv_list = data_list[-1]
-    if not isinstance(kv_list, list): return {}
-
-    h_table = {}
-    i = 0
-    while i < len(kv_list):
-        # 1. Parse the key
-        key = _parse_elisp_data(kv_list[i])
-        i += 1
-        
-        if i >= len(kv_list): break
-
-        # 2. Parse the value, which may be multi-part (e.g., #s <obj>)
-        val_item = kv_list[i]
-        if isinstance(val_item, Symbol) and val_item.value() == '#s':
-            if i + 1 < len(kv_list):
-                value = _parse_elisp_data([val_item, kv_list[i+1]])
-                i += 2
-            else: 
-                value = {} # Dangling #s is an empty hash-table
-                i += 1
-        else:
-            value = _parse_elisp_data(val_item)
-            i += 1
-        
-        if isinstance(key, (str, int, float, bool, type(None))):
-            h_table[key] = value
-        else:
-            logger.warning(f"Skipping unhashable key of type {type(key)} in hash-table: {key}")
-            
-    return h_table
 
 def normalize_payload(payload: Any) -> Dict:
     """
     The single, robust entry point for normalizing any payload from Elisp.
-    It defensively handles payloads that may have had their outer list wrapper
-    stripped by the EPC layer.
     """
     logger.debug(f"normalize_payload received raw payload of type: {type(payload)}")
 
-    elisp_data = None
-    # The contract is that Elisp sends `(list alist)`.
-    # After EPC, this should arrive as `[alist]`.
-    if isinstance(payload, list) and len(payload) == 1:
-        # This is the ideal, correctly wrapped payload.
+    elisp_data = payload
+    if isinstance(payload, (list, tuple)) and len(payload) == 1:
         elisp_data = payload[0]
-        logger.debug(f"Payload matches contract. Extracted Elisp data structure of type: {type(elisp_data)}")
-    else:
-        # This is likely a bare alist whose wrapper was stripped by EPC.
-        # We assume the entire payload is the data structure to parse.
-        logger.warning(f"Payload wrapper missing. Assuming entire payload of type {type(payload)} is the data structure.")
-        elisp_data = payload
 
-    # --- END TEMPORARY DEBUG LOG ---
+    parsed_data = _parse_elisp_data(elisp_data)
 
-    try:
-        # Parse the extracted data using our robust parser.
-        parsed_data = _parse_elisp_data(elisp_data)
-        
-        if not isinstance(parsed_data, dict):
-            # This check is a safeguard. If the top-level data from elisp was not
-            # a dictionary-like structure (alist/hash-table), we wrap it to ensure
-            # handlers always receive a dictionary.
-            logger.warning(f"Parser returned a non-dictionary type ({type(parsed_data)}). Wrapping it in a default dictionary under key 'data'.")
-            return {'data': parsed_data}
-
-        logger.debug("Successfully parsed Elisp data into a Python dictionary.")
+    if isinstance(parsed_data, dict):
         return parsed_data
-    except Exception as e:
-        logger.error(f"Failed to parse Elisp data structure: {e}", exc_info=True)
-        return {"error": "parsing_failed", "message": str(e)}
+    
+    # NEW: If the result is a list with a single dictionary, unwrap it.
+    # This handles the case where a single alist is parsed into [{}].
+    if isinstance(parsed_data, list) and len(parsed_data) == 1 and isinstance(parsed_data[0], dict):
+        logger.debug("Unwrapping single dictionary from list.")
+        return parsed_data[0]
+    
+    logger.warning(f"Parsed data is not a dict ({type(parsed_data)}), wrapping.")
+    return {'data': parsed_data}
 
 # ====== 旧的、复杂的数据转换逻辑 (将被删除) ======
 # All old functions like _convert_simple_sexp, _convert_sexp_to_dict, 
