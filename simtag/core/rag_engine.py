@@ -16,6 +16,7 @@ from simtag.config import Config
 from .graph_service import GraphService
 from ..services.llm_client import LLMClient
 from .entity_extractor import LLMEntityExtractor, ExtractedEntity
+from ..services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class OrgSupertagRAGEngine:
     def __init__(self,
                  graph_service: GraphService,
                  llm_client: LLMClient,
+                 embedding_service: EmbeddingService,
                  config: Config
                  ):
         """
@@ -46,10 +48,12 @@ class OrgSupertagRAGEngine:
         Args:
             graph_service: Instance of the unified GraphService.
             llm_client: Client for interacting with an LLM for generation.
+            embedding_service: Service for generating embeddings.
             config: Configuration object.
         """
         self.graph_service = graph_service
         self.llm_client = llm_client
+        self.embedding_service = embedding_service
         self.config = config
         
         # Use the new, unified LLMEntityExtractor
@@ -75,7 +79,7 @@ class OrgSupertagRAGEngine:
 
         if query_embedding is None:
             logger.debug("No pre-computed embedding, generating one for the query.")
-            query_embedding = await self.llm_client.get_embedding(query_text)
+            query_embedding = await self.embedding_service.get_embedding(query_text)
             if query_embedding is None:
                 logger.error("Failed to generate embedding for query.")
                 return StructuredContextOutput(entities=[], relations=[], documents=[])
@@ -321,7 +325,7 @@ class OrgSupertagRAGEngine:
                 # The new extractor returns a dict, not just entities
                 tasks.append(self.entity_extractor.extract(query_text))
             
-            tasks.append(self.llm_client.get_embedding(query_text))
+            tasks.append(self.embedding_service.get_embedding(query_text))
             
             results = await asyncio.gather(*tasks)
             
@@ -363,7 +367,7 @@ class OrgSupertagRAGEngine:
             logger.warning(f"Unknown retrieval strategy: {strategy}. Defaulting to naive.")
             # Ensure query_embedding is available for the default naive call
             if query_embedding is None: # It would be None if strategy was initially "mini"
-                 query_embedding = await self.llm_client.get_embedding(query_text)
+                 query_embedding = await self.embedding_service.get_embedding(query_text)
                  if query_embedding is None:
                     logger.error("Failed to get query embedding for default naive strategy.")
                     return StructuredContextOutput(entities=[], relations=[], documents=[])

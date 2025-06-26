@@ -645,7 +645,7 @@ class EmbeddingService:
             return chinese_chars * 1.5 + other_chars * 0.3
         
         # 1. 优先添加标题（最重要的语义信息）
-        title = node_data.get('title', '').strip()
+        title = node_data.get(':title', '').strip()
         if title:
             title_text = f"标题: {title}"
             title_tokens = estimate_tokens(title_text)
@@ -654,7 +654,7 @@ class EmbeddingService:
                 used_tokens += title_tokens
         
         # 2. 添加关键上下文（如果空间允许）
-        olp = node_data.get('olp', [])
+        olp = node_data.get(':olp', [])
         if olp and len(olp) > 0 and used_tokens < max_total_tokens * 0.5:  # 只在token使用率<50%时添加
             context = " > ".join(olp[-2:])  # 只取最近的2级父标题
             context_text = f"上下文: {context}"
@@ -664,7 +664,7 @@ class EmbeddingService:
                 used_tokens += context_tokens
         
         # 3. 添加标签（如果空间允许且标签数量合理）
-        tags = node_data.get('tags', [])
+        tags = node_data.get(':tags', [])
         if tags and len(tags) <= 5 and used_tokens < max_total_tokens * 0.6:
             tags_text = f"标签: {', '.join(tags[:5])}"  # 最多5个标签
             tags_tokens = estimate_tokens(tags_text)
@@ -673,7 +673,7 @@ class EmbeddingService:
                 used_tokens += tags_tokens
         
         # 4. 用剩余空间添加内容
-        content = node_data.get('content', '').strip()
+        content = node_data.get(':content', '').strip()
         if content:
             remaining_tokens = max_total_tokens - used_tokens - 20  # 保留20 token的安全边界
             if remaining_tokens > 50:  # 至少要有50 token才添加内容
@@ -689,8 +689,8 @@ class EmbeddingService:
         final_tokens = estimate_tokens(final_text)
         if final_tokens > max_total_tokens:
             # 如果还是超过，优先保留标题和少量内容
-            title_only = node_data.get('title', '').strip()
-            content = node_data.get('content', '').strip()
+            title_only = node_data.get(':title', '').strip()
+            content = node_data.get(':content', '').strip()
             if content:
                 remaining_chars = max_total_tokens * 0.6  # 大约60%给内容
                 truncated = self._smart_truncate(content, int(remaining_chars))

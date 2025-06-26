@@ -7,11 +7,18 @@
 (require 'org-supertag-view-table)
 (require 'org-supertag-view-discover)
 (require 'org-supertag-view-column)
-
+(require 'org-supertag-view-node)
+(require 'org-supertag-view-chat)
 
 ;;----------------------------------------------------------------------
 ;; Main functions
 ;;---------------------------------------------------------------------- 
+
+;;;###autoload
+(defun org-supertag-view-node ()
+  "Show the unified view for the node at point."
+  (interactive)
+  (org-supertag-view-node-show))
 
 ;;;###autoload
 (defun org-supertag-view-tag ()
@@ -63,9 +70,6 @@ Available views:
   (setq-local org-mode-hook nil)
   (use-local-map org-supertag-view-column-mode-map))
 
-
-
-
 (define-minor-mode org-supertag-view-mode
   "Minor mode for viewing org-supertag tag-related content."
   :lighter " SuperTag-View"
@@ -81,10 +85,6 @@ Available views:
     ;; When disabling the mode
     (when (boundp 'org-supertag-view--prev-read-only)
       (setq buffer-read-only org-supertag-view--prev-read-only))))
-      
-
 
 (provide 'org-supertag-view)
-
 ;;; org-supertag-view.el ends here
-

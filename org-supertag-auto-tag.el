@@ -517,19 +517,30 @@ The data is structured according to the unified data contract."
         (org-supertag-auto-tag--batch-refresh-display)))))
 
 (defun org-supertag-auto-tag--apply-tag-to-node (node-id tag-name)
-  "Apply tag to node (database and file)."
-  (let* ((tag-result (org-supertag-inline--ensure-tag tag-name))
-         (tag-id (plist-get tag-result :tag-id)))
-    (org-supertag-node-db-add-tag node-id tag-id)
-    (org-supertag-inline-insert-tag-for-node node-id tag-name)
+  "Apply tag to node, ensuring it's fully registered in the database and file."
+  (message "Applying tag '%s' to node '%s'..." tag-name node-id)
+  ;; 1. Sanitize the tag name to get a valid ID.
+  (let ((tag-id (org-supertag-sanitize-tag-name tag-name)))
+    ;; 2. Check if the tag object exists in the database. If not, create it.
+    (unless (org-supertag-tag-get tag-id)
+      (message "Tag '%s' not found in DB, creating it." tag-id)
+      (org-supertag-tag-create tag-id))
     
-    ;; Remove processed suggestions from queue
+    ;; 3. Link the node to the tag in the database.
+    (message "Linking node '%s' to tag '%s'." node-id tag-id)
+    (org-supertag-node-db-add-tag node-id tag-id)
+    
+    ;; 4. Insert the tag visually into the Org file.
+    (message "Inserting tag '%s' into file for node '%s'." tag-name node-id)
+    (org-supertag-inline-insert-tag-for-autotag node-id tag-name)
+    
+    ;; 5. Remove processed suggestions from the queue to prevent re-processing.
     (setq org-supertag-auto-tag--suggestion-queue
-          (seq-remove (lambda (s)
-                        (and (equal (plist-get s :node-id) node-id)
-                             (equal (plist-get s :tag-name) tag-name)))
-                      org-supertag-auto-tag--suggestion-queue)))
-  (message "Applied tag '%s' to node" tag-name))
+          (cl-remove-if (lambda (suggestion)
+                           (and (equal (plist-get suggestion :node-id) node-id)
+                                (equal (plist-get suggestion :tag-name) tag-name)))
+                         org-supertag-auto-tag--suggestion-queue))
+    (message "Tag '%s' applied and suggestion removed from queue." tag-name)))
 
 (defun org-supertag-auto-tag-get-tags-from-llm (nodes callback)
   "Send text chunks in NODES to LLM and get tags asynchronously."
@@ -562,5 +573,33 @@ The data is structured according to the unified data contract."
          (funcall result))
        (unless result
          (message "Auto-tagging returned no result."))))))
+
+(defun org-supertag-auto-tag--apply-suggestion-for-node (node-id tag-suggestions)
+  "Apply selected tag suggestions to a specific node.
+This function now correctly registers the tag in the database."
+  (dolist (suggestion tag-suggestions)
+    (let ((tag-name (plist-get suggestion :tag-name)))
+      (when (and (stringp tag-name) (not (string-empty-p tag-name)))
+        (message "Auto-tag: Applying suggestion '%s' to node '%s'" tag-name node-id)
+        
+        ;; --- Database Registration Logic ---
+        ;; 1. Sanitize and ensure the tag object exists in the database.
+        (let ((sanitized-tag-name (org-supertag-sanitize-tag-name tag-name)))
+          (unless (org-supertag-tag-get sanitized-tag-name)
+            (org-supertag-tag-create sanitized-tag-name))
+          
+          ;; 2. Link the node to the tag in the database.
+          (org-supertag-node-db-add-tag node-id sanitized-tag-name))
+
+        ;; --- UI/File Update Logic ---
+        ;; 3. Visually add the tag to the Org file as an inline tag.
+        (org-supertag-inline-tag-add (list tag-name) node-id)))))
+
+(defun org-supertag-auto-tag--get-all-suggestions-for-node (node-id)
+  "Get all suggestions for a given NODE-ID from the suggestion-queue."
+  (seq-filter (lambda (s)
+                (and (equal (plist-get s :node-id) node-id)
+                     (stringp (plist-get s :tag-name))))
+              org-supertag-auto-tag--suggestion-queue))
 
 (provide 'org-supertag-auto-tag)

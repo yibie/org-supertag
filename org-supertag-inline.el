@@ -125,6 +125,13 @@ The :style can be:
           (const :tag "Semi-bold" semi-bold))
   :group 'org-supertag-inline-style)
 
+(defcustom org-supertag-inline-manual-insert-add-newline nil
+  "When non-nil, add a newline after manually inserting an inline tag.
+This is useful for workflows where tags are expected to be on their own line,
+such as with the auto-tagging system."
+  :type 'boolean
+  :group 'org-supertag-inline-style)
+
 ;; Define the face for inline tags
 (defface org-supertag-inline-face
   `((t (:background ,org-supertag-inline-background
@@ -473,152 +480,93 @@ Only creates the relationship if NODE-ID is not nil."
 
 ;;;###autoload
 (defun org-supertag-inline-insert-tag (tag-name)
-  "Insert an inline tag at point and establish proper relationships.
-When called with an active region, use the region text as the default tag name.
-TAG-NAME is the name of the tag to insert.
-
-This function follows a structured approach:
-1. Analyze the current context
-2. Ensure the tag exists (create if necessary)
-3. Adjust cursor position appropriately (for manual insertion, stay at cursor)
-4. Insert the tag with proper spacing
-5. Establish tag-node relationships"
+  "Insert a simple inline tag at point without any automatic newline.
+This is the standard function for manual, interactive use."
   (interactive (list (org-supertag-inline--read-tag-name)))
-  
-  (let* ((original-pos (point-marker))
-         (context-info (org-supertag-inline--analyze-context))
-         (node-id (plist-get context-info :node-id))
-         (tag-result (org-supertag-inline--ensure-tag tag-name))
-         (tag-id (plist-get tag-result :tag-id))
-         (display-name (plist-get tag-result :tag-name)))
-    
-    ;; Debug information
-    (message "inline-insert-tag: ID=%s drawer=%s ctx=%s pos=%d"
-             node-id
-             (plist-get context-info :in-drawer)
-             (plist-get context-info :type)
-             (marker-position original-pos))
-    
-    ;; Process the insertion - for manual insertion, don't change position
-    (org-supertag-inline--adjust-position context-info)
-    (org-supertag-inline--insert-tag-text display-name)
-    ;; Ensure tag line ends with newline if not at end of buffer
-    (unless (or (eobp) (looking-at-p "\n"))
-      (insert "\n"))
-    (org-supertag-inline--establish-relationship tag-result node-id)
-    
-    ;; Cleanup
-    (set-marker original-pos nil)
-    
-    ;; Return message
-    (message "Inserted inline tag #%s%s"
-             display-name
-             (if node-id
-                 (format " and linked to node %s" node-id)
-               ""))))
+  (when (and tag-name (not (string-empty-p tag-name)))
+    (let* ((node-id (org-id-get-create))
+           (display-name (org-supertag-sanitize-tag-name tag-name))
+           (tag-entity (or (org-supertag-tag-get display-name)
+                           (progn
+                             (org-supertag-tag-create display-name)
+                             (org-supertag-tag-get display-name)))))
 
-;;;###autoload
+      ;; 1. Insert tag text with spacing at point
+      (org-supertag-inline--insert-tag-text display-name)
+
+      ;; 2. Establish relationship in database
+      (when tag-entity
+        (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
+
+      (message "Inserted inline tag #%s" display-name))))
+
+(defun org-supertag-inline-insert-tag-for-autotag (node-id tag-name)
+  "Insert a tag for the auto-tag system, positioning it smartly.
+This function is for programmatic use by the auto-tag engine and
+will typically place the tag on a new line below the headline properties."
+  (when (and node-id tag-name)
+    (when-let* ((node-props (org-supertag-db-get node-id))
+                (file-path (plist-get node-props :file))
+                (pos (plist-get node-props :pos)))
+      (with-current-buffer (find-file-noselect file-path)
+        (goto-char pos)
+        ;; Use the smart positioning logic for auto-tag insertion
+        (org-supertag-inline--smart-position-for-insertion)
+        ;; Create tag and insert
+        (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
+               (tag-entity (or (org-supertag-tag-get display-name)
+                               (progn
+                                 (org-supertag-tag-create display-name)
+                                 (org-supertag-tag-get display-name)))))
+          (org-supertag-inline--insert-tag-text display-name)
+          (when tag-entity
+            (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
+          (message "Auto-inserted tag #%s for node %s" display-name node-id))))))
+
 (defun org-supertag-inline-insert-tags-batch (tag-names)
-  "Insert multiple inline tags in a single line and establish relationships.
-TAG-NAMES is a list of tag names."
+  "Insert multiple inline tags, respecting the user's choice for newlines."
+  (interactive (list (org-supertag-inline--read-multiple-tags)))
   (when tag-names
-    (let* ((context-info (org-supertag-inline--analyze-context))
-           (node-id (plist-get context-info :node-id))
-           (processed-tags '()))
-      
-      ;; Process and validate all tags
-      (dolist (tag-name tag-names)
-        (condition-case err
-            (let ((tag-result (org-supertag-inline--ensure-tag tag-name)))
-              (push tag-result processed-tags))
-          (error
-           (message "Failed to process tag: %s - %s" tag-name (error-message-string err)))))
-      
+    (let* ((node-id (org-id-get-create))
+           (processed-tags (mapcar #'org-supertag-tag-get-or-create tag-names)))
+
+      ;; Do not reposition the cursor for manual batch insertion.
+      ;; The insertion will happen at the user's cursor position.
+      ;; (org-supertag-inline--position-for-batch-insert)
+
       ;; Insert tags in batch
-      (when processed-tags
-        (setq processed-tags (nreverse processed-tags))
-        (org-supertag-inline--insert-tags-batch processed-tags)
-        
-        ;; Establish relationships
-        (dolist (tag-result processed-tags)
-          (org-supertag-inline--establish-relationship tag-result node-id))
-        
-        (message "Inserted %d tags: %s" 
-                 (length processed-tags)
-                 (mapconcat (lambda (tr) (plist-get tr :tag-name)) processed-tags " "))))))
+      (org-supertag-inline--insert-tags-batch processed-tags)
+
+      ;; Establish relationships
+      (dolist (tag-result processed-tags)
+        (org-supertag-node-db-add-tag node-id (plist-get tag-result :id)))
+
+      ;; Add newline only if explicitly configured
+      (when org-supertag-inline-manual-insert-add-newline
+        (insert "\n"))
+
+      (message "Inserted %d tags: %s"
+               (length processed-tags)
+               (mapconcat (lambda (r) (plist-get r :tag-name))
+                          processed-tags ", ")))))
 
 (defun org-supertag-inline--insert-tags-batch (tag-results)
   "Insert multiple tags in a single line.
-TAG-RESULTS is a list of tag result plists."
-  (when tag-results
-    (let* ((drawer-end (org-supertag-inline--find-drawer-end))
-           (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
-      (cond
-       ;; If there's an existing tag line, add at the end
-       (existing-tag-line
-        (goto-char existing-tag-line)
-        (end-of-line)
-        (dolist (tag-result tag-results)
-          (insert (format " #%s" (plist-get tag-result :tag-name))))
-        ;; Ensure tag line ends with newline
-        (unless (looking-at-p "\n")
-          (insert "\n")))
-       ;; If there's a drawer, create a tag line after the drawer
-       (drawer-end
-        (goto-char drawer-end)
-        ;; Skip empty lines
-        (while (and (not (eobp))
-                   (not (org-at-heading-p))
-                   (looking-at-p "^[ \t]*$"))
-          (forward-line 1))
-        ;; If in content line, insert above
-        (if (and (not (eobp))
-                (not (org-at-heading-p))
-                (not (looking-at-p "^[ \t]*$")))
-            (progn
-              (beginning-of-line)
-              (open-line 1))
-          (unless (bolp) (insert "\n")))
-        ;; Insert all tags 
-        (insert (mapconcat (lambda (tag-result) 
-                            (format "#%s" (plist-get tag-result :tag-name)))
-                          tag-results " "))
-        (insert "\n"))
-       ;; If no drawer, create a tag line below the heading
-       (t
-        (end-of-line)
-        (insert "\n")
-        (insert (mapconcat (lambda (tag-result) 
-                            (format "#%s" (plist-get tag-result :tag-name)))
-                          tag-results " "))
-        (insert "\n"))))))
+TAG-RESULTS is a list of plists, each from `org-supertag-tag-get-or-create'."
+  (let ((first t))
+    (dolist (tag-result tag-results)
+      (unless first
+        (insert " ")) ; Space between tags
+      (org-supertag-inline--insert-tag-text (plist-get tag-result :tag-name))
+      (setq first nil))))
 
-(defun org-supertag-inline-insert-tag-for-node (node-id tag-name)
-  "Insert an inline tag for a specific node ID (used by auto-tag system).
-This finds the node's file and position, then inserts the tag below the drawer.
-NODE-ID: The ID of the node.
-TAG-NAME: The name of the tag to insert."
-  (when-let* ((node-data (org-supertag-db-get node-id))
-              (file-path (plist-get node-data :file-path))
-              (pos (plist-get node-data :pos)))
-    (if (and file-path (file-exists-p file-path))
-        (with-current-buffer (find-file-noselect file-path)
-          (goto-char pos)
-          (when (org-at-heading-p)
-            ;; Use the smart positioning logic for auto-tag insertion
-            (org-supertag-inline--smart-position-for-insertion)
-            ;; Create tag and insert
-            (let* ((tag-result (org-supertag-inline--ensure-tag tag-name))
-                   (display-name (plist-get tag-result :tag-name))
-                   (tag-id (plist-get tag-result :tag-id)))
-              ;; Insert the tag name (not UUID)
-              (insert "#" display-name " ")
-              ;; Establish relationship using tag-id
-              (let ((org-supertag-tag-apply-skip-headline t)
-                    (org-supertag-force-node-id node-id))
-                (org-supertag-tag-apply tag-id)))
-            (save-buffer)))
-      (message "Node file not found for ID: %s" node-id))))
+;; The function org-supertag-inline-insert-tag-for-node is now obsolete
+;; and replaced by org-supertag-inline-insert-tag-for-autotag
+;; (defun org-supertag-inline-insert-tag-for-node (node-id tag-name) ... )
+
+;; The function org-supertag-inline-insert-tag-no-newline is now obsolete
+;; as its logic will be merged into the main org-supertag-inline-insert-tag.
+;; (defun org-supertag-inline-insert-tag-no-newline (tag-name) ... )
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

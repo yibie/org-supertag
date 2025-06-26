@@ -20,6 +20,7 @@ from simtag.module.query_handler import QueryHandler
 from simtag.module.diagnostics_handler import DiagnosticsHandler
 from simtag.module.autotag_handler import AutotagHandler
 from simtag.module.resonance_handler import ResonanceHandler
+from simtag.module.rag_handler import RAGHandler
 from simtag.config import Config
 from typing import Dict, List, Any, Optional
 
@@ -123,6 +124,10 @@ class SimTagBridge:
         
         # Proactive Features
         self.server.register_function(self.proactive_get_resonance, 'proactive_get_resonance')
+        
+        # RAG Assistant
+        self.server.register_function(self.analyze_note, 'rag/analyze_note')
+        self.server.register_function(self.continue_conversation, 'rag/continue_conversation')
         
         logger.info("All EPC methods registered successfully.")
 
@@ -248,11 +253,24 @@ class SimTagBridge:
             self.server.shutdown()
 
     @inject
+    def analyze_note(self, *args, handler: RAGHandler = Provide[AppContainer.rag_handler]):
+        """
+        Analyzes a note using RAG.
+        This is a dispatcher method that finds the right handler and runs it asynchronously.
+        """
+        logger.info(f"Bridge received for analyze_note - type: {type(args)}, content: {args}")
+        try:
+            return self._run_async(handler.analyze_note(*args))
+        except Exception as e:
+            logger.error(f"Error in analyze_note bridge call: {e}", exc_info=True)
+        
+    @inject
     def sync_library(self, db_file: str, db_snapshot_json_str: str, handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
         return handler.sync_library_from_snapshot_json(db_file, db_snapshot_json_str)
 
     @inject
     def get_similar_nodes(self, query_input: str, top_k: int = 10, handler: QueryHandler = Provide[AppContainer.query_handler]):
+        """Finds nodes semantically similar to the input query string."""
         return handler.get_similar_nodes(query_input, top_k)
 
     @inject
@@ -456,6 +474,26 @@ class SimTagBridge:
         except Exception as e:
             logger.error(f"Error calling async generate_single_node_tags handler: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
+
+    @inject
+    def continue_conversation(self, *args, handler: RAGHandler = Provide[AppContainer.rag_handler]):
+        """
+        Continues a RAG conversation.
+        Runs the async handler method in the event loop.
+        """
+        logger.info(f"Bridge received for continue_conversation - type: {type(args)}, content: {args}")
+        try:
+            return self._run_async(handler.continue_conversation(*args))
+        except Exception as e:
+            logger.error(f"Error in continue_conversation bridge call: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+    @inject
+    def get_prompt_template_elisp(self, *args, handler: QueryHandler = Provide[AppContainer.query_handler]):
+        # This method is not provided in the original file or the code block
+        # It's assumed to exist as it's called in the code
+        # Implementation needed
+        pass
 
 def main():
     parser = argparse.ArgumentParser(description="Org SuperTag EPC Bridge Server (Python)")

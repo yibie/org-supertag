@@ -15,6 +15,8 @@
 (require 'org-supertag-db)
 (require 'org-supertag-sync)
 (require 'org-supertag-relation)
+(require 'org-supertag-node)
+(require 'org-supertag-tag)
 
 ;; Recovery state tracking
 (defvar org-supertag-recovery--state (make-hash-table :test 'equal)
@@ -866,6 +868,45 @@ Select (1-9): "
 (message "org-supertag Complete Recovery Suite loaded")
 (message "Run: M-x org-supertag-recovery-full-suite to start recovery")
 (message "Run: M-x org-supertag-emergency-recovery for emergency recovery")
+
+(defun org-supertag-diagnose-dangling-links ()
+  "Diagnose and offer to fix dangling node-tag links.
+A dangling link is a :node-tag link where the 'to' part
+(the tag-id) does not exist as a defined tag."
+  (interactive)
+  (let ((dangling-links '())
+        (fixed-count 0))
+    ;; Collect all dangling links
+    (maphash
+     (lambda (link-id props)
+       (when (and (string-prefix-p ":node-tag:" link-id)
+                  (eq (plist-get props :type) :node-tag))
+         (let ((tag-id (plist-get props :to)))
+           (unless (org-supertag-tag-get tag-id)
+             (push (list link-id props) dangling-links)))))
+     org-supertag-db--link)
+
+    ;; Report and offer to fix
+    (if (not dangling-links)
+        (message "No dangling links found. Your database is clean.")
+      (progn
+        (message "Found %d dangling links:" (length dangling-links))
+        (dolist (link-info dangling-links)
+          (let* ((link-id (car link-info))
+                 (props (cadr link-info))
+                 (node-id (plist-get props :from))
+                 (tag-id (plist-get props :to)))
+            (message "  - Node '%s' is linked to non-existent tag '%s'."
+                     (or (plist-get (org-supertag-db-get node-id) :title) node-id)
+                     tag-id)))
+        (when (yes-or-no-p "Do you want to remove all these invalid links? ")
+          (dolist (link-info dangling-links)
+            (let ((link-id (car link-info)))
+              (remhash link-id org-supertag-db--link)
+              (setq fixed-count (1+ fixed-count))))
+          (org-supertag-db--mark-dirty)
+          (org-supertag-db--schedule-save)
+          (message "Removed %d dangling links. Database has been cleaned." fixed-count))))))
 
 (provide 'org-supertag-recovery)
 

@@ -77,7 +77,7 @@ Enabling this increases accuracy but reduces performance."
   :group 'org-supertag-sync)
 
 (defcustom org-supertag-sync-hash-props
-  '(:raw-value :tags :todo-type :priority :properties)
+  '(:raw-value :tags :todo-type :priority)
   "Properties to include when calculating node hash values."
   :type '(repeat symbol)
   :group 'org-supertag-sync)
@@ -242,50 +242,42 @@ Returns a plist of node properties or nil if not at a valid node."
   (when (org-at-heading-p)
     (condition-case err
         (let* ((element
-                ;; Ensure a stable parsing environment to prevent hash mismatches
-                ;; by temporarily overriding potentially interfering variables.
                 (let ((org-element-use-cache nil)
                       (org-M-RET-may-split-line nil)
                       (org-startup-folded nil)
                       (org-hide-emphasis-markers nil))
-                  (save-excursion
-                    (org-back-to-heading t)
-                    (org-element-at-point))))
-               (raw-value (org-element-property :raw-value element)))
-          (unless raw-value
-            (error "Failed to extract raw value from heading"))
-          (let ((props (list :type :node
-                            :id (org-id-get)
-                            :title raw-value
-                            :raw-value raw-value
-                            :tags (org-element-property :tags element)
-                            :todo-type (org-element-property :todo-type element)
-                            :priority (let ((prio (org-element-property :priority element)))
-                                        (cond
-                                         ((numberp prio) (char-to-string prio))
-                                         ((stringp prio) prio)
-                                         ((null prio) nil)
-                                         (t (format "%S" prio))))
-                            :properties (condition-case nil
-                                          (org-entry-properties nil 'all)
-                                        (error nil))
-                            :file-path (buffer-file-name)
-                            :level (or (org-element-property :level element) 1)
-                            :pos (or (org-element-property :begin element) (point))
-                            :begin (or (org-element-property :begin element) (point))
-                            :contents-begin (org-element-property :contents-begin element)
-                            :contents-end (org-element-property :contents-end element)
-                            :olp (condition-case nil
-                                    (org-get-outline-path t)
-                                  (error nil)))))
-            ;; Validate required properties
-            (cl-loop for prop in '(:id :title :file-path :type)
-                     for value = (plist-get props prop)
-                     unless value do
-                     (error "Missing required property %s" prop))
-            props))
+                  (org-element-at-point)))
+               (file (buffer-file-name))
+               (pos (point))
+               (level (org-element-property :level element))
+               (title (org-element-property :title element))
+               (raw-value (org-element-property :raw-value element))
+               (tags (org-element-property :tags element))
+               (todo-type (org-element-property :todo-type element))
+               (todo-keyword (org-element-property :todo-keyword element))
+               (priority (org-element-property :priority element))
+               (scheduled (org-element-property :scheduled element))
+               (deadline (org-element-property :deadline element))
+               (olp (org-get-outline-path t))
+               ;; Fields related to file content are no longer extracted
+               ;; to decouple from the org-properties system.
+               (id (org-id-get)))
+          (list :id id
+                :file-path file
+                :pos pos
+                :level level
+                :title title
+                :raw-value raw-value
+                :tags tags
+                :todo-type todo-type
+                :todo-keyword todo-keyword
+                :priority priority
+                :scheduled scheduled
+                :deadline deadline
+                :olp olp))
       (error
-       (message "Error extracting node properties: %s" (error-message-string err))
+       (message "Failed to extract node properties at point %d: %s" 
+                (point) (error-message-string err))
        nil))))
 
 (defun org-supertag-db-update-buffer ()
@@ -1464,7 +1456,7 @@ This helps identify why nodes are being marked as 'updated' when they shouldn't 
                        (cl-incf hash-mismatches)
                        ;; Detailed comparison
                        (let ((differences '()))
-                         (dolist (prop '(:raw-value :tags :todo-type :priority :properties))
+                         (dolist (prop '(:raw-value :tags :todo-type :priority))
                            (let ((old-val (plist-get old-node prop))
                                  (new-val (plist-get new-props prop)))
                              (unless (equal old-val new-val)
