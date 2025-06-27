@@ -1955,6 +1955,24 @@ Returns an alist of (key . value) pairs."
     (message "After reload: %S" 
              (mapcar #'car (org-supertag-db-list-metadata)))))
 
+(defun org-supertag-db-get-all-links ()
+  "Return all links."
+  org-supertag-db--link)
+
+(defun org-supertag-db-get-nodes-by-tag (tag-id)
+  "Return a list of node IDs associated with a given TAG-ID.
+TAG-ID: The identifier of the tag.
+
+This function searches the link database for all `:node-tag`
+relationships where the 'to' field matches the given TAG-ID."
+  (let ((node-ids '()))
+    (maphash (lambda (_link-id props)
+               (when (and (eq (plist-get props :type) :node-tag)
+                          (equal (plist-get props :to) tag-id))
+                 (push (plist-get props :from) node-ids)))
+             org-supertag-db--link)
+    (delete-dups node-ids)))
+
 
 (provide 'org-supertag-db)
 ;;; org-supertag-db.el ends here
