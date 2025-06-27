@@ -103,6 +103,10 @@ class SyncHandler:
         Main entry point for periodic background sync.
         Processes an incremental snapshot of changes from the Elisp database.
         """
+        if not isinstance(snapshot_data, dict):
+            logger.error(f"SyncHandler: _async_bulk_process_snapshot expects a dictionary, but received {type(snapshot_data)}. Full data: {snapshot_data!r}")
+            return {"status": "error", "message": f"Invalid payload type: expected dict, got {type(snapshot_data)}"}
+
         try:
             nodes_to_upsert = snapshot_data.get("nodes", [])
             links_to_upsert = snapshot_data.get("links", [])

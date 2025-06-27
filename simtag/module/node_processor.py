@@ -83,7 +83,7 @@ class NodeProcessor:
         all_processing_results = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_node = {executor.submit(self._process_single_node, node): node for node in valid_nodes}
+            future_to_node = {executor.submit(self._process_single_node, node, is_batch=True): node for node in valid_nodes}
             
             for future in concurrent.futures.as_completed(future_to_node):
                 node = future_to_node[future]
@@ -170,7 +170,7 @@ class NodeProcessor:
             'format_errors': invalid_nodes_count
         }
 
-    def _process_single_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _process_single_node(self, node: Dict[str, Any], is_batch: bool) -> Optional[Dict[str, Any]]:
         """
         Prepares all data for a single node (embeddings, inferred relations) without
         writing to the database. Returns a dictionary of data to be written by the main thread.
@@ -223,48 +223,49 @@ class NodeProcessor:
             else:
                 logger.error(f"Embedding generation failed for node {node_id}: {embedding_result.error_message}")
         
-        # 3. Infer relations from content if enabled
-        if self.config.analysis_config.get("enable_inferred_relations") and self.entity_extractor and content_for_embedding:
-            logger.debug(f"Inferring relations for node {node_id} as feature is enabled.")
-            existing_tags = node_for_upsert.get('tags', [])
-            
-            extraction_result = loop.run_until_complete(
-                self.entity_extractor.extract(content_for_embedding, existing_tags)
-            )
-            
-            inferred_entities_data = extraction_result.get("entities", [])
-            inferred_relations_data = extraction_result.get("relations", [])
-
-            if inferred_entities_data:
-                entities_to_add = []
-                for entity_data in inferred_entities_data:
-                    entities_to_add.append({
-                        'name': entity_data.get('name'),
-                        'description': entity_data.get('description', '')
-                    })
-                result_package["inferred_entities"] = entities_to_add
-                logger.debug(f"Prepared {len(entities_to_add)} entities for node {node_id}")
-
-            if inferred_relations_data:
-                relations_to_add = []
-                for rel_data in inferred_relations_data:
-                    source_name = rel_data.get('source')
-                    target_name = rel_data.get('target')
-                    if not target_name or not source_name:
-                        logger.warning(f"Skipping malformed relation from LLM for node {node_id}, missing source or target. Data: {rel_data}")
-                        continue
-                    
-                    relations_to_add.append({
-                        'source_name': source_name,
-                        'target_name': target_name,
-                        'type': rel_data.get('type', 'RELATED_TO'),
-                        'properties': json.dumps({'description': rel_data.get('description', '')})
-                    })
-                result_package["inferred_relations"] = relations_to_add
-                logger.debug(f"Prepared {len(relations_to_add)} relations for node {node_id}")
-
-        logger.debug(f"Finished preparing node {node_id}.")
+        logger.debug(f"Finished preparing node {node_id} for embedding and metadata.")
         return result_package
+
+    async def process_single_node_data(self, node_id: str, content: str, tags: list, title: str) -> bool:
+        """
+        Processes a single node for interactive updates (embedding and metadata only).
+        This is the entry point for non-batch, single-node sync operations. It performs
+        embedding and metadata processing and writes directly to the database.
+        Relation inference is handled by a separate process.
+        """
+        logger.debug(f"Starting interactive processing for single node {node_id}.")
+        node_data = {
+            "id": node_id,
+            "content": content,
+            "tags": tags,
+            "title": title
+        }
+        
+        try:
+            # Call the internal worker with is_batch=False. It now only does embedding/metadata.
+            result_package = self._process_single_node(node_data, is_batch=False)
+
+            if not result_package:
+                logger.warning(f"Processing returned no result for node {node_id}.")
+                return False
+
+            # --- Perform immediate, sequential database writes for the single node ---
+            node_for_upsert = result_package.get('node_for_upsert')
+            if node_for_upsert:
+                self.graph_service.upsert_text_node(node_for_upsert)
+                logger.debug(f"Upserted metadata for single node {node_id}.")
+
+            embedding_vector = result_package.get('embedding_vector')
+            if embedding_vector is not None:
+                self.graph_service.upsert_node_embedding(node_id, embedding_vector)
+                logger.debug(f"Upserted embedding for single node {node_id}.")
+
+            logger.info(f"Successfully processed and saved single node {node_id} (metadata and embedding).")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error during single node processing for {node_id}: {e}", exc_info=True)
+            return False
 
     def find_similar_nodes(self, node_id: str, top_k: int = 5) -> List[Dict]:
         """

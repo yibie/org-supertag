@@ -172,6 +172,7 @@ class GraphService:
                     hash TEXT,
                     content_hash TEXT,
                     document_date TEXT,
+                    relations_inferred_at TEXT,
                     UNIQUE(name, type)
                 )
                 """)
@@ -223,6 +224,46 @@ class GraphService:
             except Exception as e:
                 self.logger.error(f"Unexpected error during database initialization: {e}")
                 raise
+
+    def mark_node_relations_inferred(self, node_id: str):
+        """Marks a node to indicate that relation inference has been performed."""
+        conn = self._get_connection()
+        try:
+            timestamp = datetime.now().isoformat()
+            with conn:
+                conn.execute(
+                    "UPDATE nodes SET relations_inferred_at = ? WHERE node_id = ?",
+                    (timestamp, node_id)
+                )
+            logger.debug(f"Marked node {node_id} as having relations inferred at {timestamp}.")
+        except Exception as e:
+            logger.error(f"Failed to mark node {node_id} for relation inference: {e}", exc_info=True)
+
+    def get_nodes_needing_relation_inference(self, limit: int = 5) -> List[str]:
+        """
+        Retrieves a list of node IDs that have embeddings but have not yet
+        had relation inference performed on them.
+        """
+        conn = self._get_connection()
+        try:
+            with conn:
+                cursor = conn.cursor()
+                # Find TEXT nodes with content that haven't been processed for relations yet.
+                # We assume embedding is done if there is content.
+                cursor.execute("""
+                    SELECT node_id FROM nodes
+                    WHERE type = 'TEXT'
+                      AND content IS NOT NULL AND content != ''
+                      AND relations_inferred_at IS NULL
+                    LIMIT ?
+                """, (limit,))
+                rows = cursor.fetchall()
+                node_ids = [row[0] for row in rows]
+                logger.info(f"Found {len(node_ids)} nodes needing relation inference (limit: {limit}).")
+                return node_ids
+        except Exception as e:
+            logger.error(f"Failed to get nodes needing relation inference: {e}", exc_info=True)
+            return []
 
     # --- Public API ---
 

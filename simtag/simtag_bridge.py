@@ -21,6 +21,7 @@ from simtag.module.diagnostics_handler import DiagnosticsHandler
 from simtag.module.autotag_handler import AutotagHandler
 from simtag.module.resonance_handler import ResonanceHandler
 from simtag.module.rag_handler import RAGHandler
+from simtag.module.reasoning_handler import ReasoningHandler
 from simtag.config import Config
 from typing import Dict, List, Any, Optional
 
@@ -93,6 +94,7 @@ class SimTagBridge:
         self.server.register_function(self.test_embedding_retrieval, 'test_embedding_retrieval')
         self.server.register_function(self.get_processing_status, 'get_processing_status')
         self.server.register_function(self.print_processing_report, 'print_processing_report')
+        self.server.register_function(self.inspect_vector_index, 'diagnostics/inspect_vector_index')
 
         # Sync
         self.server.register_function(self.sync_library, 'sync_library')
@@ -128,6 +130,9 @@ class SimTagBridge:
         # RAG Assistant
         self.server.register_function(self.analyze_note, 'rag/analyze_note')
         self.server.register_function(self.continue_conversation, 'rag/continue_conversation')
+        
+        # Reasoning
+        self.server.register_function(self.run_reasoning_cycle, 'reasoning/run_cycle')
         
         logger.info("All EPC methods registered successfully.")
 
@@ -353,6 +358,11 @@ class SimTagBridge:
         return handler.print_processing_report()
 
     @inject
+    def inspect_vector_index(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]) -> Dict[str, Any]:
+        """Provides a bridge to the diagnostics handler for inspecting the vector index."""
+        return handler.inspect_vector_index()
+
+    @inject
     def extract_entities_for_tagging(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
         # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
         return handler.extract_entities_for_tagging(payload_list)
@@ -487,6 +497,12 @@ class SimTagBridge:
         except Exception as e:
             logger.error(f"Error in continue_conversation bridge call: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
+
+    @inject
+    def run_reasoning_cycle(self, limit: int = 5, handler: ReasoningHandler = Provide[AppContainer.reasoning_handler]):
+        """Runs one cycle of relation inference for nodes needing it."""
+        logger.info(f"Received request to run reasoning cycle with limit {limit}.")
+        return handler.run_inference_cycle(limit)
 
     @inject
     def get_prompt_template_elisp(self, *args, handler: QueryHandler = Provide[AppContainer.query_handler]):

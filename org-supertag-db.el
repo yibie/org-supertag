@@ -399,6 +399,32 @@ Returns:
          (symbolp type)
          (alist-get type org-supertag-field-types))))
 
+(defun org-supertag-db--canonicalize-props (data)
+  "Recursively canonicalize any Lisp DATA into a standard plist format.
+This function is the single gatekeeper for data quality before writing to the DB.
+It converts alists to plists and cleans up keys and values."
+  (cond
+   ;; Atoms are returned as-is.
+   ((or (not (consp data)) (keywordp data)) data)
+
+   ;; An alist (list of cons pairs) is converted to a plist.
+   ((and (listp data) (consp (car data)) (not (keywordp (caar data))))
+    (let (plist)
+      (dolist (pair data)
+        (let ((key (car pair))
+              (val (cdr pair)))
+          (push (org-supertag-db--canonicalize-props val) plist)
+          (push (intern (format ":%S" key)) plist)))
+      (nreverse plist)))
+
+   ;; A regular list (or a plist already) is processed element by element.
+   ((listp data)
+    (mapcar #'org-supertag-db--canonicalize-props data))
+
+   ;; A dotted pair or other cons cell.
+   (t (cons (org-supertag-db--canonicalize-props (car data))
+            (org-supertag-db--canonicalize-props (cdr data))))))
+
 
 ;;------------------------------------------------------------------------------
 ;; Core Data Tables
@@ -425,32 +451,25 @@ Returns:
 (defun org-supertag-db-add (id props)
   "Add or update entity.
 ID is entity unique identifier
-PROPS is entity properties
+PROPS is entity properties. It will be canonicalized before being saved.
 
 Returns:
 - Success: entity ID
 - Error: throws error"
   (condition-case err
-      (let* ((type (plist-get props :type))
-             (old-props (org-supertag-db-get id))
+      (let* ((old-props (org-supertag-db-get id))
              (is-update (not (null old-props)))
-             ;; Normalize properties
+             ;; The wrapped `normalize` function now performs full canonicalization.
              (clean-props (org-supertag-db--normalize-props props))
+             (type (plist-get clean-props :type))
              (new-props (if is-update
-                           ;; Update: new props take precedence, but preserve content
-                           (org-supertag-db--normalize-props
-                            (append
-                             clean-props
-                             (when (and (not (plist-get clean-props :content))
-                                      (plist-get old-props :content))
-                               (list :content (plist-get old-props :content)))
-                             (list :created-at (plist-get old-props :created-at)
-                                   :modified-at (current-time))))
-                         ;; New creation
-                         (org-supertag-db--normalize-props
-                          (append
-                           clean-props
-                           (list :created-at (current-time)))))))
+                            ;; For updates, merge new props over old, preserving created-at.
+                            (append clean-props
+                                    (list :created-at (or (plist-get old-props :created-at) (current-time))
+                                          :modified-at (current-time)))
+                          ;; For new entries, add created-at.
+                          (append clean-props
+                                  (list :created-at (current-time))))))
         ;; 1. Validation
         ;; 1.1 Validate type
         (unless (org-supertag-db-valid-object-type-p type)
@@ -458,14 +477,12 @@ Returns:
         ;; 1.2 Validate properties
         (unless (org-supertag-db-valid-object-p type new-props)
           (error "Invalid object properties"))
-        ;; 2. Pre-storage processing
-        (when is-update
-          ;; 2.1 Handle type changes
-          (let ((old-type (plist-get old-props :type)))
-            (unless (eq old-type type)
-              ;; Clear all related caches on type change
-              (org-supertag-db--cache-clear-for-type old-type id))))
-        ;; 3. Store entity
+
+        ;; 2. Pre-storage processing on type change
+        (when (and is-update (not (eq (plist-get old-props :type) type)))
+          (org-supertag-db--cache-clear-for-type (plist-get old-props :type) id))
+
+        ;; 3. Store the canonical entity
         (ht-set! org-supertag-db--object id new-props)
         ;; 4. Cache management
         ;; 4.1 Clear entity cache
@@ -1171,36 +1188,8 @@ Returns property value if found, nil otherwise."
 
 (defun org-supertag-db--normalize-props (props)
   "Normalize property list to ensure correct order and no duplicates.
-PROPS is the property list
-
-Returns:
-- Normalized property list"
-  (let ((result nil)
-        (seen-keys nil))
-    ;; 1. Ensure we have a type
-    (let ((type-value (or (plist-get props :type)
-                         ;; If no type but has file-path, assume it's a node
-                         (when (plist-get props :file-path) :node))))
-      (when type-value
-        (push :type seen-keys)
-        (setq result (list :type type-value))))
-    
-    ;; 2. Process other properties
-    (let ((rest-props props))
-      (while rest-props
-        (let ((key (car rest-props))
-              (value (cadr rest-props)))
-          (unless (memq key seen-keys)  ; Avoid duplicates
-            (push key seen-keys)
-            (setq result (append result (list key value)))))
-        (setq rest-props (cddr rest-props))))
-    
-    ;; 3. Validate result
-    (let ((final-type (plist-get result :type)))
-      (unless (memq final-type '(:node :tag))
-        (error "Invalid or missing type in props: %S" props)))
-    
-    result))
+This function is now a wrapper around the canonicalization function."
+  (org-supertag-db--canonicalize-props props))
 
 (defun org-supertag-db--clean-text (text)
   "Clean text by removing all text properties and ensuring it's a plain string.

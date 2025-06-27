@@ -43,88 +43,6 @@
   "Customization options for org-supertag inline tag styling."
   :group 'org-supertag)
 
-(defcustom org-supertag-inline-style-hide-prefix t
-  "Whether to hide the '#' prefix of inline tags."
-  :type 'boolean
-  :group 'org-supertag-inline-style)
-
-(defcustom org-supertag-inline-background 'unspecified
-  "Background color for inline tags.
-Can be:
-- A color string (e.g. \"#e8f0ff\")
-- 'unspecified for transparent
-- nil for transparent"
-  :type '(choice
-          (const :tag "Transparent" unspecified)
-          (const :tag "None" nil)
-          (color :tag "Color"))
-  :group 'org-supertag-inline-style)
-
-(defcustom org-supertag-inline-foreground 'unspecified
-  "Foreground color for inline tags.
-Can be:
-- A color string (e.g. \"#0066cc\")
-- 'unspecified for transparent
-- nil for transparent"
-  :type '(choice
-          (const :tag "Transparent" unspecified)
-          (const :tag "None" nil)
-          (color :tag "Color"))
-  :group 'org-supertag-inline-style)
-
-(defcustom org-supertag-inline-box '(:line-width 1 :color "#b0b0b0" :style nil)
-  "Box properties for inline tags.
-Can be t for a simple box, nil for no box, or a property list with
-:line-width, :color and :style attributes.
-
-The :line-width can be a positive or negative number:
-- Positive: draws the box around the text (increases text height)
-- Negative: draws the box within the text area (preserves text height)
-
-The :line-width can also be a cons cell (VWIDTH . HWIDTH) to specify
-different widths for vertical and horizontal lines.
-
-The :style can be:
-- released-button (3D button that is not pressed)
-- pressed-button (3D button that is being pressed)
-- nil (a simple 2D box, the default)"
-  :type '(choice
-          (const :tag "No box" nil)
-          (const :tag "Simple box" t)
-          (list :tag "Custom box"
-                :value (:line-width 1 :color "#b0b0b0")
-                (choice :tag "Line width"
-                       (cons :tag "Width as cons"
-                             :format "%t: %v"
-                             :value (:line-width (1 . 1))
-                             (const :format "" :line-width)
-                             (cons (number :tag "Vertical") (number :tag "Horizontal")))
-                       (cons :tag "Width as number"
-                             :format "%t: %v"
-                             :value (:line-width 1)
-                             (const :format "" :line-width)
-                             (number :format "%v")))
-                (cons :tag "Color" :format "%t: %v"
-                      :value (:color "#b0b0b0")
-                      (const :format "" :color)
-                      (color :format "%v"))
-                (cons :tag "Style" :format "%t: %v"
-                      :value (:style nil)
-                      (const :format "" :style)
-                      (choice :format "%v"
-                              (const :tag "None (regular 2D box)" nil)
-                              (const :tag "Released button" released-button)
-                              (const :tag "Pressed button" pressed-button)))))
-  :group 'org-supertag-inline-style)
-
-(defcustom org-supertag-inline-weight 'semi-bold
-  "Font weight for inline tags."
-  :type '(choice
-          (const :tag "Normal" normal)
-          (const :tag "Bold" bold)
-          (const :tag "Semi-bold" semi-bold))
-  :group 'org-supertag-inline-style)
-
 (defcustom org-supertag-inline-manual-insert-add-newline nil
   "When non-nil, add a newline after manually inserting an inline tag.
 This is useful for workflows where tags are expected to be on their own line,
@@ -134,47 +52,22 @@ such as with the auto-tagging system."
 
 ;; Define the face for inline tags
 (defface org-supertag-inline-face
-  `((t (:background ,org-supertag-inline-background
-        :foreground ,org-supertag-inline-foreground
-        :box ,org-supertag-inline-box
-        :weight ,org-supertag-inline-weight)))
+  '((t :weight bold :foreground "magenta"))
   "Face for org-supertag inline tags."
   :group 'org-supertag-inline-style)
-
-;; Function to create the display property for hiding the # prefix
-(defun org-supertag-inline-display-property (tag-name)
-  "Create a display property to hide the # prefix for TAG-NAME."
-  (when org-supertag-inline-style-hide-prefix
-    (let ((len (length tag-name)))
-      (propertize (substring tag-name 1) 
-                 'face 'org-supertag-inline-face
-                 'org-supertag-inline t))))
 
 ;; Compose font-lock keywords for highlighting inline tags
 (defvar org-supertag-inline-font-lock-keywords
   `((,(rx "#" (+ (any alnum "-_")))
-     (0 (let* ((tag-name (match-string-no-properties 0))
-               (tag-text (substring tag-name 1)))
-          ;; Only apply if not in special contexts
+     (0 (progn
           (when (and (not (org-in-src-block-p))
                      (not (org-at-table-p))
                      (not (org-at-commented-p))
                      (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
-            ;; Apply different properties to the prefix and the tag text
-            (when org-supertag-inline-style-hide-prefix
-              (add-text-properties
-               (match-beginning 0) (+ (match-beginning 0) 1)
-               '(invisible org-supertag-prefix display "")))
-            ;; Apply face to the entire tag including prefix if not hidden
             (add-text-properties
-             (if org-supertag-inline-style-hide-prefix
-                 (+ (match-beginning 0) 1)
-               (match-beginning 0))
+             (match-beginning 0)
              (match-end 0)
-             `(face org-supertag-inline-face
-                   help-echo ,(format "Tag: %s" tag-text)
-                   org-supertag-inline t)))
-          ;; Return nil to allow other fontification
+             '(face org-supertag-inline-face org-supertag-inline t)))
           nil))))
   "Font-lock keywords for highlighting inline tags.")
 
@@ -195,21 +88,6 @@ such as with the auto-tagging system."
 
 ;; Enable the minor mode in org buffers
 (add-hook 'org-mode-hook 'org-supertag-inline-style-mode)
-
-;; Refresh styling when customizations change
-(defun org-supertag-inline-style-update ()
-  "Update the org-supertag-inline face based on current customizations."
-  (custom-set-faces
-   `(org-supertag-inline-face
-     ((t (:background ,org-supertag-inline-background
-          :foreground ,org-supertag-inline-foreground
-          :box ,org-supertag-inline-box
-          :weight ,org-supertag-inline-weight))))))
-
-(advice-add 'customize-save-variable :after
-            (lambda (&rest _)
-              (when (boundp 'org-supertag-inline-style-mode)
-                (org-supertag-inline-style-update))))
 
 ;; Override the tag insertion function to apply styling immediately
 (advice-add 'org-supertag-inline-insert-tag :after
@@ -334,28 +212,22 @@ Rules:
   (let ((drawer-end (org-supertag-inline--find-drawer-end))
         (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
     (cond
-     ;; 如果找到现有标签行，移动到行尾
      (existing-tag-line
       (goto-char existing-tag-line)
       (end-of-line))
-     ;; 如果有drawer，在drawer后智能定位
      (drawer-end
       (goto-char drawer-end)
-      ;; 跳过空行到内容开始
       (while (and (not (eobp))
                  (not (org-at-heading-p))
                  (looking-at-p "^[ \t]*$"))
         (forward-line 1))
-      ;; 如果已经在内容行，在内容行上方创建新行插入
       (if (and (not (eobp))
               (not (org-at-heading-p))
               (not (looking-at-p "^[ \t]*$")))
           (progn
             (beginning-of-line)
             (open-line 1))
-        ;; 否则在当前位置创建新行
         (unless (bolp) (insert "\n"))))
-     ;; 如果没有drawer，在标题下方新建一行
      (t
       (end-of-line)
       (insert "\n")))))
@@ -438,7 +310,6 @@ Smart spacing rules:
                    (and (>= prev-char ?a) (<= prev-char ?z))
                    (and (>= prev-char ?A) (<= prev-char ?Z))
                    (and (>= prev-char ?0) (<= prev-char ?9))
-                   ;; 中文字符
                    (and (>= prev-char ?\u4e00) (<= prev-char ?\u9fff)))))
          ;; Need space after ONLY if:
          ;; 1. next character exists AND is alphanumeric
@@ -480,23 +351,26 @@ Only creates the relationship if NODE-ID is not nil."
 
 ;;;###autoload
 (defun org-supertag-inline-insert-tag (tag-name)
-  "Insert a simple inline tag at point without any automatic newline.
-This is the standard function for manual, interactive use."
+  "Insert an inline tag, apply it, and establish all necessary relationships."
   (interactive (list (org-supertag-inline--read-tag-name)))
   (when (and tag-name (not (string-empty-p tag-name)))
-    (let* ((node-id (org-id-get-create))
-           (display-name (org-supertag-sanitize-tag-name tag-name))
+    (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
            (tag-entity (or (org-supertag-tag-get display-name)
                            (progn
                              (org-supertag-tag-create display-name)
-                             (org-supertag-tag-get display-name)))))
+                             (org-supertag-tag-get display-name))))
+           (tag-id (plist-get tag-entity :id))
+           ;; Variables to control org-supertag-tag-apply's behavior
+           (org-supertag-skip-text-insertion t) ; Don't add properties to drawer
+           (org-supertag-tag-apply-skip-headline t) ; Don't add to headline tags
+           (org-supertag-force-node-id (org-id-get-create))) ; Ensure correct node is used
 
-      ;; 1. Insert tag text with spacing at point
+      ;; 1. Insert the visual tag text at point
       (org-supertag-inline--insert-tag-text display-name)
 
-      ;; 2. Establish relationship in database
-      (when tag-entity
-        (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
+      ;; 2. Apply the tag using the full logic to create all relationships
+      (when tag-id
+        (org-supertag-tag-apply tag-id))
 
       (message "Inserted inline tag #%s" display-name))))
 
