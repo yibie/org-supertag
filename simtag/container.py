@@ -19,6 +19,7 @@ from simtag.module.autotag_handler import AutotagHandler
 from simtag.services.smart_ner_service import SmartNERService
 from simtag.module.resonance_handler import ResonanceHandler
 from simtag.module.rag_handler import RAGHandler
+from simtag.module.reasoning_handler import ReasoningHandler
 import asyncio
 
 class AppContainer(containers.DeclarativeContainer):
@@ -89,4 +90,5 @@ class AppContainer(containers.DeclarativeContainer):
     diagnostics_handler = providers.Factory(DiagnosticsHandler, config=config_obj, llm_client=llm_client, graph_service=graph_service, memory_engine=memory_engine, entity_extractor=entity_extractor, rag_engine=rag_engine, emacs_client=config.emacs_client, data_dir=config.data_dir, content_processor=content_processor)
     autotag_handler = providers.Factory(AutotagHandler, llm_client=llm_client, ner_service=ner_service)
     resonance_handler = providers.Factory(ResonanceHandler, graph_service=graph_service, llm_client=llm_client, config=config_obj)
-    rag_handler = providers.Factory(RAGHandler, rag_engine=rag_engine, llm_client=llm_client) 
+    rag_handler = providers.Factory(RAGHandler, rag_engine=rag_engine, llm_client=llm_client)
+    reasoning_handler = providers.Factory(ReasoningHandler, config=config_obj, graph_service=graph_service, entity_extractor=entity_extractor) 

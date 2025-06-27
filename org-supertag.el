@@ -59,6 +59,7 @@
 (require 'org-supertag-proactive-engine)
 (require 'org-supertag-background-sync) 
 (require 'org-supertag-auto-tag)
+(require 'org-supertag-completion)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."

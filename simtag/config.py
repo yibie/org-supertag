@@ -20,6 +20,7 @@ analysis_config = {
 # Define a default for processing_config as well
 processing_config = {
     "processing_workers": 4, # You can add other defaults here
+    "disable_relation_inference_in_batch": True, # Disable relation inference in batch processing by default
 }
 
 class Config(BaseModel):

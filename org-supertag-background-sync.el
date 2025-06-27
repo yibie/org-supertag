@@ -59,11 +59,12 @@ Example: '(\"09:00\" \"18:00\") for sync at 9 AM and 6 PM daily."
 (defvar org-supertag-background-sync--schedule-timer nil
   "Scheduled sync timer (for daily checks).")
 
-(defvar org-supertag-background-sync--state :idle
-  "Background sync state. Possible values:
-- :idle            - Idle state
+(defvar org-supertag-background-sync--phase :idle
+  "Background sync phase. Possible values:
+- :idle            - Idle
 - :waiting-backend - Waiting for Python backend to be ready
-- :syncing         - Syncing")
+- :embedding       - Phase 1: Syncing embeddings and metadata
+- :reasoning       - Phase 2: Inferring relations for nodes")
 
 (defvar org-supertag-background-sync--last-sync-time nil
   "Last successful sync time.")
@@ -242,6 +243,70 @@ Excludes time-sensitive and position-sensitive fields to ensure stable hashes."
       (let ((hash-content (format "%S" stable-props)))
         (secure-hash 'sha1 hash-content)))))
 
+(defun org-supertag-background-sync--is-alist-p (data)
+  "Check if DATA is likely an alist (a list of cons pairs).
+This is a dependency-free replacement for `(every #'consp data)`."
+  (and (listp data)
+       (let ((res t))
+         (dolist (x data)
+           (unless (consp x) (setq res nil)))
+         res)))
+
+(defun org-supertag-background-sync--deep-prepare-for-python (data)
+  "Recursively normalize any Lisp data into a clean structure for JSON serialization.
+The primary goal is to convert any object-like structure (hash-table, plist)
+into an association list (alist) with string keys, which `json-encode`
+correctly serializes into a JSON object."
+  (cond
+   ;; --- Base Cases for Atoms ---
+   ((null data) nil)
+   ((stringp data) data)
+   ((numberp data) data)
+   ((eq data t) t)
+
+   ;; --- Recursive Cases ---
+   ;; Hash-table: convert to alist and recurse.
+   ((hash-table-p data)
+    (org-supertag-background-sync--deep-prepare-for-python (ht->alist data)))
+
+   ;; Symbol: convert to string (keywords are stripped of ':').
+   ((symbolp data)
+    (if (keywordp data)
+        (substring (symbol-name data) 1)
+      (symbol-name data)))
+
+   ;; List-like structures (the most complex case).
+   ((consp data)
+    (cond
+     ;; Heuristic for Plist: a list starting with a keyword.
+     ;; This must be checked before other list types.
+     ((and (keywordp (car data)) (plistp data))
+      (let (alist)
+        (while (and data (cdr data)) ; Safe for odd-length plists
+          (push (cons (pop data) (pop data)) alist))
+        ;; After converting plist to alist, recurse on the alist.
+        (org-supertag-background-sync--deep-prepare-for-python (nreverse alist))))
+
+     ;; Heuristic for Alist: a list where each element is a cons pair.
+     ;; This is the target format for JSON objects.
+     ((org-supertag-background-sync--is-alist-p data)
+      (mapcar (lambda (pair)
+                (cons (org-supertag-background-sync--deep-prepare-for-python (car pair))
+                      (org-supertag-background-sync--deep-prepare-for-python (cdr pair))))
+              data))
+
+     ;; Proper list of other items.
+     ((listp data)
+      (mapcar #'org-supertag-background-sync--deep-prepare-for-python data))
+
+     ;; Fallback for improper lists or dotted pairs.
+     (t
+      (cons (org-supertag-background-sync--deep-prepare-for-python (car data))
+            (org-supertag-background-sync--deep-prepare-for-python (cdr data))))))
+
+   ;; --- Fallback for any other data type ---
+   (t data)))
+
 (defun org-supertag-background-sync--get-changed-objects ()
   "Get all changed objects (nodes, tags, links) since the last sync.
 This function iterates over both `org-supertag-db--object` and
@@ -316,9 +381,42 @@ This function iterates over both `org-supertag-db--object` and
 
 ;; === Main sync function ===
 
+(defun org-supertag-background-sync--finish-sync (&optional status)
+  "Finalizes the sync process, resetting state and logging completion."
+  (message "[background-sync] Finishing sync process with status: %s." (or status "completed"))
+  (org-supertag-background-sync--finish-progress)
+  (setq org-supertag-background-sync--phase :idle))
+
+(defun org-supertag-background-sync--handle-reasoning-result (result)
+  "Callback to handle the result of a reasoning cycle.
+If more nodes were processed, it triggers the next cycle.
+Otherwise, it finalizes the entire sync process."
+  (if (and result (equal (plist-get result :status) "success"))
+      (let ((processed (plist-get result :processed_count)))
+        (message "[background-sync::reasoning] Cycle complete. Processed %d nodes." processed)
+        (if (> processed 0)
+            ;; More nodes to process, continue the cycle.
+            (org-supertag-background-sync--trigger-reasoning-cycle)
+          ;; No more nodes to process, finish the entire sync.
+          (progn
+            (message "[background-sync::reasoning] All nodes processed. Finalizing sync.")
+            (setq org-supertag-background-sync--last-sync-time (current-time))
+            (org-supertag-background-sync--finish-sync :success))))
+    ;; Reasoning phase failed.
+    (message "[background-sync::reasoning] Reasoning cycle failed: %s" (or (plist-get result :message) "Unknown error"))
+    (org-supertag-background-sync--finish-sync :reasoning-failed)))
+
+(defun org-supertag-background-sync--trigger-reasoning-cycle ()
+  "Initiates one cycle of the relation inference process."
+  (message "[background-sync::reasoning] Triggering relation inference cycle...")
+  (setq org-supertag-background-sync--phase :reasoning)
+  (org-supertag-bridge-call-async "reasoning/run_cycle"
+                                 nil
+                                 #'org-supertag-background-sync--handle-reasoning-result))
+
 (defun org-supertag-background-sync--do-sync ()
-  "Perform a full background sync operation."
-  (setq org-supertag-background-sync--state :syncing)
+  "Perform a full, two-phase background sync operation: embedding then reasoning."
+  (setq org-supertag-background-sync--phase :embedding)
   (condition-case-unless-debug err
       (let* ((start-time (current-time))
              (changes (org-supertag-background-sync--get-changed-objects))
@@ -333,82 +431,45 @@ This function iterates over both `org-supertag-db--object` and
         (if (= total-changed 0)
             (progn
               (message "[background-sync] No changes detected. Sync complete.")
-              (setq org-supertag-background-sync--state :idle))
+              (org-supertag-background-sync--finish-sync :no-changes))
           (progn
+            (message "[background-sync::embedding] Starting embedding sync for %d changes." total-changed)
             (org-supertag-background-sync--start-progress total-changed)
             (let* ((nodes-data (org-supertag-background-sync--prepare-nodes-for-python nodes-to-upsert))
                    (tags-data (org-supertag-background-sync--prepare-tags-for-python tags-to-upsert))
                    (links-data (org-supertag-background-sync--prepare-links-for-python links-to-upsert))
-                   ;; Build an alist instead of a hash-table for reliable serialization.
                    (snapshot-data `(("nodes" . ,nodes-data)
                                     ("links" . ,links-data)
                                     ("ids_to_delete" . ,ids-to-delete)
                                     ("sync_timestamp" . ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t)))))
-              ;; We must use the designated API function which handles correct payload wrapping.
               (org-supertag-api-bulk-process-snapshot
                snapshot-data
                (lambda (result)
-                 (let ((end-time (current-time)))
-                   (message "[background-sync] Callback received, result status: %s" 
-                            (if result (plist-get result :status) "nil"))
-                   (if (and result (equal (plist-get result :status) "success"))
-                       (progn
-                         (message "[background-sync] Updating hashes for %d nodes, %d tags, %d links, deleting %d" 
-                                  (length nodes-to-upsert) (length tags-to-upsert) 
-                                  (length links-to-upsert) (length ids-to-delete))
-                         (org-supertag-background-sync--update-hashes nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete)
-                         (message "[background-sync] Hash update completed, total hashes: %d" 
-                                  (hash-table-count org-supertag-background-sync--last-sync-hashes))
-                         (setq org-supertag-background-sync--stats
-                               (list :synced-nodes (length nodes-to-upsert)
-                                     :synced-tags (length tags-to-upsert)
-                                     :synced-links (length links-to-upsert)
-                                     :deleted-count (length ids-to-delete)
-                                     :total-objects total-changed))
-                         (setq org-supertag-background-sync--last-sync-time end-time)
-                         (message "[background-sync] Sync successful."))
-                     (message "[background-sync] sync failed: %s" (or (plist-get result :message) "Unknown error")))
-                   (org-supertag-background-sync--finish-progress)
-                   (setq org-supertag-background-sync--state :idle))))))))
+                 (message "[background-sync::embedding] Callback received, result status: %s" 
+                          (if result (plist-get result :status) "nil"))
+                 (if (and result (equal (plist-get result :status) "success"))
+                     (progn
+                       ;; Phase 1 (Embedding) is successful. Update hashes and proceed to Phase 2 (Reasoning).
+                       (message "[background-sync::embedding] Updating hashes for %d nodes, %d tags, %d links, deleting %d" 
+                                (length nodes-to-upsert) (length tags-to-upsert) 
+                                (length links-to-upsert) (length ids-to-delete))
+                       (org-supertag-background-sync--update-hashes nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete)
+                       (setq org-supertag-background-sync--stats
+                             (list :synced-nodes (length nodes-to-upsert)
+                                   :synced-tags (length tags-to-upsert)
+                                   :synced-links (length links-to-upsert)
+                                   :deleted-count (length ids-to-delete)
+                                   :total-objects total-changed))
+                       (message "[background-sync::embedding] Phase 1 (Embedding) successful. Proceeding to Phase 2 (Reasoning).")
+                       ;; --- Trigger Phase 2 ---
+                       (org-supertag-background-sync--trigger-reasoning-cycle))
+                   ;; Phase 1 (Embedding) failed. Terminate the entire sync process.
+                   (progn
+                     (message "[background-sync::embedding] sync failed: %s" (or (plist-get result :message) "Unknown error"))
+                     (org-supertag-background-sync--finish-sync :embedding-failed)))))))))
     (error
-     (setq org-supertag-background-sync--state :idle)
-     (org-supertag-background-sync--finish-progress)
-     (message "[background-sync] error during sync: %s" (error-message-string err)))))
-
-(defun org-supertag-background-sync--deep-prepare-for-python (data)
-  "Recursively convert Elisp data (plist, alist) to a pure hash table, for safe sending to Python.
-This handles nested structures and special data types like time objects."
-  (cond
-   ;; Emacs internal time list (e.g., (26701 18355 90563 0)) -> ISO 8601 string
-   ((and (listp data) (numberp (car data)) (>= (length data) 3))
-    (format-time-string "%Y-%m-%dT%H:%M:%SZ" data t))
-   ;; alist (e.g., '((a . 1) (b . 2))) -> hash-table
-   ((and (listp data) (consp data) (consp (car data)))
-    (let ((table (make-hash-table :test 'equal)))
-      (dolist (pair data)
-        (when (consp pair)
-          (puthash (car pair) (org-supertag-background-sync--deep-prepare-for-python (cdr pair)) table)))
-      table))
-   ;; plist (e.g., '(:a 1 :b 2)) -> hash-table
-   ((and (listp data) (not (null data)) (symbolp (car data)) (evenp (length data)))
-    (let ((table (make-hash-table :test 'equal)))
-      (while data
-        (let ((key (pop data))
-              (value (pop data)))
-          (puthash (substring (symbol-name key) 1) (org-supertag-background-sync--deep-prepare-for-python value) table)))
-      table))
-   ;; list -> list (with values processed)
-   ((listp data)
-    (mapcar #'org-supertag-background-sync--deep-prepare-for-python data))
-   ;; Handle symbols explicitly to prevent sending them raw over EPC.
-   ((symbolp data)
-    ;; `t` and `nil` are handled correctly as booleans by the bridge.
-    ;; Other symbols must be converted to their string representation.
-    (if (memq data '(t nil))
-        data
-      (symbol-name data)))
-   ;; other types -> return as is
-   (t data)))
+     (message "[background-sync] error during sync: %s" (error-message-string err))
+     (org-supertag-background-sync--finish-sync :error))))
 
 (defun org-supertag-background-sync--prepare-nodes-for-python (nodes)
   "Prepare node data for sending to Python, using deep conversion."
@@ -501,7 +562,7 @@ This handles nested structures and special data types like time objects."
 
 (defun org-supertag-background-sync--wait-for-backend ()
   "Wait for Python backend to be ready."
-  (setq org-supertag-background-sync--state :waiting-backend)
+  (setq org-supertag-background-sync--phase :waiting-backend)
   
   ;; Try to start Python backend (if not already started)
   (org-supertag-background-sync--try-start-backend)
@@ -525,7 +586,7 @@ This handles nested structures and special data types like time objects."
 
 (defun org-supertag-background-sync--start-sync-timer ()
   "Start actual sync timer."
-  (setq org-supertag-background-sync--state :idle)
+  (setq org-supertag-background-sync--phase :idle)
   (setq org-supertag-background-sync--timer
         (run-with-timer 0 ; Start immediately for the first sync
                         org-supertag-background-sync-interval
@@ -534,7 +595,7 @@ This handles nested structures and special data types like time objects."
 
 (defun org-supertag-background-sync--timer-function ()
   "Timer callback function."
-  (when (eq org-supertag-background-sync--state :idle)
+  (when (eq org-supertag-background-sync--phase :idle)
     ;; Here Python backend should be ready, but just to be safe, check again
     (if (org-supertag-background-sync--python-ready-p)
         (org-supertag-background-sync--do-sync)
@@ -557,7 +618,7 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
             (message "[background-sync] Interval service is already running.")
           (progn
             (message "[background-sync] Starting interval sync service (interval: %ds)..." org-supertag-background-sync-interval)
-            (setq org-supertag-background-sync--state :idle)
+            (setq org-supertag-background-sync--phase :idle)
             (org-supertag-background-sync--load-hashes)
             (setq org-supertag-background-sync--timer
                   (run-with-timer 0 org-supertag-background-sync-interval
@@ -570,7 +631,7 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
           (progn
             (message "[background-sync] Starting scheduled sync service (times: %s)..." 
                      (mapconcat 'identity org-supertag-background-sync-schedule ", "))
-            (setq org-supertag-background-sync--state :idle)
+            (setq org-supertag-background-sync--phase :idle)
             (org-supertag-background-sync--load-hashes)
             (org-supertag-background-sync--start-schedule-timer))))
        
@@ -593,17 +654,17 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
       (cancel-timer org-supertag-background-sync--schedule-timer)
       (setq org-supertag-background-sync--schedule-timer nil)
       (push "scheduled" stopped-services))
-    (setq org-supertag-background-sync--state :idle)
+    (setq org-supertag-background-sync--phase :idle)
     (if stopped-services
         (message "[background-sync] Stopped %s service(s)." (mapconcat 'identity stopped-services " and "))
       (message "[background-sync] No services were running."))))
 
 (defun org-supertag-background-sync--trigger-sync ()
   "Trigger sync entry point, check state."
-  (if (eq org-supertag-background-sync--state :idle)
+  (if (eq org-supertag-background-sync--phase :idle)
       (org-supertag-background-sync--do-sync)
     (message "[background-sync] Skipping sync run because service is not idle (state: %s)."
-             org-supertag-background-sync--state)))
+             org-supertag-background-sync--phase)))
 
 (defun org-supertag-background-sync-restart ()
   "Restart background sync."
@@ -702,10 +763,10 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
   "Run background sync immediately."
   (interactive)
   (cond 
-   ((eq org-supertag-background-sync--state :syncing)
-    (message "[background-sync] Already running, please wait..."))
+   ((not (eq org-supertag-background-sync--phase :idle))
+    (message "[background-sync] Already running, please wait (current phase: %s)..." org-supertag-background-sync--phase))
    
-   ((eq org-supertag-background-sync--state :waiting-backend)
+   ((eq org-supertag-background-sync--phase :waiting-backend)
     (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
    
    ((not (org-supertag-background-sync--python-ready-p))
@@ -747,7 +808,7 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
 - Last sync: %s
 - Last sync stats: nodes %d, tags %d, links %d, total %d
 - Hash records: %d"
-                  org-supertag-background-sync--state
+                  org-supertag-background-sync--phase
                   mode-info
                   timer-status
                   (if org-supertag-background-sync-auto-start "Enabled" "Disabled")

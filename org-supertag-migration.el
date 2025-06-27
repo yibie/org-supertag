@@ -1,190 +1,99 @@
-;;; org-supertag-migration.el --- Data migration utilities for org-supertag -*- lexical-binding: t; -*-
+;;; org-supertag-migration.el --- One-time migration scripts for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Provides functionality to migrate standard Org mode tags (e.g., :tag:)
-;; to org-supertag format (e.g., :#tag:) within the configured sync directories.
+;; This file contains functions for performing one-time data migrations on the
+;; org-supertag database. These are intended to be run manually by the user
+;; to upgrade data structures to new formats.
 
 ;;; Code:
 
-(require 'org)
-(require 'org-element)
-(require 'org-supertag-sync) ; Need access to sync directories and helpers
-(require 'cl-lib) ; For cl-lib functions like cl-loop, cl-incf
 (require 'org-supertag-db)
+(require 'ht)
 
-(defun org-supertag--get-files-in-scope ()
-  "Return a list of all .org files within the sync scope.
-Respects `org-supertag-sync-directories', `org-supertag-sync-exclude-directories',
-and `org-supertag-sync-file-pattern'."
-  (let ((files nil))
-    (dolist (dir org-supertag-sync-directories files)
-      (when (file-directory-p dir)
-        (let* ((abs-dir (expand-file-name dir))
-               (dir-files (directory-files-recursively abs-dir org-supertag-sync-file-pattern t)))
-          (dolist (file dir-files)
-            (when (and (file-regular-p file)
-                       (string= (file-name-extension file) "org") ; Ensure it's an org file
-                       (org-supertag-sync--in-sync-scope-p file)) ; Check includes/excludes
-              (push file files)))))))
-  (delete-dups files)) ; Return unique list
+(defun org-supertag-migration--canonicalize-props (data)
+  "Recursively canonicalize any Lisp DATA into a standard plist format.
+This function is a copy of the new logic intended for org-supertag-db.el,
+placed here to be self-contained for the migration process.
+It converts alists to plists and cleans up keys and values."
+  (cond
+   ;; Atoms are returned as-is.
+   ((or (not (consp data)) (keywordp data)) data)
 
-(defun org-supertag--collect-standard-tags (files)
-  "Scan FILES and return a list of unique standard Org tags (without '#')."
-  (let ((standard-tags (make-hash-table :test 'equal))
-        (org-element-use-cache nil) ; Ensure fresh parsing
-        (errors nil))
-    (dolist (file files)
-      (condition-case err
-          (with-current-buffer (find-file-noselect file nil t) ; Visit quietly
-            (save-excursion
-              (goto-char (point-min))
-              (while (re-search-forward org-heading-regexp nil t)
-                (when (org-at-heading-p)
-                  (dolist (tag (org-get-tags))
-                    (unless (string-prefix-p "#" tag)
-                      (puthash tag t standard-tags)))))))
-        (error
-         (push (format "Error scanning %s: %s" file (error-message-string err)) errors))))
-    (when errors
-      (message "Warnings during tag collection:\n%s" (mapconcat #'identity errors "\n")))
-    (hash-table-keys standard-tags)))
+   ;; An alist (e.g., from properties drawer) is converted to a plist.
+   ((and (listp data) (consp (car data)) (not (keywordp (caar data))))
+    (let (plist)
+      (dolist (pair data)
+        (let ((key (car pair))
+              (val (cdr pair)))
+          (push (org-supertag-migration--canonicalize-props val) plist)
+          ;; Ensure key is a valid string/symbol before creating keyword
+          (let ((key-str (format "%s" key)))
+            (unless (string-empty-p key-str)
+              (push (intern (format ":%s" key-str)) plist)))))
+      (nreverse plist)))
 
-(defun org-supertag-migrate-standard-tags-to-supertag ()
-  "Migrate standard Org tags (:tag:) to supertags (:#tag:) globally.
+   ;; A regular list (or a plist already) is processed element by element.
+   ((listp data)
+    (mapcar #'org-supertag-migration--canonicalize-props data))
 
-Scans files defined in `org-supertag-sync-directories`, respecting
-exclusions. Prompts the user to select which standard tags to
-migrate.
+   ;; A dotted pair or other cons cell.
+   (t (cons (org-supertag-migration--canonicalize-props (car data))
+            (org-supertag-migration--canonicalize-props (cdr data))))))
 
-WARNING: This function modifies Org files in place. BACK UP YOUR
-FILES before proceeding."
+(defun org-supertag-migrate-database-to-canonical-format ()
+  "Run a one-time migration to convert the entire database to the new canonical plist format.
+This process will:
+1. Ask for user confirmation.
+2. Back up the existing database file.
+3. Load the old database.
+4. Create a new, clean database in memory by converting every object.
+5. Overwrite the old database file with the new, clean data."
   (interactive)
+  (when (y-or-n-p "Really migrate database to the new canonical format? This will create a backup.")
+    ;; 1. Back up the existing database
+    (let ((db-file org-supertag-db-file)
+          (backup-file (concat org-supertag-db-file ".bak")))
+      (message "Backing up current database to %s" backup-file)
+      (copy-file db-file backup-file t))
 
-  (unless (and org-supertag-sync-directories (listp org-supertag-sync-directories))
-    (user-error "Please configure `org-supertag-sync-directories` first."))
+    ;; 2. Load the old database
+    (message "Loading existing database...")
+    (org-supertag-db-load)
 
-  (let* ((files (org-supertag--get-files-in-scope))
-         (standard-tags (org-supertag--collect-standard-tags files)))
+    ;; 3. Create new, clean hash tables
+    (let ((new-objects (ht-create))
+          (new-links (ht-create))
+          (processed-count 0))
 
-    (unless standard-tags
-      (message "No standard Org tags found in the sync scope.")
-      (cl-return-from org-supertag-migrate-standard-tags-to-supertag))
+      (message "Starting migration of %d objects and %d links..."
+               (hash-table-count org-supertag-db--object)
+               (hash-table-count org-supertag-db--link))
 
-    (let* ((tags-to-migrate (completing-read-multiple
-                             "Select standard tags to migrate to :#tag: format (SPC to mark, RET to confirm): "
-                             standard-tags
-                             nil t))) ; require-match=t
+      ;; 4. Migrate all objects
+      (maphash (lambda (id props)
+                 (let ((clean-props (org-supertag-migration--canonicalize-props props)))
+                   (ht-set! new-objects id clean-props))
+                 (cl-incf processed-count))
+               org-supertag-db--object)
 
-      (unless tags-to-migrate
-        (message "No tags selected for migration. Aborting.")
-        (cl-return-from org-supertag-migrate-standard-tags-to-supertag))
+      ;; 5. Migrate all links
+      (maphash (lambda (id props)
+                 (let ((clean-props (org-supertag-migration--canonicalize-props props)))
+                   (ht-set! new-links id clean-props))
+                 (cl-incf processed-count))
+               org-supertag-db--link)
 
-      (message "Selected tags for migration: %s" (mapconcat #'identity tags-to-migrate ", "))
+      (message "Migration complete. Processed %d total records." processed-count)
 
-      (unless (yes-or-no-p (format "WARNING: This will modify %d files potentially.\nMigrate %d selected tags (%s) to :#tag: format?\n*** PLEASE BACK UP YOUR FILES FIRST! *** Proceed? "
-                                   (length files)
-                                   (length tags-to-migrate)
-                                   (mapconcat #'identity tags-to-migrate ", ")))
-        (message "Migration aborted by user.")
-        (cl-return-from org-supertag-migrate-standard-tags-to-supertag))
+      ;; 6. Overwrite the live database variables with the new, clean data
+      (setq org-supertag-db--object new-objects)
+      (setq org-supertag-db--link new-links)
 
-      ;; --- Execution Phase ---
-      (let ((modified-files-count 0)
-            (migrated-instances-count 0)
-            (errors nil)
-            (tags-to-migrate-hash (make-hash-table :test 'equal)))
-        ;; Populate hash for quick lookup
-        (dolist (tag tags-to-migrate) (puthash tag t tags-to-migrate-hash))
-
-        (message "Starting migration...")
-        (cl-loop for file in files
-                 for idx from 1
-                 do
-                 (message "Processing file %d/%d: %s" idx (length files) (file-name-nondirectory file))
-                 (condition-case err
-                     (let ((buffer-modified nil))
-                       (with-current-buffer (find-file-noselect file nil nil) ; Need to modify
-                         (save-excursion
-                           (goto-char (point-min))
-                           ;; Use org-scan-tags for robust heading iteration and modification
-                           (org-scan-tags
-                            (lambda ()
-                              (let* ((current-tags (org-get-tags))
-                                     (new-tags nil)
-                                     (changed-p nil))
-                                (dolist (tag current-tags)
-                                  (if (gethash tag tags-to-migrate-hash)
-                                      (progn
-                                        (push (concat "#" tag) new-tags)
-                                        (cl-incf migrated-instances-count)
-                                        (setq changed-p t))
-                                    (push tag new-tags))) ; Keep existing #tags or non-selected tags
-                                (when changed-p
-                                  (org-set-tags (nreverse new-tags)) ; org-set-tags modifies buffer
-                                  (setq buffer-modified t))))
-                            ;; Scope: only tags in headings
-                            '(:scope headline :target plain))
-                           (when buffer-modified
-                             (basic-save-buffer)
-                             (cl-incf modified-files-count))))
-                       ;; Kill buffer after processing
-                       (unless (or (eq (current-buffer) (get-buffer file)) ; Don't kill if it was already open interactively
-                                   (memq (current-buffer) (buffer-list))) ; Check if buffer still exists
-                         (kill-buffer (current-buffer))))
-                   (error
-                    (push (format "Error processing %s: %s" file (error-message-string err)) errors))))
-
-        ;; --- Reporting Phase ---
-        (message "Migration complete.")
-        (message "Migrated %d tag instances for %d selected tags across %d files."
-                 migrated-instances-count
-                 (length tags-to-migrate)
-                 modified-files-count)
-        (when errors
-          (warn "Encountered %d errors during migration:" (length errors))
-          (dolist (err-msg errors) (message "- %s" err-msg))
-          (message "Please check the affected files manually."))))))
-
-;;;###autoload
-(defun org-supertag-migrate-properties-to-db ()
-  "Migrate custom field properties from Org file drawers to the org-supertag database."
-  (interactive)
-  (if (not (y-or-n-p "This will migrate properties from your .org files to the database and remove them from the files. This is a one-way operation. Continue? "))
-      (message "Migration cancelled.")
-    (let ((migrated-count 0)
-          (processed-nodes 0)
-          (files (org-supertag-sync--get-all-files-in-scope)))
-      (message "Starting migration for %d files..." (length files))
-      (dolist (file files)
-        (with-current-buffer (find-file-noselect file t)
-          (message "Processing file: %s" file)
-          (save-excursion
-            (save-restriction
-              (widen)
-              (goto-char (point-min))
-              (while (re-search-forward org-heading-regexp nil t)
-                (when-let ((node-id (org-id-get)))
-                  (cl-incf processed-nodes)
-                  (let* ((all-props (org-entry-properties))
-                         (custom-props (cl-remove-if (lambda (key)
-                                                       (member key '("ID" "DEADLINE" "SCHEDULED" "CLOSED" "CLOCK" "Effort" "LAST_REPEAT")))
-                                                     (mapcar #'car all-props))))
-                    (dolist (prop-name custom-props)
-                      (let ((prop-value (org-entry-get nil prop-name)))
-                        (when (and prop-value (not (string-empty-p prop-value)))
-                          (message "Migrating property '%s' for node %s" prop-name node-id)
-                          ;; Call the centralized field setter, passing nil for tag-id.
-                          (org-supertag-field-set-value node-id prop-name prop-value nil)
-                          ;; Remove the property from the file
-                          (org-delete-property prop-name)
-                          (cl-incf migrated-count))))))))))
-      (when (> migrated-count 0)
-        ;; Saving is handled by the set-value function,
-        ;; so we don't need to explicitly save here.
-        (message "Migration complete. Migrated %d properties from %d nodes." migrated-count processed-nodes))
-      (unless (= migrated-count 0)
-        (message "No properties found to migrate."))))))
+      ;; 7. Save the new database to disk
+      (message "Saving new, canonicalized database to %s..." org-supertag-db-file)
+      (org-supertag-db--mark-dirty) ; Mark as dirty to force save
+      (org-supertag-db-save)
+      (message "Database migration successful!"))))
 
 (provide 'org-supertag-migration)
-
 ;;; org-supertag-migration.el ends here 

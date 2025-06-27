@@ -132,4 +132,25 @@ class DiagnosticsHandler:
         return {"status": "error", "message": "Log monitor not available in this version."}
     
     def print_processing_report(self) -> Dict[str, Any]:
-        return {"status": "error", "message": "Log monitor not available in this version."} 
+        return {"status": "error", "message": "Log monitor not available in this version."}
+
+    def inspect_vector_index(self) -> Dict[str, Any]:
+        """Inspects the vector index to check the number of entries."""
+        logger.info("inspect_vector_index called")
+        if not self.graph_service or not self.graph_service.has_vector_ext:
+            return {"status": "error", "message": "Graph service or vector extension not available."}
+        
+        try:
+            conn = self.graph_service._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM node_embeddings_vss")
+            count = cursor.fetchone()[0]
+            
+            return {
+                "status": "success",
+                "index_name": "node_embeddings_vss",
+                "entry_count": count
+            }
+        except Exception as e:
+            logger.error(f"Failed to inspect vector index: {e}\n{traceback.format_exc()}")
+            return {"status": "error", "message": str(e)} 

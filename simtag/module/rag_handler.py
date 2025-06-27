@@ -36,6 +36,8 @@ class RAGHandler:
         '(("node-id" . "...") ("title" . "...") ("content" . "..."))
         """
         payload = normalize_payload(args)
+        logger.debug(f"RAG_HANDLER: Received payload after normalization: {payload}")
+        logger.debug(f"RAG_HANDLER: Type of payload after normalization: {type(payload)}")
 
         # The keys from Elisp are strings with a leading colon, e.g., ":id"
         node_id = payload.get(":id")

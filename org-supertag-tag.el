@@ -4,9 +4,6 @@
 ;; Provides tag relationship management functionality
 ;; Core principle: Connect entities through relationships using type, from, and to
 
-(require 'org-supertag-tag-company)
-;;(require 'org-supertag-field-operation)
-
 ;;----------------------------------------------------------------------
 ;; Tag Name Operation
 ;;----------------------------------------------------------------------
