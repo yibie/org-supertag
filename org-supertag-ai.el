@@ -20,8 +20,7 @@
 (require 'org)
 (require 'org-element) ; Needed for property parsing
 (require 'org-id)
-(require 'org-supertag-behavior) ; Added require for behavior execution
-(require 'org-supertag-sim-epc) ; Added require for LLM/EPC interaction
+
 
 (defgroup org-supertag-ai nil
   "Customization options for org-supertag AI capabilities."

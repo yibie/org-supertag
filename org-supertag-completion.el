@@ -37,18 +37,27 @@
 
 (defun org-supertag--post-completion-action (selected-string original-prefix)
   "The single, unified post-completion action.
-It inspects the properties of SELECTED-STRING to decide what to do."
+It now correctly calls the main `org-supertag-tag-apply` function
+to ensure database relations and behaviors are triggered."
   ;; First, clean up what the completion UI inserted.
   (delete-region (- (point) (length selected-string)) (point))
   (when (eq (char-before) ?#) (delete-char -1))
 
-  ;; Now, check the "ID card" (the text property) of the selected string.
-  (if (get-text-property 0 'is-new-tag selected-string)
-      ;; If it's the "new tag" candidate, use the prefix the user typed.
-      (when (and original-prefix (not (string-empty-p original-prefix)))
-        (org-supertag-inline-insert-tag original-prefix))
-    ;; Otherwise, it's a normal, existing tag.
-    (org-supertag-inline-insert-tag selected-string)))
+  ;; Now, determine the tag and apply it using the unified function.
+  (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
+         (tag-name-raw (if is-new original-prefix selected-string))
+         ;; `ensure-tag` handles creation for new tags
+         (tag-info (org-supertag-inline--ensure-tag tag-name-raw))
+         (tag-id (plist-get tag-info :tag-id))
+         (node-id (org-id-get-create)))
+
+    (when (and node-id tag-id)
+      ;; We do NOT skip text insertion here. We've just deleted the
+      ;; completion text, so we rely on `tag-apply` to insert the
+      ;; final, properly-formatted tag text.
+      (let ((org-supertag-force-node-id node-id))
+        (org-supertag-tag-apply tag-id))
+      (message "Tag '%s' applied to node %s." tag-id node-id))))
 
 
 ;;;----------------------------------------------------------------------

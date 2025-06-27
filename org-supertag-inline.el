@@ -1,21 +1,5 @@
 ;;; org-supertag-inline.el --- Support for inline tags in org-mode content -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2023-2024
-
-;; Author: User <user@example.com>
-;; Keywords: org-mode, tags, inline
-
-;; This file is NOT part of GNU Emacs.
-
-;;; Commentary:
-
-;; This module adds support for inline tags within org-mode content.
-;; Inline tags are prefixed with a '#' symbol (like #hashtags) and are
-;; distinct from headline tags.
-;;
-;; Example:
-;; "This is a paragraph with an #inline-tag that can be tracked and queried."
-
 ;;; Code:
 
 (require 'org)
@@ -52,23 +36,18 @@ such as with the auto-tagging system."
 
 ;; Define the face for inline tags
 (defface org-supertag-inline-face
-  '((t :weight bold :foreground "magenta"))
+  '((t :weight bold :foreground "deeppink"))
   "Face for org-supertag inline tags."
   :group 'org-supertag-inline-style)
 
 ;; Compose font-lock keywords for highlighting inline tags
 (defvar org-supertag-inline-font-lock-keywords
   `((,(rx "#" (+ (any alnum "-_")))
-     (0 (progn
-          (when (and (not (org-in-src-block-p))
-                     (not (org-at-table-p))
-                     (not (org-at-commented-p))
-                     (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
-            (add-text-properties
-             (match-beginning 0)
-             (match-end 0)
-             '(face org-supertag-inline-face org-supertag-inline t)))
-          nil))))
+     (0 (if (and (not (org-in-src-block-p))
+                 (not (org-at-table-p))
+                 (not (org-at-commented-p))
+                 (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
+            'org-supertag-inline-face) t)))
   "Font-lock keywords for highlighting inline tags.")
 
 ;;;###autoload
@@ -179,7 +158,7 @@ Returns a plist with :tag-id and :tag-name."
                    (t
                     (if (or direct-create
                             (y-or-n-p (format "Create new tag '%s'? " sanitized-name)))
-                        (org-supertag-tag-create sanitized-name)
+                        (org-supertag-tag--create sanitized-name)
                       (user-error "Tag creation cancelled"))))))
       ;; Return both tag-id and tag-name
       (list :tag-id tag-id :tag-name sanitized-name))))
@@ -350,29 +329,15 @@ Only creates the relationship if NODE-ID is not nil."
       (org-supertag-tag-apply tag-id))))
 
 ;;;###autoload
-(defun org-supertag-inline-insert-tag (tag-name)
-  "Insert an inline tag, apply it, and establish all necessary relationships."
-  (interactive (list (org-supertag-inline--read-tag-name)))
-  (when (and tag-name (not (string-empty-p tag-name)))
-    (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
-           (tag-entity (or (org-supertag-tag-get display-name)
-                           (progn
-                             (org-supertag-tag-create display-name)
-                             (org-supertag-tag-get display-name))))
-           (tag-id (plist-get tag-entity :id))
-           ;; Variables to control org-supertag-tag-apply's behavior
-           (org-supertag-skip-text-insertion t) ; Don't add properties to drawer
-           (org-supertag-tag-apply-skip-headline t) ; Don't add to headline tags
-           (org-supertag-force-node-id (org-id-get-create))) ; Ensure correct node is used
-
-      ;; 1. Insert the visual tag text at point
-      (org-supertag-inline--insert-tag-text display-name)
-
-      ;; 2. Apply the tag using the full logic to create all relationships
-      (when tag-id
-        (org-supertag-tag-apply tag-id))
-
-      (message "Inserted inline tag #%s" display-name))))
+(defun org-supertag-inline-insert-tag (tag-name &optional pos)
+  "Insert an inline tag at POS, or at the current point.
+TAG-NAME: The name of the tag to insert (without '#').
+POS: The position to insert the tag. If nil, insert at point.
+The smart positioning logic has been removed to simplify the flow.
+The caller, `org-supertag-tag-apply`, is now responsible for positioning."
+  (let ((text-to-insert (concat " #" tag-name " ")))
+    (if pos (goto-char pos))
+    (insert text-to-insert)))
 
 (defun org-supertag-inline-insert-tag-for-autotag (node-id tag-name)
   "Insert a tag for the auto-tag system, positioning it smartly.
@@ -441,6 +406,125 @@ TAG-RESULTS is a list of plists, each from `org-supertag-tag-get-or-create'."
 ;; The function org-supertag-inline-insert-tag-no-newline is now obsolete
 ;; as its logic will be merged into the main org-supertag-inline-insert-tag.
 ;; (defun org-supertag-inline-insert-tag-no-newline (tag-name) ... )
+
+(defun org-supertag-inline-remove-tag-at-point (tag-id)
+  "Remove an inline tag at or before point.
+TAG-ID is the tag name to remove."
+  (let ((tag-pattern (concat "#" (regexp-quote tag-id))))
+    (save-excursion
+      (when (re-search-backward tag-pattern nil t)
+        (replace-match "")))))
+
+;;----------------------------------------------------------------------
+;; Interactive Commands
+;;----------------------------------------------------------------------
+
+(defun org-supertag-inline-add ()
+  "Interactively add a supertag to the current node.
+This command handles both database relations and text insertion."
+  (interactive)
+  (message "DEBUG: org-supertag-inline-add called")
+  (let* ((context (org-supertag-inline--analyze-context))
+         (node-id (plist-get context :node-id))
+         (tag-name-raw (org-supertag-inline--read-tag-name))
+         (tag-info (org-supertag-inline--ensure-tag tag-name-raw))
+         (tag-id (plist-get tag-info :tag-id)))
+    (message "DEBUG: node-id=%s, tag-id=%s" node-id tag-id)
+    (when (and node-id tag-id)
+      ;; The single call to the unified apply function.
+      ;; Text insertion is handled within `org-supertag-tag-apply`.
+      (let ((org-supertag-force-node-id node-id))
+        (org-supertag-tag-apply tag-id))
+      (message "Tag '%s' applied to node %s." tag-id node-id))))
+(defalias 'org-supertag-tag-add-tag 'org-supertag-inline-add)
+
+(defun org-supertag-inline-remove ()
+  "Interactively remove a supertag from the current node."
+  (interactive)
+  (let* ((node-id (org-id-get))
+         (tags (when node-id (org-supertag-node-get-tags node-id)))
+         (tag-to-remove (completing-read "Remove tag: " tags nil t)))
+    (when (and node-id (not (string-empty-p tag-to-remove)))
+      ;; 1. Update database
+      (org-supertag-db-remove-link :node-tag node-id tag-to-remove)
+      ;; 2. Update buffer
+      (org-supertag-inline-remove-tag-at-point tag-to-remove)
+      (message "Tag '%s' removed from node %s." tag-to-remove node-id))))
+(defalias 'org-supertag-tag-remove 'org-supertag-inline-remove)
+
+(defun org-supertag-inline-delete-all ()
+  "Interactively delete a tag definition and all its instances.
+This removes the tag from the database and from all org files."
+  (interactive)
+  (let* ((all-tags (org-supertag-get-all-tags))
+         (tag-id (completing-read "Delete tag permanently: " all-tags nil t)))
+    (when (and (not (string-empty-p tag-id))
+               (yes-or-no-p (format "DELETE tag '%s' and all its uses? This is irreversible. " tag-id)))
+      ;; First, find all nodes before deleting from DB
+      (let ((nodes (org-supertag-db-get-nodes-by-tag tag-id)))
+        ;; 1. Delete from database (this is the function from org-supertag-tag.el)
+        (org-supertag-tag--delete-at-all tag-id)
+        
+        ;; 2. Remove from all org buffers
+        (message "Removing inline tags from buffers...")
+        (let ((files (delete-dups (mapcar #'org-supertag-db-get-node-file nodes))))
+          (dolist (file files)
+            (when (file-exists-p file)
+              (with-current-buffer (find-file-noselect file)
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (re-search-forward (concat "#" (regexp-quote tag-id)) nil t)
+                    (replace-match ""))))))
+          (message "Completed buffer cleanup for tag '%s'." tag-id))))))
+
+(defun org-supertag-inline-rename ()
+  "Interactively rename a tag across all files."
+  (interactive)
+  (let* ((all-tags (org-supertag-get-all-tags))
+         (old-name (completing-read "Tag to rename: " all-tags nil t))
+         (new-name (read-string (format "New name for '%s': " old-name))))
+    (when (and (not (string-empty-p old-name))
+               (not (string-empty-p new-name)))
+      ;; 1. Update database first
+      (org-supertag-tag--rename old-name new-name)
+      
+      ;; 2. Update all buffers
+      (message "Renaming tag in buffers...")
+      (let* ((nodes (org-supertag-db-get-nodes-by-tag new-name)) ; Get nodes by new name
+             (files (delete-dups (mapcar #'org-supertag-db-get-node-file nodes))))
+        (dolist (file files)
+          (when (file-exists-p file)
+            (with-current-buffer (find-file-noselect file)
+              (save-excursion
+                (goto-char (point-min))
+                (while (re-search-forward (concat "#" (regexp-quote old-name)) nil t)
+                  (replace-match (concat "#" new-name))))
+              (save-buffer))))
+        (message "Finished renaming tag '%s' to '%s' in %d files."
+                 old-name new-name (length files))))))
+(defalias 'org-supertag-tag-rename 'org-supertag-inline-rename)
+
+(defun org-supertag-inline-change-tag ()
+  "Interactively change a tag on the current node."
+  (interactive)
+  (let* ((node-id (org-id-get))
+         (current-tags (org-supertag-node-get-tags node-id))
+         (source-tag (completing-read "Select tag to change: " current-tags nil t))
+         (target-tag-raw (read-string "Change to new tag name: ")))
+    (when (and node-id
+               (not (string-empty-p source-tag))
+               (not (string-empty-p target-tag-raw)))
+      (let* ((tag-info (org-supertag-inline--ensure-tag target-tag-raw))
+             (target-tag-id (plist-get tag-info :tag-id)))
+        ;; 1. Update database
+        (org-supertag-db-remove-link :node-tag node-id source-tag)
+        (org-supertag-node-db-add-tag node-id target-tag-id)
+        ;; 2. Update buffer
+        (org-supertag-inline-remove-tag-at-point source-tag)
+        (org-supertag-inline-insert-tag target-tag-id)
+        (message "Changed tag '%s' to '%s' on node %s."
+                 source-tag target-tag-id node-id)))))
+(defalias 'org-supertag-tag-change-tag 'org-supertag-inline-change-tag)
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

@@ -10,10 +10,9 @@
 ;; 3. Supports automated execution
 ;; 4. Supports scheduled tasks
 
-(require 'org-supertag-tag)
 (require 'org-supertag-behavior-library)
 (require 'org-supertag-behavior-template)
-(require 'org-supertag-db)
+
 
 ;;------------------------------------------------------------------------------
 ;; Behavior Registry
@@ -38,10 +37,39 @@ Key is the behavior name (string), value is a plist containing:
 (defvar org-supertag-behavior--initialized nil
   "Flag to track if behavior system has been initialized.")
 
+(with-eval-after-load 'org-supertag-tag
+  (defun org-supertag-behavior--get-behavior (tag-name)
+    "Get behavior definition for tag with TAG-NAME.
+First try to get behavior directly from registry.
+If not found, check if tag has associated behaviors."
+    (or
+     ;; Look up directly from registry
+     (gethash tag-name org-supertag-behavior-registry)
+     ;; Look up from tag's associated behaviors
+     (when-let* ((tag (org-supertag-tag-get tag-name))
+                 (behaviors (plist-get tag :behaviors)))
+       ;; If multiple behaviors exist, return the first one
+       (when (car behaviors)
+         (gethash (car behaviors) org-supertag-behavior-registry)))))
+
+  (defun org-supertag-behavior--cleanup-duplicates ()
+    "Clean up duplicate behaviors in all tags."
+    (interactive)
+    (maphash
+     (lambda (key value)
+       (when (plist-get value :behaviors)
+         (let ((unique-behaviors (delete-dups (plist-get value :behaviors))))
+           (org-supertag-tag--create
+            key
+            :type :tag
+            :behaviors unique-behaviors))))
+     org-supertag-db--object)))
+
 (defun org-supertag-behavior-register (behavior-name &rest props)
   "Register behavior with BEHAVIOR-NAME.
 PROPS is a plist with:
 :trigger  - When to execute
+:schedule - Cron format string (\"minute hour day month weekday\") for :schedule trigger
 :action   - Function or behavior list
 :style    - Visual properties
 :hooks    - Optional hooks
@@ -64,34 +92,6 @@ PROPS is a plist with:
         (add-hook (car hook-spec) (cdr hook-spec))))
     
     behavior))
-
-
-(defun org-supertag-behavior--get-behavior (tag-name)
-  "Get behavior definition for tag with TAG-NAME.
-First try to get behavior directly from registry.
-If not found, check if tag has associated behaviors."
-  (or
-   ;; Look up directly from registry
-   (gethash tag-name org-supertag-behavior-registry)
-   ;; Look up from tag's associated behaviors
-   (when-let* ((tag (org-supertag-tag-get tag-name))
-               (behaviors (plist-get tag :behaviors)))
-     ;; If multiple behaviors exist, return the first one
-     (when (car behaviors)
-       (gethash (car behaviors) org-supertag-behavior-registry)))))
-
-(defun org-supertag-behavior--cleanup-duplicates ()
-  "Clean up duplicate behaviors in all tags."
-  (interactive)
-  (maphash
-   (lambda (key value)
-     (when (plist-get value :behaviors)
-       (let ((unique-behaviors (delete-dups (plist-get value :behaviors))))
-         (org-supertag-tag-create
-          key
-          :type :tag
-          :behaviors unique-behaviors))))
-   org-supertag-db--object))
 
 ;;------------------------------------------------------------------------------
 ;; Secheduler System
@@ -589,54 +589,54 @@ Returns t if valid, nil otherwise."
        ((numberp pos) (goto-char pos)))
       (org-at-heading-p))))
 
-(defun org-supertag-behavior--on-tag-change (node-id tag-id action)
-  "Handle behavior when TAG-ID is applied to NODE-ID with ACTION."
-  ;; (message "Debug on-tag-change - node=%s tag=%s action=%s" 
-  ;;          node-id tag-id action)
+(defun org-supertag-behavior--on-tag-change (node-id tag-id change-type)
+  "Main handler for tag changes.
+Triggers behaviors based on tag and change type.
+CHANGE-TYPE can be :add, :remove, or :update."
+  (message "DEBUG: on-tag-change, node=%s, tag=%s, type=%s" node-id tag-id change-type)
   (when-let* ((behavior (org-supertag-behavior--get-behavior tag-id))
               (trigger (plist-get behavior :trigger)))
-    ;; (message "Debug on-tag-change - Found behavior=%S trigger=%S" 
-    ;;          behavior trigger)
-    (cond
-     ;; Handle scheduled behaviors
-     ((eq trigger :on-schedule)
-      (if (eq action :add)
-          (progn
-            (message "Attempting to register scheduled behavior for tag %s on node %s" tag-id node-id)
-            (condition-case err
-                (let* ((behavior-props (org-supertag-behavior--get-behavior tag-id)) ; Get full behavior props
-                       (b-action (plist-get behavior-props :action))
-                       (b-list (plist-get behavior-props :list))
-                       (b-schedule (plist-get behavior-props :schedule))
-                       ;; IMPORTANT: Task ID should be unique per node and behavior combination
-                       (task-unique-id (format "%s-%s" node-id tag-id)))
-                  (message "Registering task with ID: %s, Schedule: %s, Action: %S, List: %S, Tag: %s, Node: %s"
-                           task-unique-id b-schedule b-action b-list tag-id node-id)
-                  (org-supertag-schedule-add-task
-                   (list :id task-unique-id      ; Use unique ID
-                         :schedule b-schedule
-                         :action b-action
-                         :list b-list
-                         :params (plist-get behavior-props :params)
-                         :tag-id tag-id
-                         :node-id node-id))
-                  (message "Successfully registered scheduled behavior %s for tag %s on node %s"
-                           tag-id tag-id node-id)) ; Referring to tag-id as behavior name for this message
-              (error
-               (message "Error registering scheduled behavior for tag %s: %s"
-                        tag-id (error-message-string err)))))
-        ;; Remove scheduled task when tag is removed
-        (when (eq action :remove)
-          (let ((task-unique-id (format "%s-%s" node-id tag-id)))
-            (message "Attempting to remove scheduled task with ID: %s" task-unique-id)
-            (org-supertag-schedule-remove-task task-unique-id)))))
-     
-     ;; Handle regular behaviors
-     ((or (eq trigger :always)
-          (eq trigger :on-change)
-          (and (eq trigger :on-add) (eq action :add))
-          (and (eq trigger :on-remove) (eq action :remove)))
-      (org-supertag-behavior-execute node-id behavior)))))
+    (let ((action (plist-get behavior :action)))
+      (cond
+       ;; Handle scheduled behaviors
+       ((eq trigger :on-schedule)
+        (if (eq change-type :add)
+            (progn
+              (message "Attempting to register scheduled behavior for tag %s on node %s" tag-id node-id)
+              (condition-case err
+                  (let* ((behavior-props (org-supertag-behavior--get-behavior tag-id)) ; Get full behavior props
+                         (b-action (plist-get behavior-props :action))
+                         (b-list (plist-get behavior-props :list))
+                         (b-schedule (plist-get behavior-props :schedule))
+                         ;; IMPORTANT: Task ID should be unique per node and behavior combination
+                         (task-unique-id (format "%s-%s" node-id tag-id)))
+                    (message "Registering task with ID: %s, Schedule: %s, Action: %S, List: %S, Tag: %s, Node: %s"
+                             task-unique-id b-schedule b-action b-list tag-id node-id)
+                    (org-supertag-schedule-add-task
+                     (list :id task-unique-id      ; Use unique ID
+                           :schedule b-schedule
+                           :action b-action
+                           :list b-list
+                           :params (plist-get behavior-props :params)
+                           :tag-id tag-id
+                           :node-id node-id))
+                    (message "Successfully registered scheduled behavior %s for tag %s on node %s"
+                             tag-id tag-id node-id)) ; Referring to tag-id as behavior name for this message
+                (error
+                 (message "Error registering scheduled behavior for tag %s: %s"
+                          tag-id (error-message-string err)))))
+          ;; Remove scheduled task when tag is removed
+          (when (eq change-type :remove)
+            (let ((task-unique-id (format "%s-%s" node-id tag-id)))
+              (message "Attempting to remove scheduled task with ID: %s" task-unique-id)
+              (org-supertag-schedule-remove-task task-unique-id)))))
+       
+       ;; Handle regular behaviors
+       ((or (eq trigger :always)
+            (eq trigger :on-change)
+            (and (eq trigger :on-add) (eq change-type :add))
+            (and (eq trigger :on-remove) (eq change-type :remove)))
+        (org-supertag-behavior-execute node-id behavior))))))
 
 (defun org-supertag-behavior--plist-p (object)
   "Check if OBJECT is a property list."
