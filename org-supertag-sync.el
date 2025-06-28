@@ -259,6 +259,10 @@ Returns a plist of node properties or nil if not at a valid node."
                (scheduled (org-element-property :scheduled element))
                (deadline (org-element-property :deadline element))
                (olp (org-get-outline-path t))
+               (content (let* ((contents-begin (org-element-property :contents-begin element))
+                               (contents-end (org-element-property :contents-end element)))
+                          (when (and contents-begin contents-end)
+                            (buffer-substring-no-properties contents-begin contents-end))))
                ;; Fields related to file content are no longer extracted
                ;; to decouple from the org-properties system.
                (id (org-id-get)))
@@ -274,6 +278,7 @@ Returns a plist of node properties or nil if not at a valid node."
                 :priority priority
                 :scheduled scheduled
                 :deadline deadline
+                :content content
                 :olp olp))
       (error
        (message "Failed to extract node properties at point %d: %s" 
@@ -614,13 +619,8 @@ Only initialize if auto-sync is enabled and not already initialized."
   ;; Initial state for all files
   (let ((all-files (org-supertag-get-all-files))
         (new-files (org-supertag-scan-sync-directories)))
-    ;; Check for parsing errors in all files
-    (dolist (file (append all-files new-files))
-      (when (and (file-exists-p file)
-                 (> (org-supertag-sync--diagnose-parse-error file) 0))
-        (message "Warning: Found parsing issues in %s" file)))
     ;; Update state for valid files
-    (dolist (file (append all-files new-files))
+    (dolist (file (delete-dups (append all-files new-files)))
       (when (file-exists-p file)
         (org-supertag-sync-update-state file))))
   
@@ -657,20 +657,22 @@ Returns files that have been modified since last sync."
      org-supertag-sync--state)
     files))
 
-(defun org-supertag-scan-sync-directories ()
-  "Scan sync directories for new org files.
-Returns a list of new files that are not yet in sync state."
-  (let ((new-files nil))
+(defun org-supertag-scan-sync-directories (&optional all-files-p)
+  "Scan sync directories for org files.
+If ALL-FILES-P is non-nil, return all files in scope.
+Otherwise, returns a list of new files that are not yet in sync state."
+  (let ((files nil))
     (dolist (dir org-supertag-sync-directories)
       (when (file-exists-p dir)
-        (let ((dir-files (directory-files-recursively 
+        (let ((dir-files (directory-files-recursively
                          dir org-supertag-sync-file-pattern t)))
           (dolist (file dir-files)
             (when (and (file-regular-p file)
-                      (org-supertag-sync--in-sync-scope-p file)
-                      (not (gethash file org-supertag-sync--state)))
-              (push file new-files))))))
-    new-files))
+                       (org-supertag-sync--in-sync-scope-p file)
+                       (or all-files-p
+                           (not (gethash file org-supertag-sync--state))))
+              (push file files))))))
+    files))
 
 (defun org-supertag-sync--check-and-sync ()
   "Check and synchronize modified files.
@@ -848,9 +850,20 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
     (maphash
      (lambda (id entity)
        (let ((entity-type (plist-get entity :type)))
+         ;; **FIX:** Correctly preserve all non-node entities, including tags.
          (when (and entity-type (not (eq entity-type :node)))
            (puthash id (copy-sequence entity) preserved-entities))))
      org-supertag-db--object)
+    
+    ;; 保存所有链接数据
+    (maphash
+     (lambda (link-id link-data)
+       (puthash link-id (copy-sequence link-data) preserved-links))
+     org-supertag-db--link)
+    
+    ;; After preserving all data, clear the database to ensure a clean rebuild.
+    (clrhash org-supertag-db--object)
+    (clrhash org-supertag-db--link)
     
     ;; Confirm with user if too many files
     (when (and (> total 100)
@@ -1025,6 +1038,7 @@ Uses ID-based scanning to ensure reliability."
       (maphash
        (lambda (id entity)
          (let ((entity-type (plist-get entity :type)))
+           ;; **FIX:** Correctly preserve all non-node entities, including tags.
            (when (and entity-type (not (eq entity-type :node)))
              (puthash id (copy-sequence entity) preserved-entities))))
        org-supertag-db--object)
@@ -1034,6 +1048,10 @@ Uses ID-based scanning to ensure reliability."
        (lambda (link-id link-data)
          (puthash link-id (copy-sequence link-data) preserved-links))
        org-supertag-db--link)
+      
+      ;; After preserving all data, clear the database to ensure a clean rebuild.
+      (clrhash org-supertag-db--object)
+      (clrhash org-supertag-db--link)
       
       ;; 2. Scan all files and update nodes
       (dolist (file (org-supertag-get-all-files))
@@ -1148,44 +1166,48 @@ This is useful when files have been removed from sync scope or deleted."
 
 (defun org-supertag-sync--diagnose-parse-error (file)
   "Diagnose and attempt to fix org-element parsing errors in FILE."
-  (with-current-buffer (find-file-noselect file)
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (point-min))
-        (let ((org-element-use-cache nil)
-              (case-fold-search t)
-              (problematic-regions '()))
-          ;; First pass: try to identify problematic regions
-          (while (re-search-forward org-heading-regexp nil t)
-            (when (org-at-heading-p)
-              (let ((pos (point))
-                    (heading (org-get-heading t t t t)))
-                (condition-case err
-                    (progn
-                      (org-back-to-heading t)
-                      (let ((element (org-element-at-point)))
-                        (unless (and element
-                                   (org-element-property :raw-value element))
-                          (push (list pos heading "Invalid element structure") problematic-regions))))
-                  (error
-                   (push (list pos heading (error-message-string err)) problematic-regions))))))
-          
-          ;; Report findings
-          (when problematic-regions
-            (with-current-buffer (get-buffer-create "*Org Parse Diagnosis*")
-              (erase-buffer)
-              (insert (format "Parse diagnosis for %s\n\n" file))
-              (dolist (region (nreverse problematic-regions))
-                (let ((pos (nth 0 region))
-                      (heading (nth 1 region))
-                      (error-msg (nth 2 region)))
-                  (insert (format "Position %d: %s\n  Error: %s\n\n"
-                                pos heading error-msg))))
-              (display-buffer (current-buffer))))
-          
-          ;; Return number of problems found
-          (length problematic-regions))))))
+  (condition-case err
+      (with-current-buffer (find-file-noselect file)
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char (point-min))
+            (let ((org-element-use-cache nil)
+                  (case-fold-search t)
+                  (problematic-regions '()))
+              ;; First pass: try to identify problematic regions
+              (while (re-search-forward org-heading-regexp nil t)
+                (when (org-at-heading-p)
+                  (let ((pos (point))
+                        (heading (org-get-heading t t t t)))
+                    (condition-case err
+                        (progn
+                          (org-back-to-heading t)
+                          (let ((element (org-element-at-point)))
+                            (unless (and element
+                                       (org-element-property :raw-value element))
+                              (push (list pos heading "Invalid element structure") problematic-regions))))
+                      (error
+                       (push (list pos heading (error-message-string err)) problematic-regions))))))
+              
+              ;; Report findings
+              (when problematic-regions
+                (with-current-buffer (get-buffer-create "*Org Parse Diagnosis*")
+                  (erase-buffer)
+                  (insert (format "Parse diagnosis for %s\n\n" file))
+                  (dolist (region (nreverse problematic-regions))
+                    (let ((pos (nth 0 region))
+                          (heading (nth 1 region))
+                          (error-msg (nth 2 region)))
+                      (insert (format "Position %d: %s\n  Error: %s\n\n"
+                                    pos heading error-msg))))
+                  (display-buffer (current-buffer))))
+              
+              ;; Return number of problems found
+              (length problematic-regions)))))
+    (error
+     (message "Error diagnosing file %s: %s" file (error-message-string err))
+     -1))) ;; Return -1 to indicate a critical error during diagnosis
 
 ;;;###autoload
 (defun org-supertag-sync-test-auto-id-creation ()

@@ -100,7 +100,7 @@
                 :pos         ; Node position
                 :olp         ; Outline path (ancestor titles)
                 :level       ; Level (0 for file level)
-                )         
+                )
      :optional (;; Hash Information
                 :hash        ; Node property hash
                 :content-hash ; Content hash
@@ -139,7 +139,11 @@
                 :icon       ; Icon for visual identification
                 :color      ; Color scheme (background and foreground)
                 :modified-at)) ; Modification time
-  "Entity structure definitions."))
+    
+    (:type :metadata
+     :required (:type :data)
+     :optional ()))
+  "Entity structure definitions.")
 
 ;; Link type definition
 (defconst org-supertag-db-link-type
@@ -290,7 +294,7 @@ Returns:
       ;; Check if type is supported
       (let ((type (plist-get field :type)))
         (unless (alist-get type org-supertag-field-types)
-          (error "Unsupported field type: %s. This may be a deprecated field type. Supported types are: %s. Suggestion: Change the field type to 'string' for plain text content"
+          (error "Unsupported field type: %s. This may be a deprecated field type. Supported types are: %s. Suggestion: Change the field type to 'string' fo4r plain text content"
                  type
                  (mapconcat (lambda (type-pair) (symbol-name (car type-pair)))
                            org-supertag-field-types
@@ -864,6 +868,7 @@ Returns a list of node IDs."
 
 (defun org-supertag-get-all-files ()
   "Get list of all org files in database.
+If the database is empty, it falls back to scanning the configured sync directories.
 Returns:
 - List of absolute file paths
 - nil if no files found
@@ -881,7 +886,12 @@ Notes:
            (when (file-exists-p file-path)
              (push file-path files)))))
      org-supertag-db--object)
-    (delete-dups (nreverse files))))
+    (let ((db-files (delete-dups (nreverse files))))
+      (if (and (null db-files) (fboundp 'org-supertag-scan-sync-directories))
+          (progn
+            (message "Database is empty, scanning sync directories for files...")
+            (org-supertag-scan-sync-directories t))
+        db-files))))
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
@@ -1281,7 +1291,7 @@ Returns a clean string without any text properties."
                                  ;; only return content when begin and end are valid and have content
                                  (when (and begin content-end (< begin content-end))
                                    (org-supertag-db--clean-text
-                                    (buffer-substring-no-properties begin content-end)))))))
+                                    (buffer-substring-no-properties begin content-end))))))
                    ;; get other nodes that reference this node (keep existing reference relations)
                    (existing-node (org-supertag-db-get id))
                    (refs-from (when existing-node
@@ -1313,7 +1323,7 @@ Returns a clean string without any text properties."
                     :created-at (current-time)))))
       (error
        (message "Error parsing node at point: %s" (error-message-string err))
-       nil))))
+       nil)))))
 
 (defun org-supertag-db--validate-node-props (props)
   "Validate node property completeness."
@@ -1797,8 +1807,11 @@ Steps:
   (unless (org-supertag-db-load)
     ;; Create empty database if load fails
     (setq org-supertag-db--object (ht-create)
-          org-supertag-db--link (ht-create))  
-    (message "Created empty database"))
+          org-supertag-db--link (ht-create))
+    (message "Created empty database, saving to disk...")
+    ;; Mark as dirty and save immediately to create the file
+    (org-supertag-db--mark-dirty)
+    (org-supertag-db-save))
   ;; Set up change listeners
   (org-supertag-db-on 'entity:changed
                     (lambda (type id props)
@@ -1835,143 +1848,6 @@ Steps:
 ;; Clear cache before loading
 (add-hook 'org-supertag-db-before-load-hook #'org-supertag-db--cache-clear)
 
-
-
-;;------------------------------------------------------------------------------
-;; Metadata Storage
-;;------------------------------------------------------------------------------  
-
-(defvar org-supertag-db--metadata (ht-create)
-  "Hash table for storing global metadata.
-Metadata is stored as key-value pairs and is used for configuration,
-statistics, and relationship data that doesn't fit the entity model.")
-
-(defun org-supertag-db-get-metadata (key &optional default)
-  "Get metadata value for KEY.
-If KEY does not exist, return DEFAULT or nil if DEFAULT is not provided.
-KEY should be a string or symbol identifying the metadata.
-Returns the stored value or DEFAULT if not found."
-  (ht-get org-supertag-db--metadata (if (symbolp key) key (intern key)) default))
-
-(defun org-supertag-db-set-metadata (key value)
-  "Set metadata KEY to VALUE.
-KEY should be a string or symbol identifying the metadata.
-VALUE can be any Lisp object.
-Returns VALUE if successful.
-
-This is used for storing configuration, statistics, and
-relationship data that doesn't fit into the entity model.
-Example uses:
-- Cooccurrence statistics
-- Tag frequency data
-- Usage history
-- Global settings"
-  (let ((k (if (symbolp key) key (intern key))))
-    ;; Store the value
-    (ht-set! org-supertag-db--metadata k value)
-    ;; Mark database as dirty and schedule save
-    (org-supertag-db--mark-dirty)
-    (org-supertag-db--schedule-save)
-    ;; Emit event for tracking
-    (org-supertag-db-emit 'metadata:changed k value)
-    ;; Return the value
-    value))
-
-(defun org-supertag-db-remove-metadata (key)
-  "Remove metadata entry with KEY.
-KEY should be a string or symbol identifying the metadata.
-Returns t if the key existed and was removed, nil otherwise."
-  (let ((k (if (symbolp key) key (intern key))))
-    (when (ht-contains-p org-supertag-db--metadata k)
-      ;; Remove the entry
-      (ht-remove! org-supertag-db--metadata k)
-      ;; Mark database as dirty and schedule save
-      (org-supertag-db--mark-dirty)
-      (org-supertag-db--schedule-save)
-      ;; Emit event for tracking
-      (org-supertag-db-emit 'metadata:removed k)
-      t)))
-
-(defun org-supertag-db-list-metadata (&optional prefix)
-  "List all metadata keys, optionally filtered by PREFIX.
-If PREFIX is provided, only return keys that start with PREFIX.
-Returns an alist of (key . value) pairs."
-  (let ((results nil))
-    (ht-map (lambda (k v)
-              (when (or (null prefix)
-                        (string-prefix-p prefix (symbol-name k)))
-                (push (cons k v) results)))
-            org-supertag-db--metadata)
-    (nreverse results)))
-
-;; Add metadata save/load support to existing save/load functions
-(add-hook 'org-supertag-db-before-save-hook
-          (lambda ()
-            (ht-set! org-supertag-db--object "metadata"
-                   `(:type :metadata :data ,org-supertag-db--metadata))))
-
-(add-hook 'org-supertag-db-after-load-hook
-          (lambda ()
-            (when-let* ((metadata-entry (org-supertag-db-get "metadata")))
-              (setq org-supertag-db--metadata (or (plist-get metadata-entry :data)
-                                                 (ht-create))))))
-
-(defun org-supertag-db-test-metadata ()
-  "Test metadata storage functions."
-  (interactive)
-  (message "\n=== Testing Metadata Functions ===")
-  
-  ;; Set some test metadata
-  (org-supertag-db-set-metadata 'test-key "Test Value")
-  (org-supertag-db-set-metadata "numeric-key" 42)
-  (org-supertag-db-set-metadata 'list-key '(a b c))
-  
-  ;; Display current metadata
-  (message "Current metadata keys: %S" 
-           (mapcar #'car (org-supertag-db-list-metadata)))
-  
-  ;; Retrieve and verify values
-  (let ((test-val (org-supertag-db-get-metadata 'test-key))
-        (num-val (org-supertag-db-get-metadata "numeric-key"))
-        (list-val (org-supertag-db-get-metadata 'list-key))
-        (missing-val (org-supertag-db-get-metadata 'nonexistent "default")))
-    (message "test-key: %S (expected: \"Test Value\")" test-val)
-    (message "numeric-key: %S (expected: 42)" num-val)
-    (message "list-key: %S (expected: (a b c))" list-val)
-    (message "nonexistent: %S (expected: \"default\")" missing-val))
-  
-  ;; Remove a key
-  (org-supertag-db-remove-metadata 'test-key)
-  (message "After removal: %S" 
-           (mapcar #'car (org-supertag-db-list-metadata)))
-  
-  ;; Save and reload test
-  (when (yes-or-no-p "Save database to test persistence? ")
-    (org-supertag-db-save)
-    (setq org-supertag-db--metadata (ht-create)) ;; Clear in-memory
-    (message "Metadata table cleared. Current keys: %S" 
-             (mapcar #'car (org-supertag-db-list-metadata)))
-    (org-supertag-db-load)
-    (message "After reload: %S" 
-             (mapcar #'car (org-supertag-db-list-metadata)))))
-
-(defun org-supertag-db-get-all-links ()
-  "Return all links."
-  org-supertag-db--link)
-
-(defun org-supertag-db-get-nodes-by-tag (tag-id)
-  "Return a list of node IDs associated with a given TAG-ID.
-TAG-ID: The identifier of the tag.
-
-This function searches the link database for all `:node-tag`
-relationships where the 'to' field matches the given TAG-ID."
-  (let ((node-ids '()))
-    (maphash (lambda (_link-id props)
-               (when (and (eq (plist-get props :type) :node-tag)
-                          (equal (plist-get props :to) tag-id))
-                 (push (plist-get props :from) node-ids)))
-             org-supertag-db--link)
-    (delete-dups node-ids)))
 
 
 (provide 'org-supertag-db)

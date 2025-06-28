@@ -17,10 +17,16 @@
 ;;;----------------------------------------------------------------------
 
 (defun org-supertag--get-prefix-bounds ()
-  "Find the bounds of a tag prefix (like '#tag') before point."
-  (save-excursion
-    (when (re-search-backward "#\\([^ \t\n\r]+\\)" nil t)
-      (cons (match-beginning 1) (match-end 1)))))
+  "Find the bounds of a tag prefix at point, if any.
+Completion should only trigger when the point is immediately after
+a hash and a sequence of valid tag characters."
+  (let ((end (point)))
+    (save-excursion
+      (skip-chars-backward org-supertag-inline--valid-tag-chars)
+      (when (and (> (point) (point-min))
+               (eq (char-before) ?#))
+        ;; Return the bounds of the text part of the tag (after the '#')
+        (cons (point) end)))))
 
 (defun org-supertag--get-completion-table (prefix)
   "Return a list of candidates, with '[Create New Tag]' propertized."
@@ -37,27 +43,36 @@
 
 (defun org-supertag--post-completion-action (selected-string original-prefix)
   "The single, unified post-completion action.
-It now correctly calls the main `org-supertag-tag-apply` function
-to ensure database relations and behaviors are triggered."
-  ;; First, clean up what the completion UI inserted.
-  (delete-region (- (point) (length selected-string)) (point))
-  (when (eq (char-before) ?#) (delete-char -1))
-
-  ;; Now, determine the tag and apply it using the unified function.
+It handles both existing and new tags correctly by inspecting the
+completion candidate and correcting the buffer if necessary."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name-raw (if is-new original-prefix selected-string))
-         ;; `ensure-tag` handles creation for new tags
-         (tag-info (org-supertag-inline--ensure-tag tag-name-raw))
-         (tag-id (plist-get tag-info :tag-id))
-         (node-id (org-id-get-create)))
+         ;; For new tags, the REAL tag name is the prefix the user typed.
+         ;; For existing tags, it's the candidate they selected.
+         (tag-name (org-supertag-sanitize-tag-name (if is-new original-prefix selected-string))))
 
-    (when (and node-id tag-id)
-      ;; We do NOT skip text insertion here. We've just deleted the
-      ;; completion text, so we rely on `tag-apply` to insert the
-      ;; final, properly-formatted tag text.
-      (let ((org-supertag-force-node-id node-id))
-        (org-supertag-tag-apply tag-id))
-      (message "Tag '%s' applied to node %s." tag-id node-id))))
+    (when (and tag-name (not (string-empty-p tag-name)))
+
+      ;; --- CRITICAL FIX ---
+      ;; If this is a new tag, the completion UI has inserted the placeholder
+      ;; text "[Create New Tag]". We MUST delete that and insert the actual
+      ;; tag name that the user typed (`original-prefix`).
+      (when is-new
+        (delete-region (- (point) (length selected-string)) (point))
+        (insert original-prefix))
+
+      ;; Now the buffer is in the correct state (e.g., "#mynewtag").
+      ;; We can proceed with the backend logic, but we must tell `tag-apply`
+      ;; NOT to insert text again, as it's already correct in the buffer.
+      (let ((org-supertag-skip-text-insertion t))
+        (when is-new
+          (unless (org-supertag-tag-exists-p tag-name)
+            (org-supertag-tag--create tag-name)))
+        ;; This handles DB relations and behaviors.
+        (org-supertag-tag-apply tag-name))
+
+      ;; Finally, add the trailing space to delimit the tag.
+      (insert " ")
+      (message "Tag '%s' applied." tag-name))))
 
 
 ;;;----------------------------------------------------------------------
@@ -83,7 +98,9 @@ to ensure database relations and behaviors are triggered."
           ;;    universally understood by all completion frameworks.
           :exit-function
           (lambda (selected-string status)
-            (when (eq status 'finished)
+            ;; The condition now accepts 'finished, 'exact', and 'sole' to be
+            ;; compatible with various completion UIs like Corfu.
+            (when (memq status '(finished exact sole))
               (org-supertag--post-completion-action selected-string prefix))))))
 
 

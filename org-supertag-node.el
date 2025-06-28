@@ -277,7 +277,7 @@ List of field values, each element is (field-id . value)"
             (message "Processing tag: %s (sanitized: %s)" tag-name sanitized-tag)
             ;; Ensure tag object exists
             (unless (org-supertag-tag-get sanitized-tag)
-              (org-supertag-tag-create sanitized-tag))
+              (org-supertag-tag--create sanitized-tag))
             ;; Ensure link exists
             (org-supertag-node-db-add-tag node-id sanitized-tag))))
       

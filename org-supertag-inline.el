@@ -31,10 +31,10 @@
     (replace-regexp-in-string "\\`[ \t\n\r]+" ""
                               (replace-regexp-in-string "[ \t\n\r]+\\'" "" string))))
 
-(defconst org-supertag-inline--valid-tag-chars "a-zA-Z0-9_@#%\\u4e00-\\u9fff-"
+(defconst org-supertag-inline--valid-tag-chars "a-zA-Z0-9_@%一-龥-"
   "The set of characters considered valid for an inline supertag.
 This is used to construct regular expressions and includes ASCII
-alphanumeric characters and a basic CJK range for unicode support.")
+alphanumeric characters and a direct UTF-8 CJK range for max compatibility.")
 
 (defgroup org-supertag-inline-style nil
   "Customization options for org-supertag inline tag styling."
@@ -369,7 +369,7 @@ will typically place the tag on a new line below the headline properties."
         (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
                (tag-entity (or (org-supertag-tag-get display-name)
                                (progn
-                                 (org-supertag-tag-create display-name)
+                                 (org-supertag-tag--create display-name)
                                  (org-supertag-tag-get display-name)))))
           (org-supertag-inline--insert-tag-text display-name)
           (when tag-entity

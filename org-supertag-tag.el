@@ -16,15 +16,12 @@
 
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
-NAME is the name to convert
-- Remove leading '#' characters
-- Convert spaces to underscores
-- Validate non-empty"
+NAME is the name to convert. It removes leading/trailing whitespace
+and converts internal whitespace sequences to single underscores."
   (if (or (null name) (string-empty-p name))
       (error "Tag name cannot be empty")
     (let* ((trimmed (string-trim name))
-           (without-hash (replace-regexp-in-string "^#+" "" trimmed))
-           (sanitized (replace-regexp-in-string "\\s-+" "_" without-hash)))
+           (sanitized (replace-regexp-in-string "\\s-+" "_" trimmed)))
       (if (string-empty-p sanitized)
           (error "Invalid tag name: %s" name)
         sanitized))))
@@ -69,6 +66,8 @@ TAG-NAME: Name of the tag
 PROPS: Additional properties including:
 - :fields      List of field definitions
 - :behaviors   List of behaviors"
+  (unless (string-to-multibyte tag-name)
+    (error "Tag name '%s' contains invalid characters" tag-name))
   (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
          (parsed-name (org-supertag-tag--parse-name sanitized-name))
          (base-tag-name (car parsed-name))
@@ -446,6 +445,8 @@ NEW-NAME is the new name for the field."
 This is a data-layer function. Use `org-supertag-inline-rename` for interactive use.
 OLD-NAME: The current name of the tag.
 NEW-NAME: The new name for the tag."
+  (unless (string-to-multibyte new-name)
+    (error "New tag name '%s' contains invalid characters" new-name))
   (let* ((old-tag (org-supertag-tag-get old-name))
          (new-tag-name (org-supertag-sanitize-tag-name new-name)))
     (when (org-supertag-tag-get new-tag-name)
