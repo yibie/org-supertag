@@ -8,6 +8,10 @@
 (require 'org-supertag-tag)
 (require 'seq)  ; For seq-remove function
 
+;;;----------------------------------------------------------------------
+;;; Compatibility Functions
+;;;----------------------------------------------------------------------
+
 ;; Compatibility function for org-at-commented-p
 (unless (fboundp 'org-at-commented-p)
   (defun org-at-commented-p ()
@@ -16,12 +20,21 @@
       (beginning-of-line)
       (looking-at-p "^[ \t]*#\\+"))))
 
+;;;----------------------------------------------------------------------
+;;; Compatibility Functions
+;;;----------------------------------------------------------------------
+
 ;; Ensure string-trim is available (for Emacs < 24.4 compatibility)
 (unless (fboundp 'string-trim)
   (defun string-trim (string)
     "Remove leading and trailing whitespace from STRING."
     (replace-regexp-in-string "\\`[ \t\n\r]+" ""
                               (replace-regexp-in-string "[ \t\n\r]+\\'" "" string))))
+
+(defconst org-supertag-inline--valid-tag-chars "a-zA-Z0-9_@#%\\u4e00-\\u9fff-"
+  "The set of characters considered valid for an inline supertag.
+This is used to construct regular expressions and includes ASCII
+alphanumeric characters and a basic CJK range for unicode support.")
 
 (defgroup org-supertag-inline-style nil
   "Customization options for org-supertag inline tag styling."
@@ -42,7 +55,7 @@ such as with the auto-tagging system."
 
 ;; Compose font-lock keywords for highlighting inline tags
 (defvar org-supertag-inline-font-lock-keywords
-  `((,(rx "#" (+ (any alnum "-_")))
+  `((,(concat "#[" org-supertag-inline--valid-tag-chars "]+")
      (0 (if (and (not (org-in-src-block-p))
                  (not (org-at-table-p))
                  (not (org-at-commented-p))
@@ -73,8 +86,9 @@ such as with the auto-tagging system."
             (lambda (&rest _)
               (font-lock-flush)))
 
-;;; Helper functions for inline tag insertion
-
+;;----------------------------------------------------------------------
+;; Helper functions for inline tag insertion
+;;----------------------------------------------------------------------
 (defun org-supertag-inline--read-tag-name ()
   "Read tag name from user input with completion.
 Returns the selected or entered tag name."
@@ -258,7 +272,7 @@ Returns the tag line position, or nil if not found."
                  (not tag-line-pos))
         (beginning-of-line)
         ;; Check if the current line contains #tags (but not comment lines)
-        (when (and (looking-at-p "^[ \t]*#[a-zA-Z0-9_-]+")
+        (when (and (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]"))
                   (not (looking-at-p "^[ \t]*#\\+")))  ; Exclude org keywords
           (setq tag-line-pos (point)))
         (forward-line 1))
@@ -315,7 +329,7 @@ Smart spacing rules:
   "Check if the current line is a tag line."
   (save-excursion
     (beginning-of-line)
-    (looking-at-p "^[ \t]*#[a-zA-Z0-9_-]+")))
+    (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]+"))))
 
 (defun org-supertag-inline--establish-relationship (tag-result node-id)
   "Establish relationship between tag and node.
@@ -525,6 +539,17 @@ This removes the tag from the database and from all org files."
         (message "Changed tag '%s' to '%s' on node %s."
                  source-tag target-tag-id node-id)))))
 (defalias 'org-supertag-tag-change-tag 'org-supertag-inline-change-tag)
+
+(defun org-supertag-debug-force-refontify ()
+  "DEBUG: Force removal of old face properties and re-fontify.
+This is a temporary command to fix stale highlighting."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward (concat "#[" org-supertag-inline--valid-tag-chars "]+") nil t)
+      (remove-text-properties (match-beginning 0) (match-end 0) '(face t))))
+  (font-lock-fontify-buffer)
+  (message "Forced re-fontification complete."))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 
