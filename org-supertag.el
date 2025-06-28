@@ -168,7 +168,9 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
     (org-supertag-db-ensure-data-directory)
     ;; 3. Initialize database
     (org-supertag-db-init)
-    ;; 4. Setup auto-save hook for Emacs exit
+    ;; 4. Initialize relation module
+    (org-supertag-relation-init)
+    ;; 5. Setup auto-save hook for Emacs exit
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
 
     ;; Mark as initialized
@@ -258,7 +260,6 @@ the bridge is confirmed to be ready."
   ;; 3. Add the service start functions to the 'bridge ready' hook.
   ;;    These functions will be called automatically by the bridge
   ;;    once it has successfully connected to the Python backend.
-  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-auto-tag-start-silent-scan)
   ;; Background sync will check its auto-start setting internally
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
   
@@ -266,11 +267,16 @@ the bridge is confirmed to be ready."
   ;;    Once ready, it will trigger the hook above.
   (org-supertag-bridge-start-process)
 
+  ;; 5. Start the central scheduler. It will manage all registered tasks.
+  (org-supertag-scheduler-start)
+
   (message "Org SuperTag setup initiated. Dependent services will start once Python bridge is ready."))
 
 ;; Auto-setup when loading the package
 ;; This ensures org-supertag-mode is automatically added to org-mode-hook
 (org-supertag--setup)
+
+(add-hook 'org-supertag-db-after-load-hook #'org-supertag-behavior-setup)
 
 (provide 'org-supertag)
 

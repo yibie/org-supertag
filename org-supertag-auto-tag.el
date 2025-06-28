@@ -23,6 +23,7 @@
 (require 'org-supertag-inline)
 (require 'org-supertag-node)
 (require 'org-supertag-db)
+(require 'org-supertag-scheduler)
 (require 'cl-lib)
 
 ;;; === Core Configuration ===
@@ -36,9 +37,9 @@
   :type 'boolean
   :group 'org-supertag-auto-tag)
 
-(defcustom org-supertag-auto-tag-silent-scan-interval 7200
-  "Time interval (seconds) for background silent scanning of untagged nodes, default 10 minutes."
-  :type 'integer
+(defcustom org-supertag-auto-tag-scan-daily-time "02:30"
+  "The time of day (HH:MM format) to run the silent background scan for untagged nodes."
+  :type 'string
   :group 'org-supertag-auto-tag)
 
 (defcustom org-supertag-auto-tag-batch-min-content-length 10
@@ -74,84 +75,54 @@
 (defvar org-supertag-auto-tag--node-content-cache (make-hash-table :test 'equal)
   "Cache node content to avoid duplicate IO.")
 
-(defvar org-supertag-auto-tag--silent-scan-timer nil
-  "Timer for background silent scanning.")
-
-(defvar org-supertag-auto-tag--reminder-timer nil
-  "Timer for daily reminders.")
-
 (defvar org-supertag-auto-tag--last-prompt-date nil
   "Date (YYYY-MM-DD) of last reminder prompt, to avoid duplicate reminders.")
 
 ;;; === Auto Mode and Background Scanning ===
 
-(defun org-supertag-auto-tag-start-silent-scan ()
-  "Start background silent scan timer.
-This function should be called after Python bridge is ready."
-  (interactive)
-  (when (and org-supertag-auto-tag-enable-silent-scan
-             (not (timerp org-supertag-auto-tag--silent-scan-timer)))
-    (message "Auto-tag: Background silent scan service started, running every %d seconds."
-             org-supertag-auto-tag-silent-scan-interval)
-    (setq org-supertag-auto-tag--silent-scan-timer
-          (run-with-timer 5 org-supertag-auto-tag-silent-scan-interval
-                          'org-supertag-auto-tag-silent-scan-and-generate))))
-
-(defun org-supertag-auto-tag-stop-silent-scan ()
-  "Stop background silent scan timer."
-  (interactive)
-  (when (timerp org-supertag-auto-tag--silent-scan-timer)
-    (cancel-timer org-supertag-auto-tag--silent-scan-timer)
-    (setq org-supertag-auto-tag--silent-scan-timer nil)
-    (message "Auto-tag: Background silent scan service stopped.")))
-
-(defun org-supertag-auto-tag-start-reminder-timer ()
-  "Start daily reminder timer."
-  (interactive)
+(defun org-supertag-auto-tag--prompt-for-review ()
+  "Prompt user to review tags if conditions are met."
   (when (and org-supertag-auto-tag-enable-daily-reminder
-             (not (timerp org-supertag-auto-tag--reminder-timer)))
-    (message "Auto-tag: Daily reminder enabled, will remind at %s." org-supertag-auto-tag-daily-reminder-time)
-    (setq org-supertag-auto-tag--reminder-timer
-          (run-with-timer 60 60 'org-supertag-auto-tag--check-and-prompt-for-review))))
-
-(defun org-supertag-auto-tag-stop-reminder-timer ()
-  "Stop daily reminder timer."
-  (interactive)
-  (when (timerp org-supertag-auto-tag--reminder-timer)
-    (cancel-timer org-supertag-auto-tag--reminder-timer)
-    (setq org-supertag-auto-tag--reminder-timer nil)
-    (message "Auto-tag: Daily reminder disabled.")))
-
-(defun org-supertag-auto-tag--check-and-prompt-for-review ()
-  "Check current time and prompt user to review tags if conditions are met."
-  (let ((today (format-time-string "%Y-%m-%d")))
-    (when (and org-supertag-auto-tag-enable-daily-reminder
-               (not (seq-empty-p org-supertag-auto-tag--suggestion-queue))
-               (string= (format-time-string "%H:%M") org-supertag-auto-tag-daily-reminder-time)
-               (not (string= org-supertag-auto-tag--last-prompt-date today)))
-      (setq org-supertag-auto-tag--last-prompt-date today)
-      (when (yes-or-no-p (format "Auto-tag: %d suggestions pending, review now?"
-                                 (length org-supertag-auto-tag--suggestion-queue)))
+             (not (seq-empty-p org-supertag-auto-tag--suggestion-queue)))
+    (when (yes-or-no-p (format "Auto-tag: %d suggestions pending, review now?"
+                               (length org-supertag-auto-tag--suggestion-queue)))
+      ;; This function must be called from a timer, so it's safe
+      ;; to assume we can pop up a window.
+      (with-current-buffer (get-buffer-create "*Org Supertag Batch Add*")
         (org-supertag-auto-tag-batch-add)))))
 
 ;;;###autoload
 (define-minor-mode org-supertag-auto-tag-mode
   "Enable auto-tagging for org-supertag.
 This mode itself doesn't start any process, it's just a switch.
-Actual background scanning is started by `org-supertag-auto-tag-start-silent-scan`."
+This mode registers and deregisters the background tasks with the central scheduler."
   :init-value nil
   :lighter " ST-Auto"
   :group 'org-supertag
   (if org-supertag-auto-tag-mode
-      ;; Logic when mode is enabled (if needed), but we choose to put startup logic
-      ;; in an externally callable function to ensure correct timing.
-      (message "Org SuperTag Auto-Tag Mode enabled.")
-    ;; When mode is disabled, stop timers
-    (org-supertag-auto-tag-stop-silent-scan)
-    (org-supertag-auto-tag-stop-reminder-timer)))
+      ;; When mode is enabled, register tasks with the scheduler.
+      (progn
+        (when org-supertag-auto-tag-enable-silent-scan
+          (org-supertag-scheduler-register-task
+           'auto-tag-silent-scan
+           :daily
+           #'org-supertag-auto-tag-silent-scan-and-generate
+           :time org-supertag-auto-tag-scan-daily-time))
+        (when org-supertag-auto-tag-enable-daily-reminder
+          (org-supertag-scheduler-register-task
+           'auto-tag-daily-reminder
+           :daily
+           #'org-supertag-auto-tag--prompt-for-review
+           :time org-supertag-auto-tag-daily-reminder-time))
+        (message "Org SuperTag Auto-Tag Mode enabled."))
+    ;; When mode is disabled, deregister tasks.
+    (org-supertag-scheduler-deregister-task 'auto-tag-silent-scan)
+    (org-supertag-scheduler-deregister-task 'auto-tag-daily-reminder)
+    (message "Org SuperTag Auto-Tag Mode disabled.")))
 
 (defun org-supertag-auto-tag-silent-scan-and-generate ()
-  "Scan database for all untagged nodes and generate tag suggestions in batch.
+  "Scan database for untagged nodes and generate tag suggestions in batch.
+Nodes for which suggestions already exist in the queue are skipped to avoid reprocessing.
 If `org-supertag-auto-tag-batch-enable-limit` is t,
 process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
   (interactive)
@@ -160,16 +131,22 @@ process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
                               (lambda (node-id)
                                 (seq-empty-p (org-supertag-node-get-tags node-id)))
                               all-nodes))
+         ;; Get IDs of nodes that are already in the suggestion queue
+         (processed-node-ids (delete-dups (mapcar (lambda (s) (plist-get s :node-id)) org-supertag-auto-tag--suggestion-queue)))
+         ;; Filter out already processed nodes
+         (nodes-to-process (seq-remove (lambda (node-id) (member node-id processed-node-ids))
+                                       untagged-nodes-all))
          (untagged-nodes (if (and org-supertag-auto-tag-batch-enable-limit
-                                  (> (length untagged-nodes-all) org-supertag-auto-tag-batch-max-nodes-per-run))
-                             (seq-take untagged-nodes-all org-supertag-auto-tag-batch-max-nodes-per-run)
-                           untagged-nodes-all)))
+                                  (> (length nodes-to-process) org-supertag-auto-tag-batch-max-nodes-per-run))
+                             (seq-take nodes-to-process org-supertag-auto-tag-batch-max-nodes-per-run)
+                           nodes-to-process)))
     (if (seq-empty-p untagged-nodes)
-        (message "Auto-tag: No untagged nodes found.")
+        (message "Auto-tag: No new untagged nodes found to process.")
       (progn
-        (message "Auto-tag: Found %d untagged nodes (total %d), batch generating suggestions..."
+        (message "Auto-tag: Found %d new untagged nodes to process (total untagged: %d, with suggestions: %d). Generating..."
                  (length untagged-nodes)
-                 (length untagged-nodes-all))
+                 (length untagged-nodes-all)
+                 (length processed-node-ids))
         (org-supertag-auto-tag--batch-extract-and-send-content untagged-nodes)))))
 
 (defun org-supertag-auto-tag--batch-extract-and-send-content (node-ids)
@@ -190,48 +167,48 @@ The data is structured according to the unified data contract."
     (if nodes-to-process
         (progn
           (message "Auto-tag: Preparing to send %d eligible nodes to backend for processing..." (length nodes-to-process))
-          ;; Construct the final payload using list format for proper EPC serialization  
+          ;; Construct the final payload using list format for proper EPC serialization
           (let* ((reversed-nodes (reverse nodes-to-process))
                  (model-config (org-supertag-api--get-model-config-for-tagging))
                  ;; Use list format instead of alist - EPC serializes this as Python dict
                  (payload `(("nodes" ,reversed-nodes)
                            ("model_config" ,model-config))))
+
             
-            ;; 详细的数据收集和调试输出
-            (message "=== ELISP DEBUG: DATA COLLECTION (LIST FORMAT) ===")
-            (message "Total nodes to process: %d" (length reversed-nodes))
-            (message "Model config: %S" model-config)
-            
+            ;; (message "=== ELISP DEBUG: DATA COLLECTION (LIST FORMAT) ===")
+            ;; (message "Total nodes to process: %d" (length reversed-nodes))
+            ;; (message "Model config: %S" model-config)
+
             ;; 打印前5个节点的详细信息
-            (let ((node-count 0))
-              (dolist (node reversed-nodes)
-                (when (< node-count 5)
-                  (message "--- Node %d ---" (1+ node-count))
-                  (message "Node structure type: %s" (type-of node))
-                  (message "Node is list with length: %d" (length node))
-                  (dolist (pair node)
-                    (when (listp pair)
-                      (message "  %S => %S (type: %s)" (car pair) (cadr pair) (type-of (cadr pair)))))
-                  (cl-incf node-count))))
-            
-            (message "--- Final Payload Structure ---")
-            (message "Payload type: %s" (type-of payload))
-            (message "Payload is list with length: %d" (length payload))
-            (dolist (top-pair payload)
-              (when (listp top-pair)
-                (message "  Top-level %S => type: %s" (car top-pair) (type-of (cadr top-pair)))
-                (when (string= (car top-pair) "nodes")
-                  (message "    Nodes count: %d" (length (cadr top-pair))))
-                (when (string= (car top-pair) "model_config")
-                  (message "    Model config: %S" (cadr top-pair)))))
-            (message "=== END ELISP DEBUG ===")
-            
+            ;; (let ((node-count 0))
+            ;;   (dolist (node reversed-nodes)
+            ;;     (when (< node-count 5)
+            ;;       (message "--- Node %d ---" (1+ node-count))
+            ;;       (message "Node structure type: %s" (type-of node))
+            ;;       (message "Node is list with length: %d" (length node))
+            ;;       (dolist (pair node)
+            ;;         (when (listp pair)
+            ;;           (message "  %S => %S (type: %s)" (car pair) (cadr pair) (type-of (cadr pair)))))
+            ;;       (cl-incf node-count))))
+
+            ;; (message "--- Final Payload Structure ---")
+            ;; (message "Payload type: %s" (type-of payload))
+            ;; (message "Payload is list with length: %d" (length payload))
+            ;; (dolist (top-pair payload)
+            ;;   (when (listp top-pair)
+            ;;     (message "  Top-level %S => type: %s" (car top-pair) (type-of (cadr top-pair)))
+            ;;     (when (string= (car top-pair) "nodes")
+            ;;       (message "    Nodes count: %d" (length (cadr top-pair))))
+            ;;     (when (string= (car top-pair) "model_config")
+            ;;       (message "    Model config: %S" (cadr top-pair)))))
+            ;; (message "=== END ELISP DEBUG ===")
+
             ;; (message "Auto-tag DEBUG: Sending payload with %d nodes to API layer." (length reversed-nodes))
             ;; The API layer will wrap this payload in a list before sending.
             (org-supertag-api-batch-generate-tags
              payload
              #'org-supertag-auto-tag--batch-handle-completion)))
-      
+
       ;; If no eligible nodes, just print a message, do nothing.
       (message "Auto-tag: All untagged nodes' content is too short or cannot be extracted, skipped."))))
 
@@ -524,7 +501,7 @@ The data is structured according to the unified data contract."
     ;; 2. Check if the tag object exists in the database. If not, create it.
     (unless (org-supertag-tag-get tag-id)
       (message "Tag '%s' not found in DB, creating it." tag-id)
-      (org-supertag-tag-create tag-id))
+      (org-supertag-tag--create tag-id))
     
     ;; 3. Link the node to the tag in the database.
     (message "Linking node '%s' to tag '%s'." node-id tag-id)
@@ -586,7 +563,7 @@ This function now correctly registers the tag in the database."
         ;; 1. Sanitize and ensure the tag object exists in the database.
         (let ((sanitized-tag-name (org-supertag-sanitize-tag-name tag-name)))
           (unless (org-supertag-tag-get sanitized-tag-name)
-            (org-supertag-tag-create sanitized-tag-name))
+            (org-supertag-tag--create sanitized-tag-name))
           
           ;; 2. Link the node to the tag in the database.
           (org-supertag-node-db-add-tag node-id sanitized-tag-name))

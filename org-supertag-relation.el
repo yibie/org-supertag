@@ -86,6 +86,96 @@ When set to t, adding a relation will automatically add its complementary relati
   :type 'boolean
   :group 'org-supertag-relation)
 
+(defcustom org-supertag-relation-cooccurrence-file
+  (org-supertag-data-file "relation-cooccurrence.el")
+  "File to store co-occurrence relationship data."
+  :type 'file
+  :group 'org-supertag-relation)
+
+(defvar org-supertag-relation--cooccurrence-db (make-hash-table :test 'equal)
+  "In-memory database for co-occurrence statistics.")
+
+(defvar org-supertag-relation--db-dirty nil
+  "Flag indicating if the co-occurrence database has unsaved changes.")
+
+(defvar org-supertag-relation--save-timer nil
+  "Timer for delayed saving of the co-occurrence database.")
+
+(defun org-supertag-relation--mark-dirty ()
+  "Mark the co-occurrence database as dirty."
+  (setq org-supertag-relation--db-dirty t))
+
+(defun org-supertag-relation-save-db ()
+  "Save the co-occurrence database to its file."
+  (when org-supertag-relation--db-dirty
+    (message "Attempting to save co-occurrence database to %s..." org-supertag-relation-cooccurrence-file)
+    ;; Ensure the data directory exists before saving.
+    (make-directory (file-name-directory org-supertag-relation-cooccurrence-file) t)
+    (with-temp-buffer
+      (let ((print-level nil) (print-length nil)
+            ;; Explicitly set coding system to prevent errors on write.
+            (coding-system-for-write 'utf-8-emacs-unix))
+        (prin1 org-supertag-relation--cooccurrence-db (current-buffer))
+        (write-region (point-min) (point-max) org-supertag-relation-cooccurrence-file)))
+    (setq org-supertag-relation--db-dirty nil)
+    (message "Co-occurrence database saved successfully.")))
+
+(defun org-supertag-relation--schedule-save ()
+  "Schedule a delayed save for the co-occurrence database."
+  (when org-supertag-relation--save-timer
+    (cancel-timer org-supertag-relation--save-timer))
+  (setq org-supertag-relation--save-timer
+        (run-with-idle-timer 2 nil #'org-supertag-relation-save-db)))
+
+(defun org-supertag-relation-load-db ()
+  "Load the co-occurrence database from its file."
+  (when (file-exists-p org-supertag-relation-cooccurrence-file)
+    (with-temp-buffer
+      ;; Explicitly read with UTF-8 to match the saving process.
+      (let ((coding-system-for-read 'utf-8))
+        (insert-file-contents org-supertag-relation-cooccurrence-file))
+      ;; Handle empty or invalid file case gracefully
+      (goto-char (point-min))
+      (unless (eobp)
+        (let ((data (condition-case nil
+                        (read (current-buffer))
+                      (error nil))))
+          (if (hash-table-p data)
+              (setq org-supertag-relation--cooccurrence-db data)
+            (message "Warning: org-supertag co-occurrence DB file is corrupt.")))))))
+
+(defun org-supertag-relation--migrate-from-old-db ()
+  "Try to find and extract co-occurrence data from the old DB format.
+The old format stored this data in a special ':metadata' object in the main DB."
+  (let* ((metadata-object (gethash "metadata" org-supertag-db--object)))
+    (when (and metadata-object (plist-get metadata-object :type) (eq (plist-get metadata-object :type) :metadata))
+      (let ((cooccurrence-data (plist-get metadata-object :data)))
+        (when (hash-table-p cooccurrence-data)
+          cooccurrence-data)))))
+
+(defun org-supertag-relation-init ()
+  "Initialize the relation module, loading its database or migrating old data."
+  ;; First, load whatever is in the new DB file, if anything.
+  (org-supertag-relation-load-db)
+
+  ;; If the newly loaded DB is empty, check if we need to migrate from the old format.
+  (when (= 0 (hash-table-count org-supertag-relation--cooccurrence-db))
+    (message "Co-occurrence DB is empty. Checking for old data to migrate...")
+    (let ((migrated-data (org-supertag-relation--migrate-from-old-db)))
+      (when migrated-data
+        (message "Found old data. Starting migration...")
+        (setq org-supertag-relation--cooccurrence-db migrated-data)
+        (org-supertag-relation--mark-dirty)
+        (org-supertag-relation-save-db)
+        (message "Successfully migrated %d co-occurrence records from old database." (hash-table-count migrated-data))))))
+
+;; Save on exit.
+(add-hook 'kill-emacs-hook #'org-supertag-relation-save-db)
+
+;;----------------------------------------------------------------------
+;; Relation Type Management
+;;----------------------------------------------------------------------
+
 (defun org-supertag-relation--get-all-relation-types ()
   "Get all available relation types."
   org-supertag-relation-types)
@@ -888,18 +978,27 @@ This function will:
   "Get the number of co-occurrences between TAG1 and TAG2.
 If there is no co-occurrence record, return 0."
   (let* ((rel-id-key (format "tag-cooccur:%s:%s" tag1 tag2)))
-    (or (org-supertag-db-get-metadata rel-id-key 0) 0)))
+    (or (gethash rel-id-key org-supertag-relation--cooccurrence-db 0) 0)))
 
 (defun org-supertag-relation--set-cooccurrence-count (tag1 tag2 count)
   "Set the co-occurrence count between TAG1 and TAG2 to COUNT."
-  (let* ((tags (sort (list tag1 tag2) #'string<))
-         (tag1-sorted (car tags))
-         (tag2-sorted (cadr tags))
-         (rel-id-key1 (format "tag-cooccur:%s:%s" tag1 tag2))
+  (let* ((rel-id-key1 (format "tag-cooccur:%s:%s" tag1 tag2))
          (rel-id-key2 (format "tag-cooccur:%s:%s" tag2 tag1)))
     ;; Store the count in both directions for easy lookup
-    (org-supertag-db-set-metadata rel-id-key1 count)
-    (org-supertag-db-set-metadata rel-id-key2 count)))
+    (puthash rel-id-key1 count org-supertag-relation--cooccurrence-db)
+    (puthash rel-id-key2 count org-supertag-relation--cooccurrence-db)
+    (org-supertag-relation--mark-dirty)
+    (org-supertag-relation--schedule-save)))
+
+(defun org-supertag-relation--set-metadata (key value)
+  "Set metadata KEY to VALUE in the co-occurrence database."
+  (puthash key value org-supertag-relation--cooccurrence-db)
+  (org-supertag-relation--mark-dirty)
+  (org-supertag-relation--schedule-save))
+
+(defun org-supertag-relation--get-metadata (key)
+  "Get metadata for KEY from the co-occurrence database."
+  (gethash key org-supertag-relation--cooccurrence-db))
 
 ;; Function to analyze co-occurrence patterns across the entire database
 (defun org-supertag-relation-analyze-cooccurrence-patterns ()
@@ -925,9 +1024,9 @@ If there is no co-occurrence record, return 0."
                 (puthash key (1+ (or (gethash key cooccur-counts) 0)) cooccur-counts)))))))
     
     ;; Save the global tag frequency data to metadata
-    (org-supertag-db-set-metadata 'tag-frequency-data tag-counts)
-    (org-supertag-db-set-metadata 'tag-total-nodes total-nodes)
-    (org-supertag-db-set-metadata 'tag-analysis-timestamp (current-time))
+    (org-supertag-relation--set-metadata 'tag-frequency-data tag-counts)
+    (org-supertag-relation--set-metadata 'tag-total-nodes total-nodes)
+    (org-supertag-relation--set-metadata 'tag-analysis-timestamp (current-time))
     
     ;; Calculate the point mutual information (PMI) for each co-occurrence
     (maphash
@@ -946,7 +1045,7 @@ If there is no co-occurrence record, return 0."
          (org-supertag-relation--set-cooccurrence-count tag1 tag2 count)
          
          ;; Store PMI value in metadata for statistical access
-         (org-supertag-db-set-metadata (format "tag-pmi:%s:%s" tag1 tag2) norm-pmi)
+         (org-supertag-relation--set-metadata (format "tag-pmi:%s:%s" tag1 tag2) norm-pmi)
          
          ;; If strength is meaningful, update the relation with the new strength
          (when (>= strength org-supertag-relation-min-strength)
@@ -954,8 +1053,10 @@ If there is no co-occurrence record, return 0."
            (org-supertag-relation-add-relation tag2 tag1 'cooccurrence))))
      cooccur-counts)
     
-    (message "Co-occurrence analysis completed. Analyzed %d nodes and %d tag pairs."
-             total-nodes (hash-table-count cooccur-counts))))
+    (message "Co-occurrence analysis completed. Analyzed %d nodes and %d tag pairs. Saving results..."
+             total-nodes (hash-table-count cooccur-counts))
+    ;; Force an immediate save after this heavy operation.
+    (org-supertag-relation-save-db)))
 
 ;; Co-occurrence record incremental relation update
 (defun org-supertag-relation-update-on-tag-add (node-id tag-id)
@@ -981,8 +1082,8 @@ This is an incremental update feature that only updates affected relations."
                   (org-supertag-relation-add-relation tag-id existing-tag 'cooccurrence)))))))))
     
     ;; Record incremental update
-    (org-supertag-db-set-metadata 'tag-incremental-updates-count 
-                                 (1+ (org-supertag-db-get-metadata 'tag-incremental-updates-count 0))))
+    (org-supertag-relation--mark-dirty)
+    (org-supertag-relation--schedule-save))
 
 (defun org-supertag-relation-update-on-tag-remove (node-id tag-id)
   "When NODE-ID deletes TAG-ID as a tag, update the co-occurrence relationship.
@@ -1009,9 +1110,9 @@ This is an incremental update feature that only updates affected relations."
                       ;; Delete the relation
                       (org-supertag-relation-remove-relation related-tag-id tag-id))))))))
         
-        ;; Record incremental update
-        (org-supertag-db-set-metadata 'tag-incremental-updates-count 
-                                    (1+ (org-supertag-db-get-metadata 'tag-incremental-updates-count 0)))))))
+        ;; Record incremental update by changing the co-occurrence db, which will be saved
+        (org-supertag-relation--mark-dirty)
+        (org-supertag-relation--schedule-save)))))
 
 ;; Register hooks
 (add-hook 'org-supertag-node-tag-added-hook #'org-supertag-relation-update-on-tag-add)

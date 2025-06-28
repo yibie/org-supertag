@@ -21,6 +21,7 @@
 (require 'org-supertag-bridge)
 (require 'org-supertag-api)
 (require 'ht) ;; Ensure ht is required
+(require 'org-supertag-scheduler)
 
 ;; === Configuration variables ===
 
@@ -53,11 +54,8 @@ Example: '(\"09:00\" \"18:00\") for sync at 9 AM and 6 PM daily."
 
 ;; === Runtime variables ===
 
-(defvar org-supertag-background-sync--timer nil
-  "Background sync timer.")
-
-(defvar org-supertag-background-sync--schedule-timer nil
-  "Scheduled sync timer (for daily checks).")
+(defvar org-supertag-background-sync--registered-task-ids nil
+  "A list of task IDs registered with the central scheduler.")
 
 (defvar org-supertag-background-sync--phase :idle
   "Background sync phase. Possible values:
@@ -91,16 +89,19 @@ Value: hash string")
 ;; === Hash Persistence ===
 
 (defun org-supertag-background-sync--save-hashes ()
-  "Save the current sync hashes to the hash file in JSON format."
+  "Save the current sync hashes to the hash file in JSON format.
+Only writes the file if the hash table is not empty to avoid creating
+empty or invalid JSON files."
   (interactive)
-  (require 'json)
-  (org-supertag-background-sync--ensure-data-directory)
-  (let ((temp-file (make-temp-file "sync-hashes-json-")))
-    (with-temp-buffer
-      (insert (json-encode org-supertag-background-sync--last-sync-hashes))
-      (write-file temp-file nil))
-    (rename-file temp-file org-supertag-background-sync--hash-file t)
-    (message "[background-sync] Hashes saved to %s" org-supertag-background-sync--hash-file)))
+  (unless (hash-table-empty-p org-supertag-background-sync--last-sync-hashes)
+    (require 'json)
+    (org-supertag-background-sync--ensure-data-directory)
+    (let ((temp-file (make-temp-file "sync-hashes-json-")))
+      (with-temp-buffer
+        (insert (json-encode org-supertag-background-sync--last-sync-hashes))
+        (write-file temp-file nil))
+      (rename-file temp-file org-supertag-background-sync--hash-file t)
+      (message "[background-sync] Hashes saved to %s" org-supertag-background-sync--hash-file))))
 
 (defun org-supertag-background-sync--load-hashes ()
   "Load sync hashes from the JSON hash file if it exists.
@@ -108,34 +109,33 @@ If the file doesn't exist, automatically create a baseline hash file
 from current database state to enable incremental sync."
   (interactive)
   (if (file-exists-p org-supertag-background-sync--hash-file)
-      (progn
-        (require 'json)
-        (let* ((json-string (with-temp-buffer
-                              (insert-file-contents org-supertag-background-sync--hash-file)
-                              (buffer-string)))
-               ;; Use json-parse-string with string keys to avoid symbol conversion
-               (data-hash (condition-case nil
-                            (json-parse-string json-string)
-                          (error
-                           ;; Fallback to old method if json-parse-string not available
-                           (json-read-from-string json-string)))))
-          (clrhash org-supertag-background-sync--last-sync-hashes)
-          (cond
-           ;; If we got a hash table from json-parse-string, iterate directly
-           ((hash-table-p data-hash)
-            (maphash (lambda (key value)
-                       (puthash key value org-supertag-background-sync--last-sync-hashes))
-                     data-hash))
-           ;; If we got an alist from json-read-from-string, convert symbol keys to strings
-           ((listp data-hash)
-            (dolist (pair data-hash)
-              (let ((key (if (symbolp (car pair)) 
-                            (symbol-name (car pair))
-                          (car pair))))
-                (puthash key (cdr pair) org-supertag-background-sync--last-sync-hashes)))))
-          (message "[background-sync] Hashes loaded from JSON file %s. Total: %d"
-                   org-supertag-background-sync--hash-file
-                   (hash-table-count org-supertag-background-sync--last-sync-hashes))))
+      (let ((json-string (with-temp-buffer
+                           (insert-file-contents org-supertag-background-sync--hash-file)
+                           (buffer-string))))
+        (if (or (null json-string) (string-empty-p (string-trim json-string)))
+            (progn
+              (message "[background-sync] Hash file is empty. Creating baseline...")
+              (org-supertag-background-sync--create-baseline-hashes))
+          (require 'json)
+          (let* ((data-hash (condition-case nil
+                              (json-parse-string json-string)
+                            (error
+                             (json-read-from-string json-string)))))
+            (clrhash org-supertag-background-sync--last-sync-hashes)
+            (cond
+             ((hash-table-p data-hash)
+              (maphash (lambda (key value)
+                         (puthash key value org-supertag-background-sync--last-sync-hashes))
+                       data-hash))
+             ((listp data-hash)
+              (dolist (pair data-hash)
+                (let ((key (if (symbolp (car pair))
+                              (symbol-name (car pair))
+                            (car pair))))
+                  (puthash key (cdr pair) org-supertag-background-sync--last-sync-hashes)))))
+            (message "[background-sync] Hashes loaded from JSON file %s. Total: %d"
+                     org-supertag-background-sync--hash-file
+                     (hash-table-count org-supertag-background-sync--last-sync-hashes)))))
     ;; Hash file doesn't exist - create baseline from current database state
     (progn
       (message "[background-sync] JSON hash file not found. Creating baseline from current database state...")
@@ -604,67 +604,49 @@ Otherwise, it finalizes the entire sync process."
       (org-supertag-background-sync--wait-for-backend))))
 
 (defun org-supertag-background-sync-start (&optional force)
-  "Start background sync service.
-This function now assumes Python bridge is already ready when called.
+  "Start background sync service by registering tasks with the central scheduler.
 If FORCE is non-nil or called interactively, ignore auto-start setting."
   (interactive "P")
+  ;; First, stop any existing tasks to ensure a clean slate.
+  (org-supertag-background-sync-stop)
   (let ((should-start (or force (called-interactively-p 'any) org-supertag-background-sync-auto-start)))
     (if (not should-start)
-        (message "[background-sync] Auto-start is disabled (org-supertag-background-sync-auto-start is nil)")
-      (cond
-       ;; Interval mode (traditional behavior)
-       ((eq org-supertag-background-sync-mode 'interval)
-        (if (timerp org-supertag-background-sync--timer)
-            (message "[background-sync] Interval service is already running.")
-          (progn
-            (message "[background-sync] Starting interval sync service (interval: %ds)..." org-supertag-background-sync-interval)
-            (setq org-supertag-background-sync--phase :idle)
-            (org-supertag-background-sync--load-hashes)
-            (setq org-supertag-background-sync--timer
-                  (run-with-timer 0 org-supertag-background-sync-interval
-                                  #'org-supertag-background-sync--trigger-sync)))))
-       
-       ;; Scheduled mode
-       ((eq org-supertag-background-sync-mode 'scheduled)
-        (if (timerp org-supertag-background-sync--schedule-timer)
-            (message "[background-sync] Scheduled service is already running.")
-          (progn
-            (message "[background-sync] Starting scheduled sync service (times: %s)..." 
-                     (mapconcat 'identity org-supertag-background-sync-schedule ", "))
-            (setq org-supertag-background-sync--phase :idle)
-            (org-supertag-background-sync--load-hashes)
-            (org-supertag-background-sync--start-schedule-timer))))
-       
-       ;; Manual mode
-       ((eq org-supertag-background-sync-mode 'manual)
-        (message "[background-sync] Manual mode - no automatic sync will be started. Use M-x org-supertag-background-sync-run-now to sync."))
-       
-       (t
-        (message "[background-sync] Unknown sync mode: %s" org-supertag-background-sync-mode))))))
+        (message "[background-sync] Auto-start is disabled.")
+      (progn
+        (org-supertag-background-sync--load-hashes)
+        (pcase org-supertag-background-sync-mode
+          ('interval
+           (message "[background-sync] Registering interval task (interval: %ds)..." org-supertag-background-sync-interval)
+           (let ((task-id 'background-sync-interval))
+             (org-supertag-scheduler-register-task
+              task-id
+              :interval
+              #'org-supertag-background-sync-run-now
+              :interval org-supertag-background-sync-interval)
+             (setq org-supertag-background-sync--registered-task-ids (list task-id))))
+          ('scheduled
+           (message "[background-sync] Registering scheduled tasks (times: %s)..." (mapconcat 'identity org-supertag-background-sync-schedule ", "))
+           (setq org-supertag-background-sync--registered-task-ids nil)
+           (dolist (time-str org-supertag-background-sync-schedule)
+             (let ((task-id (intern (format "background-sync-scheduled-%s" time-str))))
+               (org-supertag-scheduler-register-task
+                task-id
+                :daily
+                #'org-supertag-background-sync-run-now
+                :time time-str)
+               (push task-id org-supertag-background-sync--registered-task-ids))))
+          ('manual
+           (message "[background-sync] Manual mode. No tasks registered.")))))))
 
 (defun org-supertag-background-sync-stop ()
-  "Stop background sync service."
+  "Stop background sync service by deregistering its tasks from the scheduler.
+This function will only print a message if tasks were actually deregistered."
   (interactive)
-  (let ((stopped-services '()))
-    (when (timerp org-supertag-background-sync--timer)
-      (cancel-timer org-supertag-background-sync--timer)
-      (setq org-supertag-background-sync--timer nil)
-      (push "continuous" stopped-services))
-    (when (timerp org-supertag-background-sync--schedule-timer)
-      (cancel-timer org-supertag-background-sync--schedule-timer)
-      (setq org-supertag-background-sync--schedule-timer nil)
-      (push "scheduled" stopped-services))
-    (setq org-supertag-background-sync--phase :idle)
-    (if stopped-services
-        (message "[background-sync] Stopped %s service(s)." (mapconcat 'identity stopped-services " and "))
-      (message "[background-sync] No services were running."))))
-
-(defun org-supertag-background-sync--trigger-sync ()
-  "Trigger sync entry point, check state."
-  (if (eq org-supertag-background-sync--phase :idle)
-      (org-supertag-background-sync--do-sync)
-    (message "[background-sync] Skipping sync run because service is not idle (state: %s)."
-             org-supertag-background-sync--phase)))
+  (when org-supertag-background-sync--registered-task-ids
+    (dolist (task-id org-supertag-background-sync--registered-task-ids)
+      (org-supertag-scheduler-deregister-task task-id))
+    (setq org-supertag-background-sync--registered-task-ids nil)
+    (message "[background-sync] Tasks deregistered.")))
 
 (defun org-supertag-background-sync-restart ()
   "Restart background sync."
@@ -675,13 +657,80 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
 (defun org-supertag-background-sync-toggle-auto-start ()
   "Toggle automatic background sync startup."
   (interactive)
-  (setq org-supertag-background-sync-auto-start 
+  (setq org-supertag-background-sync-auto-start
         (not org-supertag-background-sync-auto-start))
   (message "[background-sync] Auto-start %s. %s"
            (if org-supertag-background-sync-auto-start "enabled" "disabled")
            (if org-supertag-background-sync-auto-start
                "Background sync will start automatically when bridge is ready."
              "Use M-x org-supertag-background-sync-start to start manually.")))
+
+;;; === Manual sync and status query ===
+
+(defun org-supertag-background-sync-run-now ()
+  "Run background sync immediately."
+  (interactive)
+  (cond 
+   ((not (eq org-supertag-background-sync--phase :idle))
+    (message "[background-sync] Already running, please wait (current phase: %s)..." org-supertag-background-sync--phase))
+   
+   ((eq org-supertag-background-sync--phase :waiting-backend)
+    (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
+   
+   ((not (org-supertag-background-sync--python-ready-p))
+    (message "[background-sync] Python backend not ready. Please start Python backend: M-x org-supertag-bridge-start-process"))
+   
+   (t 
+    (org-supertag-background-sync--do-sync))))
+
+(defun org-supertag-background-sync-status ()
+  "Display background sync status."
+  (interactive)
+  (let* ((python-ready (org-supertag-background-sync--python-ready-p))
+         (timer-status (cond 
+                       ((and org-supertag-background-sync--timer 
+                             org-supertag-background-sync--schedule-timer)
+                        "Both continuous and scheduled timers running")
+                       (org-supertag-background-sync--timer "Continuous timer running")
+                       (org-supertag-background-sync--schedule-timer "Scheduled timer running")
+                       (org-supertag-background-sync--backend-check-timer "Waiting for backend timer running")
+                       (t "Stopped")))
+         (mode-info (cond
+                    ((eq org-supertag-background-sync-mode 'interval)
+                     (format "Interval (every %d hours)" 
+                             (/ org-supertag-background-sync-interval 3600)))
+                    ((eq org-supertag-background-sync-mode 'scheduled)
+                     (format "Scheduled (times: %s, next: %s)"
+                             (mapconcat 'identity org-supertag-background-sync-schedule ", ")
+                             (or (org-supertag-background-sync--next-scheduled-time) "None")))
+                    ((eq org-supertag-background-sync-mode 'manual)
+                     "Manual (no automatic sync)")
+                    (t (format "Unknown mode: %s" org-supertag-background-sync-mode))))
+         (status-msg
+          (format "Background sync status:
+- State: %s
+- Mode: %s
+- Timer: %s
+- Auto-start: %s
+- Python backend: %s
+- Last sync: %s
+- Last sync stats: nodes %d, tags %d, links %d, total %d
+- Hash records: %d"
+                  org-supertag-background-sync--phase
+                  mode-info
+                  timer-status
+                  (if org-supertag-background-sync-auto-start "Enabled" "Disabled")
+                  (if python-ready "Ready" "Not ready")
+                  (if org-supertag-background-sync--last-sync-time
+                      (format-time-string "%Y-%m-%d %H:%M:%S" org-supertag-background-sync--last-sync-time)
+                    "Never synced")
+                  (plist-get org-supertag-background-sync--stats :synced-nodes)
+                  (plist-get org-supertag-background-sync--stats :synced-tags)
+                  (plist-get org-supertag-background-sync--stats :synced-links)
+                  (plist-get org-supertag-background-sync--stats :total-objects)
+                  (hash-table-count org-supertag-background-sync--last-sync-hashes))))
+    (message "%s" status-msg)
+    status-msg))
 
 ;;; === Scheduled Sync Functions ===
 
@@ -756,112 +805,6 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
     (setq org-supertag-background-sync-schedule time-list)
     (message "[background-sync] Schedule set to: %s. Restart service to apply changes." 
              (mapconcat 'identity time-list ", "))))
-
-;;; Manual sync and status query
-
-(defun org-supertag-background-sync-run-now ()
-  "Run background sync immediately."
-  (interactive)
-  (cond 
-   ((not (eq org-supertag-background-sync--phase :idle))
-    (message "[background-sync] Already running, please wait (current phase: %s)..." org-supertag-background-sync--phase))
-   
-   ((eq org-supertag-background-sync--phase :waiting-backend)
-    (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
-   
-   ((not (org-supertag-background-sync--python-ready-p))
-    (message "[background-sync] Python backend not ready. Please start Python backend: M-x org-supertag-bridge-start-process"))
-   
-   (t 
-    (org-supertag-background-sync--do-sync))))
-
-(defun org-supertag-background-sync-status ()
-  "Display background sync status."
-  (interactive)
-  (let* ((python-ready (org-supertag-background-sync--python-ready-p))
-         (timer-status (cond 
-                       ((and org-supertag-background-sync--timer 
-                             org-supertag-background-sync--schedule-timer)
-                        "Both continuous and scheduled timers running")
-                       (org-supertag-background-sync--timer "Continuous timer running")
-                       (org-supertag-background-sync--schedule-timer "Scheduled timer running")
-                       (org-supertag-background-sync--backend-check-timer "Waiting for backend timer running")
-                       (t "Stopped")))
-         (mode-info (cond
-                    ((eq org-supertag-background-sync-mode 'interval)
-                     (format "Interval (every %d hours)" 
-                             (/ org-supertag-background-sync-interval 3600)))
-                    ((eq org-supertag-background-sync-mode 'scheduled)
-                     (format "Scheduled (times: %s, next: %s)"
-                             (mapconcat 'identity org-supertag-background-sync-schedule ", ")
-                             (or (org-supertag-background-sync--next-scheduled-time) "None")))
-                    ((eq org-supertag-background-sync-mode 'manual)
-                     "Manual (no automatic sync)")
-                    (t (format "Unknown mode: %s" org-supertag-background-sync-mode))))
-         (status-msg
-          (format "Background sync status:
-- State: %s
-- Mode: %s
-- Timer: %s
-- Auto-start: %s
-- Python backend: %s
-- Last sync: %s
-- Last sync stats: nodes %d, tags %d, links %d, total %d
-- Hash records: %d"
-                  org-supertag-background-sync--phase
-                  mode-info
-                  timer-status
-                  (if org-supertag-background-sync-auto-start "Enabled" "Disabled")
-                  (if python-ready "Ready" "Not ready")
-                  (if org-supertag-background-sync--last-sync-time
-                      (format-time-string "%Y-%m-%d %H:%M:%S" org-supertag-background-sync--last-sync-time)
-                    "Never synced")
-                  (plist-get org-supertag-background-sync--stats :synced-nodes)
-                  (plist-get org-supertag-background-sync--stats :synced-tags)
-                  (plist-get org-supertag-background-sync--stats :synced-links)
-                  (plist-get org-supertag-background-sync--stats :total-objects)
-                  (hash-table-count org-supertag-background-sync--last-sync-hashes))))
-    (message "%s" status-msg)
-    status-msg))
-
-;;; 初始化
-
-(defun org-supertag-background-sync-reset-hashes ()
-  "Reset all hash records, force full sync next time."
-  (interactive)
-  (clrhash org-supertag-background-sync--last-sync-hashes)
-  (setq org-supertag-background-sync--last-sync-time nil)
-  ;; (message "[background-sync] Hash records reset, full sync will be triggered next time")
-  )
-
-(defun org-supertag-background-sync-rebuild-baseline ()
-  "Rebuild baseline hashes from current database state.
-This is useful after database recovery or when you want to re-establish
-the sync baseline. All objects will be considered 'synced' in their current state."
-  (interactive)
-  (when (yes-or-no-p "Rebuild sync baseline from current database state? This will mark all current objects as 'synced'. ")
-    (message "[background-sync] Rebuilding baseline from current database state...")
-    (let ((result (org-supertag-background-sync--create-baseline-hashes)))
-      (message "[background-sync] Baseline rebuild completed:")
-      (message "  Total objects processed: %d" 
-               (+ (plist-get result :processed-objects)
-                  (plist-get result :processed-links)))
-      (message "  Total hashes created: %d" (plist-get result :total-hashes))
-      (when (> (plist-get result :failed-objects) 0)
-        (message "  Failed to process: %d objects" (plist-get result :failed-objects)))
-      (message "  Incremental sync is now enabled with new baseline")
-      result)))
-
-(defun org-supertag-background-sync-initialize ()
-  "Initialize background sync system."
-  ;; Load history hash records
-  (org-supertag-background-sync--load-hashes)
-  
-  (when org-supertag-background-sync-auto-start
-    (org-supertag-background-sync-start)))
-
-;; This module is now initialized directly by org-supertag.el
-;; No automatic hooks to avoid duplicate initialization
 
 ;;; Debug functions
 
