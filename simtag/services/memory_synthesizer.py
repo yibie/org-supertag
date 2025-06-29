@@ -11,6 +11,7 @@ from simtag.config import Config
 from simtag.core.memory_engine import MemoryEngine, MemoryItem, MemoryItemType
 from simtag.services.llm_client import LLMClient
 from simtag.services.embedding_service import EmbeddingService # Import EmbeddingService
+from simtag.core.entity_extractor import LLMEntityExtractor # Import LLMEntityExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,12 @@ class MemorySynthesizer:
     Analyzes user interactions and dialogue history to synthesize new,
     long-term memories for the system. Includes vectorization capabilities.
     """
-    def __init__(self, config: Config, memory_engine: MemoryEngine, llm_client: LLMClient, embedding_service: EmbeddingService):
+    def __init__(self, config: Config, memory_engine: MemoryEngine, llm_client: LLMClient, embedding_service: EmbeddingService, entity_extractor: LLMEntityExtractor):
         self.config = config
         self.memory_engine = memory_engine
         self.llm_client = llm_client
         self.embedding_service = embedding_service
+        self.entity_extractor = entity_extractor # Inject LLMEntityExtractor
         logger.info("MemorySynthesizer initialized.")
         # In-memory storage for candidates before they are approved/rejected.
         # In a larger system, this might be a database table.
@@ -75,19 +77,23 @@ Your JSON response:
 
         dialogue_text = "\n".join([f"{turn.speaker.upper()}: {turn.text}" for turn in history.turns])
         
-        valid_types = [mt.value for mt in MemoryItemType if mt in [MemoryItemType.FACT, MemoryItemType.USER_PREFERENCE, MemoryItemType.ENTITY_MERGE_SUGGESTION, MemoryItemType.RELATIONSHIP_DISCOVERY]]
-        
-        prompt = self.synthesis_prompt_template.format(
-            dialogue_text=dialogue_text,
-            valid_types=", ".join(valid_types)
-        )
-
+        # Use LLMEntityExtractor to extract memory candidates
+        # We'll use a generic "memory_synthesis" task type for now,
+        # and rely on the LLM's prompt to guide the output format.
+        # The LLMEntityExtractor will return a dictionary with 'candidates' key.
         try:
-            response_str = await self.llm_client.generate(prompt)
-            logger.debug(f"LLM response for memory synthesis: {response_str}")
+            extraction_result = await self.entity_extractor.extract(
+                text=dialogue_text,
+                task_type="memory_synthesis", # A new task type for memory synthesis
+                valid_memory_types=[mt.value for mt in MemoryItemType if mt in [
+                    MemoryItemType.FACT,
+                    MemoryItemType.USER_PREFERENCE,
+                    MemoryItemType.ENTITY_MERGE_SUGGESTION,
+                    MemoryItemType.RELATIONSHIP_DISCOVERY
+                ]]
+            )
             
-            response_data = json.loads(response_str)
-            extracted_candidates = response_data.get("candidates", [])
+            extracted_candidates = extraction_result.get("candidates", [])
 
             if not extracted_candidates:
                 logger.info("LLM analysis found no new memory candidates.")
@@ -128,9 +134,6 @@ Your JSON response:
             logger.info(f"Memory synthesis complete. Generated {len(new_candidates)} new candidates.")
             return new_candidates
 
-        except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON from LLM synthesis response: {response_str}")
-            return []
         except Exception as e:
             logger.error(f"An unexpected error occurred during synthesis: {e}", exc_info=True)
             return []

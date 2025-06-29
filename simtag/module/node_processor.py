@@ -119,15 +119,20 @@ class NodeProcessor:
                     # For now, we call it sequentially. A future optimization could be a bulk version.
                     for node_up in nodes_to_upsert:
                         self.graph_service.upsert_text_node(node_up)
+                    self.graph_service._get_connection().commit()
                     logger.info(f"Upserted metadata for {len(nodes_to_upsert)} text nodes.")
 
                 if embeddings_to_upsert:
-                    for node_id, vector in embeddings_to_upsert:
+                    # De-duplicate embeddings_to_upsert, keeping the last one for each node_id
+                    unique_embeddings = {node_id: vector for node_id, vector in embeddings_to_upsert}
+                    for node_id, vector in unique_embeddings.items():
                         self.graph_service.upsert_node_embedding(node_id, vector)
-                    logger.info(f"Upserted {len(embeddings_to_upsert)} embeddings.")
+                    self.graph_service._get_connection().commit()
+                    logger.info(f"Upserted {len(unique_embeddings)} unique embeddings.")
 
                 if entities_to_upsert:
                     self.graph_service.bulk_upsert_entity_nodes(entities_to_upsert)
+                    self.graph_service._get_connection().commit()
                     logger.info(f"Upserted {len(entities_to_upsert)} inferred entity nodes.")
 
                 if relations_to_upsert:
@@ -146,6 +151,7 @@ class NodeProcessor:
                             })
                     if final_relations:
                         self.graph_service.bulk_upsert_relations(final_relations)
+                        self.graph_service._get_connection().commit()
                         logger.info(f"Upserted {len(final_relations)} inferred relations.")
 
             except Exception as e:
