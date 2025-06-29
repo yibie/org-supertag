@@ -29,21 +29,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExtractedEntity:
-    """Represents a single entity (tag) extracted from the text."""
+    """Represents a single entity extracted from the text."""
     name: str
+    type: str = "concept"  # Default type, can be PERSON, ORGANIZATION, etc.
     confidence: Optional[float] = None
     reasoning: Optional[str] = None
     source_node_id: Optional[str] = None # ID of the org-node from which it was extracted
-    # The 'type' field is retained for future use but is not populated by the current prompt.
-    type: str = "concept"
-    attributes: Dict[str, Any] = field(default_factory=dict)
+    attributes: Dict[str, Any] = field(default_factory=dict) # For additional properties like gender, occupation, etc.
 
+@dataclass
 class ExtractedRelation:
-    def __init__(self, source: str, target: str, relationship: str, description: str):
-        self.source = source
-        self.target = target
-        self.relationship = relationship
-        self.description = description
+    """Represents a single relationship extracted from the text."""
+    source: str
+    target: str
+    type: str = "RELATED_TO" # Default relation type, can be IS_ALIAS_OF, HAS_PART, etc.
+    description: Optional[str] = None
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
+    source_node_id: Optional[str] = None # ID of the org-node from which it was extracted
+    properties: Dict[str, Any] = field(default_factory=dict) # For additional relation properties
 
 class BaseExtractor(ABC):
     @abstractmethod
@@ -59,53 +63,100 @@ class LLMEntityExtractor(BaseExtractor):
         self.config = config
         self.prompt_template = INFER_RELATIONS_PROMPT
 
-    async def extract(self, text: str, existing_entities: List[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    async def extract(self, text: str, existing_entities: Optional[List[str]] = None,
+                      task_type: str = "extract_entities_relations",
+                      **kwargs: Any) -> Dict[str, List[Any]]:
         """
-        Extracts entities and relations from the given text.
+        Extracts entities and relations from the given text based on task_type.
 
         Args:
             text: The text content to analyze.
             existing_entities: A list of known entity names to provide context.
+            task_type: The type of extraction task (e.g., "extract_entities_relations",
+                       "entity_merging", "relationship_extraction", "attribute_filling",
+                       "entity_disambiguation").
+            **kwargs: Additional arguments specific to the task_type (e.g., entities_to_consider,
+                      ambiguous_entity_name, entity_name).
 
         Returns:
-            A dictionary containing 'entities' and 'relations' found in the text.
-            Returns empty lists if extraction fails or text is empty.
+            A dictionary containing 'entities' and 'relations' found in the text,
+            or other structured data based on task_type.
+            Returns empty lists/dicts if extraction fails or text is empty.
         """
         if not text or not text.strip():
-            return {"entities": [], "relations": []}
+            return {"entities": [], "relations": []} # Default return for entity/relation extraction
 
-        try:
-            prompt = self.prompt_template.format(
+        prompt = ""
+        if task_type == "extract_entities_relations":
+            prompt = INFER_RELATIONS_PROMPT.format(
                 text_content=text,
                 existing_entities=", ".join(existing_entities) if existing_entities else "N/A"
             )
-            
-            # Use the dedicated model for inference if specified in the config
+        elif task_type == "entity_merging":
+            prompt = ENTITY_MERGING_PROMPT.format(
+                context_text=text, # Here text is the context
+                entities_to_consider=kwargs.get("entities_to_consider", "N/A")
+            )
+        elif task_type == "relationship_extraction":
+            prompt = RELATIONSHIP_EXTRACTION_PROMPT.format(
+                text_content=text,
+                # entities_to_consider=kwargs.get("entities_to_consider", "N/A") # Not in this prompt
+            )
+        elif task_type == "attribute_filling":
+            prompt = ATTRIBUTE_FILLING_PROMPT.format(
+                entity_name=kwargs.get("entity_name", "N/A"),
+                text_content=text
+            )
+        elif task_type == "entity_disambiguation":
+            prompt = ENTITY_DISAMBIGUATION_PROMPT.format(
+                ambiguous_entity_name=kwargs.get("ambiguous_entity_name", "N/A"),
+                contexts=text # Here text is the contexts
+            )
+        else:
+            logger.error(f"Unknown task_type: {task_type}")
+            return {"entities": [], "relations": []}
+
+        try:
             inference_model = self.config.get("inference_model")
-
-            # Await the asynchronous call to the LLM client, passing the specific model
             response_text = await self.llm_client.generate(prompt, model=inference_model)
-
-            # We need to robustly parse it.
             parsed_data = parse_llm_json_response(response_text)
 
-            if parsed_data and isinstance(parsed_data, dict):
-                # Validate basic structure
-                entities = parsed_data.get("entities", [])
-                relations = parsed_data.get("relations", [])
-                
-                if not isinstance(entities, list) or not isinstance(relations, list):
-                    logger.warning(f"LLM response has invalid structure: {parsed_data}")
-                    return {"entities": [], "relations": []}
+            if not parsed_data:
+                logger.error(f"Failed to parse LLM response for task_type {task_type}.")
+                return {"entities": [], "relations": []} # Default return
 
+            # --- Process parsed_data based on task_type ---
+            if task_type == "extract_entities_relations":
+                entities = [ExtractedEntity(**e) for e in parsed_data.get("entities", []) if isinstance(e, dict)]
+                relations = [ExtractedRelation(**r) for r in parsed_data.get("relations", []) if isinstance(r, dict)]
                 return {"entities": entities, "relations": relations}
+            elif task_type == "entity_merging":
+                # Expected: List of dicts, each with primary_name, aliases, reasoning, confidence
+                return {"merge_suggestions": parsed_data}
+            elif task_type == "relationship_extraction":
+                # Expected: List of dicts, each with source, target, relationship_type, description, confidence
+                relations = [ExtractedRelation(
+                    source=r.get('source'),
+                    target=r.get('target'),
+                    type=r.get('relationship_type', 'RELATED_TO'),
+                    description=r.get('description'),
+                    confidence=r.get('confidence'),
+                    source_node_id=kwargs.get('source_node_id') # Pass source_node_id if available
+                ) for r in parsed_data if isinstance(r, dict)]
+                return {"relations": relations}
+            elif task_type == "attribute_filling":
+                # Expected: Dict with entity_name as key, and attributes dict as value
+                return {"attributes": parsed_data}
+            elif task_type == "entity_disambiguation":
+                # Expected: Dict with is_ambiguous, disambiguations, reasoning, confidence
+                return {"disambiguation_result": parsed_data}
             else:
-                logger.error("Failed to parse LLM response or parsed data is not a dictionary.")
-                return {"entities": [], "relations": []}
+                logger.warning(f"Unhandled task_type for parsing: {task_type}. Returning raw parsed data.")
+                return {"raw_parsed_data": parsed_data}
 
         except Exception as e:
-            logger.error(f"Failed to extract entities/relations from text: {e}", exc_info=True)
-            return {"entities": [], "relations": []}
+            logger.error(f"Failed to extract entities/relations for task_type {task_type}: {e}", exc_info=True)
+            return {"entities": [], "relations": []} # Default return
 
     
 
@@ -133,10 +184,16 @@ class OrgSupertagEntityExtractor:
                                      Supported keys:
                                      - 'entity_types': Optional[List[str]]
         """
-        self.llm_async_callable = llm_async_callable
-        config = entity_extractor_config if entity_extractor_config else {}
+        # self.llm_async_callable = llm_async_callable # No longer directly used
+        self.config = entity_extractor_config if entity_extractor_config else {}
 
-        self.entity_types = config.get('entity_types', DEFAULT_ENTITY_TYPES)
+        # Use the new LLMEntityExtractor internally
+        self.llm_entity_extractor = LLMEntityExtractor(
+            llm_client=LLMClient(config_dict=self.config), # Assuming config has llm_client_config
+            config=self.config
+        )
+        
+        self.entity_types = self.config.get('entity_types', DEFAULT_ENTITY_TYPES)
         
         # 使用统一标签处理器
         self.unified_processor = UnifiedTagProcessor()
@@ -162,20 +219,20 @@ class OrgSupertagEntityExtractor:
         entities: List[ExtractedEntity] = []
         
         try:
-            # 使用统一处理器处理 LLM 响应
-            # 为单个节点创建临时 note_id 列表
+            # Use the unified processor to process LLM response
+            # For a single node, create a temporary note_id list
             temp_note_id = node_id or "temp_node"
             note_results = self.unified_processor.process_llm_response(
                 response_str=llm_output,
                 note_ids=[temp_note_id]
             )
             
-            # 检查是否有处理错误
+            # Check for processing errors
             if note_results and note_results[0].error:
                 logger.error(f"UnifiedTagProcessor failed for node {node_id}: {note_results[0].error}")
                 return entities
             
-            # 转换 TagResult 为 ExtractedEntity
+            # Convert TagResult to ExtractedEntity
             if note_results and note_results[0].tags:
                 for tag_result in note_results[0].tags:
                     entity = self._convert_tag_result_to_extracted_entity(tag_result, node_id)
@@ -217,26 +274,15 @@ class OrgSupertagEntityExtractor:
             logger.debug("Node content is empty, skipping extraction.")
             return []
         
-        # 1. Create the prompt
-        prompt = create_prompt(
-            contents=[node_content],
-            entity_types=self.entity_types,
-            existing_tags_lists=[existing_tags or []]
+        # Use the new LLMEntityExtractor for the actual extraction
+        extraction_result = await self.llm_entity_extractor.extract(
+            text=node_content,
+            existing_entities=existing_tags,
+            task_type="extract_entities_relations" # Specify the task type
         )
-
-        # 2. Call the LLM
-        try:
-            llm_response = await self.llm_async_callable(prompt)
-        except Exception as e:
-            logger.error(f"LLM call failed during entity extraction for node {node_id}: {e}")
-            return []
-
-        if not llm_response:
-            logger.warning(f"LLM returned an empty response for node {node_id}.")
-            return []
-
-        # 3. Parse the result
-        extracted_entities = await self._parse_llm_result(llm_response, node_id)
+        
+        # Convert the result from LLMEntityExtractor (which returns dicts) to ExtractedEntity objects
+        extracted_entities = [ExtractedEntity(**e) for e in extraction_result.get("entities", []) if isinstance(e, dict)]
 
         logger.info(f"Extracted {len(extracted_entities)} entities from node {node_id}.")
         return extracted_entities

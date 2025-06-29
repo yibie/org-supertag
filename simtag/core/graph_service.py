@@ -34,6 +34,30 @@ class TagStatus(Enum):
     SPLIT = "split"
     ARCHIVED = "archived"
 
+# --- New Enums for Node and Relation Types ---
+class NodeType(Enum):
+    TEXT = "TEXT"
+    ENTITY = "ENTITY"
+    PERSON = "PERSON"
+    ORGANIZATION = "ORGANIZATION"
+    PROJECT = "PROJECT"
+    CONCEPT = "CONCEPT"
+    EVENT = "EVENT"
+    TECHNOLOGY = "TECHNOLOGY"
+    ALIAS = "ALIAS"
+
+class RelationType(Enum):
+    HAS_ENTITY = "HAS_ENTITY"
+    REF_TO = "REF_TO"
+    IS_ALIAS_OF = "IS_ALIAS_OF"
+    MENTIONS = "MENTIONS"
+    AUTHORED_BY = "AUTHORED_BY"
+    IMPLEMENTS = "IMPLEMENTS"
+    CAUSES = "CAUSES"
+    PART_OF = "PART_OF"
+    IS_A = "IS_A"
+    RELATED_TO = "RELATED_TO"
+
 @dataclass
 class Rule:
     """Represents a governance rule."""
@@ -301,7 +325,7 @@ class GraphService:
 
     # --- Node Operations ---
 
-    def upsert_text_node(self, node_data: Dict[str, Any]):
+    def upsert_text_node(self, node_data: Dict[str, Any], node_type: NodeType = NodeType.TEXT):
         """
         Upserts a single text node, its associated entities (tags), and its references.
         This is the primary method for adding content to the graph.
@@ -325,7 +349,7 @@ class GraphService:
             elif isinstance(references_to_raw, list):
                 references_to = references_to_raw
             
-            node_to_upsert = {**node_data, 'type': 'TEXT'}
+            node_to_upsert = {**node_data, 'type': node_type}
             self._upsert_nodes_internal([node_to_upsert])
 
             # 2. Process entities (tags)
@@ -346,7 +370,7 @@ class GraphService:
                         tag_relations.append({
                             'source_id': text_node_id,
                             'target_id': entity_id,
-                            'type': 'HAS_ENTITY'
+                            'type': RelationType.HAS_ENTITY
                         })
                 
                 if tag_relations:
@@ -360,12 +384,11 @@ class GraphService:
                         ref_relations.append({
                             'source_id': text_node_id,
                             'target_id': target_id,
-                            'type': 'REF_TO'
+                            'type': RelationType.REF_TO
                         })
                 if ref_relations:
                     self.bulk_upsert_relations(ref_relations)
 
-            conn.commit()
             self.logger.info(f"Successfully upserted node {text_node_id} with {len(tags)} entities and {len(references_to)} references.")
 
         except Exception as e:
@@ -379,9 +402,10 @@ class GraphService:
             # For standalone use, a commit would be here.
             pass
 
-    def bulk_upsert_entity_nodes(self, entities_data: List[Dict[str, str]]):
+    def bulk_upsert_entity_nodes(self, entities_data: List[Dict[str, Any]]):
         """
-        Bulk upserts entity nodes from a list of dictionaries containing name and description.
+        Bulk upserts entity nodes from a list of dictionaries.
+        Each dictionary can contain 'name', 'description', 'type', 'properties', 'aliases', 'priority_score'.
         """
         if not entities_data:
             return
@@ -391,24 +415,38 @@ class GraphService:
             entity_nodes_to_upsert = []
             for entity_info in entities_data:
                 name = entity_info.get('name')
-                description = entity_info.get('description')
+                entity_type = entity_info.get('type', NodeType.ENTITY) # Default to ENTITY
+                properties = entity_info.get('properties', {})
+                aliases = entity_info.get('aliases', [])
+                priority_score = entity_info.get('priority_score', 0.0)
+
                 if not name:
+                    self.logger.warning(f"Skipping entity with no name: {entity_info}")
                     continue
 
-                _, entity_node = self._prepare_entity_node(name)
-                entity_node['properties'] = json.dumps({'description': description})
+                # Prepare entity node data, using the new _prepare_entity_node signature
+                entity_id, entity_node = self._prepare_entity_node(name, entity_type)
+                
+                # Merge additional properties
+                entity_node['properties'] = json.dumps(properties)
+                entity_node['aliases'] = json.dumps(aliases)
+                entity_node['priority_score'] = priority_score
+                entity_node['node_id'] = entity_id # Ensure node_id is set correctly
+
                 entity_nodes_to_upsert.append(entity_node)
             
             if entity_nodes_to_upsert:
                 self._upsert_nodes_internal(entity_nodes_to_upsert)
                 # The commit is handled by the calling context (NodeProcessor)
-                
         except Exception as e:
             self.logger.error(f"Failed during bulk entity node upsert: {e}", exc_info=True)
             # No rollback here, let the higher-level transaction manager handle it.
             raise
+        finally:
+            pass
 
-    def _prepare_entity_node(self, name: str) -> Tuple[str, Dict[str, Any]]:
+    # Helper function to prepare entity node data
+    def _prepare_entity_node(self, name: str, entity_type: NodeType = NodeType.ENTITY) -> Tuple[str, Dict[str, Any]]:
         """Prepares a dictionary representing an ENTITY node."""
         if not isinstance(name, str) or not name.strip():
             # Return a placeholder for invalid input to avoid downstream errors
@@ -421,7 +459,7 @@ class GraphService:
         entity_id = f"ENTITY_{normalized_name}"
         return entity_id, {
             "node_id": entity_id,
-            "type": "ENTITY",
+            "type": entity_type, # Use the passed entity_type
             "name": normalized_name,
             "title": name, # Store original casing for display
             "modified_at": datetime.now().isoformat()
@@ -449,8 +487,22 @@ class GraphService:
         # Deserialize JSON fields
         node_dict['properties'] = json.loads(node_dict.get('properties', '{}') or '{}')
         
+        # Convert type from string to NodeType enum
+        if 'type' in node_dict and isinstance(node_dict['type'], str):
+            try:
+                node_dict['type'] = NodeType(node_dict['type'])
+            except ValueError:
+                self.logger.warning(f"Unknown NodeType '{node_dict['type']}' for node {node_dict.get('node_id')}. Defaulting to TEXT.")
+                node_dict['type'] = NodeType.TEXT
+
+        # Deserialize aliases
+        node_dict['aliases'] = json.loads(node_dict.get('aliases', '[]') or '[]')
+
+        # Ensure priority_score is float
+        node_dict['priority_score'] = float(node_dict.get('priority_score', 0.0))
+        
         # For TEXT nodes, dynamically fetch associated tags from relations
-        if node_dict.get('type') == 'TEXT':
+        if node_dict.get('type') == NodeType.TEXT:
             tags = self._get_tags_for_node(node_dict['node_id'])
             node_dict['tags'] = tags
         
@@ -481,7 +533,7 @@ class GraphService:
             'node_id', 'type', 'name', 'content', 'title', 'file_path', 'pos',
             'olp', 'level', 'scheduled', 'deadline', 'todo', 'priority',
             'modified_at', 'properties', 'raw_value', 'hash', 'content_hash',
-            'document_date'
+            'document_date', 'aliases', 'priority_score'
         ]
 
         nodes_to_upsert = []
@@ -504,6 +556,9 @@ class GraphService:
                 # Handle any other list types by converting to string
                 elif isinstance(val, list):
                     val = json.dumps(val) if val else None
+                # Handle NodeType enum conversion
+                elif col == 'type' and isinstance(val, Enum):
+                    val = val.value
                 values.append(val)
             nodes_to_upsert.append(tuple(values))
 
@@ -530,7 +585,9 @@ class GraphService:
                 raw_value=excluded.raw_value,
                 hash=excluded.hash,
                 content_hash=excluded.content_hash,
-                document_date=excluded.document_date
+                document_date=excluded.document_date,
+                aliases=excluded.aliases,
+                priority_score=excluded.priority_score
         """
         cursor.executemany(sql, nodes_to_upsert)
 
@@ -668,18 +725,22 @@ class GraphService:
                 properties=excluded.properties;
         """
 
-        relations_to_upsert = [
-            (
-                rel.get('relation_id'), rel.get('source_id'), rel.get('target_id'),
-                rel.get('type'), rel.get('weight', 1.0),
-                json.dumps(rel.get('properties', {}))
+        relations_to_upsert = []
+        for rel in relations_data:
+            rel_type = rel.get('type')
+            if isinstance(rel_type, Enum): # Convert Enum to its value
+                rel_type = rel_type.value
+
+            relations_to_upsert.append(
+                (
+                    rel.get('relation_id'), rel.get('source_id'), rel.get('target_id'),
+                    rel_type, rel.get('weight', 1.0),
+                    json.dumps(rel.get('properties', {}))
+                )
             )
-            for rel in relations_data
-        ]
 
         try:
             cursor.executemany(sql, relations_to_upsert)
-            conn.commit()
             self.logger.info(f"Successfully upserted {len(relations_to_upsert)} relations.")
         except Exception as e:
             conn.rollback()
@@ -703,8 +764,8 @@ class GraphService:
             cursor.execute("SELECT embedding FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
             row = cursor.fetchone()
             if row and row[0]:
-                # The embedding is stored as a JSON string, convert it back to numpy array
-                return np.array(json.loads(row[0]), dtype=np.float32)
+                # The embedding is stored as bytes, convert it back to numpy array
+                return np.frombuffer(row[0], dtype=np.float32)
             return None
         except Exception as e:
             self.logger.error(f"Could not retrieve node embedding for id {node_id}: {e}", exc_info=True)
@@ -758,16 +819,17 @@ class GraphService:
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        # Convert numpy array to JSON string for sqlite-vec
-        embedding_json = json.dumps(embedding.tolist())
+        # Convert numpy array to bytes for sqlite-vec
+        embedding_bytes = embedding.tobytes()
         
         try:
-            # Use INSERT OR REPLACE with the explicit node_id primary key
+            # Explicitly delete existing entry to ensure upsert behavior
+            cursor.execute("DELETE FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
+            
             cursor.execute(
-                "INSERT OR REPLACE INTO node_embeddings_vss (node_id, embedding) VALUES (?, ?)",
-                (node_id, embedding_json)
+                "INSERT INTO node_embeddings_vss (node_id, embedding) VALUES (?, ?)",
+                (node_id, embedding_bytes)
             )
-            conn.commit()
             self.logger.info(f"Successfully upserted embedding for node {node_id}.")
         except Exception as e:
             conn.rollback()

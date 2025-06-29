@@ -95,7 +95,7 @@ class AppContainer(containers.DeclarativeContainer):
     autotag_handler = providers.Factory(AutotagHandler, llm_client=llm_client, ner_service=ner_service)
     resonance_handler = providers.Factory(ResonanceHandler, graph_service=graph_service, llm_client=llm_client, config=config_obj)
     rag_handler = providers.Factory(RAGHandler, rag_engine=rag_engine, llm_client=llm_client)
-    reasoning_handler = providers.Factory(ReasoningHandler, config=config_obj, graph_service=graph_service, entity_extractor=entity_extractor)
+    reasoning_handler = providers.Factory(ReasoningHandler, config=config_obj, graph_service=graph_service, entity_extractor=entity_extractor, embedding_service=embedding_service, rag_engine=rag_engine)
 
     async def shutdown_services(self):
         """Gracefully shuts down singleton services.
