@@ -31,11 +31,17 @@ a hash and a sequence of valid tag characters."
 (defun org-supertag--get-completion-table (prefix)
   "Return a list of candidates, with '[Create New Tag]' propertized."
   (let* ((safe-prefix (or prefix ""))
+         (node-id (org-id-get))
+         (current-tags (when node-id (org-supertag-node-get-tags node-id)))
          (all-tags (org-supertag-get-all-tags))
-         (matching-tags (all-completions safe-prefix all-tags))
+         (available-tags (if current-tags
+                             (seq-remove (lambda (tag) (member tag current-tags)) all-tags)
+                           all-tags))
+         (matching-tags (all-completions safe-prefix available-tags))
          (new-tag-candidate "[Create New Tag]"))
     (if (and (not (string-empty-p safe-prefix))
-             (not (member safe-prefix matching-tags)))
+             (not (member safe-prefix matching-tags))
+             (not (member safe-prefix current-tags)))
         ;; If creating a new tag is possible, add the special candidate
         ;; to the list and attach the `is-new-tag` property to it.
         (cons (propertize new-tag-candidate 'is-new-tag t) matching-tags)

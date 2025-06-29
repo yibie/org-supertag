@@ -4,9 +4,8 @@ Provides unified logging functionality
 """
 
 import os
-import sys
 import logging
-from typing import Dict, Any, Optional
+from typing import Optional
 
 def setup_logging(log_file: Optional[str], log_level: int = logging.INFO):
     """Set up logging configuration

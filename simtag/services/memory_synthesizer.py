@@ -3,7 +3,6 @@
 
 import logging
 from typing import List, Dict, Any, Optional
-import asyncio
 import dataclasses
 import uuid
 import json
@@ -11,6 +10,7 @@ import json
 from simtag.config import Config
 from simtag.core.memory_engine import MemoryEngine, MemoryItem, MemoryItemType
 from simtag.services.llm_client import LLMClient
+from simtag.services.embedding_service import EmbeddingService # Import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,11 @@ class MemorySynthesizer:
     Analyzes user interactions and dialogue history to synthesize new,
     long-term memories for the system. Includes vectorization capabilities.
     """
-    def __init__(self, config: Config, memory_engine: MemoryEngine, llm_client: LLMClient):
+    def __init__(self, config: Config, memory_engine: MemoryEngine, llm_client: LLMClient, embedding_service: EmbeddingService):
         self.config = config
         self.memory_engine = memory_engine
         self.llm_client = llm_client
+        self.embedding_service = embedding_service
         logger.info("MemorySynthesizer initialized.")
         # In-memory storage for candidates before they are approved/rejected.
         # In a larger system, this might be a database table.
@@ -74,11 +75,11 @@ Your JSON response:
 
         dialogue_text = "\n".join([f"{turn.speaker.upper()}: {turn.text}" for turn in history.turns])
         
-        valid_types = [MemoryItemType.FACT.value, MemoryItemType.USER_PREFERENCE.value]
+        valid_types = [mt.value for mt in MemoryItemType if mt in [MemoryItemType.FACT, MemoryItemType.USER_PREFERENCE, MemoryItemType.ENTITY_MERGE_SUGGESTION, MemoryItemType.RELATIONSHIP_DISCOVERY]]
         
         prompt = self.synthesis_prompt_template.format(
             dialogue_text=dialogue_text,
-            valid_types=valid_types
+            valid_types=", ".join(valid_types)
         )
 
         try:
@@ -188,9 +189,8 @@ Your JSON response:
         try:
             # 使用LLM客户端的批量嵌入功能
             logger.info(f"Vectorizing {len(texts_to_vectorize)} memory items")
-            embeddings = await self.llm_client.get_embeddings_batch(
-                texts_to_vectorize,
-                use_multicore=True
+            embeddings = await self.embedding_service.get_embeddings_batch(
+                texts_to_vectorize
             )
             
             # 构建ID到向量的映射
@@ -228,10 +228,11 @@ Your JSON response:
         
         try:
             # 为查询文本生成向量
-            query_embedding = await self.llm_client.get_embedding(query_text)
-            if not query_embedding:
+            query_embedding_result = await self.embedding_service.get_embedding(query_text)
+            if not query_embedding_result.success or not query_embedding_result.embedding:
                 logger.warning("Failed to generate embedding for query text")
                 return []
+            query_embedding = query_embedding_result.embedding
             
             # 计算相似度
             similarities = []

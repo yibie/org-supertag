@@ -45,8 +45,8 @@
 import json
 import logging
 import re
-from typing import List, Dict, Any, Optional, Union, Tuple
-from dataclasses import dataclass, asdict, field
+from typing import List, Dict, Any, Optional, Union
+from dataclasses import dataclass, field
 from sexpdata import Symbol 
 
 logger = logging.getLogger(__name__)
@@ -146,6 +146,45 @@ def _parse_elisp_data(data: Any) -> Any:
 
     # Otherwise, it's a plain list
     return [_parse_elisp_data(item) for item in data]
+
+def parse_llm_json_response(response_text: str) -> Optional[Union[Dict, List]]:
+    """
+    Robustly parses a JSON response from an LLM, handling potential markdown fences
+    and other text noise by extracting the first valid JSON object or array.
+
+    Args:
+        response_text: The raw string output from the LLM.
+
+    Returns:
+        A parsed Python dictionary or list if successful, otherwise None.
+    """
+    if not response_text or not isinstance(response_text, str):
+        return None
+
+    try:
+        # Regex to find a JSON object {...} or array [...]
+        # It's important to try to find the most specific match first.
+        # A common failure is a JSON object wrapped in ```json ... ```
+        match = re.search(r'```json\s*(\{.*\}|\[.*\])\s*```', response_text, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+        else:
+            # If not in a marked code block, find the first JSON object or array
+            match = re.search(r'(\{.*\}|\[.*\])', response_text, re.DOTALL)
+            if not match:
+                logger.error(f"No JSON object or array found in LLM response: {response_text}")
+                return None
+            json_str = match.group(0)
+
+        return json.loads(json_str)
+
+    except json.JSONDecodeError:
+        logger.error(f"Failed to decode extracted LLM JSON response: {json_str}")
+        return None
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while parsing LLM response: {e}")
+        return None
+
 
 def normalize_payload(payload: Any) -> Dict:
     """

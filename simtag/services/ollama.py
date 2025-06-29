@@ -5,7 +5,6 @@ Provides standardized interface for Ollama API interaction
 import requests
 import json
 import logging
-from typing import Optional
 
 class OllamaService:
     """Ollama Service Abstraction Layer"""

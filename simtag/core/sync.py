@@ -5,8 +5,7 @@ Handles the synchronization of full database snapshots.
 import logging
 import numpy as np
 import json
-from typing import List, Optional, Dict, Any
-import time
+from typing import Dict, Any
 
 # Forward declare types for type hinting if VectorStorage and LLMClient are complex imports
 # from .storage import VectorStorage # Assuming VectorStorage is in .storage
@@ -34,7 +33,7 @@ class SyncOrchestrator:
         Processes a full database snapshot containing tags and nodes.
         This method was moved from TaggingEngine.
         """
-        self.logger.info(f"SyncOrchestrator: Starting sync with full DB snapshot.")
+        self.logger.info("SyncOrchestrator: Starting sync with full DB snapshot.")
         if not isinstance(db_snapshot, dict):
             self.logger.error(f"SyncOrchestrator: db_snapshot is not a dictionary (type: {type(db_snapshot)}). Aborting sync.")
             return {"status": "error", "message": "Invalid snapshot format (not a dict)", "processed_tags": 0, "processed_nodes": 0}

@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Any, Optional, Callable, Awaitable, Tuple
+from typing import Dict, List, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from simtag.prompts import create_prompt, ORG_MODE_TAG_EXTRACTION_PROMPT, DEFAULT_ENTITY_TYPES
@@ -230,20 +230,13 @@ class SmartNERService:
         """Processes a batch of tasks using multi-threading"""
         logger.debug(f"Processing batch {batch_start_idx//self.batch_size + 1}, containing {len(batch)} tasks")
         
-        # Use a thread pool to execute the batch
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Create asynchronous tasks
-            futures = []
-            for task in batch:
-                future = asyncio.get_event_loop().run_in_executor(
-                    executor, 
-                    self._process_single_task_sync, 
-                    task
-                )
-                futures.append(future)
-            
-            # Wait for all tasks to complete
-            results = await asyncio.gather(*futures, return_exceptions=True)
+        # Create asynchronous tasks directly
+        futures = []
+        for task in batch:
+            futures.append(self._process_single_task_async(task))
+        
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*futures, return_exceptions=True)
         
         # Aggregate results
         generated_count = 0
@@ -290,19 +283,7 @@ class SmartNERService:
             'suggestions': organized_suggestions
         }
 
-    def _process_single_task_sync(self, task: NodeProcessingTask) -> Optional[Dict[str, Any]]:
-        """Synchronously processes a single task (runs in a thread pool)"""
-        try:
-            # Run the asynchronous processing in a new event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(self._process_single_task_async(task))
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.error(f"Synchronous task processing failed for {task.node_id}: {e}", exc_info=True)
-            return None
+    # Removed _process_single_task_sync as it's no longer needed
 
     async def _process_single_task_async(self, task: NodeProcessingTask) -> Optional[Dict[str, Any]]:
         """Asynchronously processes a single task"""

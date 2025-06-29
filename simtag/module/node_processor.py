@@ -2,21 +2,15 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import time
 import asyncio
 import json
 from typing import List, Dict, Any, Optional
 import numpy as np
-from dependency_injector.wiring import inject, Provide
 import concurrent.futures
-import os
 
-from simtag.services.content_processor import ContentItem, ProcessingResult, EmbeddingResult, NERResult
-from simtag.core.entity_extractor import ExtractedEntity, LLMEntityExtractor
-from simtag.module.utils import compute_node_hash, compute_content_hash
+from simtag.core.entity_extractor import LLMEntityExtractor
 from simtag.core.graph_service import GraphService
 from simtag.services.embedding_service import EmbeddingService
-from simtag.services.ner_service import NERService
 
 
 logger = logging.getLogger(__name__)

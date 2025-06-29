@@ -9,7 +9,7 @@ import sqlite_vec
 import os
 import asyncio
 import shutil
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from simtag.config import Config
 from simtag.services.embedding_service import get_embedding_service
 
@@ -293,7 +293,7 @@ async def main():
     print("🔍 Checking current status...")
     compatibility = manager.check_dimension_compatibility()
     
-    print(f"\n📊 Compatibility check results:")
+    print("\n📊 Compatibility check results:")
     print(f"   Status: {'✅ Compatible' if compatibility['compatible'] else '❌ Incompatible'}")
     print(f"   Message: {compatibility['message']}")
     
@@ -310,13 +310,13 @@ async def main():
     
     # 3. Get suggestions
     suggestions = manager.get_recovery_suggestions(compatibility)
-    print(f"\n💡 Suggested actions:")
+    print("\n💡 Suggested actions:")
     for suggestion in suggestions:
         print(f"   {suggestion}")
     
     # 4. Interactive repair
     if not compatibility["compatible"] or (model_dimension and compatibility.get("current_dimension") != model_dimension):
-        print(f"\n🔧 Repair options:")
+        print("\n🔧 Repair options:")
         print("   1. Auto-fix dimension mismatch")
         print("   2. Show detailed information only")
         print("   3. Exit")
@@ -335,7 +335,7 @@ async def main():
         elif choice == "2":
             # Show detailed information
             db_info = manager.get_database_info()
-            print(f"\n📋 Detailed database information:")
+            print("\n📋 Detailed database information:")
             for table_name, table_info in db_info.get("tables", {}).items():
                 print(f"   {table_name}:")
                 print(f"     Exists: {table_info.get('exists', False)}")

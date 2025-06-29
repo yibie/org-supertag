@@ -4,15 +4,13 @@ Integrates entity extraction, tag generation, and relationship analysis function
 """
 import logging
 from .graph_service import GraphService
-from .sync import SyncOrchestrator
 import time
 import traceback
-import sys
 import numpy as np
 from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..services.llm_client import LLMClient
+    pass
 
 class TaggingEngine:
     def __init__(self, config, graph_service: GraphService, llm_client):
@@ -97,7 +95,7 @@ class TaggingEngine:
 
         # If we have a vector, query the storage
         if query_vector is not None and query_vector.size > 0:
-            self.logger.debug(f"[TaggingEngine.find_similar_nodes] Querying storage for similar nodes.")
+            self.logger.debug("[TaggingEngine.find_similar_nodes] Querying storage for similar nodes.")
             storage_query_start_time = time.time()
             similar_nodes = self.graph_service.find_similar_nodes(query_vector, top_k=top_k)
             storage_query_end_time = time.time()

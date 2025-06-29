@@ -138,6 +138,80 @@ Analyze the text to find key entities and their relationships.
 **Output JSON:**
 """
 
+ENTITY_MERGING_PROMPT = """
+Given a list of entities and a context, identify if any of these entities refer to the same real-world concept or person and should be merged. Provide a primary name for the merged entity and a list of aliases.
+
+**Instructions:**
+1.  **Analyze:** Review the provided entities and context.
+2.  **Identify Merges:** Determine if any entities are duplicates or aliases of each other.
+3.  **Format:** Return a JSON array of objects. Each object represents a merge suggestion and should have:
+    - `primary_name`: The canonical name for the merged entity.
+    - `aliases`: A list of entity names that should be considered aliases of the `primary_name`.
+    - `reasoning`: A brief explanation for the merge.
+    - `confidence`: A score from 0.0 to 1.0.
+
+**Context:**
+{context_text}
+
+**Entities to Consider:**
+{entities_to_consider}
+
+**Output JSON:**
+"""
+
+RELATIONSHIP_EXTRACTION_PROMPT = """
+Extract specific relationships between identified entities from the given text. Focus on clear, semantic connections.
+
+**Instructions:**
+1.  **Identify Entities:** Recognize the key entities in the text.
+2.  **Extract Relationships:** For each meaningful relationship, identify the `source` entity, `target` entity, `relationship_type` (e.g., `CAUSES`, `PART_OF`, `AUTHORED_BY`), and a `description`.
+3.  **Format:** Return a JSON array of objects. Each object represents a relationship and should have:
+    - `source`: The name of the source entity.
+    - `target`: The name of the target entity.
+    - `relationship_type`: The type of relationship.
+    - `description`: A brief explanation of the relationship.
+    - `confidence`: A score from 0.0 to 1.0.
+
+**Text to Analyze:**
+{text_content}
+
+**Output JSON:**
+"""
+
+ATTRIBUTE_FILLING_PROMPT = """
+Extract specific attributes for a given entity from the provided text. Focus on factual details that enrich the entity's profile.
+
+**Instructions:**
+1.  **Identify Entity:** Locate the specified entity in the text.
+2.  **Extract Attributes:** Identify relevant attributes (e.g., `occupation`, `location`, `date_of_birth`, `status`) and their values.
+3.  **Format:** Return a JSON object with the entity's name as the key, and a dictionary of attributes as the value. Include a `confidence` score for the extraction.
+
+**Entity:** {entity_name}
+**Text to Analyze:**
+{text_content}
+
+**Output JSON:**
+"""
+
+ENTITY_DISAMBIGUATION_PROMPT = """
+Given an ambiguous entity name and a set of contexts, determine if the entity refers to distinct real-world concepts or if it's consistently the same. If distinct, provide distinguishing features for each.
+
+**Instructions:**
+1.  **Analyze:** Review the ambiguous entity and its various contexts.
+2.  **Disambiguate:** Decide if the entity represents one or multiple distinct concepts.
+3.  **Format:** Return a JSON object with:
+    - `is_ambiguous`: boolean, true if distinct concepts are found.
+    - `disambiguations`: A list of objects, each with `concept_name`, `description`, and `example_context` (a snippet from the original text).
+    - `reasoning`: A brief explanation for the disambiguation.
+    - `confidence`: A score from 0.0 to 1.0.
+
+**Ambiguous Entity:** {ambiguous_entity_name}
+**Contexts:**
+{contexts}
+
+**Output JSON:**
+"""
+
 def create_prompt(
     contents: list[str],
     entity_types: list[str] = None,
@@ -221,4 +295,4 @@ def log_prompt_usage(content_lengths: list[int], success: bool):
         f"📝 Prompt usage: count={len(content_lengths)}, "
         f"avg_len={sum(content_lengths) / len(content_lengths):.0f}, "
         f"status={status}"
-    ) 
+    )

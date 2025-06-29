@@ -5,7 +5,7 @@ Provides data serialization and deserialization functionality
 
 import json
 import numpy as np
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 from datetime import datetime
 
 def to_serializable(obj: Any) -> Any:

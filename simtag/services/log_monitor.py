@@ -3,16 +3,13 @@
 日志监控服务 - 用于实时跟踪多线程处理进度
 """
 
-import asyncio
 import logging
 import time
 import threading
 import queue
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
-from collections import defaultdict, deque
-import json
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -437,7 +434,7 @@ class LogMonitor:
             if remaining > 0:
                 print(f"⏰ 预计完成: {remaining/60:.1f} 分钟后")
         
-        print(f"\n👷 工作进程状态:")
+        print("\n👷 工作进程状态:")
         for worker_id, worker in session.workers.items():
             status_icon = {"idle": "⏸️", "busy": "🔧", "error": "❌", "offline": "💤"}.get(worker.status, "❓")
             print(f"  Worker {worker_id}: {status_icon} {worker.status}")

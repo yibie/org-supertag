@@ -8,7 +8,7 @@ Based on living-doc-features.org sections 10.7.A.4 and 10.8.F.
 import asyncio
 import logging
 import time
-from typing import Dict, List, Any, Optional, Union, Callable, Awaitable
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 import sqlite3 # Added for SQLite persistence
@@ -28,6 +28,9 @@ class MemoryItemType(Enum):
     CONTEXT_SNAPSHOT = "context_snapshot" # A snapshot of what was sent to LLM
     USER_FEEDBACK = "user_feedback" # Explicit feedback on AI responses
     SYSTEM_STATE = "system_state" # e.g., current dialogue mode
+    FACT = "fact" # A factual statement extracted from text or dialogue
+    ENTITY_MERGE_SUGGESTION = "entity_merge_suggestion" # Suggestion to merge entities
+    RELATIONSHIP_DISCOVERY = "relationship_discovery" # Discovered relationship
 
 @dataclass
 class MemoryItem:
@@ -1315,7 +1318,6 @@ class MemoryEngine:
 
 # Example Usage / Test function
 async def main_test_memory_engine():
-    import asyncio
     import time
     from simtag.config import Config
     from simtag.services.llm_client import LLMClient # For mocking or real use

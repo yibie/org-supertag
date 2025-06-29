@@ -868,5 +868,34 @@ LIMIT: Maximum number of records to display, default 10."
 ;; Load hashes on startup, after all functions are defined.
 (org-supertag-background-sync--load-hashes)
 
+
+;; When the vertor database is broken, use this command to re-generated one.
+
+(defun org-supertag-force-resync-to-python ()
+    "Safely force a full resynchronization of the Elisp DB to the Python backend.
+  This function is a safe alternative to org-supertag-sync-force-all.
+  It works by deleting the sync hash file and clearing the in-memory hash cache,
+  which tricks the background sync mechanism into thinking all objects are new,
+  triggering a full, one-time sync to Python for embedding and reasoning."
+    (interactive)
+    (when (y-or-n-p "This will force a full resync to the Python backend. This may take some time. Continue? ")
+      (let ((hash-file org-supertag-background-sync--hash-file))
+        ;; 1. Delete the on-disk hash file to remove the old sync state.
+        (when (file-exists-p hash-file)
+          (delete-file hash-file)
+          (message "Deleted sync hash file: %s" hash-file))
+
+        ;; 2. Clear the in-memory hash table. This is the crucial step.
+        ;;    This prevents ...--create-baseline-hashes from running and
+        ;;    makes ...--get-changed-objects see everything as new.
+        (clrhash org-supertag-background-sync--last-sync-hashes)
+        (message "Cleared in-memory hash cache.")
+
+        ;; 3. Trigger the background sync.
+        ;;    It will now find no previous hashes and send all data to Python.
+        (message "Triggering a full sync to Python backend...")
+        (org-supertag-background-sync-run-now))))
+
+
 (provide 'org-supertag-background-sync)
 ;;; org-supertag-background-sync.el ends here 

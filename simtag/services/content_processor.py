@@ -10,7 +10,6 @@
 每个步骤都是独立的，失败不会影响其他步骤的执行。
 """
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ from enum import Enum
 from simtag.services.embedding_service import get_embedding_service, EmbeddingResult
 from simtag.core.entity_extractor import LLMEntityExtractor, ExtractedEntity
 from simtag.config import Config
+from simtag.utils import text_processing
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class ContentProcessor:
                 llm_client=LLMClient(config_dict=self.config.llm_client_config),
                 config=analysis_conf
             )
-            logger.info(f"Entity extractor initialized using analysis_config.")
+            logger.info("Entity extractor initialized using analysis_config.")
         except Exception as e:
             logger.error(f"Failed to initialize entity extractor: {e}", exc_info=True)
             self.entity_extractor = None
@@ -193,10 +193,12 @@ class ContentProcessor:
             # based on whether the node is new or has been modified.
             # This processor will now embed any item it receives.
             
-            # 合并标题和内容
-            text_to_embed = f"{item.title}\n\n{item.text}" if item.title and item.text else item.title or item.text or ""
-            
-            text_to_embed = text_to_embed.strip()
+            # Prepare text for embedding using the utility function
+            node_data_for_embedding = {
+                ':title': item.title,
+                ':content': item.text
+            }
+            text_to_embed = text_processing.prepare_node_text_for_embedding(node_data_for_embedding)
             
             logger.info(f"Starting embedding generation for {item.id}: {len(text_to_embed)} chars")
             
@@ -362,9 +364,9 @@ async def process_text(text: str,
                       title: Optional[str] = None,
                       mode: ProcessingMode = ProcessingMode.FULL_PROCESSING) -> ProcessingResult:
     """便捷函数，用于处理单个文本片段"""
-    from simtag.container import Container
+    from simtag.container import AppContainer
     
-    container = Container()
+    container = AppContainer()
     config = container.config()
     content_processor = ContentProcessor(config=config)
 
@@ -383,9 +385,9 @@ async def process_node_data(node_id: str,
     处理来自Elisp的节点数据。
     这是一个兼容层，将旧的函数调用适配到新的ContentProcessor。
     """
-    from simtag.container import Container
+    from simtag.container import AppContainer
 
-    container = Container()
+    container = AppContainer()
     config = container.config()
     content_processor = ContentProcessor(config=config)
 

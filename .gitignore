@@ -53,3 +53,5 @@ simtag/nano-graphrag/
 .cursor/
 .test/
 test/
+
+.ruff_cache/
