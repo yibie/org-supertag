@@ -5,7 +5,6 @@
 """
 
 import sys
-from typing import Dict, Any
 from simtag.config import Config
 
 def show_current_config():

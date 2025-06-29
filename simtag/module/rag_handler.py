@@ -6,6 +6,7 @@ from ..services.embedding_service import EmbeddingService
 from ..core.rag_engine import OrgSupertagRAGEngine
 from ..utils.unified_tag_processor import normalize_payload
 from typing import List, Dict
+from simtag.utils import text_processing
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class RAGHandler:
         
         try:
             # 1. Prepare the query text using the specialized method
-            query_text = self.embedding_service.prepare_node_text_for_embedding(node_data)
+            query_text = text_processing.prepare_node_text_for_embedding(node_data)
             logger.info(f"Using prepared query text for RAG: '{query_text}'")
 
             # 2. Retrieve context with RAG using the prepared query text

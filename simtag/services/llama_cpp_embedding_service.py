@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import re
-import numpy as np
 import time
 
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ class LlamaCppEmbeddingService:
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
             raise RuntimeError(f"llama-embedding binary not found or not working: {e}")
         
-        logger.info(f"LlamaCpp embedding service initialized:")
+        logger.info("LlamaCpp embedding service initialized:")
         logger.info(f"  Model: {self.model_path}")
         logger.info(f"  Binary: {self.binary_path}")
         logger.info(f"  Pooling: {self.pooling}")
@@ -575,7 +574,7 @@ def create_qwen3_embedding_service(
     n_threads = config_dict.get("llama_cpp_threads")
     n_ctx = config_dict.get("llama_cpp_max_context", 512)  # 使用较小的上下文避免批处理问题
     
-    logger.info(f"Creating Qwen3-Embedding service with:")
+    logger.info("Creating Qwen3-Embedding service with:")
     logger.info(f"  Model: {model_path}")
     logger.info(f"  Binary: {binary_path}")
     logger.info(f"  Pooling: {pooling}")

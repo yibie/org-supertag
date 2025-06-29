@@ -11,7 +11,6 @@ import traceback
 
 from simtag.core.memory_engine import MemoryItem, MemoryItemType
 from simtag.services.content_processor import ContentProcessor, ProcessingConfig, ContentItem
-from simtag.core.entity_extractor import ExtractedEntity
 from simtag.utils.unified_tag_processor import normalize_payload
 from simtag.core.graph_service import GraphService
 
@@ -235,7 +234,8 @@ class EPCHandler:
 
             suggestions = []
             for doc in related_docs:
-                if doc.get('id') == node_id: continue
+                if doc.get('id') == node_id:
+                    continue
 
                 suggestions.append({
                     'type': doc.get('source', 'related_document'),
@@ -403,10 +403,12 @@ class EPCHandler:
         """Finds nodes related to a query and returns them sorted by date."""
         try:
             similar_nodes_result = await asyncio.to_thread(self.engine.find_similar_nodes, query_text, top_k)
-            if not similar_nodes_result: return {"status": "success", "result": []}
+            if not similar_nodes_result:
+                return {"status": "success", "result": []}
             node_ids = [node_id for node_id, score in similar_nodes_result]
             node_details = self.graph_service.get_nodes_by_ids(node_ids)
-            if not node_details: return {"status": "success", "result": []}
+            if not node_details:
+                return {"status": "success", "result": []}
             valid_nodes = [n for n in node_details if n.get('document_date')]
             sorted_nodes = sorted(valid_nodes, key=lambda x: x['document_date'], reverse=True)
             return {"status": "success", "result": sorted_nodes}

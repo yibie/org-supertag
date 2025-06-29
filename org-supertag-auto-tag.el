@@ -126,6 +126,7 @@ Nodes for which suggestions already exist in the queue are skipped to avoid repr
 If `org-supertag-auto-tag-batch-enable-limit` is t,
 process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
   (interactive)
+  (message "[Auto-tag] org-supertag-auto-tag-silent-scan-and-generate called at %s" (format-time-string "%H:%M:%S.%3N"))
   (let* ((all-nodes (org-supertag-node-get-all))
          (untagged-nodes-all (seq-filter
                               (lambda (node-id)
@@ -152,6 +153,7 @@ process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
 (defun org-supertag-auto-tag--batch-extract-and-send-content (node-ids)
   "Extract content from given node IDs and send asynchronously to the backend.
 The data is structured according to the unified data contract."
+  (message "[Auto-tag] org-supertag-auto-tag--batch-extract-and-send-content called at %s" (format-time-string "%H:%M:%S.%3N"))
   (let ((nodes-to-process '()))
     ;; 1. Create a simplified data structure that EPC can properly serialize
     (dolist (node-id node-ids)

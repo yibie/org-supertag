@@ -107,7 +107,6 @@ class DiagnosticsHandler:
 
     def test_embedding_retrieval(self, text: str):
         from simtag.services.content_processor import ProcessingConfig, ProcessingMode, ContentItem
-        import time
 
         logger.info(f"Received test_embedding_retrieval request with text: '{text}'")
         if not self.content_processor:

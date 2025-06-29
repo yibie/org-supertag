@@ -183,20 +183,23 @@ daily task per cycle, ensuring a smoother startup experience."
   "Execute a task and update its state."
   (let ((func (plist-get task :function)))
     (message "[Org-supertag-scheduler] Running task '%s'..." id)
-    (condition-case err
-        (funcall func)
-      (error
-       (message "[Org-supertag-scheduler] Error running task '%s': %s" id (error-message-string err))))
-    ;; Update last-run time
-    (pcase (plist-get task :type)
-      (:interval
-       (plist-put task :last-run now))
-      (:daily
-       (plist-put task :last-run (format-time-string "%Y-%m-%d" now))))
-    (puthash id task org-supertag-scheduler--tasks)
-    ;; Persist state immediately after a daily task runs
-    (when (eq (plist-get task :type) :daily)
-      (org-supertag-scheduler--save-state))))
+    (if (org-supertag-bridge-ready-p)
+        (progn
+          (condition-case err
+              (funcall func)
+            (error
+             (message "[Org-supertag-scheduler] Error running task '%s': %s" id (error-message-string err))))
+          ;; Update last-run time
+          (pcase (plist-get task :type)
+            (:interval
+             (plist-put task :last-run now))
+            (:daily
+             (plist-put task :last-run (format-time-string "%Y-%m-%d" now))))
+          (puthash id task org-supertag-scheduler--tasks)
+          ;; Persist state immediately after a daily task runs
+          (when (eq (plist-get task :type) :daily)
+            (org-supertag-scheduler--save-state)))
+      (message "[Org-supertag-scheduler] Skipped task '%s' because Python server is not running." id))))
 
 (provide 'org-supertag-scheduler)
 

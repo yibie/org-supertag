@@ -1259,43 +1259,41 @@ Returns a clean string without any text properties."
                    (properties (org-entry-properties nil 'standard))
                    ;; parse reference relations
                    (refs-to nil)
-                   (refs-from nil)
-                   ;; Get node content directly
-                   (content (save-excursion
-                             (org-end-of-meta-data t)
-                             (let* ((begin (point))
-                                    (end (org-element-property :contents-end element))
-                                    ;; Find next heading position
-                                    (next-heading (save-excursion
-                                                  (org-next-visible-heading 1)
-                                                  (point))))
-                               ;; go to begin
-                               (goto-char begin)
-                               ;; use more accurate boundary
-                               (let ((content-end (cond
-                                                 ;; if there is a next heading and in the current node content range
-                                                 ((and next-heading end (< next-heading end))
-                                                  (1- next-heading))
-                                                 ;; use the content end position of the node
-                                                 (end end)
-                                                 ;; if none, use the end position of the current node
-                                                 (t (org-entry-end-position)))))
-                                 ;; collect references
-                                 (while (re-search-forward org-link-any-re content-end t)
-                                   (let* ((link (org-element-context))
-                                          (link-type (org-element-property :type link))
-                                          (link-path (org-element-property :path link)))
-                                     (when (and (equal link-type "id")
-                                              (org-uuidgen-p link-path))
-                                       (push link-path refs-to))))
-                                 ;; only return content when begin and end are valid and have content
-                                 (when (and begin content-end (< begin content-end))
-                                   (org-supertag-db--clean-text
-                                    (buffer-substring-no-properties begin content-end))))))
-                   ;; get other nodes that reference this node (keep existing reference relations)
                    (existing-node (org-supertag-db-get id))
                    (refs-from (when existing-node
-                              (plist-get existing-node :ref-from))))
+                                (plist-get existing-node :ref-from)))
+                   ;; Get node content directly
+                   (content (save-excursion
+                              (org-end-of-meta-data t)
+                              (let* ((begin (point))
+                                     (end (org-element-property :contents-end element))
+                                     ;; Find next heading position
+                                     (next-heading (save-excursion
+                                                   (org-next-visible-heading 1)
+                                                   (point))))
+                                ;; go to begin
+                                (goto-char begin)
+                                ;; use more accurate boundary
+                                (let ((content-end (cond
+                                                  ;; if there is a next heading and in the current node content range
+                                                  ((and next-heading end (< next-heading end))
+                                                   (1- next-heading))
+                                                  ;; use the content end position of the node
+                                                  (end end)
+                                                  ;; if none, use the end position of the current node
+                                                  (t (org-entry-end-position)))))
+                                  ;; collect references
+                                  (while (re-search-forward org-link-any-re content-end t)
+                                    (let* ((link (org-element-context))
+                                           (link-type (org-element-property :type link))
+                                           (link-path (org-element-property :path link)))
+                                      (when (and (equal link-type "id")
+                                               (org-uuidgen-p link-path))
+                                        (push link-path refs-to))))
+                                  ;; only return content when begin and end are valid and have content
+                                  (when (and begin content-end (< begin content-end))
+                                    (org-supertag-db--clean-text
+                                     (buffer-substring-no-properties begin content-end))))))))
               
               (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
                       id title level todo-state priority (length refs-to))
@@ -1323,7 +1321,7 @@ Returns a clean string without any text properties."
                     :created-at (current-time)))))
       (error
        (message "Error parsing node at point: %s" (error-message-string err))
-       nil)))))
+       nil))))
 
 (defun org-supertag-db--validate-node-props (props)
   "Validate node property completeness."

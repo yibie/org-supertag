@@ -5,7 +5,6 @@ Provides project configuration and state management
 import os
 import logging
 import os.path as osp
-from dataclasses import field
 from typing import Optional, Dict, Any, List
 import toml # <--- NEW: Import toml for dynamic config persistence
 from pydantic import BaseModel, Field
@@ -13,7 +12,7 @@ from pydantic import BaseModel, Field
 # Define the default analysis config dictionary at the module level
 analysis_config = {
     "enable_inferred_relations": True,
-    "inference_model": "phi4-mini:3.8b",
+    "inference_model": "gemma3:1b",
     "processing_workers": 4,
 }
 
@@ -231,7 +230,7 @@ class Config(BaseModel):
         if env_llm_api_key:
             self.llm_client_config['api_key'] = env_llm_api_key
             # Be cautious logging API keys, even parts of them.
-            logging.getLogger("config").info(f"LLM API Key loaded from environment (not displaying value).")
+            logging.getLogger("config").info("LLM API Key loaded from environment (not displaying value).")
 
         # Environment variable overrides for Entity Extractor Config
         env_ee_entity_types_json = os.environ.get("ORG_SUPERTAG_EE_ENTITY_TYPES_JSON")
@@ -239,7 +238,7 @@ class Config(BaseModel):
             try:
                 import json
                 self.entity_extractor_config['entity_types'] = json.loads(env_ee_entity_types_json)
-                logging.getLogger("config").info(f"Loaded Entity Extractor entity types from environment.")
+                logging.getLogger("config").info("Loaded Entity Extractor entity types from environment.")
             except json.JSONDecodeError:
                 logging.getLogger("config").warning("Failed to parse ORG_SUPERTAG_EE_ENTITY_TYPES_JSON from environment.")
 
@@ -367,7 +366,7 @@ class Config(BaseModel):
                 logger.warning(f"Failed to load dynamic configuration from {self.dynamic_config_file_path}: {e}")
                 self._dynamic_config_values = {} # Ensure it's a dict on failure
         else:
-            logger.info(f"Dynamic configuration file not found or path not set. Initializing with empty dynamic config.")
+            logger.info("Dynamic configuration file not found or path not set. Initializing with empty dynamic config.")
             self._dynamic_config_values = {}
 
     def _save_dynamic_config(self) -> None:

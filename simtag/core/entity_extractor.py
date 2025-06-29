@@ -7,7 +7,6 @@ by leveraging a unified, prompt-based approach with an LLM.
 import asyncio
 import logging
 import json
-import re
 from typing import Dict, List, Any, Optional, Callable, Awaitable, Tuple
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
@@ -15,7 +14,7 @@ from abc import ABC, abstractmethod
 # Import unified prompt management and tag processor
 try:
     from ..prompts import create_prompt, DEFAULT_ENTITY_TYPES, INFER_RELATIONS_PROMPT
-    from ..utils.unified_tag_processor import UnifiedTagProcessor, TagResult
+    from ..utils.unified_tag_processor import UnifiedTagProcessor, TagResult, parse_llm_json_response
 except ImportError:
     # Fallback for direct execution
     import sys
@@ -87,43 +86,28 @@ class LLMEntityExtractor(BaseExtractor):
             # Await the asynchronous call to the LLM client, passing the specific model
             response_text = await self.llm_client.generate(prompt, model=inference_model)
 
-            # The response is expected to be a JSON string, possibly with markdown code fences.
             # We need to robustly parse it.
-            return self._parse_llm_response(response_text)
+            parsed_data = parse_llm_json_response(response_text)
+
+            if parsed_data and isinstance(parsed_data, dict):
+                # Validate basic structure
+                entities = parsed_data.get("entities", [])
+                relations = parsed_data.get("relations", [])
+                
+                if not isinstance(entities, list) or not isinstance(relations, list):
+                    logger.warning(f"LLM response has invalid structure: {parsed_data}")
+                    return {"entities": [], "relations": []}
+
+                return {"entities": entities, "relations": relations}
+            else:
+                logger.error("Failed to parse LLM response or parsed data is not a dictionary.")
+                return {"entities": [], "relations": []}
 
         except Exception as e:
             logger.error(f"Failed to extract entities/relations from text: {e}", exc_info=True)
             return {"entities": [], "relations": []}
 
-    def _parse_llm_response(self, response_text: str) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Parses the JSON response from the LLM, handling potential markdown fences.
-        """
-        try:
-            # Clean up markdown code block fences if they exist
-            if response_text.strip().startswith("```json"):
-                response_text = response_text.strip()[7:-3].strip()
-            elif response_text.strip().startswith("```"):
-                 response_text = response_text.strip()[3:-3].strip()
-
-            data = json.loads(response_text)
-            
-            # Validate basic structure
-            entities = data.get("entities", [])
-            relations = data.get("relations", [])
-            
-            if not isinstance(entities, list) or not isinstance(relations, list):
-                logger.warning(f"LLM response has invalid structure: {data}")
-                return {"entities": [], "relations": []}
-
-            return {"entities": entities, "relations": relations}
-
-        except json.JSONDecodeError:
-            logger.error(f"Failed to decode LLM JSON response: {response_text}")
-            return {"entities": [], "relations": []}
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while parsing LLM response: {e}")
-            return {"entities": [], "relations": []}
+    
 
 # You can add other extractor implementations here if needed,
 # e.g., a SpaCy-based one for faster, less-detailed extraction.

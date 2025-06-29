@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import json
 from typing import Dict, Any, List
 
 from simtag.core.graph_service import GraphService

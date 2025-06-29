@@ -6,8 +6,6 @@ from typing import List, Dict, Any, Optional
 # Assuming LLMClient has an async generate method
 from simtag.services.llm_client import LLMClient
 from simtag.services.smart_ner_service import SmartNERService
-import json
-import time
 
 logger = logging.getLogger(__name__)
 

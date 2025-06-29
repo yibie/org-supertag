@@ -34,13 +34,21 @@ class LLMClient:
         self.default_model = config.get('default_model', 'gemma3:4b')
         self.timeout = config.get('timeout', 300)
         
-        self._client = httpx.AsyncClient(timeout=self.timeout)
+        self._client: Optional[httpx.AsyncClient] = None # Initialize to None
+
+    async def _get_httpx_client(self) -> httpx.AsyncClient:
+        """Lazily initializes and returns the httpx.AsyncClient."""
+        if self._client is None or self._client.is_closed:
+            logger.info("Creating new httpx.AsyncClient instance.")
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
 
     async def check_availability(self) -> bool:
         """Checks if the configured LLM service is available."""
         if self.provider == 'ollama':
             try:
-                response = await self._client.get(f"{self.base_url}/api/tags")
+                client = await self._get_httpx_client()
+                response = await client.get(f"{self.base_url}/api/tags")
                 response.raise_for_status()
                 logger.info(f"Ollama service available at {self.base_url}")
                 return True
@@ -53,9 +61,9 @@ class LLMClient:
         logger.warning(f"Availability check not implemented for provider: {self.provider}")
         return False
 
-    async def generate(self, 
-                       prompt: str, 
-                       system_prompt: Optional[str] = None, 
+    async def generate(self,
+                       prompt: str,
+                       system_prompt: Optional[str] = None,
                        model: Optional[str] = None,
                        format_json: bool = False,
                        options: Optional[Dict[str, Any]] = None,
@@ -65,89 +73,18 @@ class LLMClient:
         Generates text using the configured LLM provider.
         """
         target_model = model if model else self.config.get('default_model', self.default_model)
-        
-        if self.provider == 'ollama':
-            try:
-                return self._call_ollama_generate_sync(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    model=target_model,
-                    format_json=format_json,
-                    options=options,
-                    **kwargs
-                )
-            except Exception as e:
-                logger.error(f"Direct Ollama generate call failed: {e}")
-                return await self._call_ollama_generate_async(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    model=target_model,
-                    format_json=format_json,
-                    options=options,
-                    **kwargs
-                )
-        else:
-            logger.error(f"LLM provider '{self.provider}' not supported.")
-            return ""
 
-    def _call_ollama_generate_sync(self,
-                                    prompt: str,
-                                    system_prompt: Optional[str],
-                                    model: str,
-                                    format_json: bool,
-                                    options: Optional[Dict[str, Any]],
-                                    **kwargs: Any
-                                   ) -> str:
-        """
-        Synchronous version using requests.
-        """
-        api_url = f"{self.base_url}/api/generate"
-        
-        payload_dict: Dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": True,
-            "format": "json" if format_json else ""
-        }
-        
-        if system_prompt:
-            payload_dict["system"] = system_prompt
-        
-        if options:
-            payload_dict["options"] = options
-        
-        logger.debug(f"Making generate request to {api_url} with model {model}")
-        
-        try:
-            response = requests.post(
-                api_url, 
-                json=payload_dict, 
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout,
-                stream=True
+        if self.provider == 'ollama':
+            return await self._call_ollama_generate_async(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=target_model,
+                format_json=format_json,
+                options=options,
+                **kwargs
             )
-            
-            response.raise_for_status()
-            
-            full_response = ""
-            for line in response.iter_lines():
-                if line:
-                    try:
-                        chunk = json.loads(line.decode('utf-8'))
-                        if 'response' in chunk:
-                            full_response += chunk['response']
-                        if chunk.get('done', False):
-                            break
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse JSON chunk: {line}")
-                        continue
-            
-            logger.debug(f"Successfully generated response with model {model}")
-            return full_response
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ollama generate request failed for model {model}: {e}")
-            raise
+        logger.warning(f"Generation not implemented for provider: {self.provider}")
+        return f"Error: Generation not implemented for provider {self.provider}"
 
     async def _call_ollama_generate_async(self,
                                         prompt: str,
@@ -161,37 +98,38 @@ class LLMClient:
         Asynchronous version using httpx.
         """
         api_url = f"{self.base_url}/api/generate"
-        
+
         payload_dict: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "stream": True,
             "format": "json" if format_json else ""
         }
-        
+
         if system_prompt:
             payload_dict["system"] = system_prompt
-        
+
         if options:
             payload_dict["options"] = options
-        
+
         logger.debug(f"Making generate request to {api_url} with model {model}")
-        
+
         try:
-            response = await self._client.post(
-                api_url, 
-                json=payload_dict, 
+            client = await self._get_httpx_client()
+            response = await client.post(
+                api_url,
+                json=payload_dict,
                 headers={"Content-Type": "application/json"},
                 timeout=self.timeout
             )
-            
+
             response.raise_for_status()
-            
+
             full_response = ""
             async for line in response.aiter_lines():
                 if line:
                     try:
-                        chunk = json.loads(line.decode('utf-8'))
+                        chunk = json.loads(line)
                         if 'response' in chunk:
                             full_response += chunk['response']
                         if chunk.get('done', False):
@@ -199,10 +137,10 @@ class LLMClient:
                     except json.JSONDecodeError:
                         logger.warning(f"Failed to parse JSON chunk: {line}")
                         continue
-            
+
             logger.debug(f"Successfully generated response with model {model}")
             return full_response
-            
+
         except httpx.RequestError as e:
             logger.error(f"Async Ollama request failed for model {model}: {e}")
             return f"Error: Failed to connect to Ollama service at {self.base_url}"
@@ -213,57 +151,7 @@ class LLMClient:
             logger.error(f"An unexpected error occurred during async Ollama call for model {model}: {e}")
             return f"Error: An unexpected error occurred: {e}"
 
-    async def get_embedding(self, 
-                            text: str, 
-                            model: Optional[str] = None,
-                            **kwargs: Any
-                           ) -> List[float]:
-        """Generates an embedding for a single piece of text."""
-        target_model = model or self.config.get('embedding_config', {}).get('default_model')
-        if not target_model:
-            logger.error("No embedding model specified.")
-            return []
-
-        if self.provider == 'ollama':
-            api_url = f"{self.base_url}/api/embeddings"
-            payload = {"model": target_model, "prompt": text}
-            try:
-                response = await self._client.post(api_url, json=payload)
-                response.raise_for_status()
-                return response.json().get("embedding", [])
-            except Exception as e:
-                logger.error(f"Failed to get embedding for model {target_model}: {e}")
-                return []
-        else:
-            logger.error(f"Embedding not implemented for provider: {self.provider}")
-            return []
-
-    async def get_embeddings_batch(self,
-                                 texts: List[str],
-                                 model: Optional[str] = None,
-                                 **kwargs: Any
-                                ) -> List[List[float]]:
-        """Generates embeddings for a batch of texts sequentially."""
-        target_model = model or self.config.get('embedding_config', {}).get('default_model')
-        if not target_model:
-            logger.error("No embedding model specified for batch operation.")
-            return [[] for _ in texts]
-
-        logger.info(f"Starting sequential batch embedding for {len(texts)} texts with model {target_model}.")
-        
-        embeddings = []
-        for i, text in enumerate(texts):
-            try:
-                embedding = await self.get_embedding(text, model=target_model, **kwargs)
-                embeddings.append(embedding)
-                if (i + 1) % 10 == 0:
-                    logger.info(f"Processed {i + 1}/{len(texts)} embeddings...")
-            except Exception as e:
-                logger.error(f"Failed to get embedding for text item {i}: {e}")
-                embeddings.append([])
-
-        logger.info(f"Finished sequential batch embedding for {len(texts)} texts.")
-        return embeddings
+    
 
     async def close(self):
         """Closes the underlying HTTP client."""
@@ -306,25 +194,6 @@ async def main_test_llm_client():
         assert isinstance(json_response, dict)
     except json.JSONDecodeError:
         print(f"Failed to parse JSON response: {json_response_str}")
-
-    print("\n--- Testing Embedding ---")
-    embedding_text = "This is a test sentence for embeddings."
-    embedding_vector = await client.get_embedding(embedding_text)
-    print(f"Text: {embedding_text}")
-    print(f"Embedding vector (first 5 dims): {embedding_vector[:5] if embedding_vector else 'Failed'}")
-    if embedding_vector:
-        print(f"Vector dimension: {len(embedding_vector)}")
-
-    print("\n--- Testing Batch Embedding (Sequential) ---")
-    batch_texts = [
-        "The quick brown fox jumps over the lazy dog.",
-        "Hello world from the final frontier.",
-        "Batch processing is now sequential."
-    ]
-    batch_embeddings = await client.get_embeddings_batch(batch_texts)
-    print(f"Processed {len(batch_embeddings)} texts in batch.")
-    for i, vec in enumerate(batch_embeddings):
-        print(f"  - Text {i+1}: Dimension {len(vec) if vec else 'Failed'}")
 
     await client.close()
 

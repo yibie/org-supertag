@@ -6,7 +6,7 @@ for org-supertag, providing different strategies for context retrieval.
 """
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional, Tuple, TypedDict
+from typing import Dict, List, Any, Optional, Tuple, TypedDict, Callable
 import os
 import numpy as np
 import tempfile # For temporary vector DB
@@ -79,10 +79,11 @@ class OrgSupertagRAGEngine:
 
         if query_embedding is None:
             logger.debug("No pre-computed embedding, generating one for the query.")
-            query_embedding = await self.embedding_service.get_embedding(query_text)
-            if query_embedding is None:
+            query_embedding_result = await self.embedding_service.get_embedding(query_text)
+            if not query_embedding_result.success or not query_embedding_result.embedding:
                 logger.error("Failed to generate embedding for query.")
                 return StructuredContextOutput(entities=[], relations=[], documents=[])
+            query_embedding = query_embedding_result.embedding
         
         # Find similar node IDs
         similar_node_tuples = self.graph_service.find_similar_nodes(query_embedding, top_k=top_k)
@@ -243,23 +244,58 @@ class OrgSupertagRAGEngine:
 
         # 1. Find reasoning paths from the knowledge graph
         if _top_k_paths > 0:
-            logger.warning("Reasoning path retrieval is currently stubbed out in this refactoring phase.")
-            # path_nodes_data, path_relations_data, path_description_docs_raw = \
-            #     await self.graph_service.find_reasoning_paths_with_details(
-            #         entity_names_from_query,
-            #         target_entity_types,
-            #         max_paths=_top_k_paths, 
-            #         max_depth=max_reasoning_depth
-            #     )
-            # Faking the output to avoid breaking the flow
-            path_nodes_data, path_relations_data, path_description_docs_raw = [], [], []
+            # Ensure query_embedding is available for search_expand
+            if query_embedding is None:
+                query_embedding_result = await self.embedding_service.get_embedding(query_text)
+                if not query_embedding_result.success or not query_embedding_result.embedding:
+                    logger.error("Failed to get query embedding for reasoning path retrieval.")
+                    return StructuredContextOutput(entities=[], relations=[], documents=[])
+                query_embedding = query_embedding_result.embedding
+
+            # Call graph_service.search_expand for topology-enhanced search
+            expanded_search_results = self.graph_service.search_expand(
+                query_embedding,
+                top_k=_top_k_paths, # Use top_k_paths for initial vector search
+                expansion_hops=max_reasoning_depth
+            )
+
+            path_nodes_data = expanded_search_results.get("initial", []) + expanded_search_results.get("expanded", [])
+            # Relations are not directly returned by search_expand, but can be inferred or fetched if needed
+            path_relations_data = [] # Placeholder for now, will be populated by explicit relation fetching
+            path_description_docs_raw = []
 
             seen_entity_ids = set()
             for node_data in path_nodes_data:
-                if node_data and node_data.get('id') not in seen_entity_ids:
+                if node_data and node_data.get('node_id') not in seen_entity_ids:
+                    # Convert node_data to a format compatible with final_entities if needed
+                    # For now, assuming node_data from graph_service is sufficient
                     final_entities.append(node_data)
-                    seen_entity_ids.add(node_data.get('id'))
+                    seen_entity_ids.add(node_data.get('node_id'))
+                    # Add node content as a document
+                    path_description_docs_raw.append({
+                        "id": node_data.get("node_id"),
+                        "text": node_data.get("content", ""),
+                        "score": 1.0, # Assign a high score for graph-retrieved docs
+                        "retrieval_source_type": "graph_expansion",
+                        "title": node_data.get("title")
+                    })
             
+            # Populate final_relations based on relationships between path_nodes_data
+            # This would involve iterating through path_nodes_data and fetching their relations
+            # For simplicity, this is a placeholder for now.
+            for node_data in path_nodes_data:
+                node_relations = self.graph_service.get_neighbors(node_data.get('node_id')) # Get all neighbors/relations
+                for rel in node_relations:
+                    # Assuming get_neighbors returns relation-like dicts or can be converted
+                    if rel.get('node_id') not in seen_entity_ids: # Avoid adding entities already processed
+                        final_entities.append(rel) # Add related entities
+                        seen_entity_ids.add(rel.get('node_id'))
+                    # This part needs careful mapping from get_neighbors output to ExtractedRelation
+                    # For now, just adding to final_relations if it's a relation object
+                    # This is a simplification, proper relation objects need to be constructed
+                    if 'source_id' in rel and 'target_id' in rel and 'type' in rel:
+                        final_relations.append(rel)
+
             seen_relation_ids = set()
             for rel_data in path_relations_data:
                 if rel_data and rel_data.get('id') not in seen_relation_ids:
@@ -274,7 +310,7 @@ class OrgSupertagRAGEngine:
         # 2. Supplement with a naive vector search
         if _top_k_vector > 0:
             # Embedding is passed as None to let _naive_retrieval generate it
-            vector_supplement_output = await self._naive_retrieval(query_text, None, _top_k_vector)
+            vector_supplement_output = await self._naive_retrieval(query_text, query_embedding, _top_k_vector)
             
             # Combine results, avoiding duplicates
             seen_doc_ids = {doc['id'] for doc in final_documents if doc.get('id')}
@@ -318,31 +354,35 @@ class OrgSupertagRAGEngine:
         extracted_entities: List[Dict[str, Any]] = []
 
         # Generate embedding and extract entities if needed by the strategy
-        if strategy in ["light", "mini", "naive"]: # naive needs embedding now
-            # In parallel for efficiency
+        if strategy in ["light", "mini", "naive"]:
             tasks = []
             if strategy in ["light", "mini"]:
-                # The new extractor returns a dict, not just entities
                 tasks.append(self.entity_extractor.extract(query_text))
             
+            # Always get embedding if strategy is light, mini, or naive
             tasks.append(self.embedding_service.get_embedding(query_text))
             
             results = await asyncio.gather(*tasks)
             
             if strategy in ["light", "mini"]:
                 extraction_result = results.pop(0)
-                # Adapt to the new return format
                 extracted_entities = extraction_result.get("entities", [])
             
-            query_embedding = results.pop(0)
+            query_embedding_result = results.pop(0)
+            if not query_embedding_result.success or not query_embedding_result.embedding:
+                logger.error("Failed to get query embedding for retrieval.")
+                return StructuredContextOutput(entities=[], relations=[], documents=[])
+            query_embedding = query_embedding_result.embedding
 
         logger.info(f"Retrieving context for query '{query_text[:50]}...' with strategy '{strategy}'")
 
+        retrieved_context: StructuredContextOutput
+
         if strategy == "naive":
-            return await self._naive_retrieval(query_text, query_embedding, cfg_top_k)
+            retrieved_context = await self._naive_retrieval(query_text, query_embedding, cfg_top_k)
         
         elif strategy == "light":
-            return await self._light_retrieval(
+            retrieved_context = await self._light_retrieval(
                 query_text,
                 query_embedding,
                 extracted_entities,
@@ -353,8 +393,9 @@ class OrgSupertagRAGEngine:
         
         elif strategy == "mini":
             _target_entity_types = target_entity_types if target_entity_types is not None else getattr(self.config, 'rag_mini_default_target_types', ['concept', 'project', 'method'])
-            return await self._mini_retrieval(
+            retrieved_context = await self._mini_retrieval(
                 query_text,
+                query_embedding, # Pass query_embedding to _mini_retrieval
                 extracted_entities, 
                 _target_entity_types, 
                 cfg_top_k, 
@@ -365,13 +406,83 @@ class OrgSupertagRAGEngine:
         
         else:
             logger.warning(f"Unknown retrieval strategy: {strategy}. Defaulting to naive.")
-            # Ensure query_embedding is available for the default naive call
-            if query_embedding is None: # It would be None if strategy was initially "mini"
-                 query_embedding = await self.embedding_service.get_embedding(query_text)
-                 if query_embedding is None:
-                    logger.error("Failed to get query embedding for default naive strategy.")
-                    return StructuredContextOutput(entities=[], relations=[], documents=[])
-            return await self._naive_retrieval(query_text, query_embedding, cfg_top_k)
+            retrieved_context = await self._naive_retrieval(query_text, query_embedding, cfg_top_k)
+
+        # Dynamic Context Construction (Token Budget Allocation)
+        final_entities = []
+        final_relations = []
+        final_documents = []
+
+        # Estimate token counts for each component
+        # This is a simplified estimation. A proper tokenizer should be used for accuracy.
+        def estimate_tokens(text_content: str) -> int:
+            return len(text_content.split()) # Simple word count
+
+        # Prioritize and truncate components based on config
+        total_tokens_budget = self.config.rag_context_window_size
+        current_tokens = 0
+
+        # Sort priorities as defined in config
+        priorities = self.config.rag_context_priorities
+
+        # Helper to add items within budget
+        def add_to_context(item_list: List[Any], item_type: str, token_ratio: float, formatter: Callable[[Any], str]):
+            nonlocal current_tokens
+            component_budget = int(total_tokens_budget * token_ratio)
+            for item in item_list:
+                item_str = formatter(item)
+                item_tokens = estimate_tokens(item_str)
+                if current_tokens + item_tokens <= component_budget:
+                    if item_type == "entities":
+                        final_entities.append(item)
+                    elif item_type == "relations":
+                        final_relations.append(item)
+                    elif item_type == "documents":
+                        final_documents.append(item)
+                    current_tokens += item_tokens
+                else:
+                    # Truncate if possible, or skip
+                    remaining_budget = component_budget - current_tokens
+                    if remaining_budget > 0:
+                        truncated_item_str = item_str[:int(remaining_budget * 4)] + "..." # Rough char estimate for tokens
+                        if item_type == "entities":
+                            # For entities, truncating description or properties
+                            truncated_item = item.copy()
+                            truncated_item['description'] = truncated_item_str
+                            final_entities.append(truncated_item)
+                        elif item_type == "relations":
+                            # For relations, truncating description or properties
+                            truncated_item = item.copy()
+                            truncated_item['properties'] = {'description': truncated_item_str}
+                            final_relations.append(truncated_item)
+                        elif item_type == "documents":
+                            truncated_item = item.copy()
+                            truncated_item['text'] = truncated_item_str
+                            final_documents.append(truncated_item)
+                        current_tokens += estimate_tokens(truncated_item_str)
+                    break # No more space for this component
+
+        # Apply prioritization and budget allocation
+        for priority_item in priorities:
+            if priority_item == "current_node":
+                # Assuming current_node is the query_text itself or a primary document
+                # This is handled by the initial retrieval, so we prioritize its full inclusion
+                pass # Already in query_text, or will be part of retrieved_context
+            elif priority_item == "recent_nodes":
+                add_to_context(retrieved_context.get("documents", []), "documents", self.config.rag_context_core_content_ratio, lambda x: x.get("text", ""))
+            elif priority_item == "high_frequency_concepts":
+                add_to_context(retrieved_context.get("entities", []), "entities", self.config.rag_context_supplementary_ratio, lambda x: x.get("name", "") + " " + x.get("description", ""))
+            elif priority_item == "cross_domain_relations":
+                add_to_context(retrieved_context.get("relations", []), "relations", self.config.rag_context_background_ratio, lambda x: x.get("description", ""))
+            # Add more priority items as needed
+
+        logger.debug(f"Dynamic context construction complete. Total tokens used: {current_tokens}/{total_tokens_budget}")
+
+        return StructuredContextOutput(
+            entities=final_entities,
+            relations=final_relations,
+            documents=final_documents
+        )
 
     async def generate_response(
         self,
@@ -412,13 +523,16 @@ class OrgSupertagRAGEngine:
                 logger.error(f"Error formatting prompt template with key {e}. Using basic fallback.")
                 prompt = f"Based on the following information:\n{context_str}\n\nAnswer the question: {query_text}"
 
+        llm_generation_params = {
+            "max_tokens": self.config.llm_client_config.get("max_tokens_response"),
+            "temperature": self.config.llm_client_config.get("temperature", 0.7)
+        }
+
         # 3. Call the LLM
         try:
-            response_text = await self.llm_client.generate_text(
+            response_text = await self.llm_client.generate(
                 prompt,
-                # TODO: Pass through LLM generation parameters like max_tokens, temperature from config
-                # max_tokens=self.config.llm_max_tokens_response,
-                # temperature=self.config.llm_temperature_response
+                **llm_generation_params
             )
             return response_text
         except Exception as e:

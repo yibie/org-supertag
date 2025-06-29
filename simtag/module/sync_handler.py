@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 import json
 import traceback
 import asyncio

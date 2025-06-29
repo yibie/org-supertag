@@ -260,15 +260,12 @@ the bridge is confirmed to be ready."
   ;; 3. Add the service start functions to the 'bridge ready' hook.
   ;;    These functions will be called automatically by the bridge
   ;;    once it has successfully connected to the Python backend.
-  ;; Background sync will check its auto-start setting internally
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
+  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-scheduler-start)
   
   ;; 4. Finally, start the Python bridge process.
   ;;    Once ready, it will trigger the hook above.
   (org-supertag-bridge-start-process)
-
-  ;; 5. Start the central scheduler. It will manage all registered tasks.
-  (org-supertag-scheduler-start)
 
   (message "Org SuperTag setup initiated. Dependent services will start once Python bridge is ready."))
 

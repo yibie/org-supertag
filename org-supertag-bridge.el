@@ -206,7 +206,6 @@ Establishes the main EPC connection from Emacs TO the Python server and runs the
 (cl-defun org-supertag-bridge-start-process ()
   "Start the `simtag_bridge.py` process if it isn't already running and connected."
   (interactive)
-  ;; Use a more robust check based on the actual process object.
   (if (and (processp org-supertag-bridge--python-process)
            (process-live-p org-supertag-bridge--python-process))
       (progn
@@ -214,6 +213,11 @@ Establishes the main EPC connection from Emacs TO the Python server and runs the
         (message "[OrgSuperTagBridge] Process already running."))
     (org-supertag-bridge--log "Attempting to start SimTagBridge process pipeline...")
     
+    (when (and (processp org-supertag-bridge--python-process)
+               (not (process-live-p org-supertag-bridge--python-process)))
+      (org-supertag-bridge--log "Stale process object found. Cleaning up before starting new process.")
+      (org-supertag-bridge-kill-process))
+
     ;; 1. Ensure Emacs-side EPC server is running for Python to connect back
     (unless (org-supertag-bridge--start-emacs-epc-server)
       (org-supertag-bridge--log "Aborting Python process start: Emacs-side EPC server failed.")
@@ -243,9 +247,7 @@ Establishes the main EPC connection from Emacs TO the Python server and runs the
                                "bash" setup-script)
                 (display-buffer "*SimTag Setup*")
                 (message "[OrgSuperTag] Setup script running in background. Please wait for it to complete, then try again.")
-                ;; Abort the current start process, user needs to retry.
                 (cl-return-from org-supertag-bridge-start-process nil))
-            ;; If user says no, or script doesn't exist, throw the original error.
             (error "[OrgSuperTagBridge] Python script not found: %s" python-cmd))))
 
       (unless (file-directory-p data-dir)

@@ -32,7 +32,7 @@ class ReasoningHandler:
         """
         logger.debug(f"Starting relation inference for node {node_id}.")
         try:
-            node_data = self.graph_service.get_node(node_id)
+            node_data = self.graph_service.get_node_by_id(node_id)
             if not node_data:
                 logger.warning(f"Could not find node {node_id} for relation inference.")
                 return False
@@ -109,7 +109,12 @@ class ReasoningHandler:
         """
         logger.info(f"Starting reasoning cycle, processing up to {limit} nodes.")
         
-        nodes_to_process = self.graph_service.get_nodes_needing_relation_inference(limit)
+        nodes_to_process = self.graph_service.get_nodes_needing_relation_inference(
+            limit=limit,
+            order_by="priority_score", # Example: order by priority score
+            order_direction="DESC",
+            min_priority_score=0.1 # Example: only process nodes with a minimum priority
+        )
         
         if not nodes_to_process:
             logger.info("Reasoning cycle finished: No nodes found requiring relation inference.")

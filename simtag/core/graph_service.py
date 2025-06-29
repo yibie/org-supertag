@@ -6,7 +6,7 @@ import sqlite3
 import numpy as np
 import json
 import threading
-from typing import Dict, List, Any, Optional, Set, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -124,6 +124,14 @@ class GraphService:
         """Retrieves the database connection for the current thread."""
         return self._init_connection()
 
+    def _add_column_if_not_exists(self, cursor, table_name, column_name, column_type):
+        """Adds a column to a table if it doesn't already exist."""
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns = [info[1] for info in cursor.fetchall()]
+        if column_name not in columns:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+            self.logger.info(f"Added column '{column_name}' to table '{table_name}'.")
+
     def _init_db(self):
         """
         Initializes the database schema, creating tables if they don't exist.
@@ -141,16 +149,7 @@ class GraphService:
                 # Enable WAL mode if not already enabled
                 cursor.execute("PRAGMA journal_mode=WAL")
                 
-                # 1. Drop old tables for a fresh start (as agreed)
-                cursor.execute("DROP TABLE IF EXISTS relations")
-                cursor.execute("DROP TABLE IF EXISTS tags")
-                cursor.execute("DROP TABLE IF EXISTS nodes")
-                cursor.execute("DROP TABLE IF EXISTS node_embeddings_vss")
-                cursor.execute("DROP TABLE IF EXISTS tag_embeddings_vss")
-
-                # 2. Recreate Nodes Table with Type and Name
-                # 'name' is for ENTITY nodes (e.g., 'PYTHON'), for TEXT nodes it can be NULL.
-                # 'type' distinguishes between 'TEXT' and 'ENTITY'.
+                # 1. Create Nodes Table if not exists
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS nodes (
                     node_id TEXT PRIMARY KEY,
@@ -172,15 +171,20 @@ class GraphService:
                     hash TEXT,
                     content_hash TEXT,
                     document_date TEXT,
-                    relations_inferred_at TEXT,
-                    UNIQUE(name, type)
+                    relations_inferred_at TEXT
+                    -- UNIQUE(name, type) -- This constraint might be too restrictive for entities, remove for now
                 )
                 """)
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes (type)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes (name)")
 
-                # 3. Recreate Relations Table (Schema is good, just recreating)
-                # This table connects nodes from the 'nodes' table, regardless of their type.
+                # 2. Add new columns to nodes table if they don't exist (Migration)
+                # Add 'aliases' column
+                self._add_column_if_not_exists(cursor, "nodes", "aliases", "TEXT")
+                # Add 'priority_score' column
+                self._add_column_if_not_exists(cursor, "nodes", "priority_score", "REAL")
+
+                # 3. Create Relations Table if not exists
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS relations (
                     relation_id TEXT PRIMARY KEY,
@@ -198,18 +202,19 @@ class GraphService:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_target_id ON relations (target_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_type ON relations (type)")
 
-                # 4. Recreate a single VSS Table for all node types
+                # 4. Create VSS Table for node embeddings if not exists
                 if self.has_vector_ext:
                     vector_dim = self.config.get_vector_dimension_for_model()
                     
                     cursor.execute(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS node_embeddings_vss USING vec0(
+                        node_id TEXT PRIMARY KEY,
                         embedding FLOAT[{vector_dim}]
                     )
                     """)
-
+                
                 conn.commit()
-                self.logger.info("Database schema re-initialized for heterogenous graph structure.")
+                self.logger.info("Database schema initialized/migrated for heterogenous graph structure.")
                 break  # Success, exit retry loop
                 
             except sqlite3.OperationalError as e:
@@ -225,6 +230,14 @@ class GraphService:
                 self.logger.error(f"Unexpected error during database initialization: {e}")
                 raise
 
+    def _add_column_if_not_exists(self, cursor, table_name, column_name, column_type):
+        """Adds a column to a table if it doesn't already exist."""
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns = [info[1] for info in cursor.fetchall()]
+        if column_name not in columns:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+            self.logger.info(f"Added column '{column_name}' to table '{table_name}'.")
+
     def mark_node_relations_inferred(self, node_id: str):
         """Marks a node to indicate that relation inference has been performed."""
         conn = self._get_connection()
@@ -239,7 +252,7 @@ class GraphService:
         except Exception as e:
             logger.error(f"Failed to mark node {node_id} for relation inference: {e}", exc_info=True)
 
-    def get_nodes_needing_relation_inference(self, limit: int = 5) -> List[str]:
+    def get_nodes_needing_relation_inference(self, limit: int = 5, order_by: Optional[str] = None, order_direction: str = "ASC", min_priority_score: Optional[float] = None) -> List[str]:
         """
         Retrieves a list of node IDs that have embeddings but have not yet
         had relation inference performed on them.
@@ -248,15 +261,34 @@ class GraphService:
         try:
             with conn:
                 cursor = conn.cursor()
-                # Find TEXT nodes with content that haven't been processed for relations yet.
-                # We assume embedding is done if there is content.
-                cursor.execute("""
+                query = """
                     SELECT node_id FROM nodes
                     WHERE type = 'TEXT'
                       AND content IS NOT NULL AND content != ''
                       AND relations_inferred_at IS NULL
-                    LIMIT ?
-                """, (limit,))
+                """
+                params = []
+
+                if min_priority_score is not None:
+                    query += " AND priority_score >= ?"
+                    params.append(min_priority_score)
+
+                if order_by:
+                    # Basic validation to prevent SQL injection
+                    if order_by not in ["node_id", "modified_at", "document_date", "priority_score"]:
+                        self.logger.warning(f"Invalid order_by column: {order_by}. Ignoring order_by.")
+                        order_by = None
+                    if order_direction.upper() not in ["ASC", "DESC"]:
+                        self.logger.warning(f"Invalid order_direction: {order_direction}. Defaulting to ASC.")
+                        order_direction = "ASC"
+
+                    if order_by:
+                        query += f" ORDER BY {order_by} {order_direction}"
+
+                query += " LIMIT ?"
+                params.append(limit)
+
+                cursor.execute(query, params)
                 rows = cursor.fetchall()
                 node_ids = [row[0] for row in rows]
                 logger.info(f"Found {len(node_ids)} nodes needing relation inference (limit: {limit}).")
@@ -657,7 +689,9 @@ class GraphService:
     # --- Embedding and Vector Search Operations ---
 
     def get_node_embedding_by_id(self, node_id: str) -> Optional[np.ndarray]:
-        """Retrieves a node's embedding from the VSS table by its ID (rowid)."""
+        """
+        Retrieves a node's embedding from the VSS table by its node_id.
+        """
         if not self.has_vector_ext:
             self.logger.warning("Vector extension not available.")
             return None
@@ -666,26 +700,11 @@ class GraphService:
         cursor = conn.cursor()
         
         try:
-            # sqlite-vec uses rowid to reference vectors. We assume node_id can be mapped to it.
-            # A common pattern is to use a text ID that is also the rowid IF it's an INTEGER PRIMARY KEY.
-            # Since our node_id is TEXT, we must have a mapping.
-            # Let's assume for now that the node_id is stored as the rowid for simplicity.
-            # This is a key design point to get right.
-            # A lookup table node_id -> rowid would be needed.
-            # We will perform this lookup now.
-            node_rowid = cursor.execute("SELECT rowid FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
-            if not node_rowid:
-                self.logger.debug(f"Node with id {node_id} not found, cannot get embedding.")
-                return None
-            
-            rowid = node_rowid[0]
-            cursor.execute("SELECT embedding FROM node_embeddings_vss WHERE rowid = ?", (rowid,))
+            cursor.execute("SELECT embedding FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
             row = cursor.fetchone()
             if row and row[0]:
-                if isinstance(row[0], bytes):
-                    return np.frombuffer(row[0], dtype=np.float32)
-                elif isinstance(row[0], str):
-                    return np.array(json.loads(row[0]), dtype=np.float32)
+                # The embedding is stored as a JSON string, convert it back to numpy array
+                return np.array(json.loads(row[0]), dtype=np.float32)
             return None
         except Exception as e:
             self.logger.error(f"Could not retrieve node embedding for id {node_id}: {e}", exc_info=True)
@@ -712,9 +731,9 @@ class GraphService:
                 n.node_id,
                 t.distance
             FROM
-                (SELECT rowid, distance FROM node_embeddings_vss WHERE embedding MATCH ? LIMIT ?) t
+                (SELECT node_id, distance FROM node_embeddings_vss WHERE embedding MATCH ? LIMIT ?) t
             JOIN
-                nodes n ON n.rowid = t.rowid
+                nodes n ON n.node_id = t.node_id
         """
         try:
             # The C-extension expects a JSON string of a list of floats.
@@ -739,22 +758,14 @@ class GraphService:
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        embedding_bytes = embedding.tobytes()
-
-        # We need the rowid of the node in the main table to upsert into the VSS table.
-        cursor.execute("SELECT rowid FROM nodes WHERE node_id = ?", (node_id,))
-        result = cursor.fetchone()
-        if not result:
-            self.logger.error(f"Cannot upsert embedding, node_id {node_id} not found in nodes table.")
-            return
-        
-        row_id = result[0]
+        # Convert numpy array to JSON string for sqlite-vec
+        embedding_json = json.dumps(embedding.tolist())
         
         try:
-            # Upsert into VSS table using rowid
+            # Use INSERT OR REPLACE with the explicit node_id primary key
             cursor.execute(
-                "INSERT OR REPLACE INTO node_embeddings_vss (rowid, embedding) VALUES (?, ?)",
-                (row_id, embedding_bytes)
+                "INSERT OR REPLACE INTO node_embeddings_vss (node_id, embedding) VALUES (?, ?)",
+                (node_id, embedding_json)
             )
             conn.commit()
             self.logger.info(f"Successfully upserted embedding for node {node_id}.")

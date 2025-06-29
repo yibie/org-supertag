@@ -25,7 +25,6 @@ from simtag.module.reasoning_handler import ReasoningHandler
 from simtag.config import Config
 from typing import Dict, List, Any, Optional
 
-from simtag.utils.unified_tag_processor import normalize_payload
 
 # --- Logging Setup ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,9 +57,16 @@ class SimTagBridge:
         
         self.container = container
         self.emacs_client: Optional[EPCClient] = None
+        self.shutdown_event = threading.Event()  # Global shutdown signal
         self._init_emacs_client(emacs_epc_port)
 
         self.container.config.emacs_client.from_value(self.emacs_client)
+
+        # --- Event Loop Management ---
+        self.loop = asyncio.new_event_loop()
+        self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self.loop_thread.start()
+        logger.info("Dedicated asyncio event loop started in a new thread.")
 
         self.server = ThreadingEPCServer((server_host, 0), log_traceback=True)
         self.server.allow_reuse_address = True
@@ -77,6 +83,18 @@ class SimTagBridge:
         logger.info(f"SimTagBridge EPC server listening on port: {server_port}. Informing Emacs.")
         self._eval_in_emacs('org-supertag-bridge--handle-python-server-ready-signal', server_port)
         logger.info("Informed Emacs about the SimTagBridge EPC server port.")
+
+    def _run_event_loop(self):
+        """Runs the asyncio event loop and logs its lifecycle."""
+        asyncio.set_event_loop(self.loop)
+        logger.info("Event loop thread started and running.")
+        try:
+            self.loop.run_forever()
+        except Exception as e:
+            logger.error(f"Event loop thread crashed with an exception: {e}", exc_info=True)
+        finally:
+            self.loop.close()
+            logger.info("Event loop has been closed and thread is terminating.")
 
     def _register_methods(self):
         """Register all available EPC methods."""
@@ -252,10 +270,62 @@ class SimTagBridge:
         return "pong"
 
     def cleanup(self):
-        logger.info("Closing EPC server and client connection.")
-        self._close_emacs_client()
+        logger.info("Starting graceful shutdown...")
+        # 1. Broadcast that shutdown has started.
+        self.shutdown_event.set()
+        logger.info("Shutdown event set. No new async tasks will be accepted.")
+
+        # 2. Stop the EPC server to prevent new requests
         if self.server:
             self.server.shutdown()
+            logger.info("EPC server has been shut down. No new requests will be accepted.")
+
+        # 3. Schedule the final cleanup coroutine in the event loop
+        if self.loop.is_running():
+            logger.info("Scheduling final cleanup tasks in the event loop...")
+            # This coroutine will wait for all currently running tasks to finish or be cancelled,
+            # then shut down services, and finally stop the loop.
+            async def final_async_cleanup():
+                # Get all currently running tasks on this loop, excluding the current cleanup task itself
+                tasks = [t for t in asyncio.all_tasks(self.loop) if t is not asyncio.current_task(self.loop)]
+                logger.info(f"Waiting for {len(tasks)} active async tasks to complete or be cancelled.")
+                for task in tasks:
+                    task.cancel() # Request cancellation
+                
+                # Wait for tasks to complete, with a timeout
+                try:
+                    # Use a shorter timeout for individual task cancellation wait
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    logger.info("Some tasks were cancelled during shutdown.")
+                except Exception as e:
+                    logger.error(f"Error while waiting for tasks to complete during shutdown: {e}", exc_info=True)
+
+                logger.info("All active async tasks have completed or been cancelled.")
+                
+                # Now shut down services
+                await self.container.shutdown_services()
+                logger.info("Async services have been shut down.")
+                
+                # Finally, stop the loop
+                self.loop.stop()
+                logger.info("Event loop stop signal has been sent from within the loop.")
+
+            # Submit this final cleanup coroutine to the event loop
+            future = asyncio.run_coroutine_threadsafe(final_async_cleanup(), self.loop)
+            try:
+                # Wait for the final cleanup to complete. This will block the calling thread.
+                # Give it a bit more time for all tasks + service shutdown
+                future.result(timeout=15) 
+                logger.info("Final async cleanup orchestrated and completed.")
+            except Exception as e:
+                logger.error(f"Error waiting for final async cleanup to complete: {e}", exc_info=True)
+        else:
+            logger.warning("Event loop was not running during cleanup. Skipping async cleanup orchestration.")
+
+        # 4. Close the client connection to Emacs
+        self._close_emacs_client()
+        logger.info("Graceful shutdown complete.")
 
     @inject
     def analyze_note(self, *args, handler: RAGHandler = Provide[AppContainer.rag_handler]):
@@ -304,13 +374,27 @@ class SimTagBridge:
         
     def _run_async(self, coro):
         """Helper to run a coroutine from a synchronous context."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:  # No running loop in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        if self.shutdown_event.is_set():
+            logger.warning("Shutdown in progress. Rejecting new async task.")
+            return {"error": "shutdown_in_progress", "message": "The application is shutting down."}
+
+        if not self.loop_thread.is_alive():
+            logger.error("CRITICAL: Event loop thread is NOT alive before scheduling a task. Cannot proceed.")
+            return {"error": "event_loop_thread_dead", "message": "The event loop thread has died."}
         
-        return loop.run_until_complete(coro)
+        if not self.loop.is_running():
+            logger.error("CRITICAL: Event loop is not running, though the thread is alive. Cannot schedule task.")
+            return {"error": "event_loop_not_running", "message": "The event loop is not running."}
+
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            return future.result(timeout=300) # 5-minute timeout for long-running tasks
+        except asyncio.TimeoutError:
+            logger.error("Async task timed out.")
+            return {"error": "timeout", "message": "The async task timed out."}
+        except Exception as e:
+            logger.error(f"Error running async task: {e}", exc_info=True)
+            return {"error": "async_execution_error", "message": str(e)}
 
     @inject
     def proactive_get_resonance(self, payload: Dict[str, Any], handler: ResonanceHandler = Provide[AppContainer.resonance_handler]) -> Dict[str, Any]:
@@ -474,7 +558,7 @@ class SimTagBridge:
         """
         Processes a single node to generate tags by running the async handler.
         """
-        logger.debug(f"Bridge received generate_single_node_tags, forwarding to async handler.")
+        logger.debug("Bridge received generate_single_node_tags, forwarding to async handler.")
         try:
             # According to unified data contract, pass the arguments as a single parameter
             # If multiple args are received, take the first one as the payload
@@ -553,17 +637,19 @@ def main():
     # --- Start EPC Server ---
     try:
         bridge = SimTagBridge(container, args.emacs_epc_port)
-        logger.info(f"SimTagBridge initialized. Python backend is ready.")
+        logger.info("SimTagBridge initialized. Python backend is ready.")
         
         # Keep the main thread alive for the server thread
-        while True:
+        while not bridge.shutdown_event.is_set():
             # Use a mechanism that allows for graceful shutdown if needed
             # For now, just sleep.
             import time
-            time.sleep(1)
+            time.sleep(0.1) # Shorter sleep to react faster to shutdown signal
 
     except KeyboardInterrupt:
         logger.info("Shutting down SimTagBridge due to KeyboardInterrupt.")
+        if 'bridge' in locals() and bridge:
+            bridge.shutdown_event.set() # Set shutdown event on Ctrl+C
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}\n{traceback.format_exc()}")
     finally:

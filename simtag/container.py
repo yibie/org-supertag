@@ -1,3 +1,8 @@
+import logging
+import asyncio
+
+logger = logging.getLogger(__name__)
+
 from dependency_injector import containers, providers
 from simtag.config import Config
 from simtag.core.graph_service import GraphService
@@ -7,8 +12,8 @@ from simtag.services.ner_service import NERService
 from simtag.services.embedding_service import EmbeddingService
 from simtag.core.memory_engine import MemoryEngine
 from simtag.services.memory_synthesizer import MemorySynthesizer
-from simtag.core.entity_extractor import OrgSupertagEntityExtractor, LLMEntityExtractor
-from simtag.services.content_processor import ContentProcessor, ProcessingConfig, ProcessingMode
+from simtag.core.entity_extractor import LLMEntityExtractor
+from simtag.services.content_processor import ContentProcessor
 from simtag.core.rag_engine import OrgSupertagRAGEngine
 from simtag.services.user_interface import UserInterfaceService
 from simtag.module.node_processor import NodeProcessor
@@ -20,7 +25,6 @@ from simtag.services.smart_ner_service import SmartNERService
 from simtag.module.resonance_handler import ResonanceHandler
 from simtag.module.rag_handler import RAGHandler
 from simtag.module.reasoning_handler import ReasoningHandler
-import asyncio
 
 class AppContainer(containers.DeclarativeContainer):
     config = providers.Configuration()
@@ -42,7 +46,7 @@ class AppContainer(containers.DeclarativeContainer):
     )
 
     # Core Services
-    llm_client = providers.Factory(
+    llm_client = providers.Singleton(
         lambda config_dict: LLMClient(
             provider=config_dict.get('llm_client_config', {}).get('provider', 'ollama'),
             config=config_dict.get('llm_client_config', {})
@@ -91,4 +95,33 @@ class AppContainer(containers.DeclarativeContainer):
     autotag_handler = providers.Factory(AutotagHandler, llm_client=llm_client, ner_service=ner_service)
     resonance_handler = providers.Factory(ResonanceHandler, graph_service=graph_service, llm_client=llm_client, config=config_obj)
     rag_handler = providers.Factory(RAGHandler, rag_engine=rag_engine, llm_client=llm_client)
-    reasoning_handler = providers.Factory(ReasoningHandler, config=config_obj, graph_service=graph_service, entity_extractor=entity_extractor) 
+    reasoning_handler = providers.Factory(ReasoningHandler, config=config_obj, graph_service=graph_service, entity_extractor=entity_extractor)
+
+    async def shutdown_services(self):
+        """Gracefully shuts down singleton services.
+        
+        This is a coroutine and must be awaited.
+        """
+        logger.info("Shutting down services...")
+        # Get the instances of the services
+        llm_client_instance = await self.llm_client()
+        embedding_service_instance = await self.embedding_service()
+        graph_service_instance = await self.graph_service()
+
+        # Create a list of shutdown tasks
+        shutdown_tasks = []
+        if hasattr(llm_client_instance, 'close') and asyncio.iscoroutinefunction(llm_client_instance.close):
+            shutdown_tasks.append(llm_client_instance.close())
+        
+        if hasattr(embedding_service_instance, 'close') and asyncio.iscoroutinefunction(embedding_service_instance.close):
+            shutdown_tasks.append(embedding_service_instance.close())
+
+        if hasattr(graph_service_instance, 'close') and not asyncio.iscoroutinefunction(graph_service_instance.close):
+            # Assuming graph_service.close() is synchronous
+            graph_service_instance.close()
+
+        # Run async shutdown tasks concurrently
+        if shutdown_tasks:
+            await asyncio.gather(*shutdown_tasks)
+        
+        logger.info("All services have been shut down.") 

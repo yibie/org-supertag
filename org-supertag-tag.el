@@ -197,6 +197,10 @@ database relations, behavior execution, and finally text insertion."
     
     (setq node-id (or node-id (org-id-get-create)))
     (message "DEBUG: applying to node-id=%s" node-id)
+
+    ;; Prevent applying a tag that already exists on the node.
+    (when (member tag-id (org-supertag-node-get-tags node-id))
+      (user-error "Tag '%s' is already applied to this node" tag-id))
     
     (unless tag
       (error "Tag %s not found" tag-id))

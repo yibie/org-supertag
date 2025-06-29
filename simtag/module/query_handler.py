@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from typing import Dict, Any, List
 import time
 import traceback
 
