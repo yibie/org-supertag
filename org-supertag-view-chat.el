@@ -87,18 +87,17 @@
 
 ;; --- Prompt with command ---
 (defun org-supertag-view-chat--insert-prompt ()
-  "Insert the input prompt at the end of the buffer."
+  "Insert an org headline as the input prompt at the end of the buffer, showing current command if any."
   (with-current-buffer (get-buffer-create org-supertag-view-chat-buffer-name)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
-      ;; Show current command
-      (let ((prompt-str (if org-supertag-view-chat--current-command
-                            (format "> [%s] " org-supertag-view-chat--current-command)
-                          "> ")))
-        (insert (propertize prompt-str 'face 'org-supertag-chat-prompt-face)))
-      (setq org-supertag-view-chat--prompt-start (point-marker))
-      (set-marker (point-marker) (point)))))
+      (let ((headline
+             (if org-supertag-view-chat--current-command
+                 (format "* User [%s]:" org-supertag-view-chat--current-command)
+               "* User:")))
+        (insert (propertize headline 'face 'org-supertag-chat-prompt-face))
+        (insert "\n"))))
 
 ;; --- Async Callback ---
 (defun org-supertag-view-chat--handle-response (result)
@@ -133,22 +132,22 @@ RESULT is the plist returned from the Python backend."
       (delete-region (point) (point-max))
 
       ;; Debug: log raw result
-      (message "[Chat Debug] Raw result: %S" result)
-      (message "[Chat Debug] Result keys: %S" (when (and (listp result) (evenp (length result))) 
-                                               (cl-loop for (key val) on result by #'cddr collect key)))
-      (let ((actual-result (if (and (listp result) (plist-get result :result))
-                               (plist-get result :result)
-                             result)))
-        (message "[Chat Debug] Actual result: %S" actual-result)
-        (message "[Chat Debug] Actual result keys: %S" (when (and (listp actual-result) (evenp (length actual-result)))
-                                                         (cl-loop for (key val) on actual-result by #'cddr collect key)))
-        (message "[Chat Debug] Answer: %S" (plist-get actual-result :answer))
-        (message "[Chat Debug] Response: %S" (plist-get actual-result :response))
-        (message "[Chat Debug] Analysis: %S" (plist-get actual-result :analysis)))
-      (message "[Chat Debug] Response content: %S" response-content)
-      (message "[Chat Debug] Status: %S" status)
+      ;; (message "[Chat Debug] Raw result: %S" result)
+      ;; (message "[Chat Debug] Result keys: %S" (when (and (listp result) (evenp (length result))) 
+      ;;                                          (cl-loop for (key val) on result by #'cddr collect key)))
+      ;; (let ((actual-result (if (and (listp result) (plist-get result :result))
+      ;;                          (plist-get result :result)
+      ;;                        result)))
+      ;;   (message "[Chat Debug] Actual result: %S" actual-result)
+      ;;   (message "[Chat Debug] Actual result keys: %S" (when (and (listp actual-result) (evenp (length actual-result)))
+      ;;                                                    (cl-loop for (key val) on actual-result by #'cddr collect key)))
+      ;;   (message "[Chat Debug] Answer: %S" (plist-get actual-result :answer))
+      ;;   (message "[Chat Debug] Response: %S" (plist-get actual-result :response))
+      ;;   (message "[Chat Debug] Analysis: %S" (plist-get actual-result :analysis)))
+      ;; (message "[Chat Debug] Response content: %S" response-content)
+      ;; (message "[Chat Debug] Status: %S" status)
 
-      ;; Insert the content. This is the primary conditional logic.
+      ;; Insert the content. This is the primary conditional logic.2
       (if (and (string= status "success") response-content)
           ;; --- THEN: SUCCESS CASE ---
           (progn
@@ -156,9 +155,9 @@ RESULT is the plist returned from the Python backend."
             ;; push assistant message to history
             (push (list :role "assistant" :content response-content)
                   org-supertag-view-chat--conversation-history)
-            (insert (propertize "Assistant:" 'face 'org-supertag-chat-label-face))
+            (insert "** Assistant\n")
+            (insert (format "%s\n" (org-supertag-view-chat--md-to-org response-content)))
             (insert "\n")
-            (insert (org-supertag-view-chat--md-to-org response-content))
 
             ;; Context block
             (when-let ((sources (plist-get result :source_nodes)))
@@ -166,35 +165,36 @@ RESULT is the plist returned from the Python backend."
                 ;; Deduplicate by id
                 (let* ((unique-sources
                         (cl-remove-duplicates sources :key (lambda (s) (plist-get s :id)) :test #'equal)))
-                  ;; Insert toggle button (always visible)
-                  (insert "\n")
-                  (let* ((btn-start (point))
-                         (label (format "▸ Context (%d)" (length unique-sources))))
-                    (insert-text-button label
-                                        'action #'org-supertag-view-chat--toggle-context
-                                        'follow-link t
-                                        'label-text label) ;; store original text
-                    (let ((btn (button-at btn-start)))
-                      (unless btn (setq btn (button-at (1- (point)))))
-                      (insert "\n")
-                      (let ((content-start (point)))
-                        ;; Build context lines with clickable titles
-                        (dolist (src unique-sources)
-                          (let* ((id (plist-get src :id))
-                                 (title (or (plist-get src :title) "Untitled"))
-                                 (snippet (or (plist-get src :snippet) "No snippet")))
-                            (insert "- ")
-                            (insert-text-button title
-                                                'action (lambda (_btn) (org-supertag-view-chat--open-node id))
-                                                'follow-link t
-                                                'help-echo (format "Open node %s" id)
-                                                'face 'org-link)
-                            (insert (propertize (format ": %s\n" snippet) 'face 'shadow))))
-                        ;; Create overlay for context lines only
-                        (let ((ov (make-overlay content-start (point))))
-                          (overlay-put ov 'invisible 'org-st-chat-context)
-                          (overlay-put ov 'intangible nil)
-                          (when btn (button-put btn 'context-overlay ov)))))))))
+                  ;; Insert org-mode context block
+                  (insert "*** Context\n")
+                  (let ((content-start (point)))
+                    (dolist (src unique-sources)
+                      (let* ((id (plist-get src :id))
+                             (title (or (plist-get src :title) "Untitled"))
+                             (snippet (or (plist-get src :snippet) "No snippet")))
+                        (insert (format "- "))
+                        (insert-text-button title
+                                            'action (lambda (_btn) (org-supertag-view-chat--open-node id))
+                                            'follow-link t
+                                            'help-echo (format "Open node %s" id)
+                                            'face 'org-link)
+                        (insert (format ": %s\n" snippet))))
+                    ;; Create overlay for context lines only
+                    (let ((ov (make-overlay content-start (point))))
+                      (overlay-put ov 'invisible 'org-st-chat-context)
+                      (overlay-put ov 'intangible nil)))
+                  ;; 自动收起 Context 区块
+                  (require 'org)
+                  (run-at-time
+                   0.1 nil
+                   (lambda ()
+                     (with-current-buffer (current-buffer)
+                       (save-excursion
+                         (goto-char (point-min))
+                         (when (re-search-forward "^\\*\\*\\* Context" nil t)
+                           (when (fboundp 'org-fold-hide-subtree)
+                             (org-fold-hide-subtree))))))))
+                  ))
 
             ;; Finalize buffer state for success
             (insert "\n\n")
@@ -256,17 +256,17 @@ the prompt marker is unexpectedly nil or misplaced."
 ;; -----------------------------------------------------------------------------
 ;; Main send input function
 ;; -----------------------------------------------------------------------------
-;; --- 用户自定义命令体系 ---
+;; --- User commands ---
 (defvar org-supertag-view-chat--user-commands (make-hash-table :test 'equal)
-  "存储所有用户自定义 chat commands，命令名->prompt 内容。")
+  "Store all user-defined chat commands, command name -> prompt content.")
 
 (defconst org-supertag-view-chat--command-dir
   (expand-file-name "command/" (or (bound-and-true-p org-supertag-data-directory)
                                     (expand-file-name "org-supertag/" user-emacs-directory)))
-  "自定义命令 prompt 文件夹路径。每个命令一个 .prompt 文件。")
+  "Path to the custom command prompt files. One .prompt file per command.")
 
 (defun org-supertag-view-chat--load-user-commands ()
-  "加载所有自定义命令 prompt 文件到 hash-table。"
+  "Load all custom command prompt files into hash-table."
   (clrhash org-supertag-view-chat--user-commands)
   (when (file-directory-p org-supertag-view-chat--command-dir)
     (dolist (file (directory-files org-supertag-view-chat--command-dir t "\\.prompt$"))
@@ -275,12 +275,12 @@ the prompt marker is unexpectedly nil or misplaced."
           (insert-file-contents file)
           (puthash name (buffer-string) org-supertag-view-chat--user-commands))))))
 
-;; 启动时自动加载
+;; Load on startup
 (org-supertag-view-chat--load-user-commands)
 
-;; /define <name> "多行prompt，含$input变量"
+;; /define <name> "multi-line prompt, containing $input variable"
 (defun org-supertag-view-chat--define-command (name prompt)
-  "定义新命令，将 prompt 持久化到文件并加载到 hash-table。"
+  "Define a new command, persist the prompt to a file and load it into the hash-table."
   (unless (file-directory-p org-supertag-view-chat--command-dir)
     (make-directory org-supertag-view-chat--command-dir t))
   (let ((file (expand-file-name (concat name ".prompt") org-supertag-view-chat--command-dir)))
@@ -289,9 +289,9 @@ the prompt marker is unexpectedly nil or misplaced."
   (puthash name prompt org-supertag-view-chat--user-commands)
   (message "Defined command /%s" name))
 
-;; /commands 显示所有命令及内容
+;; /commands show all commands and their content
 (defun org-supertag-view-chat--list-commands ()
-  "显示所有可用命令及其 prompt 内容。"
+  "Show all available commands and their prompt content."
   (interactive)
   (let ((msg (with-temp-buffer
                (insert "Commands:\n")
@@ -302,21 +302,20 @@ the prompt marker is unexpectedly nil or misplaced."
                (buffer-string))))
     (message "%s" msg)))
 
-;; 解析 /define 指令
+;; Parse /define command, return (name . prompt) or nil
 (defun org-supertag-view-chat--parse-define (input)
-  "Parse /define command，callback (name . prompt) or nil。"
   (when (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\(.*\)\"$" input)
     (let ((name (match-string 1 input))
           (prompt (match-string 2 input)))
       (cons name prompt))))
 
-;; only a built-in command /create-question
+;; Only a built-in command /create-question
 (defconst org-supertag-view-chat--builtin-commands
   '(("create-question" . "Please list all important questions related to $input.")))
 
-;; when switch prompt, display conent
+;; When switch prompt, display content
 (defun org-supertag-view-chat--show-current-command-prompt ()
-  "display current command prompt in chat buffer"
+  "Display current command prompt in chat buffer"
   (when org-supertag-view-chat--current-command
     (let ((prompt (cond
                     ((and org-supertag-view-chat--current-command
@@ -403,9 +402,9 @@ Handles both regular chat queries and special /commands."
             (when prompt-line-start
               (goto-char prompt-line-start)
               (delete-region prompt-line-start (line-end-position))
-              (insert 
-               (propertize "User:" 'face 'org-supertag-chat-label-face) "\n"
-               input "\n\n")))
+              (insert "* User\n")
+              (insert (format "%s\n" input))
+              (insert "\n")))
           (setq org-supertag-view-chat--response-start-marker (point-marker))
           (insert (propertize "Assistant is thinking..." 'face 'italic))
           ;; Variable replacement when sending
@@ -484,7 +483,7 @@ Handles both regular chat queries and special /commands."
           (org-supertag-bridge-ensure-ready 10))
         (goto-char (point-max))
         (when (= (point-min) (point-max))
-          (insert (propertize "Welcome to SuperTag Chat! " 'face 'font-lock-comment-face) " "))
+          (insert (propertize "#+TITLE: Welcome to SuperTag Chat\n")))
         (org-supertag-view-chat--insert-prompt))))
   (display-buffer org-supertag-view-chat-buffer-name)
   (select-window (get-buffer-window org-supertag-view-chat-buffer-name)))
@@ -497,10 +496,11 @@ Handles both regular chat queries and special /commands."
   "Keymap for org-supertag-view-chat-mode.")
 
 ;; Major Mode definition with keymap
-(define-derived-mode org-supertag-view-chat-mode text-mode "Org-ST-Chat"
+(define-derived-mode org-supertag-view-chat-mode org-mode "Org-ST-Chat"
   "Major mode for the chat view conversation."
   :group 'org-supertag
   (setq-local truncate-lines t)
+  (setq-local org-hide-leading-stars t)
   ;; Make buffer read-only by default, we toggle it when editing prompt
   (read-only-mode -1)
   (use-local-map org-supertag-view-chat-mode-map))
@@ -554,10 +554,9 @@ Handles both regular chat queries and special /commands."
     (let ((inhibit-read-only t))
       (goto-char org-supertag-view-chat--response-start-marker)
       (delete-region (point) (point-max))
-      (insert (propertize "Assistant:" 'face 'org-supertag-chat-label-face))
+      (insert "** Assistant\n")
+      (insert (format "%s\n" (org-supertag-view-chat--md-to-org response)))
       (insert "\n")
-      (insert (org-supertag-view-chat--md-to-org response))
-      (insert "\n\n")
       (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
       (org-supertag-view-chat--insert-prompt))))
 
