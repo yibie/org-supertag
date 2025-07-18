@@ -54,12 +54,10 @@
 (require 'org-supertag-inline)
 (require 'org-supertag-bridge)
 (require 'org-supertag-api)
-(require 'org-supertag-backlink)
 (require 'org-supertag-recovery)
 (require 'org-supertag-background-sync) 
 (require 'org-supertag-auto-tag)
 (require 'org-supertag-completion)
-
 (require 'org-supertag-smart-companion)
 
 (defgroup org-supertag nil
