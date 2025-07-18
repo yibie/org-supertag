@@ -2,13 +2,13 @@
 *.pyc
 .cask
 *~
-\#*\#
-.\#*
+#*#
+.#*
 *.bak
 *.~undo-tree
 auto-save-list
 tramp
-.\#*
+.#*
 .DS_Store 
 .aider*
 *.log
@@ -52,6 +52,22 @@ simtag/python-bridge/
 simtag/nano-graphrag/
 .cursor/
 .test/
+.GEMINI.md
+.cursorules
+.pytest_cache/
 test/
+commands/
 
 .ruff_cache/
+IMPROVEMENT_PLAN.md
+
+# YoYo AI version control directory
+.yoyo/
+
+# Claude Code guidance file
+CLAUDE.md
+.claude/
+commands/
+docs/
+hooks/
+logs/

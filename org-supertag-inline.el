@@ -6,6 +6,7 @@
 (require 'org-supertag-db)
 (require 'org-supertag-node)
 (require 'org-supertag-tag)
+(require 'org-supertag-relation nil t)
 (require 'seq)  ; For seq-remove function
 
 ;;;----------------------------------------------------------------------
@@ -197,33 +198,37 @@ Handles region deletion and smart drawer/content positioning."
 (defun org-supertag-inline--smart-position-for-insertion ()
   "Smartly position the cursor for inline tag insertion.
 Rules:
-- If no drawer, create a new line below the heading or find an existing tag line
-- If there's a drawer, position below the drawer
-- If there's an existing tag line, move to the end of the tag line
-- If already in content, create a new line above the content"
+- Position cursor at the beginning of a new line below the headline
+- If there's a property drawer, position below the drawer
+- If there's an existing tag line, move to the end of that line
+- Always ensure we're on a separate line, not on the headline itself"
   (org-back-to-heading t)
   (let ((drawer-end (org-supertag-inline--find-drawer-end))
         (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
     (cond
+     ;; If there's already a tag line, position at the end of it
      (existing-tag-line
       (goto-char existing-tag-line)
       (end-of-line))
+     
+     ;; If there's a drawer, position after it
      (drawer-end
       (goto-char drawer-end)
+      ;; Ensure we are at the beginning of a line after drawer
+      (unless (bolp) (forward-line 1))
+      ;; Skip any empty lines after drawer
       (while (and (not (eobp))
-                 (not (org-at-heading-p))
-                 (looking-at-p "^[ \t]*$"))
+                  (not (org-at-heading-p))
+                  (looking-at-p "^[ \t]*$"))
         (forward-line 1))
-      (if (and (not (eobp))
-              (not (org-at-heading-p))
-              (not (looking-at-p "^[ \t]*$")))
-          (progn
-            (beginning-of-line)
-            (open-line 1))
-        (unless (bolp) (insert "\n"))))
+      ;; Always position at the beginning of line for tag insertion
+      (beginning-of-line))
+     
+     ;; No drawer, position directly after headline
      (t
       (end-of-line)
-      (insert "\n")))))
+      (insert "\n")
+      (beginning-of-line)))))
 
 (defun org-supertag-inline--find-drawer-end ()
   "Find the end position of the current node's drawer."
@@ -331,6 +336,18 @@ Smart spacing rules:
     (beginning-of-line)
     (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]+"))))
 
+(defun org-supertag-inline--insert-tag-for-autotag (tag-name)
+  "Insert tag for auto-tag system with safe line insertion to preserve document structure.
+TAG-NAME is the tag name to insert.
+This function uses a two-line insertion strategy to avoid disrupting existing content."
+  ;; Always insert two newlines first to create safe space
+  (insert "\n\n")
+  ;; Move back to the first line and insert the tag
+  (forward-line -2)
+  (insert "#" tag-name)
+  ;; Move cursor to the end of the tag insertion area
+  (forward-line 1))
+
 (defun org-supertag-inline--establish-relationship (tag-result node-id)
   "Establish relationship between tag and node.
 TAG-RESULT is a plist with :tag-id and :tag-name from org-supertag-inline--ensure-tag.
@@ -355,26 +372,33 @@ The caller, `org-supertag-tag-apply`, is now responsible for positioning."
 
 (defun org-supertag-inline-insert-tag-for-autotag (node-id tag-name)
   "Insert a tag for the auto-tag system, positioning it smartly.
-This function is for programmatic use by the auto-tag engine and
-will typically place the tag on a new line below the headline properties."
+This function uses our custom node location finder to avoid dependency on org-id-find."
   (when (and node-id tag-name)
-    (when-let* ((node-props (org-supertag-db-get node-id))
-                (file-path (plist-get node-props :file))
-                (pos (plist-get node-props :pos)))
-      (with-current-buffer (find-file-noselect file-path)
-        (goto-char pos)
-        ;; Use the smart positioning logic for auto-tag insertion
-        (org-supertag-inline--smart-position-for-insertion)
-        ;; Create tag and insert
-        (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
-               (tag-entity (or (org-supertag-tag-get display-name)
-                               (progn
-                                 (org-supertag-tag--create display-name)
-                                 (org-supertag-tag-get display-name)))))
-          (org-supertag-inline--insert-tag-text display-name)
-          (when tag-entity
-            (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
-          (message "Auto-inserted tag #%s for node %s" display-name node-id))))))
+    (let ((found-location (org-supertag-find-node-location node-id)))
+      (if found-location
+          (let ((pos (car found-location))
+                (file-path (cdr found-location)))
+            (with-current-buffer (find-file-noselect file-path)
+              (save-excursion
+                (goto-char pos)
+                (org-back-to-heading t)
+                ;; Use the smart positioning logic for tag insertion
+                (org-supertag-inline--smart-position-for-insertion)
+                ;; Create tag and insert
+                (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
+                       (tag-entity (or (org-supertag-tag-get display-name)
+                                       (progn
+                                         (org-supertag-tag--create display-name)
+                                         (org-supertag-tag-get display-name)))))
+                  ;; Insert tag with simple format for auto-tag system
+                  (org-supertag-inline--insert-tag-for-autotag display-name)
+                  (when tag-entity
+                    (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
+                  ;; Save the buffer to ensure tag is written to file
+                  (save-buffer)
+                  (message "Auto-inserted tag #%s for node %s at %s" display-name node-id file-path)))))
+        (error "Could not find node with ID: %s" node-id)))))
+
 
 (defun org-supertag-inline-insert-tags-batch (tag-names)
   "Insert multiple inline tags, respecting the user's choice for newlines."
@@ -429,6 +453,22 @@ TAG-ID is the tag name to remove."
       (when (re-search-backward tag-pattern nil t)
         (replace-match "")))))
 
+(defun org-supertag-inline--remove-tag-in-current-node (tag)
+  "Remove all occurrences of #TAG inside the current node (headline + content)."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((subtree-end (save-excursion (org-end-of-subtree t t) (point)))
+          (regex (concat "#" (regexp-quote tag)))
+          (case-fold-search nil))
+      ;; Search headline line first (including todo / tags part)
+      (beginning-of-line)
+      (while (re-search-forward regex (line-end-position) t)
+        (replace-match ""))
+      ;; Now scan the subtree
+      (forward-line 1)
+      (while (re-search-forward regex subtree-end t)
+        (replace-match "")))))
+
 ;;----------------------------------------------------------------------
 ;; Interactive Commands
 ;;----------------------------------------------------------------------
@@ -436,7 +476,7 @@ TAG-ID is the tag name to remove."
 (defun org-supertag-inline-add ()
   "Interactively add a supertag to the current node.
 This command handles both database relations and text insertion."
-  (interactive)
+(interactive)
   (message "DEBUG: org-supertag-inline-add called")
   (let* ((context (org-supertag-inline--analyze-context))
          (node-id (plist-get context :node-id))
@@ -453,16 +493,19 @@ This command handles both database relations and text insertion."
 (defalias 'org-supertag-tag-add-tag 'org-supertag-inline-add)
 
 (defun org-supertag-inline-remove ()
-  "Interactively remove a supertag from the current node."
+  "Interactively remove a supertag from the current node and clean buffer text."
   (interactive)
   (let* ((node-id (org-id-get))
          (tags (when node-id (org-supertag-node-get-tags node-id)))
          (tag-to-remove (completing-read "Remove tag: " tags nil t)))
     (when (and node-id (not (string-empty-p tag-to-remove)))
-      ;; 1. Update database
+      ;; 1. Update database first
       (org-supertag-db-remove-link :node-tag node-id tag-to-remove)
-      ;; 2. Update buffer
-      (org-supertag-inline-remove-tag-at-point tag-to-remove)
+      ;; 2. Update co-occurrence relationships
+      (when (featurep 'org-supertag-relation)
+        (org-supertag-relation-unrecord-cooccurrence node-id tag-to-remove))
+      ;; 3. Update buffer text: remove every occurrence within the node
+      (org-supertag-inline--remove-tag-in-current-node tag-to-remove)
       (message "Tag '%s' removed from node %s." tag-to-remove node-id))))
 (defalias 'org-supertag-tag-remove 'org-supertag-inline-remove)
 
@@ -471,13 +514,14 @@ This command handles both database relations and text insertion."
 This removes the tag from the database and from all org files."
   (interactive)
   (let* ((all-tags (org-supertag-get-all-tags))
-         (tag-id (completing-read "Delete tag permanently: " all-tags nil t)))
-    (when (and (not (string-empty-p tag-id))
-               (yes-or-no-p (format "DELETE tag '%s' and all its uses? This is irreversible. " tag-id)))
+         (raw-input (completing-read "Delete tag permanently: " all-tags nil t))
+         (clean-tag (org-supertag-sanitize-tag-name (substring-no-properties raw-input))))
+    (when (and (not (string-empty-p clean-tag))
+               (yes-or-no-p (format "DELETE tag '%s' and all its uses? This is irreversible. " clean-tag)))
       ;; First, find all nodes before deleting from DB
-      (let ((nodes (org-supertag-db-get-nodes-by-tag tag-id)))
+      (let ((nodes (org-supertag-db-get-tag-nodes clean-tag)))
         ;; 1. Delete from database (this is the function from org-supertag-tag.el)
-        (org-supertag-tag--delete-at-all tag-id)
+        (org-supertag-tag--delete-at-all clean-tag)
         
         ;; 2. Remove from all org buffers
         (message "Removing inline tags from buffers...")
@@ -487,9 +531,9 @@ This removes the tag from the database and from all org files."
               (with-current-buffer (find-file-noselect file)
                 (save-excursion
                   (goto-char (point-min))
-                  (while (re-search-forward (concat "#" (regexp-quote tag-id)) nil t)
-                    (replace-match ""))))))
-          (message "Completed buffer cleanup for tag '%s'." tag-id))))))
+                  (while (re-search-forward (concat "#" (regexp-quote clean-tag)) nil t)
+                    (replace-match "")))))
+          (message "Completed buffer cleanup for tag '%s'." clean-tag)))))))
 
 (defun org-supertag-inline-rename ()
   "Interactively rename a tag across all files."
@@ -504,7 +548,7 @@ This removes the tag from the database and from all org files."
       
       ;; 2. Update all buffers
       (message "Renaming tag in buffers...")
-      (let* ((nodes (org-supertag-db-get-nodes-by-tag new-name)) ; Get nodes by new name
+      (let* ((nodes (org-supertag-db-get-tag-nodes new-name)) ; Get nodes by new name
              (files (delete-dups (mapcar #'org-supertag-db-get-node-file nodes))))
         (dolist (file files)
           (when (file-exists-p file)
@@ -550,6 +594,58 @@ This is a temporary command to fix stale highlighting."
       (remove-text-properties (match-beginning 0) (match-end 0) '(face t))))
   (font-lock-fontify-buffer)
   (message "Forced re-fontification complete."))
+
+(defun org-supertag-inline-get-tag-at-point ()
+  "Get the inline supertag name at point using the official regex.
+The tag format is '#tagname'. This is a more robust version."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (let* ((tag-re (and (boundp 'org-supertag-inline-font-lock-keywords)
+                         (car (car org-supertag-inline-font-lock-keywords))))
+             (start (point)))
+        (when (and tag-re (re-search-backward tag-re nil t))
+          ;; Check if the point is within the found match
+          (when (and (<= (match-beginning 0) start)
+                     (> (match-end 0) start))
+            ;; Extract the tag name, removing the leading '#' 
+            (substring (match-string 0) 1)))))))
+
+;;;###autoload
+(defun org-supertag-inline-relation-add-contextual ()
+  "Intelligently add a relation based on context.
+If the cursor is on a tag, use it as the source.
+Otherwise, find the current node and its tags. If there is one tag,
+use it. If there are multiple, prompt the user to select one."
+  (interactive)
+  (let* ((source-tag-name
+          (or (org-supertag-inline-get-tag-at-point)
+              (let* ((node-id (org-id-get))
+                     (node-tags (and node-id (org-supertag-node-get-tags node-id))))
+                (cond
+                 ((= (length node-tags) 1) (car node-tags))
+                   ((> (length node-tags) 1)
+                    (completing-read "Select source tag for this node: " node-tags nil t))
+                   (t nil))))))
+
+    (if (not source-tag-name)
+        (user-error "No source tag found at point or in the current node.")
+        (let* ((from-tag-id (org-supertag-tag-get-id-by-name source-tag-name))
+              (all-tags (org-supertag-get-all-tags))
+               (target-candidates (remove source-tag-name all-tags))
+               (other-tag-name (completing-read (format "Relate '%s' to: " source-tag-name) target-candidates nil t))
+               (other-tag-id (and (not (string-empty-p other-tag-name))
+                                  (org-supertag-tag-get-id-by-name other-tag-name))))
+          (if other-tag-id
+              (let* ((rel-choices (org-supertag-relation--get-relation-type-choices))
+                     (choice (completing-read "Select relation type: " rel-choices nil t))
+                     (rel-type (org-supertag-relation--get-type-from-choice choice)))
+                (when (and from-tag-id other-tag-id rel-type)
+                  (if (org-supertag-relation-has-complement-p rel-type)
+                      (org-supertag-relation-add-with-complement from-tag-id other-tag-id rel-type)
+                    (org-supertag-relation-add-relation from-tag-id other-tag-id rel-type)))
+                  ;; Inform the user once the relation has been added
+                  (message "Added relation: %s -[%s]-> %s" source-tag-name rel-type other-tag-name))
+            (user-error "Target tag not found or is empty: %s" other-tag-name))))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

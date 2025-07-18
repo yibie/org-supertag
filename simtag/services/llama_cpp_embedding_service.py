@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LlamaCpp Embedding Service
-使用 llama.cpp 的 llama-embedding 命令行工具提供嵌入服务
+Provides embedding service using llama.cpp's llama-embedding command-line tool
 """
 
 import os
@@ -17,21 +17,47 @@ import shutil
 import re
 import time
 
+# Import from the main embedding service to ensure consistency
+from .embedding_service import EmbeddingBackend, EmbeddingResult
+
 logger = logging.getLogger(__name__)
 
-@dataclass
-class EmbeddingResult:
-    """嵌入结果"""
-    success: bool
-    embedding: Optional[List[float]] = None
-    dimension: int = 0
-    error_message: Optional[str] = None
-    processing_time: float = 0.0
-
-class LlamaCppEmbeddingService:
+def smart_truncate(text: str, max_length: int) -> str:
     """
-    LlamaCpp 嵌入服务
-    封装 llama-embedding 命令行工具
+    Truncates text by preserving the beginning and end, joining them with '...'.
+    This is a token-aware (by words) truncation.
+    """
+    if len(text) <= max_length:
+        return text
+
+    # Simple word-based tokenization
+    words = text.split()
+    
+    # Estimate average characters per word
+    if not words:
+        return text[:max_length]
+        
+    avg_chars_per_word = len(text) / len(words)
+    max_words = int(max_length / avg_chars_per_word)
+    
+    if max_words < 2: # Need at least one word from start and one from end
+        return text[:max_length]
+
+    # Preserve half of the words from the start, half from the end
+    keep_words_each_side = max_words // 2
+    
+    start_words = words[:keep_words_each_side]
+    end_words = words[-keep_words_each_side:]
+    
+    start_text = " ".join(start_words)
+    end_text = " ".join(end_words)
+    
+    return f"{start_text} ... {end_text}"
+
+class LlamaCppEmbeddingService(EmbeddingBackend):
+    """
+    LlamaCpp Embedding Service
+    Wraps the llama-embedding command-line tool and implements the EmbeddingBackend interface.
     """
     
     def __init__(self, 
@@ -42,30 +68,31 @@ class LlamaCppEmbeddingService:
                  n_ctx: int = 4096,
                  config_dict: Optional[Dict[str, Any]] = None):
         """
-        初始化 LlamaCpp 嵌入服务
+        Initializes the LlamaCpp Embedding Service
         
         Args:
-            model_path: GGUF模型文件路径
-            binary_path: llama-embedding 二进制文件路径
-            pooling: 池化策略 ("mean", "cls", "last", etc.)
-            n_threads: 线程数
-            n_ctx: 上下文长度
-            config_dict: 配置字典，包含长文本处理选项
+            model_path: Path to the GGUF model file
+            binary_path: Path to the llama-embedding binary
+            pooling: Pooling strategy ("mean", "cls", "last", etc.)
+            n_threads: Number of threads
+            n_ctx: Context length
+            config_dict: Configuration dictionary, including options for long text processing
         """
         self.model_path = Path(model_path).expanduser()
         self.binary_path = binary_path
         self.pooling = pooling
         self.n_threads = n_threads or os.cpu_count()
         self.n_ctx = n_ctx
+        self._dimension: Optional[int] = None
         
-        # 配置（移除了 chunking 相关配置，使用 node-based 预处理）
+        # Configuration (removed chunking related config, using node-based preprocessing)
         self.config = config_dict or {}
         
-        # 验证模型文件
+        # Validate model file
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
         
-        # 验证二进制文件
+        # Validate binary file
         try:
             subprocess.run([self.binary_path, "--help"], 
                          capture_output=True, check=True, timeout=10)
@@ -77,44 +104,94 @@ class LlamaCppEmbeddingService:
         logger.info(f"  Binary: {self.binary_path}")
         logger.info(f"  Pooling: {self.pooling}")
         logger.info(f"  Threads: {self.n_threads}")
+        
+        # Determine the embedding dimension on initialization
+        try:
+            self._dimension = self._get_embedding_dimension()
+            logger.info(f"  Embedding Dimension: {self._dimension}")
+        except Exception as e:
+            logger.error(f"Failed to determine embedding dimension during initialization: {e}")
+            # We can either raise an exception or allow it to fail later.
+            # For robustness, we'll let it proceed and fail on the first get_embedding call.
+            pass
     
-    # 移除了 _split_text_into_chunks 和 _aggregate_embeddings 方法
-    # 这些 chunking 相关的功能已被 node-based 预处理策略替代
+    @property
+    def backend_name(self) -> str:
+        return "llama_cpp"
+        
+    @property
+    def default_dimension(self) -> int:
+        if self._dimension is None:
+            # Try to determine dimension again if it failed during init
+            try:
+                self._dimension = self._get_embedding_dimension()
+            except Exception as e:
+                logger.error(f"Could not determine embedding dimension: {e}")
+                return 0 # Return 0 or a sensible default if it fails
+        return self._dimension
+    
+    def _get_embedding_dimension(self) -> int:
+        """
+        Runs a test embedding to determine the model's output dimension.
+        This is a synchronous, one-off call during initialization.
+        """
+        test_text = "dimension check"
+        # Use a synchronous subprocess call for this one-time check
+        cmd = [
+            self.binary_path,
+            "--model", str(self.model_path),
+            "--pooling", self.pooling,
+            "--threads", str(self.n_threads),
+            "--ctx", str(self.n_ctx)
+        ]
+        
+        process = subprocess.run(
+            cmd, 
+            input=test_text, 
+            capture_output=True, 
+            text=True, 
+            check=True,
+            timeout=30
+        )
+        
+        output = process.stdout.strip()
+        embedding_list = json.loads(output)
+        return len(embedding_list)
 
     def _preprocess_text(self, text: str) -> str:
-        """智能文本预处理，处理可能导致嵌入失败的问题"""
+        """Smart text preprocessing, handles issues that might cause embedding failure"""
         if not text:
             return text
         
-        # 保存原始文本用于调试
+        # Save original text for debugging
         original_text = text
         
-        # 1. 规范化换行符和空白字符
-        # 将多个连续换行符替换为单个空格
-        text = re.sub(r'\n{2,}', ' ', text)  # 多个换行 -> 单个空格
-        text = re.sub(r'\n', ' ', text)      # 单个换行 -> 空格
-        text = re.sub(r'\r', ' ', text)      # 回车 -> 空格
-        text = re.sub(r'\t', ' ', text)      # 制表符 -> 空格
+        # 1. Normalize newlines and whitespace
+        # Replace multiple consecutive newlines with a single space
+        text = re.sub(r'\n{2,}', ' ', text)  # multiple newlines -> single space
+        text = re.sub(r'\n', ' ', text)      # single newline -> space
+        text = re.sub(r'\r', ' ', text)      # carriage return -> space
+        text = re.sub(r'\t', ' ', text)      # tab -> space
         
-        # 2. 处理重复的空格
-        text = re.sub(r' {2,}', ' ', text)   # 多个空格 -> 单个空格
+        # 2. Handle repeated spaces
+        text = re.sub(r' {2,}', ' ', text)   # multiple spaces -> single space
         
-        # 3. 移除首尾空白
+        # 3. Remove leading/trailing whitespace
         text = text.strip()
         
-        # 4. 处理过短的文本 - 添加一些上下文
+        # 4. Handle overly short text - add some context
         if len(text.strip()) < 3:
             if text.strip():
-                # 对于很短的文本，添加描述性前缀
-                text = f"文本内容：{text.strip()}"
+                # For very short text, add a descriptive prefix
+                text = f"Text content: {text.strip()}"
             
-        # 5. 处理重复内容（如"点评点评"）
-        # 检测重复模式并简化
-        if len(text) < 20:  # 只对短文本做重复检测
-            # 检查是否是简单重复（如："abc abc"）
+        # 5. Handle repeated content (e.g., 'comment comment')
+        # Detect and simplify repeated patterns
+        if len(text) < 20:  # Only check short texts for repetition
+            # Check for simple repetition (e.g., "abc abc")
             words = text.split()
             if len(words) >= 2:
-                # 检查是否有相邻的重复词
+                # Check for adjacent repeated words
                 unique_words = []
                 prev_word = None
                 for word in words:
@@ -125,19 +202,19 @@ class LlamaCppEmbeddingService:
                     text = ' '.join(unique_words)
                     logger.debug(f"Removed adjacent duplicates: {repr(original_text)} -> {repr(text)}")
         
-        # 6. 确保文本不会太短导致tokenizer问题
+        # 6. Ensure text is not too short to cause tokenizer issues
         if len(text.strip()) < 5:
-            text = f"这是关于'{text.strip()}'的内容"
+            text = f"This is content about '{text.strip()}'"
             logger.debug(f"Expanded short text: {repr(original_text)} -> {repr(text)}")
         
-        # 记录预处理变化
+        # Log preprocessing changes
         if text != original_text:
             logger.debug(f"Text preprocessed: {repr(original_text)} -> {repr(text)}")
         
         return text
 
     def _analyze_text(self, text: str) -> Dict[str, Any]:
-        """分析文本特征，帮助识别可能导致问题的内容"""
+        """Analyze text features to help identify content that might cause issues"""
         analysis = {
             "length": len(text),
             "stripped_length": len(text.strip()),
@@ -152,18 +229,18 @@ class LlamaCppEmbeddingService:
 
     async def get_embedding(self, text: str) -> EmbeddingResult:
         """
-        获取单个文本的嵌入向量
+        Get embedding vector for a single text
         
         Args:
-            text: 输入文本
+            text: Input text
             
         Returns:
-            EmbeddingResult: 嵌入结果
+            EmbeddingResult: Embedding result
         """
         import time
         start_time = time.time()
         
-        # 更严格的空文本检查
+        # More strict empty text check
         if not text or not text.strip():
             text_analysis = self._analyze_text(text)
             logger.warning(f"Empty or whitespace-only text detected: {text_analysis['preview']}")
@@ -172,11 +249,11 @@ class LlamaCppEmbeddingService:
                 error_message=f"Empty or whitespace-only text provided: {text_analysis['preview']}"
             )
         
-        # 智能文本预处理
+        # Smart text preprocessing
         original_text = text
         text = self._preprocess_text(text)
         
-        # 如果预处理后文本变空，记录并返回错误
+        # If text becomes empty after preprocessing, log and return error
         if not text.strip():
             logger.warning(f"Text became empty after preprocessing: {repr(original_text)}")
             return EmbeddingResult(
@@ -184,20 +261,20 @@ class LlamaCppEmbeddingService:
                 error_message=f"Text became empty after preprocessing: {repr(original_text)}"
             )
         
-        # 简单的长度检查和截断（node-based 预处理应该已经处理了长度）
-        # 使用基础的字符长度检查作为安全保障
+        # Simple length check and truncation (node-based preprocessing should have handled length)
+        # Use basic character length check as a safeguard
         char_length = len(text.strip())
-        safe_char_length = int(self.n_ctx * 0.6)  # 更保守的字符长度限制
+        safe_char_length = int(self.n_ctx * 0.75) # Increase ratio to accommodate longer context
         
         if char_length > safe_char_length:
-            # 如果字符长度仍然超长，进行截断并警告
-            logger.warning(f"Text still too long after preprocessing ({char_length} chars, max {safe_char_length}), truncating. This suggests node-based preprocessing needs adjustment.")
-            text = text[:safe_char_length]
-            logger.info(f"Truncated text to {len(text)} characters")
+            # If character length is still too long, perform smart truncation and warn
+            logger.warning(f"Text still too long after preprocessing ({char_length} chars, max {safe_char_length}), performing smart truncation.")
+            text = smart_truncate(text, safe_char_length)
+            logger.info(f"Smart-truncated text to {len(text)} characters: '{text[:100]}...'")
         
-        # 尝试不同的池化策略来避免llama.cpp的bug
+        # Try different pooling strategies to avoid llama.cpp bugs
         pooling_strategies = [self.pooling, "cls", "last", "mean"]
-        # 去重并保持顺序
+        # Remove duplicates and preserve order
         pooling_strategies = list(dict.fromkeys(pooling_strategies))
         
         for i, pooling_strategy in enumerate(pooling_strategies):
@@ -206,21 +283,21 @@ class LlamaCppEmbeddingService:
             result = await self._try_embedding_with_pooling(text, pooling_strategy, start_time)
             
             if result.success:
-                if i > 0:  # 如果不是第一次尝试成功的
+                if i > 0:  # If not successful on the first attempt
                     logger.info(f"Successfully generated embedding using fallback pooling strategy: {pooling_strategy}")
                 return result
             else:
-                # 检查是否是GGML_ASSERT错误
+                # Check for GGML_ASSERT error
                 if "GGML_ASSERT" in str(result.error_message) or "seq_id" in str(result.error_message):
                     text_preview = repr(text[:30]) + ("..." if len(text) > 30 else "")
                     logger.warning(f"Pooling strategy '{pooling_strategy}' failed with sequence ID issue for text {text_preview}, trying next strategy")
                     continue
                 else:
-                    # 其他类型的错误，可能不是池化策略问题
+                    # Other types of errors, possibly not a pooling strategy issue
                     logger.error(f"Non-pooling related error with strategy '{pooling_strategy}': {result.error_message}")
                     return result
         
-        # 所有池化策略都失败 - 记录详细的文本分析信息
+        # All pooling strategies failed - log detailed text analysis information
         text_analysis = self._analyze_text(text)
         
         error_details = [
@@ -243,16 +320,16 @@ class LlamaCppEmbeddingService:
         )
     
     async def _try_embedding_with_pooling(self, text: str, pooling_strategy: str, start_time: float) -> EmbeddingResult:
-        """尝试使用指定的池化策略生成嵌入"""
+        """Attempt to generate embedding using the specified pooling strategy"""
         import time
         try:
-            # 使用临时文件避免管道问题
+            # Use temporary file to avoid pipe issues
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp_file:
                 tmp_file.write(text.strip())
                 tmp_file_path = tmp_file.name
             
             try:
-                # 构建命令
+                # Build command
                 cmd = [
                     self.binary_path,
                     "-m", str(self.model_path),
@@ -260,15 +337,15 @@ class LlamaCppEmbeddingService:
                     "--pooling", pooling_strategy,
                     "-t", str(self.n_threads),
                     "-c", str(self.n_ctx),
-                    "-b", "1",  # 强制批处理大小为1，避免溢出
+                    "-b", "1",  # Force batch size to 1 to avoid overflow
                     "--embd-output-format", "json",
-                    "--embd-normalize", "2",  # L2标准化
-                    "--no-warmup"  # 跳过预热
+                    "--embd-normalize", "2",  # L2 normalization
+                    "--no-warmup"  # Skip warmup
                 ]
                 
                 logger.debug(f"Running command: {' '.join(cmd)}")
                 
-                # 运行命令
+                # Run command
                 result = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -277,7 +354,7 @@ class LlamaCppEmbeddingService:
                 
                 stdout, stderr = await result.communicate()
                 
-                # 过滤掉已知的、无害的警告信息
+                # Filter out known, harmless warning messages
                 stderr_lines = stderr.decode().split('\n')
                 filtered_stderr = []
                 for line in stderr_lines:
@@ -302,7 +379,7 @@ class LlamaCppEmbeddingService:
                 filtered_stderr_text = '\n'.join(filtered_stderr).strip()
                 
                 if result.returncode != 0:
-                    # 只记录过滤后的错误信息
+                    # Only log filtered error messages
                     if filtered_stderr_text:
                         error_msg = f"llama-embedding failed with code {result.returncode}: {filtered_stderr_text}"
                     else:
@@ -314,7 +391,7 @@ class LlamaCppEmbeddingService:
                         processing_time=time.time() - start_time
                     )
                 
-                # 解析输出
+                # Parse output
                 output = stdout.decode().strip()
                 if not output:
                     return EmbeddingResult(
@@ -323,12 +400,12 @@ class LlamaCppEmbeddingService:
                         processing_time=time.time() - start_time
                     )
                 
-                # 尝试解析JSON格式输出
+                # Attempt to parse JSON format output
                 try:
-                    # 查找JSON部分（可能混有其他日志）
+                    # Find JSON part (may be mixed with other logs)
                     lines = output.split('\n')
                     
-                    # 寻找包含JSON数据的部分
+                    # Look for the section containing JSON data
                     json_text = ""
                     in_json = False
                     brace_count = 0
@@ -351,7 +428,7 @@ class LlamaCppEmbeddingService:
                         try:
                             json_data = json.loads(json_text)
                             
-                            # 处理OpenAI风格的嵌入格式
+                            # Handle OpenAI-style embedding format
                             if isinstance(json_data, dict) and 'data' in json_data:
                                 data_array = json_data['data']
                                 if isinstance(data_array, list) and len(data_array) > 0:
@@ -374,39 +451,39 @@ class LlamaCppEmbeddingService:
                                 
                         except json.JSONDecodeError as e:
                             logger.debug(f"JSON parsing failed, trying alternative parsing: {e}")
-                            # 如果JSON解析失败，尝试提取嵌入数组
-                            # 查找 "embedding": [数字列表] 模式
+                            # If JSON parsing fails, attempt to extract embedding array
+                            # Look for the "embedding": [list of numbers] pattern
                             pattern = r'"embedding":\s*\[([\d\.\-,\s]+)\]'
                             match = re.search(pattern, output, re.DOTALL)
                             if match:
                                 numbers_text = match.group(1)
-                                # 分割并转换为浮点数
+                                # Split and convert to float numbers
                                 numbers = re.findall(r'-?\d+\.?\d*', numbers_text)
                                 embedding = [float(n) for n in numbers if n]
                             else:
                                 raise ValueError("Could not extract embedding from output")
                     else:
-                        # 如果没有找到JSON，尝试解析原始数字输出
-                        # 查找包含数字的行
+                        # If JSON is not found, attempt to parse raw numeric output
+                        # Find lines containing numbers
                         number_lines = []
                         for line in lines:
                             if any(char.isdigit() or char == '.' or char == '-' for char in line):
                                 number_lines.append(line)
                         
                         if number_lines:
-                            # 将所有数字行合并并解析
+                            # Combine and parse all numeric lines
                             numbers_text = ' '.join(number_lines)
-                            # 提取浮点数
+                            # Extract float numbers
                             numbers = re.findall(r'-?\d+\.?\d*', numbers_text)
                             embedding = [float(n) for n in numbers if n]
                         else:
                             raise ValueError("No numeric data found in output")
                     
-                    # 验证嵌入向量
+                    # Validate embedding vector
                     if not embedding or not isinstance(embedding, list):
                         raise ValueError("Invalid embedding format")
                     
-                    # 检查是否全为零（可能表示错误）
+                    # Check if all elements are zero (may indicate an error)
                     if all(abs(x) < 1e-10 for x in embedding):
                         logger.warning("Generated embedding contains all zeros, this might indicate an issue")
                     
@@ -430,7 +507,7 @@ class LlamaCppEmbeddingService:
                     )
             
             finally:
-                # 清理临时文件
+                # Clean up temporary file
                 try:
                     os.unlink(tmp_file_path)
                 except:
@@ -445,148 +522,103 @@ class LlamaCppEmbeddingService:
                 processing_time=time.time() - start_time
             )
     
-    # 移除了 _get_embedding_chunked 方法
-    # chunking 功能已被 node-based 预处理策略完全替代
-    
-    async def get_embeddings_batch(self, texts: List[str]) -> List[EmbeddingResult]:
+    async def get_embeddings_batch(self, texts: List[str], model: Optional[str] = None) -> List[EmbeddingResult]:
         """
-        串行批量获取嵌入向量 - 针对 llama-embedding 的特性优化
-        
-        由于 llama-embedding 每次调用都需要加载模型，并发反而会增加开销
-        因此采用优化的串行处理策略
-        
-        Args:
-            texts: 文本列表
-            
-        Returns:
-            List[EmbeddingResult]: 嵌入结果列表
+        Get embedding vectors for a batch of texts.
+        The `model` parameter is ignored as this service is tied to a single model instance.
         """
-        logger.info(f"Processing batch of {len(texts)} texts (optimized serial)")
         start_time = time.time()
         
-        results = []
-        for i, text in enumerate(texts):
-            logger.debug(f"Processing text {i+1}/{len(texts)}")
-            result = await self.get_embedding(text)
-            results.append(result)
+        # 1. Preprocess all texts
+        processed_texts = [self._preprocess_text(text) for text in texts]
+        
+        # 2. Filter out texts that became empty after preprocessing
+        valid_texts = []
+        original_indices = []
+        for i, text in enumerate(processed_texts):
+            if text and text.strip():
+                valid_texts.append(text)
+                original_indices.append(i)
+
+        if not valid_texts:
+            return [EmbeddingResult(success=False, error_message="All texts were empty after preprocessing.")] * len(texts)
+
+        # 3. Create a temporary file to pass all valid texts to the binary
+        with tempfile.NamedTemporaryFile(mode='w+', delete=True, suffix=".txt", encoding='utf-8') as tmpfile:
+            # Each text must be on a new line
+            tmpfile.write("\n".join(valid_texts))
+            tmpfile.flush() # Ensure all data is written to disk
             
-            # 提供进度反馈
-            if (i + 1) % 5 == 0 or i == len(texts) - 1:
-                elapsed = time.time() - start_time
-                rate = (i + 1) / elapsed if elapsed > 0 else 0
-                remaining = (len(texts) - i - 1) / rate if rate > 0 else 0
-                logger.info(f"Progress: {i+1}/{len(texts)} ({rate:.1f} texts/s, ~{remaining:.0f}s remaining)")
+            cmd = [
+                self.binary_path,
+                "--model", str(self.model_path),
+                "--pooling", self.pooling,
+                "--threads", str(self.n_threads),
+                "--ctx", str(self.n_ctx),
+                "--file", tmpfile.name
+            ]
             
-            # 如果连续失败太多，提前退出
-            if i >= 5 and all(not r.success for r in results[-5:]):
-                logger.error("Too many consecutive failures, stopping batch processing")
-                # 为剩余文本添加失败结果
-                for j in range(i+1, len(texts)):
-                    results.append(EmbeddingResult(
-                        success=False,
-                        error_message="Batch processing stopped due to consecutive failures"
-                    ))
-                break
-        
-        success_count = sum(1 for r in results if r.success)
-        total_time = time.time() - start_time
-        
-        logger.info(f"Batch processing completed: {success_count}/{len(texts)} successful in {total_time:.2f}s")
-        logger.info(f"Average time per text: {total_time/len(texts):.3f}s")
-        
-        return results
-    
+            try:
+                # 4. Run the llama-embedding process asynchronously
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    error_msg = f"Llama-embedding failed with code {process.returncode}: {stderr.decode('utf-8', 'ignore')}"
+                    logger.error(error_msg)
+                    # Return errors for all original texts
+                    return [EmbeddingResult(success=False, error_message=error_msg)] * len(texts)
+                
+                # 5. Parse the output
+                output_str = stdout.decode('utf-8').strip()
+                # The output for batch is one JSON array per line
+                lines = output_str.splitlines()
+                batch_embeddings = [json.loads(line) for line in lines]
+                
+                if len(batch_embeddings) != len(valid_texts):
+                    raise ValueError(f"Mismatch in batch embedding results. Expected {len(valid_texts)}, got {len(batch_embeddings)}.")
+
+                # 6. Reconstruct the results list in the original order
+                final_results = [EmbeddingResult(success=False, error_message="Text was empty after preprocessing.")] * len(texts)
+                processing_time = (time.time() - start_time) / len(valid_texts)
+
+                for i, embedding in enumerate(batch_embeddings):
+                    original_idx = original_indices[i]
+                    final_results[original_idx] = EmbeddingResult(
+                        success=True,
+                        embedding=embedding,
+                        dimension=len(embedding),
+                        processing_time=processing_time
+                    )
+                
+                return final_results
+
+            except Exception as e:
+                logger.error(f"Batch embedding failed: {e}", exc_info=True)
+                return [EmbeddingResult(success=False, error_message=str(e))] * len(texts)
+
     async def health_check(self) -> bool:
         """
-        健康检查
-        
-        Returns:
-            bool: 服务是否正常
+        Performs a health check on the service
         """
         try:
-            result = await self.get_embedding("Health check test")
+            result = await self.get_embedding("health check")
             return result.success
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
+        except Exception:
             return False
-    
+
     def get_model_info(self) -> Dict[str, Any]:
-        """
-        获取模型信息
-        
-        Returns:
-            Dict: 模型信息
-        """
+        """Returns information about the model and service configuration."""
         return {
             "model_path": str(self.model_path),
-            "model_exists": self.model_path.exists(),
-            "model_size_mb": round(self.model_path.stat().st_size / (1024*1024), 1) if self.model_path.exists() else 0,
             "binary_path": self.binary_path,
-            "pooling": self.pooling,
-            "n_threads": self.n_threads,
-            "n_ctx": self.n_ctx
-        }
-
-def create_qwen3_embedding_service(
-    model_path: Optional[str] = None, 
-    binary_path: Optional[str] = None,
-    config_dict: Optional[Dict[str, Any]] = None
-) -> 'LlamaCppEmbeddingService':
-    """
-    创建配置好的 Qwen3-Embedding 服务
-    
-    Args:
-        model_path: 模型文件路径，如果为None则使用默认路径
-        binary_path: llama-embedding 二进制文件路径，如果为None则使用默认
-        config_dict: 配置字典，用于获取额外的配置参数
-        
-    Returns:
-        配置好的 LlamaCppEmbeddingService 实例
-    """
-    # 如果没有提供config_dict，创建一个默认的
-    if config_dict is None:
-        config_dict = {}
-    
-    # 默认模型路径
-    if model_path is None:
-        model_path = config_dict.get(
-            "llama_cpp_model_path",
-            "~/.models/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
-        )
-    
-    # 展开用户路径
-    model_path = os.path.expanduser(model_path)
-    
-    # 检查模型文件是否存在
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Qwen3-Embedding model not found at: {model_path}")
-    
-    # 默认二进制路径
-    if binary_path is None:
-        binary_path = config_dict.get("llama_cpp_binary", "llama-embedding")
-    
-    # 检查二进制文件
-    if not shutil.which(binary_path):
-        raise FileNotFoundError(f"llama-embedding binary not found: {binary_path}")
-    
-    # 从config获取参数
-    pooling = config_dict.get("llama_cpp_pooling", "mean")
-    n_threads = config_dict.get("llama_cpp_threads")
-    n_ctx = config_dict.get("llama_cpp_max_context", 512)  # 使用较小的上下文避免批处理问题
-    
-    logger.info("Creating Qwen3-Embedding service with:")
-    logger.info(f"  Model: {model_path}")
-    logger.info(f"  Binary: {binary_path}")
-    logger.info(f"  Pooling: {pooling}")
-    logger.info(f"  Threads: {n_threads}")
-    logger.info(f"  Context: {n_ctx}")
-    
-    # 直接使用LlamaCppEmbeddingService构造函数
-    return LlamaCppEmbeddingService(
-        model_path=model_path,
-        binary_path=binary_path,
-        pooling=pooling,
-        n_threads=n_threads,
-        n_ctx=n_ctx,
-        config_dict=config_dict
-    ) 
+            "pooling_strategy": self.pooling,
+            "threads": self.n_threads,
+            "context_length": self.n_ctx,
+            "dimension": self._dimension
+        } 

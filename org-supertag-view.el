@@ -70,10 +70,17 @@ Available views:
   (setq-local org-mode-hook nil)
   (use-local-map org-supertag-view-column-mode-map))
 
+(defvar org-supertag-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-f") 'org-supertag-feedback-submit)
+    map)
+  "Keymap for org-supertag-view-mode.")
+
 (define-minor-mode org-supertag-view-mode
   "Minor mode for viewing org-supertag tag-related content."
   :lighter " SuperTag-View"
   :group 'org-supertag
+  :keymap org-supertag-view-mode-map
 
   (if org-supertag-view-mode
       ;; When enabling the mode

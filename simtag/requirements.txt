@@ -5,7 +5,7 @@ wheel>=0.40.0
 numpy>=1.26.0
 requests>=2.31.0
 epc>=0.0.5
-dependency-injector>=4.41.0
+pydantic>=2.0.0
 
 # AI/ML dependencies (optional but recommended)
 torch>=2.1.0
@@ -21,3 +21,22 @@ sqlite-vec>=0.0.1
 urllib3<2.0.0
 toml>=0.10.2
 
+# Added during refactoring
+fastapi
+uvicorn[standard]
+python-dotenv
+beautifulsoup4
+scipy
+thefuzz
+pydantic-settings
+openai
+anthropic
+google-generativeai
+llama-cpp-python
+llama-index
+llama-index-llms-llama-cpp
+llama-index-embeddings-huggingface
+loguru
+sexpdata
+aiohttp
+rank_bm25>=0.2.2

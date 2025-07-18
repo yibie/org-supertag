@@ -1,40 +1,32 @@
+
 """
 Unified Knowledge Graph Service
 """
 import logging
 import sqlite3
-import numpy as np
 import json
 import threading
-from typing import Dict, List, Any, Optional, Tuple
+import time
+from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
 # Ensure numpy is available
-NP_AVAILABLE = False
 try:
     import numpy as np
-    NP_AVAILABLE = True
+    if TYPE_CHECKING:
+        from numpy import ndarray
 except ImportError:
+    np = None
+    if TYPE_CHECKING:
+        from typing import Any as ndarray
     logging.getLogger("GraphService").error("NumPy library not found. Vector operations will be disabled.")
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
 
-# --- Data Classes (can be moved to a separate file later) ---
-
-class TagStatus(Enum):
-    """Tag governance status types."""
-    DRAFT = "draft"
-    REVIEW = "review"
-    ACTIVE = "active"
-    DEPRECATED = "deprecated"
-    MERGED = "merged"
-    SPLIT = "split"
-    ARCHIVED = "archived"
-
-# --- New Enums for Node and Relation Types ---
+# --- Enums for Node and Relation Types ---
 class NodeType(Enum):
     TEXT = "TEXT"
     ENTITY = "ENTITY"
@@ -45,6 +37,7 @@ class NodeType(Enum):
     EVENT = "EVENT"
     TECHNOLOGY = "TECHNOLOGY"
     ALIAS = "ALIAS"
+    TAG = "TAG"
 
 class RelationType(Enum):
     HAS_ENTITY = "HAS_ENTITY"
@@ -58,22 +51,6 @@ class RelationType(Enum):
     IS_A = "IS_A"
     RELATED_TO = "RELATED_TO"
 
-@dataclass
-class Rule:
-    """Represents a governance rule."""
-    type: str # RuleType enum can be used here
-    rule: Dict[str, Any]
-    description: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.now)
-
-@dataclass
-class HistoryEntry:
-    """Represents a history entry for status or type changes."""
-    timestamp: datetime
-    old_value: Any
-    new_value: Any
-    reason: Optional[str] = None
-
 class GraphService:
     """
     Manages the storage and querying of the org-supertag knowledge graph,
@@ -83,10 +60,6 @@ class GraphService:
     def __init__(self, db_path: str, config=None):
         """
         Initializes the GraphService.
-
-        Args:
-            db_path: The path to the SQLite database file.
-            config: Optional configuration object.
         """
         self.db_path = db_path
         self.config = config
@@ -96,7 +69,6 @@ class GraphService:
         
         self._init_connection()
         
-        # Try to initialize database, with automatic unlock if needed
         try:
             self._init_db()
         except sqlite3.OperationalError as e:
@@ -104,8 +76,8 @@ class GraphService:
                 self.logger.warning("Database locked during initialization, attempting to force unlock...")
                 if self.force_unlock_database():
                     self.logger.info("Database unlocked, retrying initialization...")
-                    self._init_connection()  # Reconnect
-                    self._init_db()  # Retry initialization
+                    self._init_connection()
+                    self._init_db()
                 else:
                     raise Exception("Failed to unlock database during initialization") from e
             else:
@@ -124,12 +96,8 @@ class GraphService:
         """Creates and configures a new SQLite connection."""
         conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
         
-        # Configure SQLite for better concurrency
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=10000")
-        conn.execute("PRAGMA temp_store=memory")
-        conn.execute("PRAGMA mmap_size=268435456")  # 256MB
         
         conn.enable_load_extension(True)
         try:
@@ -148,917 +116,599 @@ class GraphService:
         """Retrieves the database connection for the current thread."""
         return self._init_connection()
 
-    def _add_column_if_not_exists(self, cursor, table_name, column_name, column_type):
-        """Adds a column to a table if it doesn't already exist."""
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = [info[1] for info in cursor.fetchall()]
-        if column_name not in columns:
-            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-            self.logger.info(f"Added column '{column_name}' to table '{table_name}'.")
-
     def _init_db(self):
-        """
-        Initializes the database schema, creating tables if they don't exist.
-        This method is designed to be idempotent.
-        """
-        import time
+        """Initializes the database schema, being idempotent."""
         max_retries = 5
         retry_delay = 1.0
         
         for attempt in range(max_retries):
             try:
                 conn = self._get_connection()
-                cursor = conn.cursor()
-                
-                # Enable WAL mode if not already enabled
-                cursor.execute("PRAGMA journal_mode=WAL")
-                
-                # 1. Create Nodes Table if not exists
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS nodes (
-                    node_id TEXT PRIMARY KEY,
-                    type TEXT NOT NULL,
-                    name TEXT,
-                    content TEXT,
-                    title TEXT,
-                    file_path TEXT,
-                    pos INTEGER,
-                    olp TEXT,
-                    level INTEGER,
-                    scheduled TEXT,
-                    deadline TEXT,
-                    todo TEXT,
-                    priority TEXT,
-                    modified_at TEXT,
-                    properties TEXT,
-                    raw_value TEXT,
-                    hash TEXT,
-                    content_hash TEXT,
-                    document_date TEXT,
-                    relations_inferred_at TEXT
-                    -- UNIQUE(name, type) -- This constraint might be too restrictive for entities, remove for now
-                )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes (type)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes (name)")
-
-                # 2. Add new columns to nodes table if they don't exist (Migration)
-                # Add 'aliases' column
-                self._add_column_if_not_exists(cursor, "nodes", "aliases", "TEXT")
-                # Add 'priority_score' column
-                self._add_column_if_not_exists(cursor, "nodes", "priority_score", "REAL")
-
-                # 3. Create Relations Table if not exists
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS relations (
-                    relation_id TEXT PRIMARY KEY,
-                    source_id TEXT NOT NULL,
-                    target_id TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    weight REAL DEFAULT 1.0,
-                    properties TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (source_id) REFERENCES nodes (node_id) ON DELETE CASCADE,
-                    FOREIGN KEY (target_id) REFERENCES nodes (node_id) ON DELETE CASCADE
-                )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_source_id ON relations (source_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_target_id ON relations (target_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_type ON relations (type)")
-
-                # 4. Create VSS Table for node embeddings if not exists
-                if self.has_vector_ext:
-                    vector_dim = self.config.get_vector_dimension_for_model()
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
                     
-                    cursor.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS node_embeddings_vss USING vec0(
+                    # Nodes Table
+                    cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS nodes (
                         node_id TEXT PRIMARY KEY,
-                        embedding FLOAT[{vector_dim}]
+                        type TEXT NOT NULL,
+                        name TEXT,
+                        content TEXT,
+                        title TEXT,
+                        file_path TEXT,
+                        pos INTEGER,
+                        olp TEXT,
+                        level INTEGER,
+                        scheduled TEXT,
+                        deadline TEXT,
+                        todo TEXT,
+                        priority TEXT,
+                        modified_at TEXT,
+                        knowledge_status TEXT,
+                        properties TEXT,
+                        raw_value TEXT,
+                        hash TEXT,
+                        content_hash TEXT,
+                        document_date TEXT,
+                        relations_inferred_at TEXT,
+                        aliases TEXT,
+                        priority_score REAL
                     )
                     """)
-                
-                conn.commit()
-                self.logger.info("Database schema initialized/migrated for heterogenous graph structure.")
-                break  # Success, exit retry loop
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes (type)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes (name)")
+                    # 如果数据库已存在于旧版本，确保 knowledge_status 列存在
+                    cursor.execute("PRAGMA table_info(nodes)")
+                    existing_cols = [row[1] for row in cursor.fetchall()]
+                    if 'knowledge_status' not in existing_cols:
+                        self.logger.info("Adding missing column 'knowledge_status' to existing nodes table…")
+                        cursor.execute("ALTER TABLE nodes ADD COLUMN knowledge_status TEXT")
+
+                    # 添加索引（在确保列存在之后）
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_knowledge_status ON nodes (knowledge_status)")
+
+                    # Relations Table
+                    cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS relations (
+                        relation_id TEXT PRIMARY KEY,
+                        source_id TEXT NOT NULL,
+                        target_id TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        weight REAL DEFAULT 1.0,
+                        properties TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (source_id) REFERENCES nodes (node_id) ON DELETE CASCADE,
+                        FOREIGN KEY (target_id) REFERENCES nodes (node_id) ON DELETE CASCADE
+                    )
+                    """)
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_source_id ON relations (source_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_relations_target_id ON relations (target_id)")
+                    
+                    # VSS Table
+                    if self.has_vector_ext:
+                        vector_dim = self.config.get_vector_dimension_for_model()
+                        cursor.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS node_embeddings_vss USING vec0(
+                            embedding FLOAT[{vector_dim}],
+                            node_id TEXT
+                        )
+                        """
+                        )
+                        cursor.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS entity_embeddings_vss USING vec0(
+                            embedding FLOAT[{vector_dim}],
+                            entity_id TEXT
+                        )
+                        """
+                        )
+                    
+                self.logger.info("Database schema initialized.")
+                break
                 
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    self.logger.warning(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    self.logger.warning(f"Database locked, retrying... ({attempt + 1})")
                     time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    retry_delay *= 2
                     continue
                 else:
-                    self.logger.error(f"Failed to initialize database schema after {max_retries} attempts: {e}")
+                    self.logger.error(f"Failed to initialize database: {e}", exc_info=True)
                     raise
-            except Exception as e:
-                self.logger.error(f"Unexpected error during database initialization: {e}")
-                raise
 
-    def _add_column_if_not_exists(self, cursor, table_name, column_name, column_type):
-        """Adds a column to a table if it doesn't already exist."""
+    # --- Schema Helpers ---
+
+    def get_table_columns(self, table_name: str) -> List[str]:
+        """Gets a list of column names for a given table."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
         cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = [info[1] for info in cursor.fetchall()]
-        if column_name not in columns:
-            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-            self.logger.info(f"Added column '{column_name}' to table '{table_name}'.")
+        return [row[1] for row in cursor.fetchall()]
 
-    def mark_node_relations_inferred(self, node_id: str):
-        """Marks a node to indicate that relation inference has been performed."""
+    # --- Knowledge-status helpers ---
+
+    def update_node_status(self, node_id: str, status: str):
+        """Updates the knowledge_status of a node."""
         conn = self._get_connection()
-        try:
-            timestamp = datetime.now().isoformat()
-            with conn:
-                conn.execute(
-                    "UPDATE nodes SET relations_inferred_at = ? WHERE node_id = ?",
-                    (timestamp, node_id)
-                )
-            logger.debug(f"Marked node {node_id} as having relations inferred at {timestamp}.")
-        except Exception as e:
-            logger.error(f"Failed to mark node {node_id} for relation inference: {e}", exc_info=True)
+        with conn:
+            conn.execute(
+                "UPDATE nodes SET knowledge_status = ?, modified_at = ? WHERE node_id = ?",
+                (status, datetime.now().isoformat(), node_id),
+            )
 
-    def get_nodes_needing_relation_inference(self, limit: int = 5, order_by: Optional[str] = None, order_direction: str = "ASC", min_priority_score: Optional[float] = None) -> List[str]:
-        """
-        Retrieves a list of node IDs that have embeddings but have not yet
-        had relation inference performed on them.
-        """
-        conn = self._get_connection()
-        try:
-            with conn:
-                cursor = conn.cursor()
-                query = """
-                    SELECT node_id FROM nodes
-                    WHERE type = 'TEXT'
-                      AND content IS NOT NULL AND content != ''
-                      AND relations_inferred_at IS NULL
-                """
-                params = []
-
-                if min_priority_score is not None:
-                    query += " AND priority_score >= ?"
-                    params.append(min_priority_score)
-
-                if order_by:
-                    # Basic validation to prevent SQL injection
-                    if order_by not in ["node_id", "modified_at", "document_date", "priority_score"]:
-                        self.logger.warning(f"Invalid order_by column: {order_by}. Ignoring order_by.")
-                        order_by = None
-                    if order_direction.upper() not in ["ASC", "DESC"]:
-                        self.logger.warning(f"Invalid order_direction: {order_direction}. Defaulting to ASC.")
-                        order_direction = "ASC"
-
-                    if order_by:
-                        query += f" ORDER BY {order_by} {order_direction}"
-
-                query += " LIMIT ?"
-                params.append(limit)
-
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-                node_ids = [row[0] for row in rows]
-                logger.info(f"Found {len(node_ids)} nodes needing relation inference (limit: {limit}).")
-                return node_ids
-        except Exception as e:
-            logger.error(f"Failed to get nodes needing relation inference: {e}", exc_info=True)
-            return []
-
-    # --- Public API ---
-
-    # --- Node Operations ---
-
-    def upsert_text_node(self, node_data: Dict[str, Any], node_type: NodeType = NodeType.TEXT):
-        """
-        Upserts a single text node, its associated entities (tags), and its references.
-        This is the primary method for adding content to the graph.
-        """
-        conn = self._get_connection()
-        try:
-            # 1. Prepare and separate data
-            text_node_id = node_data['node_id']
-            tags = node_data.pop('tags', []) # Extract tags
-            references_to_raw = node_data.pop('ref_to', []) # Extract references
-
-            # The 'ref_to' data might be a JSON string, so we need to parse it.
-            references_to = []
-            if isinstance(references_to_raw, str):
-                try:
-                    parsed_refs = json.loads(references_to_raw)
-                    if isinstance(parsed_refs, list):
-                        references_to = parsed_refs
-                except json.JSONDecodeError:
-                    self.logger.warning(f"Could not parse 'ref_to' JSON string for node {text_node_id}: {references_to_raw}")
-            elif isinstance(references_to_raw, list):
-                references_to = references_to_raw
-            
-            node_to_upsert = {**node_data, 'type': node_type}
-            self._upsert_nodes_internal([node_to_upsert])
-
-            # 2. Process entities (tags)
-            if tags:
-                entity_nodes = []
-                for tag_name in tags:
-                    entity_id, entity_node = self._prepare_entity_node(tag_name)
-                    entity_nodes.append(entity_node)
-                
-                # Upsert entity nodes
-                self._upsert_nodes_internal(entity_nodes)
-
-                # Create tag relations
-                tag_relations = []
-                for tag_name in tags:
-                    entity_id = self._get_entity_id_by_name(tag_name)
-                    if entity_id:
-                        tag_relations.append({
-                            'source_id': text_node_id,
-                            'target_id': entity_id,
-                            'type': RelationType.HAS_ENTITY
-                        })
-                
-                if tag_relations:
-                    self.bulk_upsert_relations(tag_relations)
-            
-            # 3. Process direct references (links)
-            if references_to:
-                ref_relations = []
-                for target_id in references_to:
-                    if isinstance(target_id, str) and target_id:
-                        ref_relations.append({
-                            'source_id': text_node_id,
-                            'target_id': target_id,
-                            'type': RelationType.REF_TO
-                        })
-                if ref_relations:
-                    self.bulk_upsert_relations(ref_relations)
-
-            self.logger.info(f"Successfully upserted node {text_node_id} with {len(tags)} entities and {len(references_to)} references.")
-
-        except Exception as e:
-            conn.rollback()
-            self.logger.error(f"Failed to upsert text node {node_data.get('node_id')}: {e}", exc_info=True)
-            raise
-        finally:
-            # Committing should happen here after all operations for the node are successful.
-            # However, since this function is now part of a larger transaction in NodeProcessor,
-            # we let the caller manage the commit/rollback.
-            # For standalone use, a commit would be here.
-            pass
-
-    def bulk_upsert_entity_nodes(self, entities_data: List[Dict[str, Any]]):
-        """
-        Bulk upserts entity nodes from a list of dictionaries.
-        Each dictionary can contain 'name', 'description', 'type', 'properties', 'aliases', 'priority_score'.
-        """
-        if not entities_data:
-            return
-
-        conn = self._get_connection()
-        try:
-            entity_nodes_to_upsert = []
-            for entity_info in entities_data:
-                name = entity_info.get('name')
-                entity_type = entity_info.get('type', NodeType.ENTITY) # Default to ENTITY
-                properties = entity_info.get('properties', {})
-                aliases = entity_info.get('aliases', [])
-                priority_score = entity_info.get('priority_score', 0.0)
-
-                if not name:
-                    self.logger.warning(f"Skipping entity with no name: {entity_info}")
-                    continue
-
-                # Prepare entity node data, using the new _prepare_entity_node signature
-                entity_id, entity_node = self._prepare_entity_node(name, entity_type)
-                
-                # Merge additional properties
-                entity_node['properties'] = json.dumps(properties)
-                entity_node['aliases'] = json.dumps(aliases)
-                entity_node['priority_score'] = priority_score
-                entity_node['node_id'] = entity_id # Ensure node_id is set correctly
-
-                entity_nodes_to_upsert.append(entity_node)
-            
-            if entity_nodes_to_upsert:
-                self._upsert_nodes_internal(entity_nodes_to_upsert)
-                # The commit is handled by the calling context (NodeProcessor)
-        except Exception as e:
-            self.logger.error(f"Failed during bulk entity node upsert: {e}", exc_info=True)
-            # No rollback here, let the higher-level transaction manager handle it.
-            raise
-        finally:
-            pass
-
-    # Helper function to prepare entity node data
-    def _prepare_entity_node(self, name: str, entity_type: NodeType = NodeType.ENTITY) -> Tuple[str, Dict[str, Any]]:
-        """Prepares a dictionary representing an ENTITY node."""
-        if not isinstance(name, str) or not name.strip():
-            # Return a placeholder for invalid input to avoid downstream errors
-            invalid_name = f"INVALID_NAME_{datetime.now().isoformat()}"
-            self.logger.warning(f"Invalid entity name provided (type: {type(name)}). Using placeholder: {invalid_name}")
-            name = invalid_name
-
-        # Normalize name to create a consistent ID
-        normalized_name = name.strip().upper()
-        entity_id = f"ENTITY_{normalized_name}"
-        return entity_id, {
-            "node_id": entity_id,
-            "type": entity_type, # Use the passed entity_type
-            "name": normalized_name,
-            "title": name, # Store original casing for display
-            "modified_at": datetime.now().isoformat()
-        }
-
-    def _get_entity_id_by_name(self, name: str) -> Optional[str]:
-        """Gets an entity's node_id by its normalized name."""
-        if not isinstance(name, str):
-            self.logger.warning(f"_get_entity_id_by_name called with non-string argument: {name} (type: {type(name)}). This may indicate an issue with the LLM output. Returning None.")
-            return None
-        normalized_name = name.strip().upper()
+    def get_nodes_by_status(self, status: str, limit: int = 10) -> List[str]:
+        """Returns up to <limit> node IDs with the given knowledge_status."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT node_id FROM nodes WHERE type='ENTITY' AND name=?", (normalized_name,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-
-    def _format_node_output(self, node_row: sqlite3.Row) -> Optional[Dict[str, Any]]:
-        """Formats a raw database row into a structured node dictionary."""
-        if not node_row:
-            return None
-        
-        node_dict = dict(node_row)
-        
-        # Deserialize JSON fields
-        node_dict['properties'] = json.loads(node_dict.get('properties', '{}') or '{}')
-        
-        # Convert type from string to NodeType enum
-        if 'type' in node_dict and isinstance(node_dict['type'], str):
-            try:
-                node_dict['type'] = NodeType(node_dict['type'])
-            except ValueError:
-                self.logger.warning(f"Unknown NodeType '{node_dict['type']}' for node {node_dict.get('node_id')}. Defaulting to TEXT.")
-                node_dict['type'] = NodeType.TEXT
-
-        # Deserialize aliases
-        node_dict['aliases'] = json.loads(node_dict.get('aliases', '[]') or '[]')
-
-        # Ensure priority_score is float
-        node_dict['priority_score'] = float(node_dict.get('priority_score', 0.0))
-        
-        # For TEXT nodes, dynamically fetch associated tags from relations
-        if node_dict.get('type') == NodeType.TEXT:
-            tags = self._get_tags_for_node(node_dict['node_id'])
-            node_dict['tags'] = tags
-        
-        return node_dict
-
-    def _get_tags_for_node(self, node_id: str) -> List[str]:
-        """Retrieves all tag names associated with a given text node."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        sql = """
-            SELECT n.title FROM relations r
-            JOIN nodes n ON r.target_id = n.node_id
-            WHERE r.source_id = ? AND r.type = 'HAS_ENTITY' AND n.type = 'ENTITY'
-        """
-        cursor.execute(sql, (node_id,))
+        cursor.execute(
+            "SELECT node_id FROM nodes WHERE knowledge_status = ? ORDER BY priority_score DESC, modified_at DESC LIMIT ?",
+            (status, limit),
+        )
         return [row[0] for row in cursor.fetchall()]
 
-    def _upsert_nodes_internal(self, nodes_data: List[Dict[str, Any]]):
-        """Helper to bulk upsert nodes, ensuring all required fields are present."""
-        if not nodes_data:
+    # --- Node and Relation Operations ---
+    
+    def upsert_entity(self, entity_data: Dict[str, Any]):
+        """
+        Inserts or updates an entity (node or tag), handling both dict and list-of-pairs input,
+        including nested structures like the 'properties' field.
+        """
+        # --- Robust Data Normalization (Level 1: Top-level entity object) ---
+        if isinstance(entity_data, list):
+            try:
+                entity_data = {str(item[0]): item[1] for item in entity_data if isinstance(item, (list, tuple)) and len(item) == 2}
+            except (TypeError, IndexError) as e:
+                self.logger.error(f"Failed to convert top-level entity alist to dict: {entity_data}. Error: {e}")
+                return
+
+        if not isinstance(entity_data, dict):
+            self.logger.error(f"upsert_entity expects a dictionary, but received type {type(entity_data)}.")
             return
 
+        # --- Robust Data Normalization (Level 2: Nested 'properties' field) ---
+        props = entity_data.get('properties')
+        if isinstance(props, list):
+            try:
+                entity_data['properties'] = {str(item[0]): item[1] for item in props if isinstance(item, (list, tuple)) and len(item) == 2}
+            except (TypeError, IndexError) as e:
+                self.logger.error(f"Failed to convert nested properties alist to dict: {props}. Error: {e}")
+                # Continue with empty properties instead of failing the whole entity
+                entity_data['properties'] = {}
+
+        # Map 'id' to 'node_id' for consistency
+        if 'id' in entity_data and 'node_id' not in entity_data:
+            entity_data['node_id'] = entity_data['id']
+            
+        node_id = entity_data.get('node_id')
+        if not node_id:
+            self.logger.warning(f"Skipping entity upsert due to missing 'node_id'. Data: {entity_data}")
+            return
+
+        # --- Default knowledge_status handling ---
+        # If the incoming entity represents a node (not a tag, etc.) and the caller
+        # 没有显式设置 knowledge_status，则默认将其标记为 "PENDING"，
+        # 这样它会被后台知识提取流程自动拾取。
+        if entity_data.get('type') == 'node' and 'knowledge_status' not in entity_data:
+            entity_data['knowledge_status'] = 'PENDING'
+
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT properties FROM nodes WHERE node_id = ?", (node_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                # UPDATE
+                existing_props = json.loads(existing[0] or '{}')
+                new_props = entity_data.get('properties', {})
+
+                # --- Final Data Integrity Check ---
+                # Ensure both existing and new props are dictionaries before merging.
+                # This handles historical data that might have been stored incorrectly.
+                if isinstance(existing_props, list):
+                    try:
+                        existing_props = {str(item[0]): item[1] for item in existing_props if isinstance(item, (list, tuple)) and len(item) == 2}
+                    except (TypeError, IndexError):
+                        existing_props = {} # Default to empty dict on failure
+                
+                if isinstance(new_props, list):
+                    try:
+                        new_props = {str(item[0]): item[1] for item in new_props if isinstance(item, (list, tuple)) and len(item) == 2}
+                    except (TypeError, IndexError):
+                        new_props = {} # Default to empty dict on failure
+
+                # Merge descriptions if both exist
+                new_desc = new_props.get('description')
+                if new_desc and existing_props.get('description'):
+                    new_props['description'] = f"{existing_props.get('description')}\n---\n{new_desc}"
+                
+                merged_props = {**existing_props, **new_props}
+                entity_data['properties'] = json.dumps(merged_props)
+
+                valid_columns = self.get_table_columns('nodes')
+                update_clauses = [f"`{k}` = ?" for k in entity_data if k != 'node_id' and k in valid_columns]
+                
+                update_values = []
+                for k, v in entity_data.items():
+                    if k != 'node_id' and k in valid_columns:
+                        if isinstance(v, (dict, list)) and k != 'properties':
+                             update_values.append(json.dumps(v))
+                        else:
+                            update_values.append(v)
+                
+                if not update_clauses: return
+                update_values.append(node_id)
+                sql = f"UPDATE nodes SET {', '.join(update_clauses)} WHERE node_id = ?"
+                cursor.execute(sql, tuple(update_values))
+
+            else:
+                # INSERT
+                props = entity_data.get('properties', {})
+                if isinstance(props, list):
+                    try:
+                        entity_data['properties'] = {str(item[0]): item[1] for item in props if isinstance(item, (list, tuple)) and len(item) == 2}
+                    except (TypeError, IndexError):
+                        entity_data['properties'] = {}
+                
+                valid_columns = self.get_table_columns('nodes')
+                cols = [c for c in valid_columns if c in entity_data]
+                vals = []
+                for c in cols:
+                    v = entity_data.get(c)
+                    if isinstance(v, (dict, list)):
+                        vals.append(json.dumps(v))
+                    else:
+                        vals.append(v)
+                
+                placeholders = ', '.join(['?' for _ in cols])
+                sql = f"INSERT INTO nodes ({', '.join(f'`{c}`' for c in cols)}) VALUES ({placeholders})"
+                cursor.execute(sql, tuple(vals))
+
+    def upsert_relationship(self, source_id: str, target_id: str, type: str, properties: Optional[Dict[str, Any]] = None):
+        """Inserts or updates a relationship, merging properties."""
+        properties = properties or {}
+        conn = self._get_connection()
+        relation_id = f"{source_id}-{type}-{target_id}"
+        properties.setdefault('weight', 1.0)
+        
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT properties, weight FROM relations WHERE relation_id = ?", (relation_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                # UPDATE
+                existing_props = json.loads(existing[0] or '{}')
+                existing_weight = existing[1]
+                
+                final_weight = existing_weight + properties.get('weight', 1.0)
+                merged_props = {**existing_props, **properties}
+
+                sql = "UPDATE relations SET weight = ?, properties = ? WHERE relation_id = ?"
+                cursor.execute(sql, (final_weight, json.dumps(merged_props, indent=2), relation_id))
+
+            else:
+                # INSERT
+                sql = "INSERT INTO relations (relation_id, source_id, target_id, type, weight, properties) VALUES (?, ?, ?, ?, ?, ?)"
+                props_json = json.dumps(properties, indent=2)
+                cursor.execute(sql, (relation_id, source_id, target_id, type, properties['weight'], props_json))
+
+            # --- Tag Incremental Update ---
+            if type == "HAS_TAG":
+                cursor.execute("SELECT type FROM nodes WHERE node_id = ?", (target_id,))
+                row = cursor.fetchone()
+                if row and row[0] == "TAG":
+                    self.update_node_status(target_id, "STALE")
+
+    def mark_node_relations_inferred(self, node_id: str):
+        """Marks a node to indicate that its relations have been inferred."""
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE nodes SET relations_inferred_at = ? WHERE node_id = ?", (datetime.now().isoformat(), node_id))
+
+    def get_nodes_needing_relation_inference(self, limit: int = 5) -> List[str]:
+        """Fetches node IDs that haven't had their relations inferred yet."""
         conn = self._get_connection()
         cursor = conn.cursor()
+        query = "SELECT node_id FROM nodes WHERE relations_inferred_at IS NULL ORDER BY priority_score DESC, modified_at DESC LIMIT ?"
+        cursor.execute(query, (limit,))
+        return [row[0] for row in cursor.fetchall()]
 
-        # Define all columns to ensure order
-        columns = [
-            'node_id', 'type', 'name', 'content', 'title', 'file_path', 'pos',
-            'olp', 'level', 'scheduled', 'deadline', 'todo', 'priority',
-            'modified_at', 'properties', 'raw_value', 'hash', 'content_hash',
-            'document_date', 'aliases', 'priority_score'
-        ]
-
-        nodes_to_upsert = []
-        for node in nodes_data:
-            # Ensure all columns have a value (default to None if missing)
-            values = []
-            for col in columns:
-                val = node.get(col)
-                # Convert list types to string for datetime fields
-                if col in ['scheduled', 'deadline', 'modified_at', 'created_at', 'document_date'] and isinstance(val, list):
-                    # Elisp time lists are typically [high low microsecs picosecs]
-                    # For now, just convert to string representation
-                    val = str(val) if val else None
-                # Ensure olp is serialized as string if it's a list
-                elif col == 'olp' and isinstance(val, list):
-                    val = json.dumps(val)
-                # Ensure properties is serialized as string
-                elif col == 'properties' and isinstance(val, dict):
-                    val = json.dumps(val)
-                # Handle any other list types by converting to string
-                elif isinstance(val, list):
-                    val = json.dumps(val) if val else None
-                # Handle NodeType enum conversion
-                elif col == 'type' and isinstance(val, Enum):
-                    val = val.value
-                values.append(val)
-            nodes_to_upsert.append(tuple(values))
-
-        # SQL for upserting
-        placeholders = ', '.join(['?'] * len(columns))
-        sql = f"""
-            INSERT INTO nodes ({', '.join(columns)})
-            VALUES ({placeholders})
-            ON CONFLICT(node_id) DO UPDATE SET
-                type=excluded.type,
-                name=excluded.name,
-                content=excluded.content,
-                title=excluded.title,
-                file_path=excluded.file_path,
-                pos=excluded.pos,
-                olp=excluded.olp,
-                level=excluded.level,
-                scheduled=excluded.scheduled,
-                deadline=excluded.deadline,
-                todo=excluded.todo,
-                priority=excluded.priority,
-                modified_at=excluded.modified_at,
-                properties=excluded.properties,
-                raw_value=excluded.raw_value,
-                hash=excluded.hash,
-                content_hash=excluded.content_hash,
-                document_date=excluded.document_date,
-                aliases=excluded.aliases,
-                priority_score=excluded.priority_score
-        """
-        cursor.executemany(sql, nodes_to_upsert)
+    def _format_node_output(self, node_row: sqlite3.Row) -> Optional[Dict[str, Any]]:
+        """Formats a database row into a node dictionary."""
+        if not node_row: return None
+        node_dict = dict(node_row)
+        if node_dict.get('properties'):
+            try:
+                node_dict['properties'] = json.loads(node_dict['properties'])
+            except (json.JSONDecodeError, TypeError):
+                node_dict['properties'] = {}
+        return node_dict
 
     def get_node_by_id(self, node_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single node by its ID, including its tags."""
+        """Retrieves a single node by its ID."""
         conn = self._get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM nodes WHERE node_id = ?", (node_id,))
-        row = cursor.fetchone()
-        conn.row_factory = None # Reset row factory
-        return self._format_node_output(row)
+        node_row = cursor.fetchone()
+        conn.row_factory = None
+        return self._format_node_output(node_row)
 
     def get_nodes_by_ids(self, node_ids: List[str]) -> List[Dict[str, Any]]:
-        """Retrieves multiple nodes' metadata by their IDs."""
-        if not node_ids:
-            return []
-        
-        placeholders = ','.join('?' for _ in node_ids)
-        query = f"SELECT * FROM nodes WHERE node_id IN ({placeholders})"
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, node_ids)
-        
-        return [self._format_node_output(row) for row in cursor.fetchall()]
-
-    def delete_nodes_by_ids(self, node_ids: List[str]):
-        """
-        Deletes a list of nodes and their associated VSS embeddings by their IDs.
-        This operation is performed within a single transaction.
-        Relationships are handled by the 'ON DELETE CASCADE' foreign key constraint.
-        """
-        if not node_ids:
-            self.logger.info("delete_nodes_by_ids called with an empty list.")
-            return
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        try:
-            # 1. Get rowids of nodes to be deleted BEFORE deleting them.
-            # This is crucial for cleaning up the VSS table.
-            id_placeholders = ','.join('?' for _ in node_ids)
-            rowid_query = f"SELECT rowid FROM nodes WHERE node_id IN ({id_placeholders})"
-            cursor.execute(rowid_query, node_ids)
-            rowids_to_delete = [row[0] for row in cursor.fetchall()]
-            
-            # 2. Delete from the main 'nodes' table.
-            # The 'ON DELETE CASCADE' on the 'relations' table will automatically
-            # clean up any relationships pointing to or from these nodes.
-            delete_nodes_query = f"DELETE FROM nodes WHERE node_id IN ({id_placeholders})"
-            cursor.execute(delete_nodes_query, node_ids)
-            deleted_node_count = cursor.rowcount
-            self.logger.info(f"Deleted {deleted_node_count} records from the 'nodes' table.")
-
-            # 3. Delete from the VSS table using the collected rowids.
-            if self.has_vector_ext and rowids_to_delete:
-                vss_placeholders = ','.join('?' for _ in rowids_to_delete)
-                delete_vss_query = f"DELETE FROM node_embeddings_vss WHERE rowid IN ({vss_placeholders})"
-                cursor.execute(delete_vss_query, rowids_to_delete)
-                self.logger.info(f"Deleted {cursor.rowcount} embeddings from the VSS table.")
-
-            # 4. Commit the transaction.
-            conn.commit()
-            self.logger.info(f"Successfully deleted {deleted_node_count} nodes and their related data.")
-
-        except Exception as e:
-            conn.rollback()
-            self.logger.error(f"Failed to delete nodes: {e}", exc_info=True)
-            raise
-
-    # --- Tag Operations ---
-    def bulk_upsert_tags(self, tags_data: List[Dict[str, Any]]):
-        """Bulk inserts or updates tag metadata."""
-        if not tags_data:
-            return
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        sql = """
-            INSERT INTO tags (tag_id, name, description, modified_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(tag_id) DO UPDATE SET
-                name=excluded.name,
-                description=excluded.description,
-                modified_at=excluded.modified_at;
-        """
-
-        tags_to_upsert = [
-            (
-                tag.get('tag_id'), tag.get('name'), tag.get('description'),
-                tag.get('modified_at', datetime.now().isoformat())
-            )
-            for tag in tags_data
-        ]
-
-        try:
-            cursor.executemany(sql, tags_to_upsert)
-            conn.commit()
-            self.logger.info(f"Successfully upserted {len(tags_to_upsert)} tags.")
-        except Exception as e:
-            conn.rollback()
-            self.logger.error(f"Failed to bulk upsert tags: {e}", exc_info=True)
-            raise
-
-    def get_tag_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single tag by its name (case-insensitive)."""
+        """Retrieves a list of nodes by their IDs."""
+        if not node_ids: return []
         conn = self._get_connection()
         conn.row_factory = sqlite3.Row
+        placeholders = ','.join('?' for _ in node_ids)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tags WHERE name = ?", (name,))
-        row = cursor.fetchone()
+        cursor.execute(f"SELECT * FROM nodes WHERE node_id IN ({placeholders})", node_ids)
+        results = [self._format_node_output(row) for row in cursor.fetchall()]
         conn.row_factory = None
-        return dict(row) if row else None
+        return results
 
-    # --- Relation Operations ---
-    def bulk_upsert_relations(self, relations_data: List[Dict[str, Any]]):
-        """Bulk inserts or updates relations."""
-        if not relations_data:
-            return
+    def delete_nodes_by_ids(self, node_ids: List[str]):
+        """Deletes one or more nodes and their associated data."""
+        if not node_ids: return
+        conn = self._get_connection()
+        with conn:
+            placeholders = ','.join('?' for _ in node_ids)
+            conn.execute(f"DELETE FROM nodes WHERE node_id IN ({placeholders})", node_ids)
+            if self.has_vector_ext:
+                # 清理两个嵌入表以确保完整性
+                conn.execute(f"DELETE FROM node_embeddings_vss WHERE node_id IN ({placeholders})", node_ids)
+                conn.execute(f"DELETE FROM entity_embeddings_vss WHERE entity_id IN ({placeholders})", node_ids)
 
+    # --- Vector Operations ---
+
+    def get_node_embedding_by_id(self, node_id: str) -> Optional["ndarray"]:
+        """Retrieves the vector embedding for a single node."""
+        if not self.has_vector_ext or not np: return None
         conn = self._get_connection()
         cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
+        result = cursor.fetchone()
+        return np.frombuffer(result[0], dtype=np.float32) if result and result[0] and isinstance(result[0], bytes) else None
 
-        sql = """
-            INSERT INTO relations (relation_id, source_id, target_id, type, weight, properties)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(relation_id) DO UPDATE SET
-                source_id=excluded.source_id,
-                target_id=excluded.target_id,
-                type=excluded.type,
-                weight=excluded.weight,
-                properties=excluded.properties;
-        """
-
-        relations_to_upsert = []
-        for rel in relations_data:
-            rel_type = rel.get('type')
-            if isinstance(rel_type, Enum): # Convert Enum to its value
-                rel_type = rel_type.value
-
-            relations_to_upsert.append(
-                (
-                    rel.get('relation_id'), rel.get('source_id'), rel.get('target_id'),
-                    rel_type, rel.get('weight', 1.0),
-                    json.dumps(rel.get('properties', {}))
-                )
-            )
-
-        try:
-            cursor.executemany(sql, relations_to_upsert)
-            self.logger.info(f"Successfully upserted {len(relations_to_upsert)} relations.")
-        except Exception as e:
-            conn.rollback()
-            self.logger.error(f"Failed to bulk upsert relations: {e}", exc_info=True)
-            raise
-
-    # --- Embedding and Vector Search Operations ---
-
-    def get_node_embedding_by_id(self, node_id: str) -> Optional[np.ndarray]:
-        """
-        Retrieves a node's embedding from the VSS table by its node_id.
-        """
-        if not self.has_vector_ext:
-            self.logger.warning("Vector extension not available.")
-            return None
-        
+    def find_similar_nodes(self, query_embedding: List[float], top_k=10) -> List[Dict[str, Any]]:
+        """Finds nodes with embeddings similar to the query embedding."""
+        if not self.has_vector_ext or not np: return []
+        query_embedding_np = np.array(query_embedding, dtype=np.float32)
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+        # 使用 entity_embeddings_vss 表进行统一搜索
         try:
-            cursor.execute("SELECT embedding FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
-            row = cursor.fetchone()
-            if row and row[0]:
-                # The embedding is stored as bytes, convert it back to numpy array
-                return np.frombuffer(row[0], dtype=np.float32)
-            return None
-        except Exception as e:
-            self.logger.error(f"Could not retrieve node embedding for id {node_id}: {e}", exc_info=True)
-            return None
-
-    def find_similar_nodes(self, query_vector, top_k=10):
-        if not self.has_vector_ext:
-            logger.warning("Vector extension not available, cannot find similar nodes.")
-            return []
-        
-        # The query_vector is now an EmbeddingResult object.
-        # We need to extract the embedding data from it.
-        if not query_vector or not query_vector.success:
-            logger.error("Invalid or failed EmbeddingResult received.")
-            return []
-        
-        embedding_list = query_vector.embedding
-        if not embedding_list:
-            logger.error("EmbeddingResult contains no embedding data.")
-            return []
-
-        sql = """
-            SELECT
-                n.node_id,
-                t.distance
-            FROM
-                (SELECT node_id, distance FROM node_embeddings_vss WHERE embedding MATCH ? LIMIT ?) t
-            JOIN
-                nodes n ON n.node_id = t.node_id
-        """
-        try:
-            # The C-extension expects a JSON string of a list of floats.
-            query_vector_json = json.dumps(embedding_list)
-            
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(sql, (query_vector_json, top_k))
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"Failed to find similar nodes: {e}", exc_info=True)
-            return []
-
-    def upsert_node_embedding(self, node_id: str, embedding: np.ndarray):
-        """
-        Upserts an embedding for a node into the VSS table.
-        """
-        if not self.has_vector_ext or not NP_AVAILABLE:
-            self.logger.warning(f"Cannot upsert embedding for node {node_id}, vector support is disabled.")
-            return
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Convert numpy array to bytes for sqlite-vec
-        embedding_bytes = embedding.tobytes()
-        
-        try:
-            # Explicitly delete existing entry to ensure upsert behavior
-            cursor.execute("DELETE FROM node_embeddings_vss WHERE node_id = ?", (node_id,))
-            
+            # 使用正确的 sqlite-vec KNN 查询语法
             cursor.execute(
-                "INSERT INTO node_embeddings_vss (node_id, embedding) VALUES (?, ?)",
-                (node_id, embedding_bytes)
+                "SELECT entity_id, distance FROM entity_embeddings_vss WHERE embedding MATCH ? AND k = ?",
+                (query_embedding_np.tobytes(), top_k)
             )
-            self.logger.info(f"Successfully upserted embedding for node {node_id}.")
-        except Exception as e:
-            conn.rollback()
-            self.logger.error(f"Failed to upsert embedding for node {node_id}: {e}", exc_info=True)
-            raise
-
-    # --- Graph Traversal ---
-
-    def get_neighbors(self, node_id: str, link_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Retrieves neighbor nodes of a given node, based on stored relations."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        placeholders = '?'
-        params = [node_id]
-        if link_type:
-            sql += " AND type = ?"
-            params.append(link_type)
-        
-        cursor.execute(sql, params)
-        neighbor_ids = [row[0] for row in cursor.fetchall()]
-
-        if not neighbor_ids:
+        except sqlite3.OperationalError as e:
+            self.logger.error(f"Vector search failed: {e}")
             return []
         
-        # Get full node details for the neighbors
+        similar_entities_with_distance = cursor.fetchall()
+        similar_entity_ids = [row[0] for row in similar_entities_with_distance]
+        # 修复：使用 entity_id 作为键，因为在统一嵌入系统中，entity_id 就是 node_id
+        full_entity_data_map = {entity['node_id']: entity for entity in self.get_nodes_by_ids(similar_entity_ids)}
+        results = []
+        for entity_id, distance in similar_entities_with_distance:
+            # 修复：在统一嵌入系统中，entity_id 就是 node_id
+            if entity_id in full_entity_data_map:
+                entity_data = full_entity_data_map[entity_id]
+                entity_data['distance'] = distance
+                results.append(entity_data)
+        return results
+
+    def upsert_node_embedding(self, node_id: str, embedding: "ndarray"):
+        """Inserts or updates a node's vector embedding."""
+        if not self.has_vector_ext or not np: return
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("REPLACE INTO node_embeddings_vss (node_id, embedding) VALUES (?, ?)", (node_id, embedding.tobytes()))
+
+    def get_entity_embedding_by_id(self, entity_id: str) -> Optional["ndarray"]:
+        """Retrieves the vector embedding for a single entity."""
+        if not self.has_vector_ext or not np: return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM entity_embeddings_vss WHERE entity_id = ?", (entity_id,))
+        result = cursor.fetchone()
+        return np.frombuffer(result[0], dtype=np.float32) if result and result[0] and isinstance(result[0], bytes) else None
+
+    def upsert_entity_embedding(self, entity_id: str, embedding: "ndarray"):
+        """Inserts or updates an entity's description vector embedding."""
+        if not self.has_vector_ext or not np: return
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("REPLACE INTO entity_embeddings_vss (entity_id, embedding) VALUES (?, ?)", (entity_id, embedding.tobytes()))
+
+    def find_similar_entities(self, query_embedding: List[float], top_k=5) -> List[Dict[str, Any]]:
+        """Finds entities with descriptions similar to the query embedding."""
+        if not self.has_vector_ext or not np: return []
+        query_embedding_np = np.array(query_embedding, dtype=np.float32)
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            # 使用正确的 sqlite-vec KNN 查询语法
+            cursor.execute(
+                "SELECT entity_id, distance FROM entity_embeddings_vss WHERE embedding MATCH ? AND k = ?",
+                (query_embedding_np.tobytes(), top_k)
+            )
+        except sqlite3.OperationalError as e:
+            self.logger.error(f"Vector search failed: {e}")
+            return []
+        
+        similar_entities_with_distance = cursor.fetchall()
+        similar_entity_ids = [row[0] for row in similar_entities_with_distance]
+        # 获取完整的实体数据并添加距离信息
+        full_entity_data_map = {entity['node_id']: entity for entity in self.get_nodes_by_ids(similar_entity_ids)}
+        results = []
+        for entity_id, distance in similar_entities_with_distance:
+            if entity_id in full_entity_data_map:
+                entity_data = full_entity_data_map[entity_id]
+                entity_data['distance'] = distance
+                results.append(entity_data)
+        return results
+
+    # --- Graph Traversal and Querying ---
+
+
+
+    def get_neighbors(self, node_id: str, relation_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves neighboring nodes connected by a specific relation type."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        if relation_type:
+            cursor.execute("SELECT target_id FROM relations WHERE source_id = ? AND type = ?", (node_id, relation_type))
+        else:
+            cursor.execute("SELECT target_id FROM relations WHERE source_id = ?", (node_id,))
+        neighbor_ids = [row[0] for row in cursor.fetchall()]
         return self.get_nodes_by_ids(neighbor_ids)
 
+    def get_nodes_linked_to_tag(self, tag_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves all nodes that are linked from a specific tag.
+        This is primarily used to gather context for embedding a tag concept.
+        """
+        conn = self._get_connection()
+        # This query finds all nodes that are the 'source' of a link where the tag is the 'target'.
+        # This corresponds to a node having a tag.
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT n.*
+            FROM nodes n
+            JOIN relations r ON n.node_id = r.source_id
+            WHERE r.target_id = ? AND r.type = 'HAS_TAG'
+        """, (tag_id,))
+        
+        node_rows = cursor.fetchall()
+        
+        # Since the schema is unified, we need to re-establish the row factory to parse rows into dicts.
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT n.*
+            FROM nodes n
+            JOIN relations r ON n.node_id = r.source_id
+            WHERE r.target_id = ? AND r.type = 'HAS_TAG'
+        """, (tag_id,))
+        
+        results = [self._format_node_output(row) for row in cursor.fetchall()]
+        conn.row_factory = None # Reset row factory
+        return results
+
     def search_nodes_by_title_content(self, search_query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Performs a LIKE search on node titles and content.
-        """
-        if not search_query.strip():
-            return []
+        """Performs a full-text search on node titles and content. Also finds nodes linked to matching tags."""
+        conn = self._get_connection()
+        conn.row_factory = sqlite3.Row  # Enable row -> dict conversion
+        like_query = f"%{search_query}%"
+        cursor = conn.cursor()
+        # 1) direct match on title / content
+        cursor.execute(
+            "SELECT * FROM nodes WHERE title LIKE ? OR content LIKE ? ORDER BY modified_at DESC LIMIT ?",
+            (like_query, like_query, limit)
+        )
+        rows = cursor.fetchall()
+        results: List[Dict[str, Any]] = [self._format_node_output(row) for row in rows if row]
 
+        # 2) if not enough, search by tag linkage
+        if len(results) < limit:
+            collected_ids = {n['node_id'] for n in results}
+            tag_limit = limit * 2  # fetch extra for deduplication buffer
+            cursor.execute(
+                """
+                SELECT n.*
+                FROM nodes n
+                JOIN relations r ON n.node_id = r.source_id
+                JOIN nodes t ON t.node_id = r.target_id
+                WHERE r.type = 'HAS_TAG'
+                  AND (t.title LIKE ? OR t.name LIKE ? OR t.node_id LIKE ?)
+                LIMIT ?
+                """,
+                (like_query, like_query, like_query, tag_limit)
+            )
+            tag_rows = cursor.fetchall()
+            for row in tag_rows:
+                node = self._format_node_output(row)
+                if node and node['node_id'] not in collected_ids:
+                    results.append(node)
+                    collected_ids.add(node['node_id'])
+                    if len(results) >= limit:
+                        break
+        conn.row_factory = None  # Reset row factory
+        return results
+
+    def get_node_with_neighbors(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a node along with its neighbors."""
+        node = self.get_node_by_id(node_id)
+        if not node: return None
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        search_pattern = f"%{search_query.strip()}%"
-        query = """
-            SELECT *
-            FROM nodes 
-            WHERE title LIKE ? OR content LIKE ?
-            ORDER BY 
-                CASE 
-                    WHEN title LIKE ? THEN 1 
-                    ELSE 2 
-                END,
-                LENGTH(title) ASC
-            LIMIT ?
-        """
-        
-        try:
-            conn.row_factory = sqlite3.Row
-            cursor.execute(query, (search_pattern, search_pattern, search_pattern, limit))
-            rows = cursor.fetchall()
-            conn.row_factory = None
-
-            results = []
-            for row in rows:
-                node = dict(row)
-                node['tags'] = json.loads(node.get('tags', '[]'))
-                node['properties'] = json.loads(node.get('properties', '{}'))
-                results.append(node)
-            return results
-        except Exception as e:
-            self.logger.error(f"Error searching nodes by content: {e}", exc_info=True)
-            return []
-
-    def search_expand(self, query_vector: np.ndarray, top_k: int = 5, expansion_hops: int = 1) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Performs topology-enhanced search.
-        1. Find initial seed nodes via vector search.
-        2. Expand from seed nodes to find related entities.
-        3. Expand from entities to find other related text nodes.
-        """
-        self.logger.info(f"Starting search_expand with top_k={top_k}, expansion_hops={expansion_hops}")
-        
-        # 1. Initial vector search for seed nodes
-        initial_nodes_tuples = self.find_similar_nodes(query_vector, top_k=top_k)
-        if not initial_nodes_tuples:
-            self.logger.info("No initial nodes found in vector search.")
-            return {"initial": [], "expanded": []}
-
-        initial_node_ids = [item[0] for item in initial_nodes_tuples]
-        initial_nodes = self.get_nodes_by_ids(initial_node_ids)
-        self.logger.debug(f"Found {len(initial_nodes)} initial seed nodes.")
-
-        # Use a set to keep track of all node IDs found to avoid duplicates
-        all_found_node_ids = set(initial_node_ids)
-        
-        # 2. Graph Expansion
-        current_expansion_front = set(initial_node_ids)
-        
-        for hop in range(expansion_hops):
-            self.logger.debug(f"Expansion hop {hop + 1}/{expansion_hops}")
-            
-            # Find related entities from the current front of text nodes
-            related_entity_ids = set()
-            for node_id in current_expansion_front:
-                neighbors = self.get_neighbors(node_id, relation_type='HAS_ENTITY')
-                for neighbor in neighbors:
-                    related_entity_ids.add(neighbor['node_id'])
-            
-            if not related_entity_ids:
-                self.logger.debug("No related entities found to expand from.")
-                break # Stop if no further expansion is possible
-            
-            self.logger.debug(f"Found {len(related_entity_ids)} related entities.")
-            
-            # Find new text nodes related to these entities
-            newly_found_text_ids = set()
-            for entity_id in related_entity_ids:
-                # We need a method to get neighbors that are sources of a relation
-                source_neighbors = self._get_source_neighbors(entity_id, relation_type='HAS_ENTITY')
-                for neighbor in source_neighbors:
-                    if neighbor['node_id'] not in all_found_node_ids:
-                        newly_found_text_ids.add(neighbor['node_id'])
-            
-            if not newly_found_text_ids:
-                self.logger.debug("Entities did not lead to any new text nodes.")
-                break
-
-            self.logger.debug(f"Found {len(newly_found_text_ids)} new text nodes in hop {hop + 1}.")
-            all_found_node_ids.update(newly_found_text_ids)
-            current_expansion_front = newly_found_text_ids
-
-        # 3. Aggregate results
-        expanded_node_ids = list(all_found_node_ids - set(initial_node_ids))
-        expanded_nodes = self.get_nodes_by_ids(expanded_node_ids) if expanded_node_ids else []
-        
-        self.logger.info(f"Search expanded from {len(initial_nodes)} to {len(all_found_node_ids)} total nodes.")
-
-        return {
-            "initial": initial_nodes,
-            "expanded": expanded_nodes
+        cursor.execute("SELECT source_id, type FROM relations WHERE target_id = ?", (node_id,))
+        parents = [{"node_id": row[0], "relation_type": row[1]} for row in cursor.fetchall()]
+        cursor.execute("SELECT target_id, type FROM relations WHERE source_id = ?", (node_id,))
+        children = [{"node_id": row[0], "relation_type": row[1]} for row in cursor.fetchall()]
+        node['relations'] = {
+            'parents': self.get_nodes_by_ids([p['node_id'] for p in parents]),
+            'children': self.get_nodes_by_ids([c['node_id'] for c in children]),
         }
-
-    def _get_source_neighbors(self, node_id: str, relation_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Helper to get neighbors where the given node_id is the target."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        return node
         
-        sql = "SELECT source_id FROM relations WHERE target_id = ?"
-        params = [node_id]
-        if relation_type:
-            sql += " AND type = ?"
-            params.append(relation_type)
-            
-        cursor.execute(sql, params)
-        source_ids = [row[0] for row in cursor.fetchall()]
-        
-        if not source_ids:
-            return []
-            
-        return self.get_nodes_by_ids(source_ids)
+    # --- Database Maintenance and Stats ---
 
     def get_stats(self) -> Dict[str, Any]:
-        """Returns statistics about the database."""
+        """Retrieves statistics about the graph."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        total_nodes = cursor.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-        text_nodes = cursor.execute("SELECT COUNT(*) FROM nodes WHERE type = 'TEXT'").fetchone()[0]
-        entity_nodes = cursor.execute("SELECT COUNT(*) FROM nodes WHERE type = 'ENTITY'").fetchone()[0]
-        total_relations = cursor.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
-        
-        stats = {
-            'total_nodes': total_nodes,
-            'text_nodes': text_nodes,
-            'entity_nodes': entity_nodes,
-            'total_relations': total_relations,
-            'db_path': self.db_path,
-            'vector_extension': 'sqlite-vec' if self.has_vector_ext else 'Not loaded'
-        }
+        stats = {}
+        cursor.execute("SELECT COUNT(*) FROM nodes")
+        stats['node_count'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM relations")
+        stats['relation_count'] = cursor.fetchone()[0]
+        cursor.execute("SELECT type, COUNT(*) FROM nodes GROUP BY type")
+        stats['nodes_by_type'] = dict(cursor.fetchall())
+        cursor.execute("SELECT type, COUNT(*) FROM relations GROUP BY type")
+        stats['relations_by_type'] = dict(cursor.fetchall())
         return stats
 
+
+
     def close(self):
-        """Closes the database connection for the current thread."""
-        if hasattr(self.local, 'conn') and self.local.conn is not None:
+        """Safely closes the database connection for the current thread."""
+        if hasattr(self, 'local') and hasattr(self.local, 'conn') and self.local.conn:
+            self.logger.debug(f"Closing database connection for thread {threading.get_ident()}")
             self.local.conn.close()
             self.local.conn = None
-            self.logger.debug(f"Closed database connection for thread {threading.get_ident()}") 
-    
+
     def force_unlock_database(self):
-        """Force unlock the database by closing all connections and clearing WAL files if needed."""
+        """
+        Forces the database to unlock by clearing the WAL journal file.
+        WARNING: This is a last resort and can lead to data corruption if the
+        database is actively being written to by another process.
+        """
         try:
-            # Close current connection
+            wal_path = f"{self.db_path}-wal"
+            shm_path = f"{self.db_path}-shm"
+
             self.close()
-            
-            # Try to connect and run a simple query to check if database is accessible
-            test_conn = sqlite3.connect(self.db_path, timeout=5.0)
-            test_conn.execute("SELECT 1").fetchone()
-            test_conn.close()
-            
-            self.logger.info("Database is accessible, no force unlock needed.")
+
+            import os
+            if os.path.exists(wal_path):
+                os.remove(wal_path)
+                self.logger.info(f"Removed WAL file: {wal_path}")
+            if os.path.exists(shm_path):
+                os.remove(shm_path)
+                self.logger.info(f"Removed SHM file: {shm_path}")
+                
             return True
-            
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower():
-                self.logger.warning("Database is locked, attempting to force unlock...")
-                
-                # Remove WAL and SHM files if they exist
-                import os
-                wal_file = self.db_path + "-wal"
-                shm_file = self.db_path + "-shm"
-                
-                try:
-                    if os.path.exists(wal_file):
-                        os.remove(wal_file)
-                        self.logger.info(f"Removed WAL file: {wal_file}")
-                    if os.path.exists(shm_file):
-                        os.remove(shm_file)
-                        self.logger.info(f"Removed SHM file: {shm_file}")
-                        
-                    # Try to connect again
-                    test_conn = sqlite3.connect(self.db_path, timeout=5.0)
-                    test_conn.execute("SELECT 1").fetchone()
-                    test_conn.close()
-                    
-                    self.logger.info("Database unlocked successfully.")
-                    return True
-                    
-                except Exception as cleanup_error:
-                    self.logger.error(f"Failed to force unlock database: {cleanup_error}")
-                    return False
-            else:
-                self.logger.error(f"Database error (not lock-related): {e}")
-                return False
         except Exception as e:
-            self.logger.error(f"Unexpected error during database unlock: {e}")
+            self.logger.error(f"Failed to force unlock database: {e}", exc_info=True)
             return False
+
+    def __del__(self):
+        """Ensures the connection is closed when the object is destroyed."""
+        self.close()

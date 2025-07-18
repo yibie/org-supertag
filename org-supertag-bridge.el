@@ -111,47 +111,11 @@ Functions added to this hook will be run without arguments.")
 ;; Emacs-side EPC Server (for Python to connect to)
 ;; =============================================================================
 (defun org-supertag-bridge--start-emacs-epc-server ()
-  "Start the Emacs-side EPC server for `simtag_bridge.py` to connect to.
-This server allows Python to call methods defined in Emacs."
-  (org-supertag-bridge--log "Attempting to start Emacs-side EPC server (current server: %S, live: %S)..."
-                            org-supertag-bridge--emacs-epc-server
-                            (if (processp org-supertag-bridge--emacs-epc-server)
-                                (process-live-p org-supertag-bridge--emacs-epc-server)
-                              "not a process"))
-  (unless (and org-supertag-bridge--emacs-epc-server (process-live-p org-supertag-bridge--emacs-epc-server))
-    (org-supertag-bridge--log "No live Emacs EPC server found, attempting to create one.")
-    (let ((callback (lambda (manager) ; Callback when Python connects
-                      (org-supertag-bridge--log "Python process connected to Emacs EPC server. Manager: %S" manager)
-                      (org-supertag-bridge-epc-define-method manager
-                                                             'simtag-bridge/report-ready ; Python calls this
-                                                             #'org-supertag-bridge--handle-python-server-ready-signal) ; Our handler
-                      (org-supertag-bridge-epc-define-method manager
-                                                             'eval-in-emacs ; Python calls this
-                                                             #'org-supertag-bridge--eval-in-emacs-func) ; Our handler
-                      (org-supertag-bridge--log "Defined EPC methods for Python on Emacs server."))))
-      (org-supertag-bridge--log "Calling org-supertag-bridge-epc-server-start now with callback...")
-      ;; Ensure `org-supertag-bridge-epc.el` is loaded for `org-supertag-bridge-epc-server-start`
-      (require 'org-supertag-bridge-epc)
-      (setq org-supertag-bridge--emacs-epc-server (org-supertag-bridge-epc-server-start callback))
-      (org-supertag-bridge--log "org-supertag-bridge-epc-server-start returned: %S" org-supertag-bridge--emacs-epc-server)))
-
-  (if org-supertag-bridge--emacs-epc-server
-      (if (process-live-p org-supertag-bridge--emacs-epc-server) ; Extra check for liveness
-          (progn
-            (setq org-supertag-bridge--emacs-epc-server-port (process-contact org-supertag-bridge--emacs-epc-server :service))
-            (org-supertag-bridge--log "Emacs-side EPC server started successfully. Process: %S. Listening on port: %d"
-                                      org-supertag-bridge--emacs-epc-server
-                                      org-supertag-bridge--emacs-epc-server-port)
-            t) ; Success
-        (progn
-          (org-supertag-bridge--log "ERROR: Emacs EPC server process %S is not live after creation." org-supertag-bridge--emacs-epc-server)
-          (message "[OrgSuperTagBridge] Error: Emacs-side EPC server process not live after creation.")
-          (setq org-supertag-bridge--emacs-epc-server nil) ; Clear it if not live
-          nil)) ; Failure
-    (progn
-      (org-supertag-bridge--log "ERROR: Failed to start Emacs-side EPC server (server object is nil after attempt).")
-      (message "[OrgSuperTagBridge] Error: Emacs-side EPC server failed to start (nil server object).")
-      nil))) ; Failure
+  "This function is now DEPRECATED.
+The new connection logic no longer requires a persistent Emacs-side server
+for the initial handshake. Python server is now polled directly."
+  (message "org-supertag-bridge--start-emacs-epc-server is deprecated and should not be called.")
+  nil)
 
 ;; Handler for 'eval-in-emacs' called by Python
 (defun org-supertag-bridge--eval-in-emacs-func (sexp-string)
@@ -167,44 +131,23 @@ This server allows Python to call methods defined in Emacs."
      ;; Decide if Python should be notified of the error. For now, just log.
      nil)))
 
+;; NEW: Handler for 'simtag-bridge/log' called by Python
+(defun org-supertag-bridge-epc-log-message (message-string)
+  "Receives a MESSAGE-STRING from Python and logs it with a [Python] prefix."
+  (org-supertag-bridge--log "[Python] %s" message-string))
+
 ;; Handler for Python's readiness signal
-(defun org-supertag-bridge--handle-python-server-ready-signal (python-server-port)
-  "Handles `simtag-bridge/report-ready` call from Python.
-PYTHON-SERVER-PORT is the port the Python EPC server is listening on.
-Establishes the main EPC connection from Emacs TO the Python server and runs the ready hook."
-  (org-supertag-bridge--log "Python server reported ready. Listening on its port: %s" python-server-port)
-  (condition-case-unless-debug err
-      (progn
-        (setq org-supertag-bridge--python-epc-manager
-              (make-org-supertag-bridge-epc-manager
-               :server-process org-supertag-bridge--python-process
-               :commands (cons org-supertag-bridge--python-program-to-run org-supertag-bridge--python-program-args)
-               :title (format "OrgSuperTagBridge-Client-to-Python:%s" python-server-port)
-               :port python-server-port
-               :connection (org-supertag-bridge-epc-connect "127.0.0.1" python-server-port)))
-        
-        (if (and org-supertag-bridge--python-epc-manager (org-supertag-bridge-epc-live-p org-supertag-bridge--python-epc-manager))
-            (progn
-              (org-supertag-bridge-epc-init-epc-layer org-supertag-bridge--python-epc-manager)
-              (setq org-supertag-bridge--ready-p t)
-              (message "[OrgSuperTagBridge] Successfully connected to SimTagBridge Python server on port %s." python-server-port)
-              (org-supertag-bridge--log "✅ Connection FROM Emacs TO SimTagBridge Python server established. Running ready hook...")
-              (run-hooks 'org-supertag-bridge-ready-hook))
-          (progn
-            (setq org-supertag-bridge--ready-p nil)
-            (error (format "[OrgSuperTagBridge] Failed to establish live connection to Python server on port %s" python-server-port)))))
-    (error
-     (setq org-supertag-bridge--ready-p nil)
-     (org-supertag-bridge--log "ERROR establishing connection TO Python server: %S" err)
-     (message "[OrgSuperTagBridge] Error connecting to Python server: %s" (error-message-string err))
-     (org-supertag-bridge-kill-process) ; Clean up if connection failed
-     nil)))
+(defun org-supertag-bridge--handle-python-server-ready-signal (args)
+  "This function is now DEPRECATED.
+The new connection logic polls the Python server directly."
+  (message "org-supertag-bridge--handle-python-server-ready-signal is deprecated.")
+  nil)
 
 ;; =============================================================================
 ;; Python Process Management
 ;; =============================================================================
 (cl-defun org-supertag-bridge-start-process ()
-  "Start the `simtag_bridge.py` process if it isn't already running and connected."
+  "Start the `simtag_bridge.py` process and poll it until it's ready."
   (interactive)
   (if (and (processp org-supertag-bridge--python-process)
            (process-live-p org-supertag-bridge--python-process))
@@ -218,74 +161,97 @@ Establishes the main EPC connection from Emacs TO the Python server and runs the
       (org-supertag-bridge--log "Stale process object found. Cleaning up before starting new process.")
       (org-supertag-bridge-kill-process))
 
-    ;; 1. Ensure Emacs-side EPC server is running for Python to connect back
-    (unless (org-supertag-bridge--start-emacs-epc-server)
-      (org-supertag-bridge--log "Aborting Python process start: Emacs-side EPC server failed.")
-      (cl-return-from org-supertag-bridge-start-process nil))
-      
-    (unless org-supertag-bridge--emacs-epc-server-port
-      (org-supertag-bridge--log "Aborting Python process start: Emacs-side EPC server port not available.")
-      (error "[OrgSuperTagBridge] Emacs-side EPC server port not set. Cannot start Python process.")
-      (cl-return-from org-supertag-bridge-start-process nil))
-
-    ;; 2. Prepare and launch the simtag_bridge.py script
-    (setq org-supertag-bridge--ready-p nil) ; Reset readiness flag
+    ;; 1. Prepare and launch the simtag_bridge.py script
+    (setq org-supertag-bridge--ready-p nil)
     (let* ((python-cmd org-supertag-bridge-python-command)
-           (emacs-port-str (number-to-string org-supertag-bridge--emacs-epc-server-port))
-           (data-dir org-supertag-data-directory)
-           (profile-arg (when org-supertag-bridge-enable-profile (list "--profile")))
-           (default-directory (expand-file-name ".." (file-name-directory org-supertag-bridge-python-script))))
+           ;; CRITICAL: Use the centralized project root variable.
+           (project-root org-supertag-project-root)
+           (port-file (expand-file-name "simtag_bridge.port" org-supertag-data-directory))
+           (args (list "-m" "simtag.simtag_bridge" "--port-file" port-file "--data-directory" org-supertag-data-directory)))
 
-      (unless (file-exists-p python-cmd)
-        (let ((setup-script (expand-file-name "simtag/setup.sh" default-directory)))
-          (if (and (file-exists-p setup-script)
-                   (y-or-n-p (format "Python executable '%s' not found. Run setup script to create virtual environment?" python-cmd)))
-              (progn
-                (message "[OrgSuperTag] Starting setup script: %s" setup-script)
-                (start-process "simtag-setup"
-                               (get-buffer-create "*SimTag Setup*")
-                               "bash" setup-script)
-                (display-buffer "*SimTag Setup*")
-                (message "[OrgSuperTag] Setup script running in background. Please wait for it to complete, then try again.")
-                (cl-return-from org-supertag-bridge-start-process nil))
-            (error "[OrgSuperTagBridge] Python script not found: %s" python-cmd))))
+      (when (file-exists-p port-file)
+        (delete-file port-file)) ; Clean up old port file
 
-      (unless (file-directory-p data-dir)
-        (make-directory data-dir t)
-        (org-supertag-bridge--log "Created data directory: %s" data-dir))
-      
       (setq org-supertag-bridge--python-program-to-run python-cmd)
-      (setq org-supertag-bridge--python-program-args
-            (append (list "-m" "simtag.simtag_bridge"
-                          "--emacs-epc-port" emacs-port-str
-                          "--data-directory" data-dir)
-                    profile-arg))
+      (setq org-supertag-bridge--python-program-args (append args (when org-supertag-bridge-enable-profile (list "--profile"))))
 
-      (org-supertag-bridge--log "DEBUG: Using Python command from org-supertag-bridge-python-command: '%s'" python-cmd)
-      (org-supertag-bridge--log "Starting Python process with command: %s %s"
-                                org-supertag-bridge--python-program-to-run
-                                (string-join org-supertag-bridge--python-program-args " "))
-      (org-supertag-bridge--log "  Working directory for script: %s" default-directory)
+      (org-supertag-bridge--log "Starting Python process in directory: %s" project-root)
+      (org-supertag-bridge--log "Command: %s %s" python-cmd (string-join org-supertag-bridge--python-program-args " "))
+
+      ;; CRITICAL FIX: Use `let` to dynamically bind `default-directory` for the child process.
+      ;; This ensures the process starts in the correct project root, regardless of the current buffer's directory.
+      (let ((default-directory project-root))
+        (setq org-supertag-bridge--python-process (apply #'start-process "SimTagBridge-Python" (get-buffer-create org-supertag-bridge-process-buffer-name) python-cmd org-supertag-bridge--python-program-args)))
       
-      (let ((current-process-environment process-environment) ; Save current
-            (process-connection-type nil)) ; For stdio pipes
-        (setq process-environment current-process-environment) ; Restore for other Emacs processes
-        (org-supertag-bridge--log "Starting Python process with command: %s %s"
-                                  org-supertag-bridge--python-program-to-run
-                                  (string-join org-supertag-bridge--python-program-args " "))
-        (setq org-supertag-bridge--python-process
-              (apply #'start-process
-                     "simtag-bridge-py"
-                     (get-buffer-create org-supertag-bridge-process-buffer-name)
-                     org-supertag-bridge--python-program-to-run
-                     org-supertag-bridge--python-program-args)))
+      (when (processp org-supertag-bridge--python-process)
+        (set-process-sentinel org-supertag-bridge--python-process #'org-supertag-bridge-process-sentinel)
+        (org-supertag-bridge--log "Python process started. Polling for port file and connection...")
+        (org-supertag-bridge--poll-for-connection port-file 10)))))
 
-      (when (process-live-p org-supertag-bridge--python-process)
-        (org-supertag-bridge--log "SimTagBridge Python process started. Waiting for it to connect back and report ready..."))
-      org-supertag-bridge--python-process)))
+(defun org-supertag-bridge--poll-for-connection (port-file max-wait-seconds)
+  "Poll for PORT-FILE to appear and contain the port number."
+  (let ((start-time (current-time))
+        (port nil))
+    (while (and (not port) (< (time-to-seconds (time-subtract (current-time) start-time)) max-wait-seconds))
+      (when (file-exists-p port-file)
+        (with-temp-buffer
+          (insert-file-contents port-file)
+          (setq port (string-to-number (buffer-string)))))
+      (unless port
+        (sleep-for 0.2)))
+
+    (if (not port)
+        (progn
+          (org-supertag-bridge--log "ERROR: Python server did not write port file in time.")
+          (message "[OrgSuperTagBridge] Error: Connection timed out.")
+          (org-supertag-bridge-kill-process))
+      (org-supertag-bridge--log "Got port %d from file. Attempting to connect..." port)
+      (condition-case-unless-debug err
+          (let ((manager (make-org-supertag-bridge-epc-manager
+                          :server-process org-supertag-bridge--python-process
+                          :commands (cons org-supertag-bridge--python-program-to-run org-supertag-bridge--python-program-args)
+                          :title (format "OrgSuperTagBridge-Client-to-Python:%s" port)
+                          :port port
+                          :connection (org-supertag-bridge-epc-connect "127.0.0.1" port))))
+            (setq org-supertag-bridge--python-epc-manager manager)
+            (org-supertag-bridge-epc-init-epc-layer manager)
+            ;; Final check using a simple ping
+            (if (equal "pong" (org-supertag-bridge-call-sync "ping" nil 5))
+                (progn
+                  (setq org-supertag-bridge--ready-p t)
+                  (message "[OrgSuperTagBridge] Successfully connected to SimTagBridge Python server on port %d." port)
+                  (org-supertag-bridge--log "✅ Connection established. Running ready hook...")
+                  (run-hooks 'org-supertag-bridge-ready-hook))
+              (error "Ping to Python server failed.")))
+        (error
+         (org-supertag-bridge--log "ERROR connecting to Python server: %S" err)
+         (message "[OrgSuperTagBridge] Error connecting to Python server: %s" (error-message-string err))
+         (org-supertag-bridge-kill-process))))))
+
+(defun org-supertag-bridge-process-sentinel (process event)
+  "Sentinel function for the Python process.
+Handles process termination and reports errors."
+  (org-supertag-bridge--log "Process sentinel triggered for %s with event: %s" process event)
+  (let ((exit-status (process-status process)))
+    (unless (memq exit-status '(run signal)) ; Ignore normal running or signal-based termination for now
+      (setq org-supertag-bridge--ready-p nil)
+      (setq org-supertag-bridge--python-process nil)
+      (org-supertag-bridge--log "Python process terminated. Status: %S" exit-status)
+      (message "[OrgSuperTagBridge] Python process terminated: %s" event)
+      (let ((output-buffer (process-buffer process)))
+        (when (buffer-live-p output-buffer)
+          (with-current-buffer output-buffer
+            (let ((output (buffer-string)))
+              (when (string-match-p "\\S-" output) ; If there's non-whitespace output
+                (org-supertag-bridge--log "--- Python Process Output ---")
+                (org-supertag-bridge--log output)
+                (org-supertag-bridge--log "---------------------------")
+                (display-buffer output-buffer) ; Show the user what went wrong
+                (message "[OrgSuperTagBridge] Python process exited with an error. See %s for details."
+                         (buffer-name output-buffer))))))))))
 
 (defun org-supertag-bridge-kill-process ()
-  "Stop the SimTagBridge Python process and clean up related EPC resources."
+  "Kill the `simtag_bridge.py` process and associated EPC connections."
   (interactive)
   (org-supertag-bridge--log "Attempting to kill SimTagBridge Python process and EPC connections...")
   
@@ -464,6 +430,85 @@ Returns t if ready, nil otherwise. Waits up to TIMEOUT seconds (default 10)."
   (interactive)
   (remove-hook 'post-command-hook #'org-supertag-bridge-ensure-ready t) ; Remove local hook
   (message "[OrgSuperTagBridge] Auto-start disabled."))
+
+;; =============================================================================
+;; AI/LLM Convenience Functions
+;; =============================================================================
+
+(defun org-supertag-bridge-fetch-available-models ()
+  "Fetch the list of available AI models via the Python bridge.
+Returns a list of model name strings on success, or signals an error."
+  (interactive)
+  (org-supertag-bridge--log "Fetching available AI models via bridge...")
+  (unless (org-supertag-bridge-ensure-ready)
+    (error "Bridge is not ready. Cannot fetch models."))
+  (let ((response (org-supertag-bridge-call-sync "get_available_models" nil)))
+    (org-supertag-bridge--log "Raw response for models: %S" response)
+    (if (and (listp response) (plistp response) (string= (plist-get response :status) "success"))
+        (let ((result (plist-get response :result)))
+          (if (listp result)
+              (progn
+                (org-supertag-bridge--log "Successfully fetched %d models." (length result))
+                result)
+            (error "Invalid result format for models: Expected list, got %S" result)))
+      (error "Error fetching models from backend: %S" response))))
+
+(defun org-supertag-bridge-select-model ()
+  "Interactively select an available AI model.
+Fetches the list of models from the backend and presents them for
+selection in the minibuffer. Inserts the selected model name into
+the current buffer at point."
+  (interactive)
+  (condition-case err
+      (let* ((available-models (org-supertag-bridge-fetch-available-models))
+             (selected-model nil))
+        (if available-models
+            (setq selected-model
+                  (completing-read "Select Model: "
+                                   available-models
+                                   nil ; predicate
+                                   t   ; require-match
+                                   nil ; initial-input
+                                   nil ; history var
+                                   (car available-models))) ; default
+          (message "No available models found."))
+        (if (and selected-model (not (string-empty-p selected-model)))
+            (progn
+              (insert selected-model)
+              (message "Inserted model: %s" selected-model))
+          (message "No model selected.")))
+    (error
+     (message "Error selecting model: %s" (error-message-string err)))))
+
+(defun org-supertag-bridge-llm-invoke (prompt &key system-prompt model temperature max-tokens)
+  "Synchronously invoke an LLM via the Python bridge.
+This is a high-level wrapper that sends a request to the `reasoning_invoke`
+method in the Python backend.
+
+PROMPT: The main user prompt string.
+:system-prompt: Optional system prompt string.
+:model: Optional model name string to override the default.
+:temperature: Optional temperature override.
+:max-tokens: Optional max-tokens override.
+
+Returns the AI response string on success, or signals an error."
+  (org-supertag-bridge--log "Invoking LLM with prompt: %s..." (truncate-string-to-width prompt 80))
+  (unless (org-supertag-bridge-ensure-ready)
+    (error "Bridge is not ready. Cannot invoke LLM."))
+
+  (let* ((payload-alist `((prompt . ,prompt)
+                         ,@(when system-prompt `((system_prompt . ,system-prompt)))
+                         ,@(when model `((model . ,model)))
+                         ,@(when temperature `((temperature . ,temperature)))
+                         ,@(when max-tokens `((max_tokens . ,max-tokens)))))
+         (response (org-supertag-bridge-call-sync "reasoning_invoke" (list payload-alist))))
+
+    (org-supertag-bridge--log "Raw LLM response: %S" response)
+    (if (and (listp response) (plistp response) (string= (plist-get response :status) "success"))
+        (let ((result (plist-get response :result)))
+          (org-supertag-bridge--log "LLM call successful.")
+          result)
+      (error "LLM call failed: %S" response))))
 
 (provide 'org-supertag-bridge)
 

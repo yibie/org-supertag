@@ -56,10 +56,11 @@
 (require 'org-supertag-api)
 (require 'org-supertag-backlink)
 (require 'org-supertag-recovery)
-(require 'org-supertag-proactive-engine)
 (require 'org-supertag-background-sync) 
 (require 'org-supertag-auto-tag)
 (require 'org-supertag-completion)
+
+(require 'org-supertag-smart-companion)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -83,6 +84,11 @@ available after manual initialization via `org-supertag-sim-init'."
 Only used when `org-supertag-enable-auto-vectorization' is non-nil."
   :type 'integer
   :group 'org-supertag)
+
+(defvar org-supertag-project-root
+  (file-name-directory (or load-file-name (buffer-file-name)))
+  "The root directory of the org-supertag project.
+This is determined dynamically based on the location of this file.")
 
 ;;;###autoload
 (define-minor-mode org-supertag-mode
@@ -168,9 +174,12 @@ Only used when `org-supertag-enable-auto-vectorization' is non-nil."
     (org-supertag-db-ensure-data-directory)
     ;; 3. Initialize database
     (org-supertag-db-init)
-    ;; 4. Initialize relation module
+    ;; 4. Initialize sync system
+    (when (fboundp 'org-supertag-sync-init)
+      (org-supertag-sync-init))
+    ;; 5. Initialize relation module
     (org-supertag-relation-init)
-    ;; 5. Setup auto-save hook for Emacs exit
+    ;; 6. Setup auto-save hook for Emacs exit
     (add-hook 'kill-emacs-hook #'org-supertag-db-save)
 
     ;; Mark as initialized
@@ -262,6 +271,7 @@ the bridge is confirmed to be ready."
   ;;    once it has successfully connected to the Python backend.
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-scheduler-start)
+  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-smart-companion-setup)
   
   ;; 4. Finally, start the Python bridge process.
   ;;    Once ready, it will trigger the hook above.

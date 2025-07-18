@@ -5,150 +5,139 @@ import logging
 import time
 import traceback
 
-from simtag.core.graph_service import GraphService
+from typing import Dict, Any, List
+
+from ..core.graph_service import GraphService
+from ..utils.unified_tag_processor import normalize_payload
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 logger = logging.getLogger(__name__)
 
 class QueryHandler:
-    def __init__(self, engine, user_interface, graph_service: GraphService, emacs_client=None):
-        self.engine = engine
-        self.user_interface = user_interface
+    """
+    Handles simple, direct queries against the knowledge graph, such as
+    keyword search and fetching specific node details.
+    """
+    def __init__(self, graph_service: GraphService):
         self.graph_service = graph_service
-        self.emacs_client = emacs_client
-        logger.info("QueryHandler initialized.")
+        self.logger = logging.getLogger(__name__)
+
+    def search(self, payload: Dict) -> List[Dict[str, Any]]:
+        """
+        Performs a keyword search against node titles and content.
+        """
+        try:
+            data = normalize_payload(payload)
+            query_text = data.get("query")
+            limit = data.get("limit", 10)
+
+            if not query_text:
+                self.logger.warning("Search query is empty.")
+                return []
+
+            self.logger.info(f"Performing keyword search for: '{query_text}' with limit {limit}")
+            return self.graph_service.search_nodes_by_title_content(
+                search_query=query_text,
+                limit=limit
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error during keyword search: {e}", exc_info=True)
+            return []
+
+    def get_node_details(self, payload: Dict) -> Dict[str, Any]:
+        """
+        Retrieves full details for a given node_id, including its neighbors.
+        """
+        try:
+            data = normalize_payload(payload)
+            node_id = data.get("node_id")
+
+            if not node_id:
+                self.logger.warning("Node ID is missing for get_node_details.")
+                return {"error": "Node ID is required."}
+
+            self.logger.info(f"Fetching details for node: {node_id}")
+            node_details = self.graph_service.get_node_with_neighbors(node_id)
+
+            if not node_details:
+                return {"error": f"Node with ID '{node_id}' not found."}
+
+            return node_details
+
+        except Exception as e:
+            self.logger.error(f"Error fetching node details for {node_id}: {e}", exc_info=True)
+            return {"error": "An internal error occurred."}
+
+    async def get_similar_entities(self, *args) -> Dict[str, Any]:
+        """
+        Finds nodes with similar content based on vector embeddings.
+        This is an async method intended to be called from the EPC bridge.
+        """
+        node_id = None  # Initialize for logging in case of early failure
+        try:
+            payload = normalize_payload(args)
+            node_id = payload.get("node_id")
+            top_k = payload.get("top_k", 5)
+
+            if not node_id:
+                self.logger.warning("Node ID is missing for get_similar_entities.")
+                return {"status": "error", "message": "Node ID is required."}
+
+            self.logger.info(f"Fetching similar entities for node: {node_id}")
+
+            # Note: graph_service methods are synchronous.
+            # We don't need to await them unless they are converted to async.
+            query_embedding = self.graph_service.get_entity_embedding_by_id(node_id)
+
+            if query_embedding is None:
+                self.logger.warning(f"No embedding found for node {node_id}.")
+                # It's not an error if a node simply has no embedding yet.
+                # Return success with an empty list.
+                return {"status": "success", "result": []}
+
+            # The find_similar_nodes expects a list of floats
+            if np and isinstance(query_embedding, np.ndarray):
+                embedding_list = query_embedding.tolist()
+            else:
+                embedding_list = query_embedding
+
+
+            similar_nodes = self.graph_service.find_similar_nodes(
+                query_embedding=embedding_list,
+                top_k=top_k + 1  # Fetch one more to account for the source node
+            )
+
+            # Exclude the query node itself from the results
+            results = [node for node in similar_nodes if node.get("node_id") != node_id]
+
+            # Trim to top_k if necessary
+            results = results[:top_k]
+
+            self.logger.info(f"Found {len(results)} similar entities for node {node_id}.")
+            return {"status": "success", "result": results}
+
+        except Exception as e:
+            self.logger.error(f"Error fetching similar entities for {node_id}: {e}", exc_info=True)
+            return {"status": "error", "message": f"An internal error occurred: {e}"}
 
     def get_similar_nodes(self, query_input: str, top_k: int = 10):
-        """
-        Finds similar nodes using the core tagging engine.
-        Moved from SimTagBridge.
-        """
-        logger.info(f"QueryHandler.get_similar_nodes called for: '{query_input[:100]}...', top_k: {top_k}")
+        logger.info(f"QueryHandler.get_similar_nodes: '{query_input[:100]}...', top_k: {top_k}")
         start_time = time.time()
         try:
-            if not hasattr(self, 'engine') or self.engine is None:
-                logger.error("QueryHandler.get_similar_nodes: TaggingEngine (self.engine) is not initialized.")
-                return {"status": "error", "message": "TaggingEngine not initialized"}
-            
-            similar_nodes_result = self.engine.find_similar_nodes(query_input, top_k)
-            
-            logger.info(f"QueryHandler.get_similar_nodes for '{query_input[:100]}...' completed in {time.time() - start_time:.4f} seconds. Found {len(similar_nodes_result)} nodes.")
-            return {"status": "success", "result": similar_nodes_result}
+            # This is a temporary solution. The engine concept will be removed.
+            # Directly call embedding service and graph service.
+            try:
+                similar_nodes_result = self.graph_service.search_nodes_by_title_content(query_input, limit=top_k)
+                logger.info(f"QueryHandler.get_similar_nodes completed in {time.time() - start_time:.4f} seconds. Found {len(similar_nodes_result)} nodes.")
+                return {"status": "success", "result": similar_nodes_result}
+            except Exception as search_error:
+                logger.error(f"Text search also failed: {search_error}")
+                return {"status": "error", "message": "Both embedding and text search failed"}
         except Exception as e:
-            logger.error(f"QueryHandler.get_similar_nodes for '{query_input[:100]}...' failed: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def find_similar_nodes_friendly(self, query_input: str, top_k: int = 10):
-        """
-        User-friendly method to find similar nodes, returning rich context.
-        Moved from SimTagBridge.
-        """
-        logger.info(f"QueryHandler.find_similar_nodes_friendly: '{query_input[:100]}...', top_k: {top_k}")
-        start_time = time.time()
-        
-        try:
-            if not hasattr(self, 'user_interface') or self.user_interface is None:
-                logger.error("QueryHandler.find_similar_nodes_friendly: UserInterfaceService not initialized.")
-                return {"status": "error", "message": "UserInterfaceService not initialized"}
-            
-            if not hasattr(self, 'engine') or self.engine is None:
-                logger.error("QueryHandler.find_similar_nodes_friendly: TaggingEngine not initialized.")
-                return {"status": "error", "message": "TaggingEngine not initialized"}
-            
-            # Resolve user input to UUID if possible
-            resolved_query = self.user_interface.resolve_user_input_to_uuid(query_input) or query_input
-            
-            # Use the engine to find similar nodes (returns UUIDs)
-            uuid_results = self.engine.find_similar_nodes(resolved_query, top_k)
-            
-            # Convert to user-friendly format
-            friendly_results = self.user_interface.convert_similar_nodes_to_user_friendly(uuid_results)
-            
-            logger.info(f"QueryHandler.find_similar_nodes_friendly: Completed for '{query_input[:100]}...' in {time.time() - start_time:.4f}s. Found {len(friendly_results)} nodes.")
-            
-            return {
-                "status": "success", 
-                "result": friendly_results,
-                "query_info": {
-                    "original_query": query_input,
-                    "resolved_query": resolved_query,
-                    "total_results": len(friendly_results)
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"QueryHandler.find_similar_nodes_friendly failed for '{query_input[:100]}...': {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def search_nodes_by_content(self, search_query: str, top_k: int = 10, fuzzy_match: bool = True):
-        """
-        Searches for nodes by their content (title, keywords, etc.).
-        Moved from SimTagBridge.
-        """
-        logger.info(f"QueryHandler.search_nodes_by_content: '{search_query}', top_k: {top_k}, fuzzy: {fuzzy_match}")
-        start_time = time.time()
-        
-        try:
-            if not hasattr(self, 'user_interface') or self.user_interface is None:
-                logger.error("QueryHandler.search_nodes_by_content: UserInterfaceService not initialized.")
-                return {"status": "error", "message": "UserInterfaceService not initialized"}
-            
-            # Use the user interface service to perform the search
-            search_results = self.user_interface.search_nodes_by_title_or_content(
-                query=search_query,
-                top_k=top_k,
-                fuzzy_match=fuzzy_match
-            )
-            
-            logger.info(f"QueryHandler.search_nodes_by_content: Completed for '{search_query}' in {time.time() - start_time:.4f}s. Found {len(search_results)} results.")
-            
-            return {
-                "status": "success",
-                "result": search_results,
-                "search_info": {
-                    "query": search_query,
-                    "total_results": len(search_results),
-                    "fuzzy_match_enabled": fuzzy_match
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"QueryHandler.search_nodes_by_content failed for '{search_query}': {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def get_node_context_friendly(self, node_identifier: str):
-        """
-        Gets the full context for a node in a user-friendly format.
-        Moved from SimTagBridge.
-        """
-        logger.info(f"QueryHandler.get_node_context_friendly: '{node_identifier}'")
-        start_time = time.time()
-        
-        try:
-            if not hasattr(self, 'user_interface') or self.user_interface is None:
-                logger.error("QueryHandler.get_node_context_friendly: UserInterfaceService not initialized.")
-                return {"status": "error", "message": "UserInterfaceService not initialized"}
-            
-            # Resolve user input to a UUID
-            node_uuid = self.user_interface.resolve_user_input_to_uuid(node_identifier)
-            if not node_uuid:
-                return {"status": "error", "message": f"Could not resolve node identifier: {node_identifier}"}
-            
-            # Get the node context
-            context_info = self.user_interface.get_node_context_by_uuid(node_uuid)
-            if not context_info:
-                return {"status": "error", "message": f"Node not found: {node_identifier}"}
-            
-            logger.info(f"QueryHandler.get_node_context_friendly: Completed for '{node_identifier}' in {time.time() - start_time:.4f}s.")
-            
-            return {
-                "status": "success",
-                "result": context_info,
-                "node_info": {
-                    "identifier": node_identifier,
-                    "resolved_uuid": node_uuid
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"QueryHandler.get_node_context_friendly failed for '{node_identifier}': {e}\n{traceback.format_exc()}")
+            logger.error(f"QueryHandler.get_similar_nodes failed: {e}\n{traceback.format_exc()}")
             return {"status": "error", "message": str(e)} 

@@ -9,6 +9,8 @@
 (require 'org-supertag-db)
 (require 'org-supertag-node)
 (require 'org-supertag-field)
+;; Utilities
+(require 'cl-lib) ; For cl-return-from used in early exit
 
 ;;----------------------------------------------------------------------
 ;; Tag Name Operation
@@ -16,11 +18,13 @@
 
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
-NAME is the name to convert. It removes leading/trailing whitespace
-and converts internal whitespace sequences to single underscores."
+NAME is the name to convert. It removes leading/trailing whitespace,
+removes all text properties, and converts internal whitespace sequences
+to single underscores."
   (if (or (null name) (string-empty-p name))
       (error "Tag name cannot be empty")
-    (let* ((trimmed (string-trim name))
+    (let* ((clean-name (substring-no-properties name))
+           (trimmed (string-trim clean-name))
            (sanitized (replace-regexp-in-string "\\s-+" "_" trimmed)))
       (if (string-empty-p sanitized)
           (error "Invalid tag name: %s" name)
@@ -31,16 +35,6 @@ and converts internal whitespace sequences to single underscores."
 TAG-NAME is the name of the tag to check"
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     (org-supertag-tag-get sanitized-name)))
-
-(defun org-supertag-node-get-parent-tags (node-id)
-  "Get the parent tags of the node.
-NODE-ID: The ID of the current node"
-  (save-excursion
-    (when-let* ((pos (org-id-find node-id t)))
-      (goto-char pos)
-      (when (org-up-heading-safe)  
-        (when-let ((parent-id (org-id-get)))  
-          (org-supertag-node-get-tags parent-id))))))
 
 ;;----------------------------------------------------------------------
 ;; Tag Base Operation
@@ -68,28 +62,33 @@ PROPS: Additional properties including:
 - :behaviors   List of behaviors"
   (unless (string-to-multibyte tag-name)
     (error "Tag name '%s' contains invalid characters" tag-name))
-  (let* ((sanitized-name (org-supertag-sanitize-tag-name tag-name))
-         (parsed-name (org-supertag-tag--parse-name sanitized-name))
-         (base-tag-name (car parsed-name))
-         (new-fields (plist-get props :fields))
-         (base-tag (and base-tag-name 
-                       (org-supertag-tag-exists-p base-tag-name)
-                       (org-supertag-tag-get base-tag-name)))
-         (fields (or (if base-tag
-                         (org-supertag-tag--project-fields 
-                          base-tag
-                          new-fields
-                          (plist-get props :field-defaults))
-                       new-fields)
-                     '()))
-         (base-props (list :type :tag
-                           :id sanitized-name
-                           :name sanitized-name
-                           :fields fields
-                           :extend-from base-tag-name
-                           :behaviors (plist-get props :behaviors)
-                           :created-at (current-time))))
-    (org-supertag-db-add sanitized-name base-props)
+  (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
+    ;; If the tag already exists, do NOT overwrite it. Simply return its ID.
+    (when (org-supertag-tag-get sanitized-name)
+      (cl-return-from org-supertag-tag--create sanitized-name))
+
+    ;; Tag does not exist yet – proceed with normal creation logic.
+    (let* ((parsed-name (org-supertag-tag--parse-name sanitized-name))
+           (base-tag-name (car parsed-name))
+           (new-fields (plist-get props :fields))
+           (base-tag (and base-tag-name
+                          (org-supertag-tag-exists-p base-tag-name)
+                          (org-supertag-tag-get base-tag-name)))
+           (fields (or (if base-tag
+                           (org-supertag-tag--project-fields
+                            base-tag
+                            new-fields
+                            (plist-get props :field-defaults))
+                         new-fields)
+                       '()))
+           (base-props (list :type :tag
+                             :id sanitized-name
+                             :name sanitized-name
+                             :fields fields
+                             :extend-from base-tag-name
+                             :behaviors (plist-get props :behaviors)
+                             :created-at (current-time))))
+      (org-supertag-db-add sanitized-name base-props))
     sanitized-name))
 
 (defun org-supertag-tag--project-fields (base-tag new-fields defaults)
@@ -187,6 +186,21 @@ This function is provided for compatibility."
 (defvar org-supertag-skip-text-insertion nil
   "When non-nil, skip text insertion when applying tags, only establish the relationship.")
 
+(defcustom org-supertag-inherit-parent-tags t
+  "When non-nil, automatically inherit all parent node tags to the child node (database only)."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defun org-supertag-tag--inherit-parent-tags (node-id)
+  "Inherit all parent node tags to NODE-ID when `org-supertag-inherit-parent-tags` is non-nil.
+Only creates :node-tag links in database; no inline text insertion."  
+  (when (and org-supertag-inherit-parent-tags node-id)
+    (when-let* ((parent-tags (org-supertag-node-get-parent-tags node-id)))
+      (dolist (ptag parent-tags)
+        (unless (member ptag (org-supertag-node-get-tags node-id))
+          (org-supertag-node-db-add-tag node-id ptag))))))
+
+;; In org-supertag-tag-apply, after establishing the primary tag relationship, call inherit function.
 (defun org-supertag-tag-apply (tag-id)
   "Apply tag to the node at current position.
 This is now the single entry point for applying a tag. It handles
@@ -210,6 +224,8 @@ database relations, behavior execution, and finally text insertion."
       (org-supertag-node-sync-at-point))
     
     (org-supertag-node-db-add-tag node-id tag-id)
+    ;; inherit parent tags, database only
+    (org-supertag-tag--inherit-parent-tags node-id)
     
     ;; Text insertion is now handled here, controlled by the same variable.
     (unless org-supertag-skip-text-insertion
@@ -258,7 +274,7 @@ NODE-ID: The node identifier"
 This is the data-layer function. For interactive use, see `org-supertag-inline-delete-all`.
 TAG-ID: The tag identifier to delete."
   (when (yes-or-no-p (format "Delete tag '%s' from DB? This is a data-only operation. " tag-id))
-    (let ((nodes (org-supertag-db-get-nodes-by-tag tag-id))
+    (let ((nodes (org-supertag-db-get-tag-nodes tag-id))
           (tag (org-supertag-tag-get tag-id)))
       
       (unless tag
@@ -308,75 +324,7 @@ The hook functions are called with one argument:
 ;;----------------------------------------------------------------------
 
 (defcustom org-supertag-preset-tags
-  '(("project" . ((:name "status"
-                    :type options 
-                    :options ("planning" "active" "on-hold" "completed" "cancelled")
-                    :description "Project status")
-                   (:name "priority"
-                    :type options
-                    :options ("high" "medium" "low") 
-                    :description "Priority level")
-                   (:name "deadline"
-                    :type date
-                    :description "Due date")
-                   (:name "owner"
-                    :type string
-                    :description "Project owner")))
-    ("task" . ((:name "status"
-                :type options
-                :options ("todo" "in-progress" "done" "cancelled")
-                :description "Task status")
-               (:name "priority" 
-                :type options
-                :options ("A" "B" "C")
-                :description "Priority level")
-               (:name "due"
-                :type date
-                :description "Due date")
-               (:name "assignee"
-                :type string
-                :description "Assigned to")))
-    ("person" . ((:name "role"
-                  :type string
-                  :description "Role")
-                 (:name "email"
-                  :type string
-                  :description "Email address")
-                 (:name "phone"
-                  :type string
-                  :description "Phone number")))
-    ("meeting" . ((:name "date"
-                   :type date
-                   :description "Meeting date")
-                  (:name "attendees"
-                   :type string
-                   :description "Attendees")
-                  (:name "location"
-                   :type string
-                   :description "Location")))
-    ("place" . ((:name "address"
-                 :type string
-                 :description "Address")
-                (:name "category"
-                 :type options
-                 :options ("office" "home" "public" "other")
-                 :description "Place type")))
-    ("company" . ((:name "industry"
-                   :type string
-                   :description "Industry")
-                  (:name "website"
-                   :type string
-                   :description "Website")
-                  (:name "contact"
-                   :type string
-                   :description "Contact person")))
-    ("note" . ((:name "category"
-                :type options
-                :options ("idea" "reference" "summary" "other")
-                :description "Note type")
-               (:name "source"
-                :type string
-                :description "Source"))))
+  '()
   "Default preset tags with their field definitions."
   :type '(repeat (cons (string :tag "Tag name")
                       (repeat (plist :options ((:name string)

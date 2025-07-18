@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import functools
-from typing import Optional
+from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 
 import sexpdata
@@ -27,6 +27,8 @@ import logging
 import pathlib
 import platform
 import sys
+import json
+import re
 
 from epc.client import EPCClient
 
@@ -229,4 +231,42 @@ def get_os_name():
 
 def parse_json_content(content):
     return json_parser.loads(content)
+
+
+def extract_json_from_response(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Robustly extracts a JSON object from a string, which may contain markdown code blocks or other text.
+
+    Args:
+        text: The string containing the JSON object.
+
+    Returns:
+        The parsed JSON object as a dictionary, or None if no valid JSON object can be found.
+    """
+    if not text:
+        return None
+
+    # 1. Look for a markdown JSON block
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse JSON from markdown block: {e}")
+            # Fall through to try other methods
+
+    # 2. Look for a raw JSON object that spans the entire string (or is embedded)
+    # This is a bit more aggressive. We look for the first '{' and the last '}'
+    try:
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            json_str = text[start:end+1]
+            return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON from raw string slice: {e}")
+
+    logger.error(f"Could not find any valid JSON in the response text: {text}")
+    return None
 

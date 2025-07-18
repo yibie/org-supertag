@@ -2,307 +2,232 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, TYPE_CHECKING
 import json
 import traceback
 import asyncio
 import concurrent.futures
+import numpy as np
+
+if TYPE_CHECKING:
+    from ..core.graph_service import GraphService
+    from simtag.services.embedding_service import EmbeddingService
+    from simtag.services.rag_service import RAGService
+else:
+    from ..core.graph_service import GraphService
+    from simtag.services.embedding_service import EmbeddingService
+    from simtag.services.rag_service import RAGService
+from simtag.utils.unified_tag_processor import normalize_payload
+from ..utils.text_processing import prepare_node_text_for_embedding, generate_semantic_id
+from ..config import Config
+
+
 
 logger = logging.getLogger(__name__)
 
 class SyncHandler:
-    def __init__(self, node_processor, engine, emacs_client=None):
-        self.node_processor = node_processor
-        self.engine = engine
-        self.emacs_client = emacs_client
-        logger.info("SyncHandler initialized.")
+    """
+    Coordinates the synchronization of data between Emacs and the Python backend.
+    It orchestrates GraphService, EmbeddingService, and RAGService to process
+    and store nodes, embeddings, and inferred relations.
+    """
+    def __init__(
+        self,
+        graph_service: "GraphService",
+        embedding_service: "EmbeddingService", 
+        rag_service: "RAGService",
+        config: Config
+    ):
+        self.graph_service = graph_service
+        self.embedding_service = embedding_service
+        self.rag_service = rag_service
+        self.config = config
+        # Create a semaphore to limit concurrent LLM calls
+        self.llm_semaphore = asyncio.Semaphore(config.sync_max_concurrent_llm_tasks)
+        logger.info(f"SyncHandler initialized. LLM concurrency limit: {config.sync_max_concurrent_llm_tasks}")
 
-    def sync_library(self, db_file, db_snapshot_json_str):
-        logger.info(f"sync_library called with db_file: {db_file}, receiving DB snapshot as JSON string.")
+    def _get_content_for_node(self, node_data: Dict) -> str:
+        """
+        Determines the most relevant text content for processing.
+        """
+        content = node_data.get('content')
+        if content and isinstance(content, str) and content.strip():
+            return content.strip()
+        title = node_data.get('title')
+        if title and isinstance(title, str) and title.strip():
+            return title.strip()
+        return ""
+
+    async def _process_knowledge_with_limit(self, raw_content: str, node_id: str):
+        """
+        A wrapper function that acquires a semaphore before calling the LLM service,
+        thus limiting concurrency.
+        """
+        async with self.llm_semaphore:
+            logger.debug(f"Semaphore acquired for node {node_id}. Processing knowledge...")
+            await self.rag_service.process_and_store_text(raw_content, node_id)
+            logger.debug(f"Semaphore released for node {node_id}.")
+
+    async def _process_single_entity_for_sync(self, entity: Dict[str, Any]):
+        """
+        处理单个实体：存储数据并根据实体类型生成嵌入向量
         
-        num_tags = "N/A"
-        num_nodes = "N/A"
-        parsed_snapshot = None
+        现在期望接收已经验证过的实体数据字典
+        """
+        entity_id = entity.get('id')  # 注意：使用 'id' 而不是 'node_id'
+        entity_type = entity.get('type')
+
+        if not entity_id:
+            logger.warning(f"Skipping entity without an ID. Original data: {entity}")
+            return
 
         try:
-            if not isinstance(db_snapshot_json_str, str):
-                logger.error(f"DB snapshot is not a JSON string as expected (type: {type(db_snapshot_json_str)}). Aborting sync.")
-                return {"status": "error", "message": "Invalid snapshot format (not a JSON string)"}
+            # 将 'id' 映射为 'node_id' 以兼容 graph_service
+            if 'id' in entity and 'node_id' not in entity:
+                entity['node_id'] = entity['id']
 
-            logger.debug(f"Attempting to parse JSON snapshot string (length: {len(db_snapshot_json_str)} chars). Preview: {db_snapshot_json_str[:200]}...")
-            parsed_snapshot = json.loads(db_snapshot_json_str) # Parse the JSON string
-            logger.info("Successfully parsed DB snapshot JSON string.")
+            # 只要是节点类型，就将其状态设置为 PENDING，以便知识周期可以处理
+            if entity_type == 'node':
+                # 确保 properties 存在
+                if 'properties' not in entity or not isinstance(entity.get('properties'), dict):
+                    entity['properties'] = {}
+                # 设置状态以进行知识提取
+                entity['properties']['status'] = 'PENDING'
+                logger.debug(f"Set status to PENDING for node {entity_id}")
 
-            if isinstance(parsed_snapshot, dict):
-                num_tags = len(parsed_snapshot.get("tags", []))
-                num_nodes = len(parsed_snapshot.get("nodes", []))
-                logger.info(f"Parsed snapshot contains: tags={num_tags}, nodes={num_nodes}.")
-            else:
-                logger.error(f"Parsed snapshot is not a dictionary (type: {type(parsed_snapshot)}). Aborting sync.")
-                return {"status": "error", "message": "Parsed snapshot is not a dictionary"}
+            # 如果 content 为空但 title 不为空，则将 title 作为 content 以便后续嵌入和 RAG 使用
+            if entity_type == 'node' and (not entity.get('content')) and entity.get('title'):
+                entity['content'] = entity['title']
+            # 1. Upsert the entity's data first.
+            self.graph_service.upsert_entity(entity)
 
-            # Call the engine method with the parsed Python dictionary
-            result = self.engine.sync_full_snapshot(parsed_snapshot) 
-            
-            return {"status": "success", "result": result}
-        except json.JSONDecodeError as je:
-            logger.error(f"JSON decoding failed for DB snapshot: {je}\nFull string was (approx first 500 chars): {db_snapshot_json_str[:500]}")
-            return {"status": "error", "message": f"JSON decoding error: {je}"}
-        except Exception as e:
-            logger.error(f"Sync library with full snapshot failed: {e}\n{traceback.format_exc()}")
-            # Include details about the snapshot if it was parsed, to help debug if error is in engine
-            parsed_info = f"Parsed snapshot (tags: {num_tags}, nodes: {num_nodes})" if parsed_snapshot else "Snapshot not parsed."
-            return {"status": "error", "message": f"General error during sync: {e}. {parsed_info}"}
+            # 2. If it's a node, proceed with embedding and knowledge extraction.
+            if entity_type == 'node':
+                raw_content = entity.get('content', '') or entity.get('title', '')
 
-    async def _async_sync_node_from_elisp(self, node_props: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Asynchronously processes a single node from Elisp.
-        This is the new, preferred method for syncing individual nodes.
-        The logic is moved here from SimTagBridge.
-        """
-        node_id = node_props.get("id")
-        if not node_id:
-            logger.error("sync_node_from_elisp: Received node properties without an 'id'.")
-            return {"status": "error", "message": "Node 'id' is required."}
+                # Fast path：只做嵌入，不做耗时的 LLM 推理
+                logger.info(f"Starting embedding process for node {entity_id}")
+                embedding_result = await self.embedding_service.get_node_embedding(entity)
 
-        logger.info(f"SyncHandler: Processing node {node_id}.")
+                if embedding_result is not None:
+                    # 根据配置决定是否使用语义标识符
+                    if self.config.use_semantic_embedding_ids:
+                        semantic_id = generate_semantic_id(entity)
+                        self.graph_service.upsert_entity_embedding(semantic_id, embedding_result)
+                        logger.info(f"Successfully embedded entity {entity_id} with semantic ID '{semantic_id}' and shape {embedding_result.shape}")
+                    else:
+                        self.graph_service.upsert_entity_embedding(entity_id, embedding_result)
+                        logger.info(f"Successfully embedded entity {entity_id} with shape {embedding_result.shape}")
+                else:
+                    logger.warning(f"Failed to get embedding for entity {entity_id}")
 
-        try:
-            title = node_props.get("title", "")
-            content_body = node_props.get("content", "")
-            tags = node_props.get("tags", [])
-            
-            # The content for processing is the combination of title and body.
-            content = f"{title}\n\n{content_body}".strip()
-
-            # Delegate the core processing to NodeProcessor
-            success = await self.node_processor.process_single_node_data(
-                node_id=node_id, 
-                content=content, 
-                tags=tags, 
-                title=title
-            )
-
-            if success:
-                logger.info(f"SyncHandler: Successfully processed node {node_id}.")
-                return {"status": "success", "node_id": node_id}
-            else:
-                logger.warning(f"SyncHandler: NodeProcessor failed to process node {node_id}.")
-                return {"status": "error", "message": f"NodeProcessor failed for node {node_id}.", "node_id": node_id}
+            # 3. If it's a tag, we'll handle embedding later in batch
+            elif entity_type == 'tag':
+                logger.debug(f"Tag entity {entity_id} will be processed in batch embedding")
 
         except Exception as e:
-            logger.error(f"SyncHandler: Error syncing node {node_id}: {e}", exc_info=True)
-            return {"status": "error", "message": str(e), "node_id": node_id}
+            logger.error(f"Error processing entity {entity_id} in worker: {e}", exc_info=True)
 
-    def sync_node_from_elisp(self, node_props: Dict[str, Any]) -> Dict[str, Any]:
-        """Synchronous EPC wrapper for _async_sync_node_from_elisp."""
-        return asyncio.run(self._async_sync_node_from_elisp(node_props))
-
-    async def _async_bulk_process_snapshot(self, snapshot_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def bulk_process_snapshot(self, snapshot_data: Any) -> Dict[str, Any]:
         """
-        Main entry point for periodic background sync.
+        Main async entry point for periodic background sync.
         Processes an incremental snapshot of changes from the Elisp database.
+        
+        Now receiving data that has been validated by normalize_payload
         """
-        if not isinstance(snapshot_data, dict):
-            logger.error(f"SyncHandler: _async_bulk_process_snapshot expects a dictionary, but received {type(snapshot_data)}. Full data: {snapshot_data!r}")
-            return {"status": "error", "message": f"Invalid payload type: expected dict, got {type(snapshot_data)}"}
+        # Data has been validated and cleaned by normalize_payload
+        normalized_data = normalize_payload(snapshot_data)
+        entities_to_upsert = normalized_data.get("entities", [])
+        links_to_upsert = normalized_data.get("links", [])
+        ids_to_delete = normalized_data.get("ids_to_delete", [])
 
+        logger.info(f"Received snapshot: {len(entities_to_upsert)} entities, {len(links_to_upsert)} links, {len(ids_to_delete)} deletions.")
+
+        # 1. Handle Deletions
+        if ids_to_delete:
+            self.graph_service.delete_nodes_by_ids(ids_to_delete)
+            logger.info(f"Deleted {len(ids_to_delete)} entities.")
+
+        # 2. Process Entities (Nodes and Tags) Concurrently
+        tag_ids_to_embed = []
+        if entities_to_upsert:
+            # Separate tags and nodes for subsequent batch embedding
+            for entity in entities_to_upsert:
+                if entity.get('type') == 'tag':
+                    tag_ids_to_embed.append(entity.get('id'))
+
+            # Process all entities concurrently
+            tasks = [self._process_single_entity_for_sync(entity) for entity in entities_to_upsert]
+            await asyncio.gather(*tasks)
+            logger.info(f"Finished processing {len(entities_to_upsert)} entities.")
+
+        # 3. Process Tags for Embedding (Batch process tag embedding)
+        if tag_ids_to_embed:
+            tag_ids_to_embed = [tid for tid in tag_ids_to_embed if tid]
+            logger.info(f"Starting embedding process for {len(tag_ids_to_embed)} tags.")
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                await loop.run_in_executor(
+                    pool,
+                    self.embedding_service.batch_embed_tags,
+                    tag_ids_to_embed
+                )
+            logger.info(f"Finished processing {len(tag_ids_to_embed)} tags.")
+
+        # 4. Upsert Org-mode Links as Relations
+        if links_to_upsert:
+            for link in links_to_upsert:
+                # Data has been validated, use directly
+                self.graph_service.upsert_relationship(
+                    source_id=link['source'],
+                    target_id=link['target'],
+                    type=link.get('type', 'REF_TO'),
+                    properties={'raw_link': link}
+                )
+            logger.info(f"Upserted {len(links_to_upsert)} link-based relations.")
+
+        # 4.5 Refresh embeddings for STALE tags created by new HAS_TAG relations
+        await self.embedding_service.refresh_stale_tags()
+        
+        # 5. Commit any pending transactions
         try:
-            nodes_to_upsert = snapshot_data.get("nodes", [])
-            links_to_upsert = snapshot_data.get("links", [])
-            ids_to_delete = snapshot_data.get("ids_to_delete", [])
-
-            total_upsert = len(nodes_to_upsert)
-            total_delete = len(ids_to_delete)
-            logger.info(f"Received incremental snapshot: {total_upsert} nodes to upsert, {total_delete} IDs to delete, {len(links_to_upsert)} links to upsert.")
-
-            # 1. Perform deletions first to handle nodes that might be re-added with a new type, etc.
-            if ids_to_delete:
-                logger.info(f"Deleting {len(ids_to_delete)} objects from graph.")
-                self.node_processor.graph_service.delete_nodes_by_ids(ids_to_delete)
-
-            # 2. Process nodes that need to be created or updated.
-            # This will handle embedding and relation inference for new/changed content.
-            if nodes_to_upsert:
-                logger.info(f"Delegating upsert processing of {len(nodes_to_upsert)} nodes to NodeProcessor.")
-                loop = asyncio.get_running_loop()
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    report = await loop.run_in_executor(
-                        executor, self.node_processor.process_nodes_batch, nodes_to_upsert, len(nodes_to_upsert)
-                    )
-                logger.info(f"NodeProcessor finished. Report: {report}")
-            else:
-                report = {"status": "no nodes to process"}
-
-            # 3. Upsert link relationships. This is a direct graph operation.
-            if links_to_upsert:
-                relations_from_links = []
-                for link in links_to_upsert:
-                    source_id = link.get('source')
-                    target_id = link.get('target')
-                    if source_id and target_id:
-                        relations_from_links.append({
-                            'source_id': source_id,
-                            'target_id': target_id,
-                            'type': 'REF_TO',  # Correctly hardcode the relation type for org links
-                            'properties': json.dumps({'raw_link': link})
-                        })
-                
-                if relations_from_links:
-                    logger.info(f"Upserting {len(relations_from_links)} link-based relations.")
-                    self.node_processor.graph_service.bulk_upsert_relations(relations_from_links)
-
-            logger.info("Incremental snapshot processing complete.")
-            return {"status": "success", "result": report}
-            
+            self.graph_service._get_connection().commit()
+            logger.info("Final commit successful.")
         except Exception as e:
-            logger.error(f"SyncHandler: Error in _async_bulk_process_snapshot: {e}", exc_info=True)
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Error during final commit: {e}", exc_info=True)
 
-    def bulk_process_snapshot(self, snapshot_data: Any) -> Dict[str, Any]:
-        """Synchronous EPC wrapper for _async_bulk_process_snapshot."""
-        # 统一使用 unified_tag_processor 进行所有数据标准化
-        from simtag.utils.unified_tag_processor import normalize_payload
+        return {
+            "status": "success", 
+            "processed_entities": len(entities_to_upsert),
+            "processed_links": len(links_to_upsert),
+            "deleted_entities": len(ids_to_delete)
+        }
+
+    async def _embed_and_store_entity(self, entity_id, entity_data):
+        """Embeds entity data and stores the embedding for a given entity."""
+        logger.info(f"Embedding content for entity {entity_id}...")
+        embedding_result = await self.embedding_service.get_node_embedding(entity_data)
+        if embedding_result is not None:
+            self.graph_service.upsert_entity_embedding(entity_id, embedding_result)
+            logger.info(f"Successfully embedded and stored entity {entity_id}")
+        else:
+            logger.error(f"Failed to embed entity {entity_id}")
+
+
+
+    def sync_deleted_nodes(self, payload):
+        """
+        Receives a list of deleted node IDs and removes them from the graph.
+        """
+        deleted_node_ids = normalize_payload(payload)
+        logger.info(f"Received request to delete {len(deleted_node_ids)} nodes.")
+        if not deleted_node_ids:
+            return
         
         try:
-            # 按照规范，应该接收 [hash-table] 格式，但EPC可能序列化了hash-table
-            normalized_data = normalize_payload(snapshot_data)
-            logger.debug(f"Normalized data keys: {normalized_data.keys() if isinstance(normalized_data, dict) else 'N/A'}")
-            
-            return asyncio.run(self._async_bulk_process_snapshot(normalized_data))
-            
+            self.graph_service.delete_nodes_by_ids(deleted_node_ids)
+            logger.info(f"Successfully deleted {len(deleted_node_ids)} nodes.")
         except Exception as e:
-            logger.error(f"Failed to normalize snapshot data: {e}", exc_info=True)
-            return {"status": "error", "message": f"Data normalization failed: {str(e)}"}
+            logger.error(f"Failed to delete nodes: {e}", exc_info=True)
 
-    def sync_tag_event(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
-        """同步标签事件到 Python 后端。
-        
-        Args:
-            event_data: 事件数据，包含事件类型和相关数据
-            
-        Returns:
-            同步结果
-        """
-        try:
-            event_type = event_data.get('event_type')
-            tag_data = event_data.get('tag_data')
-            
-            if not event_type or not tag_data:
-                return {"status": "error", "message": "Missing event_type or tag_data"}
-            
-            # 根据事件类型处理
-            if event_type == 'tag:status-changed':
-                return self.update_tag_status(tag_data)
-            elif event_type == 'tag:rules-changed':
-                return self.update_tag_rules(tag_data)
-            elif event_type == 'tag:relation-changed':
-                return self.update_relation_type(tag_data)
-            else:
-                return {"status": "error", "message": f"Unknown event type: {event_type}"}
-                
-        except Exception as e:
-            logger.error(f"Error in sync_tag_event: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def update_tag_status(self, tag_data: Dict[str, Any]) -> Dict[str, Any]:
-        """更新标签状态。
-        
-        Args:
-            tag_data: 标签数据，包含标签ID和新状态
-            
-        Returns:
-            更新结果
-        """
-        try:
-            tag_id = tag_data.get('id')
-            new_status = tag_data.get('tag-status')
-            
-            if not tag_id or not new_status:
-                return {"status": "error", "message": "Missing tag_id or new_status"}
-            
-            # 更新数据库中的标签状态
-            self.engine.update_tag_status(tag_id, new_status)
-            
-            return {"status": "success", "tag_id": tag_id, "new_status": new_status}
-            
-        except Exception as e:
-            logger.error(f"Error in update_tag_status: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def update_tag_rules(self, tag_data: Dict[str, Any]) -> Dict[str, Any]:
-        """更新标签规则。
-        
-        Args:
-            tag_data: 标签数据，包含标签ID和规则
-            
-        Returns:
-            更新结果
-        """
-        try:
-            tag_id = tag_data.get('id')
-            rules = tag_data.get('tag-rules')
-            
-            if not tag_id or not rules:
-                return {"status": "error", "message": "Missing tag_id or rules"}
-            
-            # 更新数据库中的标签规则
-            self.engine.update_tag_rules(tag_id, rules)
-            
-            return {"status": "success", "tag_id": tag_id}
-            
-        except Exception as e:
-            logger.error(f"Error in update_tag_rules: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def update_relation_type(self, relation_data: Dict[str, Any]) -> Dict[str, Any]:
-        """更新标签关系类型。
-        
-        Args:
-            relation_data: 关系数据，包含源标签ID、目标标签ID和关系类型
-            
-        Returns:
-            更新结果
-        """
-        try:
-            from_tag = relation_data.get('from-tag')
-            to_tag = relation_data.get('to-tag')
-            rel_type = relation_data.get('tag-rel-type')
-            
-            if not from_tag or not to_tag or not rel_type:
-                return {"status": "error", "message": "Missing from_tag, to_tag, or rel_type"}
-            
-            # 更新数据库中的关系类型
-            self.engine.update_relation_type(from_tag, to_tag, rel_type)
-            
-            return {"status": "success", "from_tag": from_tag, "to_tag": to_tag}
-            
-        except Exception as e:
-            logger.error(f"Error in update_relation_type: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)}
-
-    def update_relation_rules(self, relation_data: Dict[str, Any]) -> Dict[str, Any]:
-        """更新标签关系规则。
-        
-        Args:
-            relation_data: 关系数据，包含源标签ID、目标标签ID和规则
-            
-        Returns:
-            更新结果
-        """
-        try:
-            from_tag = relation_data.get('from-tag')
-            to_tag = relation_data.get('to-tag')
-            rules = relation_data.get('tag-rel-rules')
-            
-            if not from_tag or not to_tag or not rules:
-                return {"status": "error", "message": "Missing from_tag, to_tag, or rules"}
-            
-            # 更新数据库中的关系规则
-            self.engine.update_relation_rules(from_tag, to_tag, rules)
-            
-            return {"status": "success", "from_tag": from_tag, "to_tag": to_tag}
-            
-        except Exception as e:
-            logger.error(f"Error in update_relation_rules: {e}\n{traceback.format_exc()}")
-            return {"status": "error", "message": str(e)} 
+ 
