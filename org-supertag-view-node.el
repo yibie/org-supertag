@@ -25,6 +25,7 @@
     (define-key map (kbd "E") 'org-supertag-view-node-edit-field-definition-at-point)
     (define-key map (kbd "a") 'org-supertag-view-node-add-field)
     (define-key map (kbd "d") 'org-supertag-view-node-remove-field-at-point)
+    (define-key map (kbd "f") 'org-supertag-feedback-on-relation-at-point)
 
     (define-key map (kbd "g") 'org-supertag-view-node-refresh)
     (define-key map (kbd "q") 'quit-window)
@@ -66,87 +67,114 @@ Otherwise, return VALUE as a string."
 
 (defun org-supertag-view-node--insert-metadata-section (node-id)
   (let ((tags (org-supertag-node-get-tags node-id)))
-    (insert (propertize "Metadata\n" 'face '(:weight bold)))
-    (insert "────────────────────────────────\n")
+    (insert (propertize "🏷️ Tags\n" 'face 'org-level-2))
     (if (not tags)
-        (insert "  No metadata found.\n")
+        (insert (propertize "  No metadata found.\n" 'face 'shadow))
       (dolist (tag-id tags)
-        (insert (propertize (format "Tag: %s\n" tag-id)
-                          'face '(:weight bold :slant italic :height 1.2)
-                          'tag-id tag-id 'field-name nil))
+        (insert (propertize (format "  %s\n" tag-id) 'face 'org-tag 'tag-id tag-id 'field-name nil))
         (when-let* ((tag-def (org-supertag-tag-get tag-id))
                     (fields (plist-get tag-def :fields)))
           (if (not fields)
-              (insert "  No fields defined.\n")
+              (insert (propertize "    No fields defined.\n" 'face 'shadow))
             (dolist (field-def fields)
               (let* ((field-name (plist-get field-def :name))
                      (value (org-supertag-field-get-value node-id field-name tag-id))
                      (display-value (org-supertag-view-node--format-display-value value))
                      (start (point)))
-                ;; Insert the full line of text
-                (insert (format "  %s: %s\n" field-name display-value))
+                (insert (propertize (format "    %s: " field-name)
+                                     'face '(:weight bold :underline t)))
+                (insert (propertize (format "%s\n" display-value) 'face 'font-lock-string-face))
+                (add-text-properties start (point)
+                                     `(field-name ,field-name
+                                       tag-id ,tag-id
+                                       field-def ,field-def
+                                       face (:height 1.0))))))))
+      (insert (propertize "    [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field\n" 'face 'org-meta-line)))
+    (insert "\n")))
 
-                (let ((field-start (+ start 2))
-                      (field-end (+ start 2 (length field-name))))
+(defun org-supertag-view-node--insert-relations-section (node-id)
+  (insert (propertize "🔗 Relations\n" 'face 'org-level-2))
+  (let ((tags (org-supertag-node-get-tags node-id))
+        (relations '()))
+    (dolist (tag-id tags)
+      (setq relations (append relations (org-supertag-relation-get-all tag-id))))
+    (if relations
+        (dolist (rel relations)
+          (let* ((source-id (plist-get rel :from))
+                 (target-id (plist-get rel :to))
+                 (type (plist-get rel :type))
+                 (source-name (org-supertag-tag-get-name-by-id source-id))
+                 (target-name (org-supertag-tag-get-name-by-id target-id)))
+            (insert (propertize (format "    %s " source-name) 'face 'org-tag))
+            (insert (propertize (format "--[%s]-->" type) 'face 'font-lock-keyword-face))
+            (insert (propertize (format " %s\n" target-name) 'face 'org-tag))
+            ))
+      (insert (propertize "    No relations found.\n" 'face 'shadow))))
+  (insert "\n"))
 
-                  ;; Apply base properties and face to the entire line
-                  (add-text-properties start (point)
-                                       `(field-name ,field-name
-                                         tag-id ,tag-id
-                                         field-def ,field-def
-                                         face (:height 1.0)))
-
-                  ;; Add underline face property to the field name, which merges with the existing face.
-                  (add-text-properties field-start field-end
-                                       '(face (:underline t))))))))
-      (insert "  [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field\n"))
-    (insert "\n"))))
+(defun org-supertag-view-node--insert-similar-entities-section (node-id)
+  (insert (propertize "🧑‍🤝‍🧑 Similar Entities\n" 'face 'org-level-2))
+  (org-supertag-bridge-call-async "query/get_similar_entities" `(("node_id" . ,node-id))
+                                  (lambda (result)
+                                    (with-current-buffer (get-buffer-create "*Org SuperTag Node View*")
+                                      (let ((inhibit-read-only t))
+                                        (goto-char (point-max))
+                                        (if (and result (equal (plist-get result :status) "success"))
+                                            (let ((entities (plist-get result :result)))
+                                              (if entities
+                                                  (dolist (entity entities)
+                                                    (insert (propertize (format "    %s " (plist-get entity :title)) 'face 'org-tag))
+                                                    (insert (propertize (format "(Score: %.2f)\n" (plist-get entity :score)) 'face 'success)))
+                                                (insert (propertize "    No similar entities found.\n" 'face 'shadow))))
+                                          (insert (propertize "    Error getting similar entities.\n" 'face 'error)))))))
+  (insert "\n"))  
 
 (defun org-supertag-view-node--insert-backlinks-section (node-id)
-  (insert (propertize "References\n" 'face '(:weight bold)))
-  (insert "────────────────────────────────\n")
+  (insert (propertize "👉 References\n" 'face 'org-level-2))
   (let ((refs (org-supertag-view-node--get-references node-id)))
     (if refs
         (dolist (ref-id refs)
           (insert (org-supertag-view-node--format-node-content ref-id)))
-      (insert "  No references found\n")))
+      (insert (propertize "    No references found\n" 'face 'shadow))))
   (insert "\n")
-  (insert (propertize "Referenced By\n" 'face '(:weight bold)))
-  (insert "────────────────────────────────\n")
+  (insert (propertize "👈 Referenced By\n" 'face 'org-level-2))
   (let ((refd-by (org-supertag-view-node--get-referenced-by node-id)))
     (if refd-by
         (dolist (ref-id refd-by)
           (insert (org-supertag-view-node--format-node-content ref-id)))
-      (insert "  Not referenced by any nodes\n"))))
+      (insert (propertize "    Not referenced by any nodes\n" 'face 'shadow)))))
 
 (defun org-supertag-view-node--get-field-info-at-point ()
-  "Get information about the field at the current line.
-Returns a plist with :node-id, :tag-id, :field-name, :field-def, and :value."
-  (let* ((tag-id (get-text-property (point) 'tag-id))
-         (field-name (get-text-property (point) 'field-name))
+  "Return plist of field info at point, or nil.
+Tries current position first"
+  (let* ((pos (point))
+         (fallback-pos (max (point-min) (1- pos)))
+         (tag-id     (or (get-text-property pos 'tag-id)
+                         (get-text-property fallback-pos 'tag-id)))
+         (field-name (or (get-text-property pos 'field-name)
+                         (get-text-property fallback-pos 'field-name)))
          (node-id org-supertag-view-node--current-node-id))
-    (when (and tag-id node-id)
-      (let* ((tag-def (org-supertag-tag-get tag-id))
-             (field-def (when field-name
-                          (cl-find field-name (plist-get tag-def :fields)
-                                   :key (lambda (f) (plist-get f :name))
-                                   :test #'string=)))
+    (when (and tag-id field-name node-id)
+      (let* ((tag-def   (org-supertag-tag-get tag-id))
+             (field-def (cl-find field-name (plist-get tag-def :fields)
+                                 :key (lambda (f) (plist-get f :name))
+                                 :test #'string=))
              (value (when field-def
                       (org-supertag-field-get-value node-id field-name tag-id))))
-        (list :node-id node-id
-              :tag-id tag-id
+        (list :node-id   node-id
+              :tag-id    tag-id
               :field-name field-name
               :field-def field-def
-              :value value)))))
+              :value     value)))))
 
 (defun org-supertag-view-node-edit-field-at-point ()
   "Edit the field value at the current point."
   (interactive)
   (when-let* ((field-info (org-supertag-view-node--get-field-info-at-point))
-              (field-def (plist-get field-info :field-def))
-              (current-value (plist-get field-info :value)))
+              (field-def (plist-get field-info :field-def)))
     (when field-def
-      (let* ((node-id (plist-get field-info :node-id))
+      (let* ((current-value (plist-get field-info :value))
+             (node-id (plist-get field-info :node-id))
              (tag-id (plist-get field-info :tag-id))
              (field-name (plist-get field-info :field-name))
              (new-value (org-supertag-field-read-and-validate-value field-def current-value)))
@@ -265,13 +293,17 @@ Returns a plist with :node-id, :tag-id, :field-name, :field-def, and :value."
         (org-supertag-view-node-mode)
         (when-let* ((node (org-supertag-db-get org-supertag-view-node--current-node-id))
                    (title (plist-get node :title)))
-          (insert (propertize "Node: " 'face '(:weight bold)))
-          (insert title "\n\n")
+          (insert (propertize (format "📄 %s\n" title) 'face 'org-level-1))
+          (insert (propertize "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" 'face 'org-meta-line))
           (org-supertag-view-node--insert-metadata-section org-supertag-view-node--current-node-id)
-          (org-supertag-view-node--insert-backlinks-section org-supertag-view-node--current-node-id))))
+          (org-supertag-view-node--insert-relations-section org-supertag-view-node--current-node-id)
+          (org-supertag-view-node--insert-backlinks-section org-supertag-view-node--current-node-id)
+          (org-supertag-view-node--insert-similar-entities-section org-supertag-view-node--current-node-id)
+          (insert (propertize "\nj/k: move  RET: edit  E: edit field def  a: add field  d: delete field  f: feedback  g: refresh  q: quit\n" 'face 'org-meta-line))
+          ))
     (org-supertag-view--display-buffer-right buffer)
     (select-window (get-buffer-window buffer))
-    (goto-char (point-min))))
+    (goto-char (point-min)))))
 
 ;;;###autoload
 (defun org-supertag-view-node-show ()

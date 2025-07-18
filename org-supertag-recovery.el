@@ -17,6 +17,7 @@
 (require 'org-supertag-relation)
 (require 'org-supertag-node)
 (require 'org-supertag-tag)
+(require 'cl-lib)
 
 ;; Recovery state tracking
 (defvar org-supertag-recovery--state (make-hash-table :test 'equal)
@@ -907,6 +908,62 @@ A dangling link is a :node-tag link where the 'to' part
           (org-supertag-db--mark-dirty)
           (org-supertag-db--schedule-save)
           (message "Removed %d dangling links. Database has been cleaned." fixed-count))))))
+
+;;; =================================================================
+;;; Corrupted Data Cleaning
+;;; =================================================================
+
+(defun org-supertag-recovery--value-is-corrupted-p (value)
+  "Check if a value has text properties, indicating corruption.
+This function recursively checks lists and does not use `cl-lib'."
+  (cond
+   ((stringp value) (not (null (text-properties-at 0 value))))
+   ((symbolp value) (not (null (text-properties-at 0 (symbol-name value)))))
+   ((listp value)
+    (let ((corrupted-found nil)
+          (remaining-list value))
+      (while (and remaining-list (not corrupted-found))
+        (when (org-supertag-recovery--value-is-corrupted-p (car remaining-list))
+          (setq corrupted-found t))
+        (setq remaining-list (cdr remaining-list)))
+      corrupted-found))
+   (t nil)))
+
+(defun org-supertag-recovery-delete-corrupted-links ()
+  "Find and delete corrupted entries from `org-supertag-db--link`.
+
+This is a destructive operation. It deletes any entry where the key
+or any part of the value plist contains text properties (often from
+completion frameworks). It will ask for confirmation before deleting.
+
+This function is designed to be simple and robust, with no
+dependencies on `cl-lib'."
+  (interactive)
+  (let ((to-delete '())
+        (scanned-count 0))
+    (message "Scanning for corrupted links to delete...")
+
+    (maphash
+     (lambda (key props)
+       (setq scanned-count (1+ scanned-count))
+       (when (or (org-supertag-recovery--value-is-corrupted-p key)
+                 (org-supertag-recovery--value-is-corrupted-p props))
+         (push key to-delete)))
+     org-supertag-db--link)
+
+    (if (not to-delete)
+        (message "Scan complete (scanned %d links). No corrupted links found." scanned-count)
+      (progn
+        (message "Found %d corrupted links to delete:" (length to-delete))
+        (dolist (key to-delete)
+          (message "  - Corrupted key: %s" key))
+        (when (yes-or-no-p "Do you want to permanently delete these invalid links? ")
+          (dolist (key to-delete)
+            (remhash key org-supertag-db--link))
+          (org-supertag-db--mark-dirty)
+          (org-supertag-db--schedule-save)
+          (message "Deletion complete. Deleted %d corrupted link(s). Database marked for saving." (length to-delete)))))))
+
 
 (provide 'org-supertag-recovery)
 

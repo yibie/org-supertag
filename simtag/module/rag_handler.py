@@ -1,153 +1,81 @@
-# simtag/module/rag_handler.py
 import logging
-from dependency_injector.wiring import inject, Provide
-from ..services.llm_client import LLMClient
-from ..services.embedding_service import EmbeddingService
-from ..core.rag_engine import OrgSupertagRAGEngine
+from typing import Dict, Any
+
+from ..services.rag_service import RAGService
 from ..utils.unified_tag_processor import normalize_payload
-from typing import List, Dict
-from simtag.utils import text_processing
+from ..prompts import generate_query_with_language_instruction
 
 logger = logging.getLogger(__name__)
 
 class RAGHandler:
-    @inject
-    def __init__(self, 
-                 rag_engine: OrgSupertagRAGEngine = Provide['rag_engine'], 
-                 llm_client: LLMClient = Provide['llm_client'],
-                 embedding_service: EmbeddingService = Provide['embedding_service']):
-        self.rag_engine = rag_engine
-        self.llm_client = llm_client
-        self.embedding_service = embedding_service
-        self.methods = {
-            "analyze_note": self.analyze_note,
-            "continue_conversation": self.continue_conversation,
-        }
+    """
+    A clean, simple handler that acts as an API endpoint for the RAGService.
+    """
+    def __init__(self, rag_service: RAGService):
+        self.rag_service = rag_service
+        self.logger = logging.getLogger(__name__)
 
-    def _error(self, message: str) -> dict:
-        """Logs an error and returns a formatted error dictionary."""
-        logger.error(message, exc_info=True)
-        return {"status": "error", "message": message}
-
-    async def analyze_note(self, *args):
+    async def query(self, payload: Dict) -> Dict[str, Any]:
         """
-        Analyzes a note using RAG and returns a summary.
-        
-        Payload from Elisp should now include more node data:
-        '(("node-id" . "...") ("title" . "...") ("content" . "..."))
-        """
-        payload = normalize_payload(args)
-        logger.debug(f"RAG_HANDLER: Received payload after normalization: {payload}")
-        logger.debug(f"RAG_HANDLER: Type of payload after normalization: {type(payload)}")
-
-        # The keys from Elisp are strings with a leading colon, e.g., ":id"
-        node_id = payload.get(":id")
-        content = payload.get(":content")
-        node_data = payload
-
-        if not node_id or not content:
-            return self._error("Missing node-id or content in payload")
-        
-        try:
-            # 1. Prepare the query text using the specialized method
-            query_text = text_processing.prepare_node_text_for_embedding(node_data)
-            logger.info(f"Using prepared query text for RAG: '{query_text}'")
-
-            # 2. Retrieve context with RAG using the prepared query text
-            retrieved_context_result = await self.rag_engine.retrieve_context(query_text, top_k=3)
-            retrieved_context = retrieved_context_result.get('documents', [])
-            
-            # --- DEBUG LOGGING ---
-            logger.info(f"RAG retrieved context: {retrieved_context}")
-            # --- END DEBUG LOGGING ---
-
-            context_str = "\n\n".join([item['content'] for item in retrieved_context])
-
-            # 3. Build the prompt for analysis
-            prompt = f"""
-Here is a note I am working on:
---- NOTE ---
-{content}
---- END NOTE ---
-
-Here is some additional context that might be relevant:
---- CONTEXT ---
-{context_str}
---- END CONTEXT ---
-
-Please provide a concise analysis and summary of my note, and context provided. Your analysis should:
-1. Identify the main topic and key points of the note.
-2. Synthesize the information from the provided context to add depth and connections.
-3. Propose potential next steps or questions to explore based on the note and context.
-4. Respond in the primary language used in the note.    
-
-Keep your response focused and directly related to the provided material.
-"""
-            # 4. Call LLM for analysis
-            analysis_response = await self.llm_client.generate(prompt, temperature=0.5)
-
-            # 5. Return the result
-            return {
-                "node_id": node_id,
-                "analysis": analysis_response or "",
-                "conversation_history": [
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": analysis_response or ""}
-                ]
-            }
-        except Exception as e:
-            # Use self.error to log and return a formatted error
-            return self._error(f"Failed to analyze note: {e}")
-
-    def _build_prompt_with_history(self, current_prompt: str, history: List[Dict]) -> str:
-        """Builds a single string prompt from the current prompt and conversation history."""
-        # Simple implementation: join assistant and user messages.
-        # A more sophisticated approach could be used depending on the model's expected format.
-        full_conversation = []
-        for entry in history:
-            if entry.get("role") == "user":
-                full_conversation.append(f"User: {entry.get('content')}")
-            elif entry.get("role") == "assistant":
-                full_conversation.append(f"Assistant: {entry.get('content')}")
-
-        full_conversation.append(f"User: {current_prompt}")
-        
-        return "\n".join(full_conversation)
-
-    async def continue_conversation(self, *args):
-        """
-        Continues a conversation based on history and a new prompt.
+        Receives a query payload from the Elisp front-end, passes it to the
+        RAGService, and returns the result.
         """
         try:
-            payload = normalize_payload(args)
-            history = payload.get("conversation-history", [])
-            user_prompt = payload.get("prompt")
+            # Handle chat query data format (different from snapshot data)
+            data = self._normalize_chat_payload(payload)
+            self.logger.debug(f"Normalized chat data keys: {list(data.keys())}")
+            query_text = data.get("query") or data.get("query_text")
+            history = data.get("history", [])
+            lang = data.get("lang") # Extract language setting
+            command = data.get("command") # Extract command setting
 
-            if not user_prompt:
-                return self._error("Prompt is missing.")
+            if not query_text:
+                self.logger.error("Query payload did not contain 'query' text.")
+                return {"error": "Query text is missing."}
 
-            # Build a single prompt string from history and the new prompt
-            full_prompt = self._build_prompt_with_history(user_prompt, history)
+            if isinstance(query_text, list):
+                query_text = " ".join(str(x) for x in query_text)
 
-            # Call the LLM with the consolidated prompt
-            response_text = await self.llm_client.generate(
-                prompt=full_prompt,
-                conversation_history=[]  # History is now part of the prompt
-            )
+            # Generate a language-specific query if lang is provided and no command is active
+            # Skip language prefix for custom commands as they already contain complete instructions
+            if lang and not command:
+                final_query = generate_query_with_language_instruction(lang, query_text)
+            else:
+                final_query = query_text
 
-            if not response_text:
-                return self._error("LLM returned an empty response.")
+            self.logger.info(f"RAGHandler received query: '{final_query}' (history len {len(history)}, command: {command})")
+            return await self.rag_service.query(final_query, history=history, command=command)
 
-            # Update history for the next turn
-            new_history = history + [
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": response_text}
-            ]
-
-            return {
-                "response": response_text,
-                "conversation-history": new_history
-            }
         except Exception as e:
-            logger.error(f"Error continuing conversation: {e}", exc_info=True)
-            return self._error(f"Failed to continue conversation: {e}") 
+            self.logger.error(f"Error in RAGHandler query: {e}", exc_info=True)
+            return {"error": f"An unexpected error occurred in RAGHandler: {e}"}
+
+    def _normalize_chat_payload(self, payload: Any) -> Dict:
+        """
+        Normalize chat query payload from Elisp.
+        This is a simplified version for chat data that doesn't use the full snapshot validation.
+        """
+        logger.debug(f"_normalize_chat_payload received raw payload of type: {type(payload)}")
+
+        current_data = payload
+        # Elisp often wraps data in a single-element list or tuple
+        while isinstance(current_data, (list, tuple)) and len(current_data) == 1:
+            current_data = current_data[0]
+            logger.debug(f"Unwrapped payload, current type: {type(current_data)}")
+
+        # After unwrapping, we should have the core alist (as a list/tuple of lists/tuples)
+        if isinstance(current_data, (list, tuple)):
+            from ..utils.unified_tag_processor import _parse_elisp_data
+            parsed_dict = _parse_elisp_data(current_data)
+            if isinstance(parsed_dict, dict):
+                logger.debug(f"Successfully parsed chat payload to dict: {list(parsed_dict.keys())}")
+                return parsed_dict
+            else:
+                logger.error(f"Parsed chat data is not a dict, but {type(parsed_dict)}. Returning empty dict.")
+                return {}
+        
+        if isinstance(current_data, dict):
+            return current_data
+
+        logger.error(f"Could not normalize chat payload. Final type was {type(current_data)}. Returning empty dict.")
+        return {}

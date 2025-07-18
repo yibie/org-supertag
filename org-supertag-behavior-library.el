@@ -432,20 +432,14 @@ Example:
 
 (defun org-supertag-behavior--get-property (node-id params)
   "Get property value for NODE-ID based on PARAMS.
-PARAMS is a plist with :name key and optional :inherit flag.
-
-Example:
-  ;; Get local property
-  (org-supertag-behavior--get-property node-id '(:name \"CATEGORY\"))
-  ;; Get with inheritance
-  (org-supertag-behavior--get-property node-id '(:name \"CATEGORY\" :inherit t))"
+PARAMS is a plist with :name key and optional :inherit flag."
   (message "Debug get-property - node=%s params=%S" node-id params)
   (when-let* ((name (plist-get params :name))
               (inherit (plist-get params :inherit))
               (pos (org-supertag-db-get-pos node-id)))
     (message "Debug get-property - Getting %s (inherit=%s)" name inherit)
     (save-excursion
-      (org-with-point-at pos
+      (org-with-point-at posp
         (if inherit
             (org-entry-get nil name t)  ; t means inherit
           (org-entry-get nil name))))))

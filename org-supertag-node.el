@@ -175,6 +175,26 @@ Returns the first tag ID found for the node."
   (when-let* ((node-tags (org-supertag-node-get-tags node-id)))
     (car node-tags)))
 
+(defun org-supertag-node-get-parent-tags (node-id)
+  "Get the parent tags of the node.
+NODE-ID: The ID of the current node"
+  (save-excursion
+    (message "DEBUG: org-supertag-node-get-parent-tags called with node-id: %s" node-id)
+    (when-let* ((pos (org-id-find node-id t)))
+      (goto-char pos)
+      (message "DEBUG: Child node (id: %s) found at pos %s" node-id pos)
+      (if (org-up-heading-safe)
+          (let* ((parent-id (org-id-get))
+                 (parent-tags (when parent-id (org-supertag-node-get-tags parent-id))))
+            (message "DEBUG: Parent ID found: %s" parent-id)
+            (message "DEBUG: Parent tags from DB: %S" parent-tags)
+            parent-tags)
+        ;; If no parent heading is found, log and return nil explicitly to avoid
+        ;; propagating a string value that breaks callers expecting a list.
+        (progn
+          (message "DEBUG: org-up-heading-safe returned nil. No parent found.")
+          nil)))))
+
 
 (defun org-supertag-node--ensure-sync ()
   "Ensure current node is properly synced with database.
@@ -873,6 +893,75 @@ filename / outline-path / title"
           (recenter)
           (message "Jumped to node: %s" choice))))))
 
+
+;;------------------------------------------------------------------------------
+;; Node Location Functions
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-find-node-location (node-id &optional file-path)
+  "Find the location of a node by ID using database information and file search.
+NODE-ID: The node identifier to find
+FILE-PATH: Optional file path, if nil will get from database
+
+Returns:
+- (POSITION . FILE-PATH) if found
+- nil if not found
+
+This function does NOT use org-id-find, instead it:
+1. Gets file path from database
+2. Searches for the ID in the file
+3. Returns the position of the headline"
+  (let* ((node-data (org-supertag-db-get node-id))
+         (target-file (or file-path (plist-get node-data :file-path))))
+    
+    (when (and target-file (file-exists-p target-file))
+      (with-temp-buffer
+        (org-mode)
+        (insert-file-contents target-file)
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char (point-min))
+            ;; Search for the ID property in the file
+            (when (re-search-forward
+                   (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
+                   nil t)
+              ;; Found the ID property, now find the corresponding headline
+              (let ((id-pos (point)))
+                ;; Move backward to find the headline that contains this property
+                (when (re-search-backward "^\\*+ " nil t)
+                  (beginning-of-line)
+                  (when (org-at-heading-p)
+                    ;; Verify this is the correct headline by checking if the ID property
+                    ;; is within this headline's property drawer
+                    (let ((headline-start (point))
+                          (headline-end (save-excursion
+                                          (org-end-of-subtree t t)
+                                          (point))))
+                      (when (and (>= id-pos headline-start)
+                                 (<= id-pos headline-end))
+                        (cons (point) target-file)))))))))))))
+
+(defun org-supertag-goto-node (node-id)
+  "Go to a node by ID using database information.
+NODE-ID: The node identifier to navigate to
+
+Returns:
+- t if successfully navigated
+- nil if node not found"
+  (when-let* ((location (org-supertag-find-node-location node-id)))
+    (let ((pos (car location))
+          (file (cdr location)))
+      ;; Switch to the file and position
+      (find-file file)
+      (widen)
+      (goto-char pos)
+      ;; Ensure we're at the beginning of the headline
+      (org-back-to-heading t)
+      ;; Show the context
+      (org-show-context)
+      (org-show-subtree)
+      t)))
 
 ;;------------------------------------------------------------------------------
 ;; Node Relations 

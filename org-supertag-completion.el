@@ -54,7 +54,9 @@ completion candidate and correcting the buffer if necessary."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
          ;; For new tags, the REAL tag name is the prefix the user typed.
          ;; For existing tags, it's the candidate they selected.
-         (tag-name (org-supertag-sanitize-tag-name (if is-new original-prefix selected-string))))
+         ;; --- FIX: Use substring-no-properties to get a clean string for data ---
+         (clean-tag-string (if is-new original-prefix (substring-no-properties selected-string)))
+         (tag-name (org-supertag-sanitize-tag-name clean-tag-string)))
 
     (when (and tag-name (not (string-empty-p tag-name)))
 

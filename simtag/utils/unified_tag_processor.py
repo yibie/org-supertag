@@ -1,10 +1,93 @@
 #!/usr/bin/env python3
 """
-统一标签处理器
+Unify data Processer
 ===============
 
-本模块负责统一所有 Elisp <-> Python 数据传输的格式和转换逻辑。
-所有跨语言数据交互都必须遵循此文件中定义的约定。
+Data Contract Specification
+==========================================
+
+### 1. Elisp 端数据准备规范
+
+Elisp 端必须按照以下规范准备数据，确保数据结构符合 sync_handler.py 的期望：
+
+#### 1.1 实体 (Entity) 数据格式
+```elisp
+;; 每个实体必须包含以下字段：
+'((id . "entity-id")           ; 必需：实体唯一标识
+  (type . "node")              ; 必需：实体类型 ("node" | "tag")
+  (title . "实体标题")         ; 可选：实体标题
+  (content . "实体内容")       ; 可选：实体内容
+  (properties . properties-alist) ; 可选：属性列表
+  (file_path . "/path/to/file")    ; 可选：文件路径
+  (pos . 123)                      ; 可选：位置信息
+  ;; ... 其他字段
+  )
+```
+
+#### 1.2 快照 (Snapshot) 数据格式
+```elisp
+;; 完整的同步快照数据：
+'((entities . (entity1 entity2 ...))     ; 要更新的实体列表
+  (links . (link1 link2 ...))           ; 要更新的链接列表
+  (ids_to_delete . ("id1" "id2" ...))   ; 要删除的实体ID列表
+  )
+```
+
+#### 1.3 链接 (Link) 数据格式
+```elisp
+;; 链接数据：
+'((source . "source-id")       ; 必需：源实体ID
+  (target . "target-id")       ; 必需：目标实体ID
+  (type . "REF_TO")           ; 可选：链接类型
+  ;; ... 其他属性
+  )
+```
+
+### 2. Python 端处理规范
+
+#### 2.1 normalize_payload 函数职责
+- 接收 Elisp 传输的数据 (通过 EPC 协议)
+- 将 Elisp alist 转换为 Python dict
+- 处理 Symbol 类型和特殊值 (t, nil)
+- 递归处理嵌套结构
+
+#### 2.2 期望的输出格式
+```python
+{
+    "entities": [
+        {
+            "id": "entity-id",
+            "type": "node",
+            "title": "实体标题",
+            "content": "实体内容",
+            "properties": {...},
+            # ... 其他字段
+        },
+        # ... 更多实体
+    ],
+    "links": [
+        {
+            "source": "source-id",
+            "target": "target-id",
+            "type": "REF_TO",
+            # ... 其他属性
+        },
+        # ... 更多链接
+    ],
+    "ids_to_delete": ["id1", "id2", ...]
+}
+```
+
+### 3. 数据验证规则
+
+#### 3.1 必需字段验证
+- 实体必须有 'id' 和 'type' 字段
+- 链接必须有 'source' 和 'target' 字段
+
+#### 3.2 数据类型验证
+- ID 字段必须是字符串
+- type 字段必须是 "node" 或 "tag"
+- properties 必须是字典或能转换为字典的结构
 
 数据传输约定 (Elisp -> Python)
 ---------------------------------
@@ -13,7 +96,7 @@
 
 1.  **Elisp 端**:
     - 所有数据必须被构建成一个 **关联列表 (alist)**，例如 
-      `'(("nodes" . nodes-list) ("config" . config-list))`。
+      `'(("entities" . entities-list) ("links" . links-list))`。
       这是最可靠的序列化格式，必须取代 hash-table。
     - 在调用 `org-supertag-bridge` 的任何函数时，此 alist 必须被包裹在一个
       **列表中**，例如 `(list payload-alist)`。
@@ -92,8 +175,6 @@ class TagRelationData:
     rel_type: Optional[str] = None
     rel_rules: Dict[str, Any] = field(default_factory=dict)
     rel_history: List[Dict[str, Any]] = field(default_factory=list)
-
-# ====== 最终的、健壮的数据转换逻辑 (V7) ======
 
 def _is_alist(data: list) -> bool:
     """
@@ -186,172 +267,238 @@ def parse_llm_json_response(response_text: str) -> Optional[Union[Dict, List]]:
         return None
 
 
+def validate_entity_data(entity: Dict[str, Any]) -> bool:
+    """
+    Validate entity data
+    
+    Args:
+        entity: Entity data dictionary
+        
+    Returns:
+        bool: Validation passed
+    """
+    # Required fields check
+    if not entity.get('id'):
+        logger.error(f"Entity missing required 'id' field: {entity}")
+        return False
+    
+    if not entity.get('type'):
+        logger.error(f"Entity missing required 'type' field: {entity}")
+        return False
+    
+    # Type validation
+    if entity.get('type') not in ['node', 'tag']:
+        logger.error(f"Invalid entity type '{entity.get('type')}', must be 'node' or 'tag': {entity}")
+        return False
+    
+    # ID type check
+    if not isinstance(entity.get('id'), str):
+        logger.error(f"Entity 'id' must be a string, got {type(entity.get('id'))}: {entity}")
+        return False
+    
+    return True
+
+def validate_link_data(link: Dict[str, Any]) -> bool:
+    """
+    Validate link data
+    
+    Args:
+        link: Link data dictionary
+        
+    Returns:
+        bool: Validation passed
+    """
+    # Required fields check
+    if not link.get('source'):
+        logger.error(f"Link missing required 'source' field: {link}")
+        return False
+    
+    if not link.get('target'):
+        logger.error(f"Link missing required 'target' field: {link}")
+        return False
+    
+    # Type check
+    if not isinstance(link.get('source'), str):
+        logger.error(f"Link 'source' must be a string, got {type(link.get('source'))}: {link}")
+        return False
+    
+    if not isinstance(link.get('target'), str):
+        logger.error(f"Link 'target' must be a string, got {type(link.get('target'))}: {link}")
+        return False
+    
+    return True
+
+def validate_snapshot_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and clean snapshot data.
+    
+    Args:
+        data: Snapshot data dictionary
+        
+    Returns:
+        Dict: Validated data, invalid data will be filtered out
+    """
+    validated_data = {
+        'entities': [],
+        'links': [],
+        'ids_to_delete': []
+    }
+    
+    # Validate entity data
+    entities = data.get('entities', [])
+    if not isinstance(entities, list):
+        logger.error(f"'entities' must be a list, got {type(entities)}")
+        entities = []
+    
+    for entity in entities:
+        if validate_entity_data(entity):
+            validated_data['entities'].append(entity)
+    
+    # Validate link data
+    links = data.get('links', [])
+    if not isinstance(links, list):
+        logger.error(f"'links' must be a list, got {type(links)}")
+        links = []
+    
+    for link in links:
+        if validate_link_data(link):
+            validated_data['links'].append(link)
+    
+    # Validate delete ID list
+    ids_to_delete = data.get('ids_to_delete', [])
+    if not isinstance(ids_to_delete, list):
+        logger.error(f"'ids_to_delete' must be a list, got {type(ids_to_delete)}")
+        ids_to_delete = []
+    
+    valid_ids = []
+    for id_val in ids_to_delete:
+        if isinstance(id_val, str) and id_val.strip():
+            valid_ids.append(id_val.strip())
+        else:
+            logger.warning(f"Invalid ID in ids_to_delete: {id_val}")
+    
+    validated_data['ids_to_delete'] = valid_ids
+    
+    logger.info(f"Validation completed: {len(validated_data['entities'])} entities, "
+                f"{len(validated_data['links'])} links, {len(validated_data['ids_to_delete'])} deletions")
+    
+    return validated_data
+
 def normalize_payload(payload: Any) -> Dict:
     """
     The single, robust entry point for normalizing any payload from Elisp.
+    It recursively unwraps tuples and lists until it finds the first
+    dictionary-like structure (an alist), then converts it to a dict.
+    
+    Enhanced with data validation and error handling.
     """
     logger.debug(f"normalize_payload received raw payload of type: {type(payload)}")
 
-    elisp_data = payload
-    if isinstance(payload, (list, tuple)) and len(payload) == 1:
-        elisp_data = payload[0]
+    current_data = payload
+    # Elisp often wraps data in a single-element list or tuple
+    while isinstance(current_data, (list, tuple)) and len(current_data) == 1:
+        current_data = current_data[0]
+        logger.debug(f"Unwrapped payload, current type: {type(current_data)}")
 
-    parsed_data = _parse_elisp_data(elisp_data)
-
-    if isinstance(parsed_data, dict):
-        return parsed_data
-    
-    # NEW: If the result is a list with a single dictionary, unwrap it.
-    # This handles the case where a single alist is parsed into [{}].
-    if isinstance(parsed_data, list) and len(parsed_data) == 1 and isinstance(parsed_data[0], dict):
-        logger.debug("Unwrapping single dictionary from list.")
-        return parsed_data[0]
-    
-    logger.warning(f"Parsed data is not a dict ({type(parsed_data)}), wrapping.")
-    return {'data': parsed_data}
-
-# ====== 旧的、复杂的数据转换逻辑 (将被删除) ======
-# All old functions like _convert_simple_sexp, _convert_sexp_to_dict, 
-# normalize_autotag_payload etc. are now obsolete and removed.
-
-class UnifiedTagProcessor:
-    """
-    统一的标签处理器 - 标准化LLM响应的解析。
-    """
-    
-    def clean_llm_response(self, response_str: str) -> str:
-        """
-        Cleans the LLM response string to extract only the valid JSON part.
-        It finds the first occurrence of a JSON array or object.
-        """
-        # Regex to find a JSON object {...} or array [...]
-        json_match = re.search(r'(\{.*\}|\[.*\])', response_str, re.DOTALL)
-        
-        if json_match:
-            json_str = json_match.group(0)
-            logger.debug(f"Extracted JSON string from LLM response: {json_str[:300]}...")
-            return json_str
+    # After unwrapping, we should have the core alist (as a list/tuple of lists/tuples)
+    if isinstance(current_data, (list, tuple)):
+        parsed_dict = _parse_elisp_data(current_data)
+        if isinstance(parsed_dict, dict):
+            logger.debug(f"Successfully parsed payload to dict: {list(parsed_dict.keys())}")
+            # Validate and clean data
+            validated_data = validate_snapshot_data(parsed_dict)
+            logger.debug("Data validation completed successfully")
+            # === Preserve additional top-level keys that are not part of the standard snapshot schema ===
+            for k, v in parsed_dict.items():
+                if k not in validated_data:
+                    validated_data[k] = v
+            return validated_data
         else:
-            logger.warning("No JSON object or array found in the LLM response.")
-            # Fallback: try to remove markdown backticks as a last resort
-            cleaned = response_str.strip()
-            if cleaned.startswith('```json'):
-                cleaned = cleaned[7:].strip()
-            elif cleaned.startswith('```'):
-                cleaned = cleaned[3:].strip()
-            if cleaned.endswith('```'):
-                cleaned = cleaned[:-3].strip()
-            return cleaned
+            logger.error(f"Parsed data is not a dict, but {type(parsed_dict)}. Returning empty dict.")
+            return {'entities': [], 'links': [], 'ids_to_delete': []}
+    
+    if isinstance(current_data, dict):
+        # Validate and clean data
+        validated_data = validate_snapshot_data(current_data)
+        # === Preserve additional top-level keys that are not part of the standard snapshot schema ===
+        for k, v in current_data.items():
+            if k not in validated_data:
+                validated_data[k] = v
+        return validated_data
+
+    logger.error(f"Could not normalize payload. Final type was {type(current_data)}. Returning empty dict.")
+    return {'entities': [], 'links': [], 'ids_to_delete': []}
+
+# ====== UnifiedTagProcessor (restored) ======
+class UnifiedTagProcessor:
+    """Provides helper methods to clean and parse LLM tag-extraction responses into
+    structured TagResult / NoteResult objects. This class was accidentally
+    removed; restoring it ensures downstream imports function correctly."""
+
+    # ------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------
+    def clean_llm_response(self, response_str: str) -> str:
+        """Extract the first valid JSON object/array from the LLM response."""
+        json_match = re.search(r'(\{.*\}|\[.*\])', response_str, re.DOTALL)
+        if json_match:
+            return json_match.group(0)
+
+        # Fallback – strip markdown fences
+        cleaned = response_str.strip()
+        if cleaned.startswith('```json'):
+            cleaned = cleaned[7:].strip()
+        elif cleaned.startswith('```'):
+            cleaned = cleaned[3:].strip()
+        if cleaned.endswith('```'):
+            cleaned = cleaned[:-3].strip()
+        return cleaned
 
     def process_llm_response(self, response_str: str, note_ids: List[str]) -> List[NoteResult]:
-        """
-        处理 LLM 响应并返回标准化的 NoteResult 列表。
-        
-        Args:
-            response_str: LLM 的原始响应字符串
-            note_ids: 对应的笔记ID列表
-            
-        Returns:
-            List[NoteResult]: 处理结果列表
-        """
-        import json
-        
-        results = []
-        
+        """Parse LLM output string and return a list of NoteResult objects."""
+        results: List[NoteResult] = []
         try:
-            # Clean the response to get only the JSON part
             json_string = self.clean_llm_response(response_str)
-            
-            try:
-                # Attempt to parse the cleaned JSON string
-                parsed_data = json.loads(json_string)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse extracted JSON response: {e}. JSON string was: '{json_string}'")
-                # Create error results for all note_ids
-                return [NoteResult(note_id=note_id, tags=[], error=f"JSON parse error: {e}") 
-                        for note_id in note_ids]
-            
-            # Process the parsed data
-            if isinstance(parsed_data, list):
-                # Response is a list of tags
-                tags = self._parse_tag_list(parsed_data)
-                note_id = note_ids[0] if note_ids else "unknown"
-                results.append(NoteResult(note_id=note_id, tags=tags))
-                
-            elif isinstance(parsed_data, dict):
-                # Response is a dictionary, might contain tags
-                if 'tags' in parsed_data and isinstance(parsed_data['tags'], list):
-                    tags = self._parse_tag_list(parsed_data['tags'])
-                else:
-                    # Try to parse the whole dict as a single tag
-                    tags = self._parse_tag_list([parsed_data])
-                
-                note_id = note_ids[0] if note_ids else "unknown"
-                results.append(NoteResult(note_id=note_id, tags=tags))
-            else:
-                logger.warning(f"Unexpected JSON format after parsing: {type(parsed_data)}")
-                return [NoteResult(note_id=note_id, tags=[], error="Unexpected JSON format") 
-                        for note_id in note_ids]
-                
+            parsed = json.loads(json_string)
         except Exception as e:
-            logger.error(f"Error processing LLM response: {e}", exc_info=True)
-            return [NoteResult(note_id=note_id, tags=[], error=str(e)) for note_id in note_ids]
-        
-        # 如果结果数量不匹配 note_ids 数量，补齐空结果
+            logger.error(f"Failed to parse LLM response: {e}")
+            return [NoteResult(note_id=nid, tags=[], error=str(e)) for nid in note_ids]
+
+        # Helper to convert raw list/dict to TagResult list
+        def _to_tag_results(raw) -> List[TagResult]:
+            tag_list: List[TagResult] = []
+            if not isinstance(raw, list):
+                raw = [raw]
+            for item in raw:
+                try:
+                    if isinstance(item, dict):
+                        tag_name = item.get('tag_name') or item.get('name') or ''
+                        conf = float(item.get('confidence', 0.0))
+                        reasoning = item.get('reasoning', item.get('reason', ''))
+                    else:
+                        tag_name = str(item)
+                        conf = 0.5
+                        reasoning = 'Extracted as simple string'
+                    if tag_name:
+                        tag_list.append(TagResult(tag_name=tag_name, confidence=conf, reasoning=reasoning, source='llm'))
+                except Exception as ex:
+                    logger.warning(f"Failed to parse tag item {item}: {ex}")
+            return tag_list
+
+        try:
+            if isinstance(parsed, list):
+                tags = _to_tag_results(parsed)
+                results.append(NoteResult(note_id=note_ids[0] if note_ids else 'unknown', tags=tags))
+            elif isinstance(parsed, dict):
+                raw_tags = parsed.get('tags', parsed)
+                tags = _to_tag_results(raw_tags)
+                results.append(NoteResult(note_id=note_ids[0] if note_ids else 'unknown', tags=tags))
+            else:
+                logger.warning(f"Unexpected JSON root type: {type(parsed)}")
+        except Exception as err:
+            logger.error(f"Error constructing NoteResult: {err}")
+
+        # Ensure one result per note_id
         while len(results) < len(note_ids):
             results.append(NoteResult(note_id=note_ids[len(results)], tags=[]))
-            
         return results
-    
-    def _parse_tag_list(self, tag_data: List[Dict[str, Any]]) -> List[TagResult]:
-        """
-        解析标签数据列表为 TagResult 对象列表。
-        
-        Args:
-            tag_data: 标签数据列表，每个元素是包含标签信息的字典
-            
-        Returns:
-            List[TagResult]: 解析后的标签结果列表
-        """
-        tags = []
-        
-        if not isinstance(tag_data, list):
-            logger.warning(f"Expected list for tag_data, got {type(tag_data)}")
-            return tags
-        
-        for item in tag_data:
-            try:
-                if isinstance(item, dict):
-                    # 标准格式：{"tag_name": "...", "confidence": ..., "reasoning": "..."}
-                    tag_name = item.get('tag_name', item.get('name', ''))
-                    confidence = float(item.get('confidence', 0.0))
-                    reasoning = item.get('reasoning', item.get('reason', ''))
-                    
-                    if tag_name:
-                        tag_result = TagResult(
-                            tag_name=tag_name,
-                            confidence=confidence,
-                            reasoning=reasoning,
-                            source="llm"
-                        )
-                        tags.append(tag_result)
-                    else:
-                        logger.warning(f"Tag item missing name: {item}")
-                        
-                elif isinstance(item, str):
-                    # 简单字符串格式
-                    tag_result = TagResult(
-                        tag_name=item,
-                        confidence=0.5,  # 默认置信度
-                        reasoning="Extracted as simple string",
-                        source="llm"
-                    )
-                    tags.append(tag_result)
-                else:
-                    logger.warning(f"Unexpected tag item format: {type(item)}")
-                    
-            except Exception as e:
-                logger.error(f"Error parsing tag item {item}: {e}")
-                continue
-        
-        return tags

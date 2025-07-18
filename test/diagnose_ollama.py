@@ -11,6 +11,7 @@ import json
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+import httpx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -359,10 +360,34 @@ def print_diagnostic_report(result: DiagnosticResult):
     print("="*60)
 
 async def main():
-    """主函数"""
-    diagnostic = OllamaDiagnostic()
-    result = await diagnostic.run_full_diagnostic()
-    print_diagnostic_report(result)
+    client = httpx.AsyncClient(timeout=120)
+    api_url = "http://localhost:11434/api/chat"
+    model_name = "hf.co/unsloth/gemma-3-4b-it-GGUF"  # <--- THE MODEL IN QUESTION
+    messages = [{"role": "user", "content": "Why is the sky blue?"}]
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": 0.5
+        }
+    }
+
+    print(f"Sending request to {api_url} with model {model_name} and options...")
+    try:
+        response = await client.post(api_url, json=payload, headers={"Content-Type": "application/json"})
+        response.raise_for_status()
+        print("Success! Response:")
+        print(response.json())
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP Error! Status: {e.response.status_code}")
+        print("Response body:")
+        print(e.response.text)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    finally:
+        await client.aclose()
 
 if __name__ == "__main__":
     asyncio.run(main()) 

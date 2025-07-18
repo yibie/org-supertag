@@ -12,35 +12,27 @@ from simtag.core.graph_service import GraphService
 logger = logging.getLogger(__name__)
 
 class DiagnosticsHandler:
-    def __init__(self, config, llm_client, graph_service: GraphService, memory_engine, entity_extractor, rag_engine, emacs_client, data_dir, content_processor):
+    def __init__(self, config, graph_service: GraphService, llm_client, embedding_service):
         self.config = config
-        self.llm_client = llm_client
         self.graph_service = graph_service
-        self.memory_engine = memory_engine
-        self.entity_extractor = entity_extractor
-        self.rag_engine = rag_engine
-        self.emacs_client = emacs_client
-        self.data_dir = data_dir
-        self.content_processor = content_processor
-        logger.info("DiagnosticsHandler initialized with extended dependencies.")
+        self.llm_client = llm_client
+        self.embedding_service = embedding_service
+        logger.info("DiagnosticsHandler initialized with modern dependencies.")
 
     def get_status(self) -> Dict[str, Any]:
         """
-        Gets the system status. Moved from SimTagBridge.
+        Gets the system status.
         """
         logger.info("get_status called")
         try:
-            # Check LLM client availability
-            llm_available = False
+            llm_available = self.llm_client is not None
             llm_model = "unknown"
-            try:
-                if self.llm_client:
-                    llm_available = True
-                    llm_model = getattr(self.config, 'llm_client_config', {}).get('default_model', 'unknown')
-            except Exception as e:
-                logger.warning(f"Could not check LLM status: {e}")
+            if llm_available:
+                try:
+                    llm_model = self.llm_client.get_default_model()
+                except Exception:
+                    pass
 
-            # Check storage stats
             storage_stats = {}
             try:
                 if self.graph_service:
@@ -52,16 +44,12 @@ class DiagnosticsHandler:
                 "llm_available": llm_available,
                 "llm_model": llm_model,
                 "graph_service_ready": self.graph_service is not None,
+                "embedding_service_ready": self.embedding_service is not None,
                 "storage_stats": storage_stats,
-                "memory_engine_ready": self.memory_engine is not None,
-                "entity_extractor_ready": self.entity_extractor is not None,
-                "rag_engine_ready": self.rag_engine is not None,
                 "server_running": True,
-                "emacs_client_connected": self.emacs_client is not None,
                 "config": {
-                    "vector_db_path": self.config.vector_db_path,
-                    "data_directory": self.data_dir,
-                    "llm_model": llm_model
+                    "data_directory": self.config.data_directory,
+                    "db_path": self.config.db_path,
                 }
             }
             return {"status": "success", "result": status}
@@ -71,13 +59,13 @@ class DiagnosticsHandler:
 
     def get_config(self) -> Dict[str, Any]:
         """
-        Gets the current configuration. Moved from SimTagBridge.
+        Gets the current configuration.
         """
         logger.info("EPC Call: get_config")
         try:
             return {
                 "status": "success",
-                "config": self.config.to_dict()  # Assuming Config has a to_dict method
+                "config": self.config.model_dump()
             }
         except Exception as e:
             logger.error(f"Get config failed: {e}\n{traceback.format_exc()}")
@@ -105,51 +93,53 @@ class DiagnosticsHandler:
             logger.error(msg)
             return {"status": "error", "message": msg, "missing": missing_modules}
 
-    def test_embedding_retrieval(self, text: str):
-        from simtag.services.content_processor import ProcessingConfig, ProcessingMode, ContentItem
-
-        logger.info(f"Received test_embedding_retrieval request with text: '{text}'")
-        if not self.content_processor:
-            return "Error: ContentProcessor not available."
-        
-        try:
-            embedding_config = ProcessingConfig(mode=ProcessingMode.EMBEDDING_ONLY)
-            embedding_processor = self.content_processor.__class__(embedding_config)
-            
-            content_item = ContentItem(id=f"test_{int(time.time())}", text=text)
-            processing_result = asyncio.run(embedding_processor.process_single(content_item))
-            
-            if processing_result.success and processing_result.embedding_result and processing_result.embedding_result.success:
-                embedding = processing_result.embedding_result.embedding
-                return f"Success! Got embedding of dimension {len(embedding)}."
-            else:
-                return f"Error: {processing_result.error or 'Unknown error'}"
-        except Exception as e:
-            return f"Error: Exception occurred: {e}"
-
     def get_processing_status(self) -> Dict[str, Any]:
         return {"status": "error", "message": "Log monitor not available in this version."}
     
     def print_processing_report(self) -> Dict[str, Any]:
         return {"status": "error", "message": "Log monitor not available in this version."}
 
-    def inspect_vector_index(self) -> Dict[str, Any]:
-        """Inspects the vector index to check the number of entries."""
-        logger.info("inspect_vector_index called")
-        if not self.graph_service or not self.graph_service.has_vector_ext:
-            return {"status": "error", "message": "Graph service or vector extension not available."}
+
+
+    async def test_embedding_retrieval(self, text: str) -> Dict[str, Any]:
+        """Tests the full embedding retrieval pipeline for a given text."""
+        logger.info(f"Running embedding test for text: '{text[:30]}...'")
+        if not self.embedding_service:
+            return {"status": "error", "message": "EmbeddingService is not available."}
         
-        try:
-            conn = self.graph_service._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM node_embeddings_vss")
-            count = cursor.fetchone()[0]
-            
+        start_time = time.time()
+        result = await self.embedding_service.get_embedding(text)
+        end_time = time.time()
+        
+        if result.success:
             return {
                 "status": "success",
-                "index_name": "node_embeddings_vss",
-                "entry_count": count
+                "embedding_length": len(result.embedding) if result.embedding else 0,
+                "model_used": result.model_used,
+                "backend_used": result.backend_used,
+                "processing_time_ms": (end_time - start_time) * 1000
             }
+        else:
+            return {
+                "status": "error",
+                "message": result.error_message,
+                "model_used": result.model_used,
+                "backend_used": result.backend_used,
+            }
+
+
+
+    async def get_available_models(self) -> Dict[str, Any]:
+        """
+        Gets the available models from the LLM client.
+        """
+        try:
+            if self.llm_client:
+                # This assumes the llm_client has a method to get available models.
+                # We will need to add this to the LLMClient class.
+                models = await self.llm_client.get_available_models()
+                return {"status": "success", "models": models}
+            return {"status": "error", "message": "LLM client not available."}
         except Exception as e:
-            logger.error(f"Failed to inspect vector index: {e}\n{traceback.format_exc()}")
+            logger.error(f"Failed to get available models: {e}\n{traceback.format_exc()}")
             return {"status": "error", "message": str(e)} 

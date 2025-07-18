@@ -67,6 +67,35 @@
   :type 'string
   :group 'org-supertag-auto-tag)
 
+(defcustom org-supertag-auto-tag-provider 'ollama
+  "The AI provider to use for auto-tagging.
+Supported values match the Python backend's LLMClient configuration."
+  :type '(choice (const :tag "Ollama" ollama)
+                 (const :tag "OpenAI" openai)
+                 (const :tag "Google" google))
+  :group 'org-supertag-auto-tag)
+
+(defcustom org-supertag-auto-tag-model "hf.co/unsloth/gemma-3-4b-it-GGUF:latest"
+  "The model name to use for auto-tagging."
+  :type 'string
+  :group 'org-supertag-auto-tag)
+
+(defcustom org-supertag-auto-tag-temperature 0.7
+  "The sampling temperature for the auto-tagging model (0.0 - 2.0)."
+  :type 'float
+  :group 'org-supertag-auto-tag)
+
+(defcustom org-supertag-auto-tag-max-tokens 2048
+  "The maximum number of tokens for the auto-tagging model's response."
+  :type 'integer
+  :group 'org-supertag-auto-tag)
+
+(defcustom org-supertag-auto-tag-endpoint "http://localhost:11434"
+  "The API endpoint for the auto-tagging provider.
+This is particularly important for local providers like Ollama."
+  :type 'string
+  :group 'org-supertag-auto-tag)
+
 ;;; === Global Variables ===
 
 (defvar org-supertag-auto-tag--suggestion-queue '()
@@ -159,11 +188,12 @@ The data is structured according to the unified data contract."
     (dolist (node-id node-ids)
       (when-let* ((node-data (org-supertag-db-get node-id))
                   (content (org-supertag-auto-tag--get-node-content node-data)))
-        (when (>= (length content) org-supertag-auto-tag-batch-min-content-length)
-          ;; Use list of pairs instead of alist - EPC serializes this as Python dict
-          (let ((node-dict `(("id" ,node-id)
-                            ("content" ,content))))
-            (push node-dict nodes-to-process)))))
+        (let* ((title (plist-get node-data :title))
+               (combined (concat (or title "") " " (or content ""))))
+          (when (>= (length (string-trim combined)) org-supertag-auto-tag-batch-min-content-length)
+            (let ((node-dict `(("id" . ,node-id)
+                               ("content" . ,combined))))
+              (push node-dict nodes-to-process))))))
 
     ;; 2. Only send data to backend when there are eligible nodes.
     (if nodes-to-process
@@ -171,17 +201,17 @@ The data is structured according to the unified data contract."
           (message "Auto-tag: Preparing to send %d eligible nodes to backend for processing..." (length nodes-to-process))
           ;; Construct the final payload using list format for proper EPC serialization
           (let* ((reversed-nodes (reverse nodes-to-process))
-                 (model-config (org-supertag-api--get-model-config-for-tagging))
+                 (model-config (org-supertag-auto-tag--get-model-config))
                  ;; Use list format instead of alist - EPC serializes this as Python dict
                  (payload `(("nodes" ,reversed-nodes)
                            ("model_config" ,model-config))))
 
-            
-            ;; (message "=== ELISP DEBUG: DATA COLLECTION (LIST FORMAT) ===")
-            ;; (message "Total nodes to process: %d" (length reversed-nodes))
-            ;; (message "Model config: %S" model-config)
+            ;; (message "--- ELISP DEBUG: PAYLOAD SENT ---")
+            ;; (message "Payload type: %s" (type-of payload))
+            ;; (message "Payload content: %S" payload)
+            ;; (message "--- END ELISP DEBUG ---")
 
-            ;; 打印前5个节点的详细信息
+            ;; print the first 5 nodes
             ;; (let ((node-count 0))
             ;;   (dolist (node reversed-nodes)
             ;;     (when (< node-count 5)
@@ -208,11 +238,21 @@ The data is structured according to the unified data contract."
             ;; (message "Auto-tag DEBUG: Sending payload with %d nodes to API layer." (length reversed-nodes))
             ;; The API layer will wrap this payload in a list before sending.
             (org-supertag-api-batch-generate-tags
-             payload
+             (list payload) ;; Wrap the payload in a list to conform to the data contract
              #'org-supertag-auto-tag--batch-handle-completion)))
 
       ;; If no eligible nodes, just print a message, do nothing.
       (message "Auto-tag: All untagged nodes' content is too short or cannot be extracted, skipped."))))
+
+(defun org-supertag-auto-tag--get-model-config ()
+  "Get model configuration for auto-tagging from this module's custom variables.
+This ensures auto-tagging is self-contained and not dependent on other modules like `org-supertag-ai`."
+  (list
+   (cons 'provider org-supertag-auto-tag-provider)
+   (cons 'model org-supertag-auto-tag-model)
+   (cons 'temperature org-supertag-auto-tag-temperature)
+   (cons 'max_tokens org-supertag-auto-tag-max-tokens)
+   (cons 'endpoint org-supertag-auto-tag-endpoint)))
 
 (defun org-supertag-auto-tag--get-node-content (node-data)
   "Extract content for analysis from node data, including title and body."
@@ -240,35 +280,34 @@ The data is structured according to the unified data contract."
      title
      "")))
 
-(defun org-supertag-auto-tag--batch-handle-completion (result)
-  "Handle batch processing completion callback, unify suggestions into main suggestion queue."
-  (let* ((all-suggestions (plist-get result :suggestions))
-         (failed-count (or (plist-get result :failed_count) 0))
-         (new-suggestions-count 0))
-
-    (when all-suggestions
-      (dolist (node-suggestion-group all-suggestions)
-        (let* ((node-id (plist-get node-suggestion-group :node_id))
-               (suggestions-for-node (plist-get node-suggestion-group :suggestions))
-               (existing-tags (org-supertag-node-get-tags node-id)))
-
-          (dolist (suggestion-data suggestions-for-node)
-            (let ((tag-name (plist-get suggestion-data :tag_name)))
-              ;; Check if tag already exists on node
-              (unless (member tag-name existing-tags)
-                (let ((new-suggestion
-                       (list :node-id node-id
-                             :tag-name (plist-get suggestion-data :tag_name)
-                             :confidence (plist-get suggestion-data :confidence)
-                             :reasoning (plist-get suggestion-data :reasoning))))
-                  (cl-pushnew new-suggestion org-supertag-auto-tag--suggestion-queue :test 'equal)
-                  (cl-incf new-suggestions-count))))))))
-
-    (message "Auto-tag: Background processing completed: %d new suggestions, %d failed nodes."
-             new-suggestions-count failed-count)
-
-    (when (> new-suggestions-count 0)
-      (message "Auto-tag: New suggestions added to queue, use M-x org-supertag-auto-tag-batch-add to review."))))
+(defun org-supertag-auto-tag--batch-handle-completion (results)
+  "Handle batch processing completion callback from Python backend.
+RESULTS is a vector of plists, each representing a suggestion for a node."
+  (message "Auto-tag: Received %d suggestions from backend." (length results))
+  (let ((new-suggestions-count 0))
+    (dolist (suggestion results)
+      (let ((node-id (plist-get suggestion :node_id))
+            (tags (plist-get suggestion :tags)))
+        (when (and node-id tags)
+          ;; Check if a suggestion for this node already exists to avoid duplicates.
+          (unless (cl-some (lambda (q-item) (string= (plist-get q-item :node-id) node-id))
+                           org-supertag-auto-tag--suggestion-queue)
+            (let* ((node-data (org-supertag-db-get node-id))
+                   (content (or (gethash node-id org-supertag-auto-tag--node-content-cache)
+                                (org-supertag-auto-tag--get-node-content node-data))))
+              (when content
+                ;; Add to suggestion queue with a consistent structure
+                (push (list :node-id node-id
+                            :content content
+                            :tags tags)
+                      org-supertag-auto-tag--suggestion-queue)
+                (puthash node-id content org-supertag-auto-tag--node-content-cache)
+                (cl-incf new-suggestions-count)))))))
+    (if (> new-suggestions-count 0)
+        (message "Auto-tag: Added %d new suggestions to the queue. Total pending: %d."
+                 new-suggestions-count
+                 (length org-supertag-auto-tag--suggestion-queue))
+      (message "Auto-tag: No new suggestions were added (already in queue or invalid format)."))))
 
 ;;; === Batch Tag Addition Interface ===
 
@@ -335,9 +374,12 @@ The data is structured according to the unified data contract."
            (nodes-to-process '())
            (node-ids-processed (make-hash-table :test 'equal)))
 
-      (dolist (suggestion org-supertag-auto-tag--suggestion-queue)
-        (let ((node-id (plist-get suggestion :node-id)))
-          (push suggestion (gethash node-id suggestions-by-node '()))))
+      ;; Correctly build the suggestions hash table using the :tags key
+      (dolist (item org-supertag-auto-tag--suggestion-queue)
+        (let ((node-id (plist-get item :node-id))
+              (tags (plist-get item :tags)))
+          ;; Only store the actual list of tag suggestion plists
+          (puthash node-id tags suggestions-by-node)))
 
       (maphash (lambda (node-id _suggestions)
                  (unless (gethash node-id node-ids-processed)
@@ -365,7 +407,7 @@ The data is structured according to the unified data contract."
     (org-supertag-auto-tag--batch-insert-compact-display)
     (when current-tag-info
       (goto-char (point-min))
-      (when (re-search-forward (format "^\\s-*[✓□] %s (" (regexp-quote (car current-tag-info))) nil t)
+      (when (re-search-forward (format "^\\s-*\\(?:[✓□]\\) %s (" (regexp-quote (car current-tag-info))) nil t)
         (beginning-of-line)))))
 
 (defun org-supertag-auto-tag--batch-insert-compact-display ()
@@ -383,7 +425,8 @@ The data is structured according to the unified data contract."
              (file-path (plist-get node-data :file-path))
              (suggestions (gethash node-id org-supertag-auto-tag--batch-all-suggestions))
              (selected-tags (gethash node-id org-supertag-auto-tag--batch-all-selected))
-             (progress (format "[%d/%d]" (1+ node-index) (length org-supertag-auto-tag--batch-nodes))))
+             (progress (format "[%d/%d]" (1+ node-index) (length org-supertag-auto-tag--batch-nodes)))
+             (start (point)))
 
         ;; Diagnostic messages for missing data
         (unless title
@@ -392,40 +435,35 @@ The data is structured according to the unified data contract."
           (message "Auto-tag Diagnostics: Node ID '%s' is missing a file-path." node-id))
 
         (when (> node-index 0)
-          (insert "\n" (propertize (make-string 80 ?═) 'face 'org-meta-line) "\n\n"))
+          (insert "\n" (propertize "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" 'face 'org-meta-line) "\n\n"))
         
-        (insert (propertize (format "%s 📄 %s" progress (or title "Untitled Node")) 'face 'bold) "\n")
-        (insert (propertize (format "    %s" (if file-path (file-name-nondirectory file-path) "<No File>")) 'face 'org-meta-line) "\n\n")
-        
-        (let ((content (org-supertag-auto-tag--get-node-content node-data)))
-          (when content
-            (let ((content-lines (split-string content "\n" t)))
-              (dotimes (i (min 2 (length content-lines)))
-                (let ((line (nth i content-lines)))
-                  (when (and line (> (length (string-trim line)) 0))
-                    (insert "    " (substring line 0 (min (length line) 76))
-                            (if (> (length line) 76) "..." "") "\n")))))
-            (insert "\n")))
-
-        (insert (propertize "    🏷️ Suggested Tags:\n" 'face 'org-level-2))
-        
-        (if (null suggestions)
-            (insert "        No suggestions or generating...\n")
-          (dolist (suggestion suggestions)
-            (let* ((tag-name (plist-get suggestion :tag-name))
-                   (confidence (plist-get suggestion :confidence))
-                   (selected-p (member tag-name selected-tags))
-                   (confidence-color (cond ((>= confidence 0.8) 'success)
-                                           ((>= confidence 0.6) 'warning)
-                                           (t 'error)))
-                   (line-start (point)))
-              (insert (format "        %s %s " (if selected-p "✓" "□") (propertize tag-name 'face 'bold)))
-              (insert (propertize (format "(%.2f)" confidence) 'face confidence-color) "\n")
-              (put-text-property line-start (point) 'tag-name tag-name)
-              (put-text-property line-start (point) 'node-id node-id))))
-        (insert "\n")
+        (let ((node-start (point)))
+          (insert (propertize (format "%s 📄 %s" progress (or title "Untitled Node")) 'face 'bold) "\n")
+          (insert (propertize (format "    %s" (if file-path (file-name-nondirectory file-path) "<No File>")) 'face 'org-meta-line) "\n\n")
+          (let ((content (org-supertag-auto-tag--get-node-content node-data)))
+            (when content
+              (let ((content-lines (split-string content "\n" t)))
+                (dotimes (i (min 2 (length content-lines)))
+                  (let ((line (nth i content-lines)))
+                    (when (and line (> (length (string-trim line)) 0))
+                      (insert "    " (substring line 0 (min (length line) 76))
+                              (if (> (length line) 76) "..." "") "\n")))))
+              (insert "\n")))
+          (insert (propertize "    🏷️ Suggested Tags:\n" 'face 'org-level-2))
+          (if (or (not suggestions) (seq-empty-p suggestions))
+              (insert "        No suggestions or generating...\n")
+            (dolist (tag-name suggestions)
+              (when (stringp tag-name) ; Add safeguard
+                (let* ((selected-p (member tag-name selected-tags))
+                       (line-start (point)))
+                  (insert (format "        %s %s\n"
+                                  (if selected-p "✓" "□")
+                                  (propertize tag-name 'face 'bold)))
+                  (put-text-property line-start (point) 'tag-name tag-name)
+                  (put-text-property line-start (point) 'node-id node-id)))))
+          (insert "\n")
+          (add-text-properties node-start (point) `(node-id ,node-id)))
         (cl-incf node-index))))
-  
   (insert (propertize "j/k: node switch n/p: up/down move SPC: toggle select RET: apply current A: apply all M: manual add q: quit" 
                      'face 'org-meta-line)))
 
@@ -437,8 +475,8 @@ The data is structured according to the unified data contract."
   "Get current cursor tag name and node ID"
   (save-excursion
     (beginning-of-line)
-    (when (re-search-forward "^\\s-*[✓□] \\(.+?\\) (" (line-end-position) t)
-      (let ((tag-name (match-string-no-properties 1))
+    (when (re-search-forward "^\\s-*\\(?:[✓□]\\) \\(.+?\\)\\s-*$" (line-end-position) t)
+      (let ((tag-name (string-trim (match-string-no-properties 1)))
             (node-id (get-text-property (point) 'node-id)))
         (when node-id (cons tag-name node-id))))))
 
@@ -452,8 +490,12 @@ The data is structured according to the unified data contract."
       (if (member tag-name selected-tags)
           (puthash node-id (remove tag-name selected-tags) org-supertag-auto-tag--batch-all-selected)
         (puthash node-id (cons tag-name selected-tags) org-supertag-auto-tag--batch-all-selected))
-      (let ((inhibit-read-only t))
-        (org-supertag-auto-tag--batch-refresh-display)))))
+      (let ((pos (point))
+            (win-start (window-start)))
+        (org-supertag-auto-tag--batch-refresh-current-node)
+        ;; 恢复光标和窗口位置
+        (goto-char pos)
+        (set-window-start (selected-window) win-start)))))
 
 (defun org-supertag-auto-tag--batch-apply-current-tag ()
   "Apply current cursor tag"
@@ -513,13 +555,13 @@ The data is structured according to the unified data contract."
     (message "Inserting tag '%s' into file for node '%s'." tag-name node-id)
     (org-supertag-inline-insert-tag-for-autotag node-id tag-name)
     
-    ;; 5. Remove processed suggestions from the queue to prevent re-processing.
+    ;; 5. Remove the corresponding suggestion from the queue after applying.
     (setq org-supertag-auto-tag--suggestion-queue
-          (cl-remove-if (lambda (suggestion)
-                           (and (equal (plist-get suggestion :node-id) node-id)
-                                (equal (plist-get suggestion :tag-name) tag-name)))
-                         org-supertag-auto-tag--suggestion-queue))
-    (message "Tag '%s' applied and suggestion removed from queue." tag-name)))
+          (cl-remove-if
+           (lambda (q-item)
+             (string= (plist-get q-item :node-id) node-id))
+           org-supertag-auto-tag--suggestion-queue))
+    (message "Tag '%s' applied and all suggestions for this node removed from queue." tag-name)))
 
 (defun org-supertag-auto-tag-get-tags-from-llm (nodes callback)
   "Send text chunks in NODES to LLM and get tags asynchronously."
@@ -580,5 +622,52 @@ This function now correctly registers the tag in the database."
                 (and (equal (plist-get s :node-id) node-id)
                      (stringp (plist-get s :tag-name))))
               org-supertag-auto-tag--suggestion-queue))
+
+(defun org-supertag-auto-tag--batch-refresh-current-node ()
+  "Only refresh the display of the current node, not the entire buffer."
+  (let* ((node-id (org-supertag-auto-tag--batch-get-current-node-id)))
+    (when node-id
+      (save-excursion
+        (let ((inhibit-read-only t))
+          (let* ((start (previous-single-property-change (point) 'node-id nil (point-min)))
+                 (end (next-single-property-change (point) 'node-id nil (point-max))))
+            (when (and start end)
+              (goto-char start)
+              (delete-region start end)
+              (let* ((node-entry (assoc node-id org-supertag-auto-tag--batch-nodes))
+                     (node-data (cdr node-entry))
+                     (title (plist-get node-data :title))
+                     (file-path (plist-get node-data :file-path))
+                     (suggestions (gethash node-id org-supertag-auto-tag--batch-all-suggestions))
+                     (selected-tags (gethash node-id org-supertag-auto-tag--batch-all-selected))
+                     (progress (format "[%d/%d]"
+                                       (1+ (cl-position node-entry org-supertag-auto-tag--batch-nodes :test #'equal))
+                                       (length org-supertag-auto-tag--batch-nodes)))
+                     (node-start (point)))
+                (insert (propertize (format "%s 📄 %s" progress (or title "Untitled Node")) 'face 'bold) "\n")
+                (insert (propertize (format "    %s" (if file-path (file-name-nondirectory file-path) "<No File>")) 'face 'org-meta-line) "\n\n")
+                (let ((content (org-supertag-auto-tag--get-node-content node-data)))
+                  (when content
+                    (let ((content-lines (split-string content "\n" t)))
+                      (dotimes (i (min 2 (length content-lines)))
+                        (let ((line (nth i content-lines)))
+                          (when (and line (> (length (string-trim line)) 0))
+                            (insert "    " (substring line 0 (min (length line) 76))
+                                    (if (> (length line) 76) "..." "") "\n")))))
+                    (insert "\n")))
+                (insert (propertize "    🏷️ Suggested Tags:\n" 'face 'org-level-2))
+                (if (or (not suggestions) (seq-empty-p suggestions))
+                    (insert "        No suggestions or generating...\n")
+                  (dolist (tag-name suggestions)
+                    (when (stringp tag-name) ; Add safeguard
+                      (let* ((selected-p (member tag-name selected-tags))
+                             (line-start (point)))
+                        (insert (format "        %s %s\n"
+                                        (if selected-p "✓" "□")
+                                        (propertize tag-name 'face 'bold)))
+                        (put-text-property line-start (point) 'tag-name tag-name)
+                        (put-text-property line-start (point) 'node-id node-id)))))
+                (insert "\n")
+                (add-text-properties node-start (point) `(node-id ,node-id))))))))))
 
 (provide 'org-supertag-auto-tag)

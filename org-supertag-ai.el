@@ -393,82 +393,11 @@ CONTEXT-HASH: A hash table where keys are variable names (strings)
 
 ;; --- LLM Interaction Wrapper ---
 
-(defun org-supertag-ai--invoke-llm-sync (prompt &optional system-prompt model)
-  "Synchronously invoke the LLM via the EPC bridge.
-Assumes the EPC server is running AND initialized by `org-supertag--enable`.
-Calls the 'run_ollama' method on the Python side using `epc:call-sync`,
-passing the model hint.
-
-PROMPT: The main user prompt string.
-SYSTEM-PROMPT: Optional system prompt string.
-MODEL: Optional model name string. If non-nil, this will be passed
-       to the Python backend to override the default model for this call.
-
-Returns the AI response string on success.
-Signals an error on failure (EPC error, AI error, server not running)."
-  (org-supertag-sim-epc-log "Invoking LLM synchronously (Prompt: %s..., SystemPrompt: %s, Model: %s)..."
-                           (truncate-string-to-width prompt 50)
-                           (if system-prompt "yes" "no")
-                           (or model "Default"))
-
-  ;; 1. Ensure system is properly initialized
-  (deferred:sync!
-    (org-supertag-sim--ensure-initialized))
-
-  ;; 2. Clean prompt and system prompt values (remove quotes)
-  (let* ((clean-prompt (replace-regexp-in-string "\"" "" prompt))
-         (clean-system-prompt (when system-prompt (replace-regexp-in-string "\"" "" system-prompt))))
-
-    ;; 3. If model is provided, set it as default model before calling Ollama
-    (when model
-      (let ((clean-model (replace-regexp-in-string "\"" "" model)))
-        (message "Setting model to: %s" clean-model)
-        ;; Call set_default_model if available, otherwise log a message
-        (if (org-supertag-sim-epc-verify-ollama-model clean-model)
-            (message "Using model: %s" clean-model)
-          (message "Warning: Model %s not verified, using default model" clean-model))))
-    
-    ;; 4. Prepare arguments for EPC call (only prompt and system)
-    (let ((args (list clean-prompt clean-system-prompt)))
-      (org-supertag-sim-epc-log "Calling EPC method 'run_ollama' with args: %S" args)
-
-      (condition-case err
-          (let ((response (epc:call-sync org-supertag-sim-epc-manager 'run_ollama args)))
-            (org-supertag-sim-epc-log "Raw EPC response: %S" response)
-
-            ;; 5. Process Response
-            (if (and response (listp response) (plistp response))
-                (let ((status (plist-get response :status))
-                      (result (plist-get response :result))
-                      (message (plist-get response :message)))
-                  (if (string= status "success")
-                      (progn
-                        (org-supertag-sim-epc-log "LLM call successful.")
-                        result)
-                    ;; Check for specific error types and handle accordingly
-                    (cond
-                     ;; Model not found error
-                     ((string-match-p "model.*not found" (or message ""))
-                      (let ((fallback-models '("gemma:2b" "llama2" "mistral")))
-                        (catch 'found-model
-                          (dolist (fallback-model fallback-models)
-                            (when (org-supertag-sim-epc-verify-ollama-model fallback-model)
-                              (message "Original model not found, using fallback model: %s" fallback-model)
-                              (throw 'found-model
-                                     (org-supertag-ai--invoke-llm-sync prompt system-prompt fallback-model)))))))
-                     ;; Service not initialized error
-                     ((string-match-p "not initialized" (or message ""))
-                      (message "Service not initialized, attempting to reinitialize...")
-                      (org-supertag-sim-init)
-                      (org-supertag-ai--invoke-llm-sync prompt system-prompt model))
-                     ;; Other errors
-                     (t
-                      (error "LLM Error: %s" (or message "Unknown error"))))))
-              (error "Invalid response format from EPC: %S" response)))
-        ;; Handle EPC communication errors
-        (error
-         (error "EPC communication error: %s" (error-message-string err)))))))
-
+;; This entire section has been moved to `org-supertag-bridge.el`
+;; and refactored to use the new bridge architecture.
+;; The old functions `org-supertag-ai--invoke-llm-sync`,
+;; `org-supertag-ai--fetch-available-models`, `org-supertag-ai-select-model`
+;; are now obsolete.
 
 ;; --- Internal Node Type Executors (Implementations/Refined Stubs) ---
 
@@ -489,7 +418,9 @@ Returns: (list ACTION RESULT-STRING THOUGHTS-STRING)."
 
     (if rendered-prompt
         (condition-case err ;; This catches errors from invoke-llm-sync
-            (let* ((llm-result (org-supertag-ai--invoke-llm-sync rendered-prompt rendered-system-prompt model))
+            ;; TODO: This node is now broken as `org-supertag-ai--invoke-llm-sync` was removed.
+            ;; It should be updated to call `org-supertag-bridge-llm-invoke`.
+            (let* ((llm-result (error "LLM invocation is disabled. `org-supertag-ai--invoke-llm-sync` was removed."))
                    (final-thoughts (concat thoughts (format "\nLLM Result:\n%s\n---" llm-result))))
               (list "default" llm-result final-thoughts))
           (error ;; Handle invoke-llm-sync error
@@ -822,17 +753,8 @@ Returns the final shared-context hash-table after the workflow completes or stop
   (interactive "sStart Node ID or Title: ")
   
   ;; Ensure EPC service is properly initialized
-  (when (featurep 'org-supertag-sim-epc)
-    (unless (org-supertag-sim-epc-server-running-p)
-      (org-supertag-sim-epc-start-server)
-      (sit-for 1))
-    (when (org-supertag-sim-epc-server-running-p)
-      (condition-case err
-          (progn
-            (org-supertag-sim-epc-init)
-            (message "EPC service initialized successfully"))
-        (error
-         (message "Warning: Failed to initialize EPC service: %s" (error-message-string err))))))
+  ;; TODO: This logic needs to be updated to use the new bridge.
+  (message "Warning: AI workflow is likely non-functional due to refactoring.")
 
   (let* ((buf (or buffer (current-buffer)))
          (shared-context (if initial-context
@@ -935,188 +857,11 @@ Returns the final shared-context hash-table after the workflow completes or stop
 
 ;; --- Workflow Design Helpers ---
 
-(defun org-supertag-ai--fetch-available-models ()
-  "Fetch the list of available Ollama models via EPC.
-Returns a list of model name strings on success, or signals an error
-if the EPC server is unreachable or the backend fails to get models."
-  (org-supertag-sim-epc-log "Fetching available Ollama models via EPC...")
-  ;; 1. Ensure EPC Server is ready
-  (condition-case err
-      (progn
-        (unless (org-supertag-sim-epc-server-running-p)
-          (error "SimTag EPC server is not running or failed to start.")))
-    (error (error "Failed to ensure EPC server environment: %s" (error-message-string err))))
-
-  ;; 2. Call the new EPC method 'get_available_models' synchronously
-  (condition-case err
-      (let ((response (epc:call-sync org-supertag-sim-epc-manager 'get_available_models nil))) ; No arguments needed
-        (org-supertag-sim-epc-log "Raw EPC response for models: %S" response)
-
-        ;; 3. Process Response
-        (if (and response (listp response) (plistp response))
-            (let ((status (plist-get response :status))
-                  (result (plist-get response :result)) ; Should be the list of model names
-                  (message (plist-get response :message)))
-              (if (string= status "success")
-                  (if (listp result) ; Verify the result is a list
-                      (progn
-                        (org-supertag-sim-epc-log "Successfully fetched %d models." (length result))
-                        result) ; Return the list of model names
-                    (error "Invalid result format received for models: Expected list, got %S" result))
-                  (error "Error fetching models from backend: %s" (or message "Unknown error."))))
-          (error "Invalid response format received from EPC for models: %S" response)))
-    ;; Handle EPC communication errors
-    (error (error "EPC communication error while fetching models: %s" (error-message-string err)))))
-
-(defun org-supertag-ai-select-model ()
-  "Interactively select an available Ollama model.
-Fetches the list of models from the running Ollama service via the
-SimTag EPC server and presents them for selection in the minibuffer.
-Inserts the selected model name into the current buffer at point."
-  (interactive)
-  (condition-case err
-      ;; Fetch the list of models first
-      (let* ((available-models (org-supertag-ai--fetch-available-models))
-             (selected-model nil))
-        (if available-models
-            ;; Use completing-read for selection
-            (setq selected-model (completing-read "Select Ollama Model: "
-                                                  available-models ; Candidates
-                                                  nil ; Predicate
-                                                  t ; Require match
-                                                  nil ; Initial input
-                                                  nil ; History var
-                                                  (car available-models))) ; Default value
-          (message "No available models fetched from Ollama service."))
-
-        ;; Insert the selected model if one was chosen
-        (if (and selected-model (stringp selected-model) (not (string-empty-p selected-model)))
-            (progn
-              (insert selected-model)
-              (message "Inserted model: %s" selected-model))
-          (message "No model selected.")))
-    ;; Catch errors during fetching or selection
-    (error
-     (message "Error selecting model: %s" (error-message-string err)))))
+;; This functionality has been moved to `org-supertag-bridge.el`.
 
 ;; --- Convert Markdown to Org ---
-;; Inspired by the Ollama-Buddy: https://github.com/captainflasmr/ollama-buddy/blob/main/ollama-buddy-core.el
-(defun org-supertag-ai--convert-md-to-org (md-string)
-  "Convert a Markdown string MD-STRING to Org format string.
-Handles common Markdown elements like headers, lists, bold, italics,
-links, inline code, code blocks, and horizontal rules.
 
-Inspired by the logic in `ollama-buddy--md-to-org-convert-region`."
-  (if (not (and md-string (stringp md-string) (not (string-empty-p md-string))))
-      ;; Return empty string if input is invalid
-      ""
-    (with-temp-buffer
-      (insert md-string)
-      ;; Perform conversions within the temporary buffer
-      (goto-char (point-min))
-
-      ;; --- Conversion logic (adapted from ollama-buddy) ---
-
-      ;; 1. Protect code blocks
-      (let ((code-blocks nil)
-            (counter 0)
-            block-start block-end lang content placeholder)
-        (save-match-data
-          (goto-char (point-min)) ; Ensure search starts from beginning
-          ;; Regex slightly adjusted for potentially missing language and newline variations
-          (while (re-search-forward "```\\([^\n`]*?\\)\\(?:\n\\|\\s-*$\\)\\(\\(?:.\\|\n\\)*?\\)```" nil t)
-            (setq lang (or (match-string 1) "") ; Handle potentially nil language
-                  content (match-string 3) ; Content is group 3
-                  block-start (match-beginning 0)
-                  block-end (match-end 0)
-                  placeholder (format "CODE_BLOCK_PLACEHOLDER_%d_AI" counter)) ; Unique placeholder
-
-            (push (list placeholder lang content) code-blocks)
-            (delete-region block-start block-end)
-            (goto-char block-start)
-            (insert placeholder)
-            (setq counter (1+ counter)))))
-
-      ;; 2. Apply Markdown to Org transformations
-      ;; Lists: Translate `-`, `*`, or `+` lists
-      (save-match-data
-        (goto-char (point-min))
-        (while (re-search-forward "^\\([ \t]*\\)[*-+] \\(.*\\)$" nil t)
-          (replace-match (concat (match-string 1) "- \\2"))))
-
-      ;; Bold: `**bold**` -> `*bold*`
-      (save-match-data
-        (goto-char (point-min))
-        ;; Match non-space character at boundaries
-        (while (re-search-forward "\\*\\*\\([^[:space:]]\\(?:.\\|\n\\)*?[^[:space:]]\\)\\*\\*" nil t)
-          (replace-match "*\\1*")))
-
-      ;; Italics: `_italic_` or `*italic*` -> `/italic/`
-      ;; Note: Simple `*italic*` conversion might conflict with bold if not careful.
-      ;; Let's prioritize `_italic_` first.
-      (save-match-data
-        (goto-char (point-min))
-        ;; Match non-space boundary for _italic_
-        (while (re-search-forward "\\([[:space:]]\\|^\\)_\\([^[:space:]]\\(?:.\\|\n\\)*?[^[:space:]]\\)_\\([[:space:]]\\|$\\)" nil t)
-          (replace-match "\\1/\\2/\\3")))
-      ;; Consider adding conversion for *italic* if needed, carefully avoiding bold conflict
-
-      ;; Links: `[text](url)` -> `[[url][text]]`
-      (save-match-data
-        (goto-char (point-min))
-        (while (re-search-forward "\\[\\(.*?\\)\\](\\(.*?\\))" nil t)
-          (replace-match "[[\\2][\\1]]")))
-
-      ;; Inline code: `code` -> `=code=`
-      (save-match-data
-        (goto-char (point-min))
-        ;; Match non-backtick content
-        (while (re-search-forward "`\\([^`\n]+\\)`" nil t)
-          (replace-match "=\\1=")))
-
-      ;; Horizontal rules: `---` or `***` -> `-----`
-      (save-match-data
-        (goto-char (point-min))
-        (while (re-search-forward "^[ \t]*\\(?:-{3,}\\|\\*{3,}\\)[ \t]*$" nil t)
-          (replace-match "-----")))
-
-      ;; Images: `![alt text](url)` -> `[[url]]` (Org usually displays images directly from links)
-      (save-match-data
-        (goto-char (point-min))
-        (while (re-search-forward "!\\[.*?\\](\\([^)]+\\))" nil t)
-          (replace-match "[[\\1]]")))
-
-      ;; Headers: `# header` -> `* header` (Only converts level 1-6)
-      (save-match-data
-        (goto-char (point-min))
-        (while (re-search-forward "^\\(#{1,6}\\) \\(.*\\)$" nil t)
-          (replace-match (concat (make-string (length (match-string 1)) ?*) " " (match-string 2)))))
-
-      ;; Remove potential Markdown blockquote leaders "> "
-      (save-match-data
-         (goto-char (point-min))
-         (while (re-search-forward "^> \\(.*\\)$" nil t)
-           (replace-match "\\1")))
-
-
-      ;; 3. Restore code blocks with proper Org syntax
-      (save-match-data
-        (dolist (block (nreverse code-blocks))
-          (let ((placeholder (nth 0 block))
-                (lang (nth 1 block)) ; Language might be empty string
-                (content (nth 2 block)))
-            (goto-char (point-min))
-            (when (search-forward placeholder nil t)
-              ;; Ensure newline before/after block if needed
-              (unless (or (bobp) (eq (char-before) ?\n)) (insert "\n"))
-              (replace-match (format "#+begin_src%s\n%s\n#+end_src"
-                                     (if (string-empty-p lang) "" (concat " " lang)) ; Add space only if lang exists
-                                     content)
-                             t t)
-              (unless (or (eobp) (eq (char-after) ?\n)) (insert "\n"))))))
-
-      ;; Return the converted buffer content
-      (buffer-string))))
+;; This function has been removed as it is not core to this module's purpose.
 
 (provide 'org-supertag-ai)
 ;;; org-supertag-ai.el ends here

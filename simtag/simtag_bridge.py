@@ -7,82 +7,104 @@ import logging
 import traceback
 import threading
 import argparse
-import sexpdata
 import asyncio
+import time
+import json
 
 from epc.server import ThreadingEPCServer
-from epc.client import EPCClient
 
-from dependency_injector.wiring import inject, Provide
-from simtag.container import AppContainer
-from simtag.module.sync_handler import SyncHandler
-from simtag.module.query_handler import QueryHandler
-from simtag.module.diagnostics_handler import DiagnosticsHandler
-from simtag.module.autotag_handler import AutotagHandler
-from simtag.module.resonance_handler import ResonanceHandler
-from simtag.module.rag_handler import RAGHandler
-from simtag.module.reasoning_handler import ReasoningHandler
-from simtag.config import Config
-from typing import Dict, List, Any, Optional
-
-
-# --- Logging Setup ---
+# --- Project Setup ---
+# Add project root to sys.path to allow for absolute imports
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from simtag.context import context
+from simtag.utils.unified_tag_processor import normalize_payload
+from typing import Dict, Any
+
+# --- Logging ---
+# Note: Full logging to file is initialized inside SimTagBridge
+# after the data_directory is known.
 logger = logging.getLogger("simtag_bridge")
 
-def setup_simtag_logging(data_dir):
-    """Sets up logging for the SimTag bridge."""
-    log_file = os.path.join(data_dir, 'simtag_bridge.log')
-    package_logger = logging.getLogger("simtag")
-    package_logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    if package_logger.hasHandlers():
-        package_logger.handlers.clear()
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(formatter)
-    package_logger.addHandler(stream_handler)
-    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-    file_handler.setFormatter(formatter)
-    package_logger.addHandler(file_handler)
-    logging.getLogger("simtag.bridge_setup").info(f"SimTag package logging initialized. Log file: {log_file}")
-    return package_logger
-
 class SimTagBridge:
-    def __init__(self, container: AppContainer, emacs_epc_port: int, server_host: str = '127.0.0.1'):
-        logger.info(f"Initializing SimTagBridge. Emacs EPC port: {emacs_epc_port}")
+    def __init__(self, port_file: str, data_directory: str, server_port: int, server_host: str = '127.0.0.1'):
+        # --- Logging Setup ---
+        log_file = os.path.join(data_directory, 'simtag_bridge.log')
+        if not os.path.exists(data_directory):
+            os.makedirs(data_directory)
+            
+        package_logger = logging.getLogger("simtag")
+        package_logger.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         
-        self.container = container
-        self.emacs_client: Optional[EPCClient] = None
-        self.shutdown_event = threading.Event()  # Global shutdown signal
-        self._init_emacs_client(emacs_epc_port)
+        if package_logger.hasHandlers():
+            package_logger.handlers.clear()
+            
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+        package_logger.addHandler(stream_handler)
+        
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        package_logger.addHandler(file_handler)
+        
+        logging.getLogger("simtag.bridge_setup").info(f"SimTag package logging initialized. Log file: {log_file}")
+        
+        # --- Core Initialization ---
+        self.server_host = server_host
+        self.port = server_port
+        self.port_file = port_file
+        self.shutdown_event = threading.Event()
+        
+        # --- Request Tracking ---
+        self.running_tasks = {}  # request_id -> task_info
+        self.task_lock = threading.Lock()
+        self.request_counter = 0
+        
+        # --- Component Setup ---
+        self._init_event_loop()
+        
+        # 1. Initialize the EPC Server
+        self.server = ThreadingEPCServer((self.server_host, self.port), log_traceback=True)
+        self.server.allow_reuse_address = True
+        
+        # 2. Initialize all application services via the global context
+        # This must be done *before* registering methods that use these services.
+        context.initialize(port=self.port, emacs_client=None) # emacs_client can be set later if needed
+        
+        # 3. Register methods with the server
+        self._register_methods()
+        
+        # 4. Start the server in a separate thread
+        self.server_thread = threading.Thread(target=self._run_server, daemon=True)
+        self.server_thread.start()
+        
+        # 5. Write the actual port number to the port file for Emacs to read
+        actual_port = self.server.server_address[1]
+        logger.info(f"SimTagBridge EPC server listening on port: {actual_port}. Writing to port file: {self.port_file}")
+        try:
+            with open(self.port_file, 'w') as f:
+                f.write(str(actual_port))
+            logger.info("Successfully wrote port to file.")
+        except IOError as e:
+            logger.error(f"FATAL: Could not write to port file {self.port_file}. Error: {e}", exc_info=True)
+            self.shutdown()
 
-        self.container.config.emacs_client.from_value(self.emacs_client)
-
-        # --- Event Loop Management ---
+    def _init_event_loop(self):
+        """Initializes the asyncio event loop and starts it in a separate thread."""
         self.loop = asyncio.new_event_loop()
         self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self.loop_thread.start()
-        logger.info("Dedicated asyncio event loop started in a new thread.")
+        logger.info("Dedicated asyncio event loop thread started.")
 
-        self.server = ThreadingEPCServer((server_host, 0), log_traceback=True)
-        self.server.allow_reuse_address = True
-        
-        self._register_methods()
-        logger.info("Registered SimTagBridge instance methods with EPC server.")
-
-        self.server_thread = threading.Thread(target=self.server.serve_forever)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-        logger.info("SimTagBridge EPC server started in a new thread.")
-
-        server_port = self.server.server_address[1]
-        logger.info(f"SimTagBridge EPC server listening on port: {server_port}. Informing Emacs.")
-        self._eval_in_emacs('org-supertag-bridge--handle-python-server-ready-signal', server_port)
-        logger.info("Informed Emacs about the SimTagBridge EPC server port.")
+    def _run_server(self):
+        """Runs the EPC server loop until a shutdown is requested."""
+        logger.info("EPC server thread started.")
+        self.server.serve_forever()
+        logger.info("EPC server thread has shut down.")
 
     def _run_event_loop(self):
         """Runs the asyncio event loop and logs its lifecycle."""
@@ -91,13 +113,14 @@ class SimTagBridge:
         try:
             self.loop.run_forever()
         except Exception as e:
-            logger.error(f"Event loop thread crashed with an exception: {e}", exc_info=True)
+            logger.error(f"""Event loop thread crashed with an exception: {e}
+{traceback.format_exc()}""")
         finally:
             self.loop.close()
             logger.info("Event loop has been closed and thread is terminating.")
 
     def _register_methods(self):
-        """Register all available EPC methods."""
+        """Register all available EPC methods by referencing handlers from the global context."""
         logger.info("Registering EPC methods...")
         
         # Core
@@ -106,582 +129,370 @@ class SimTagBridge:
         self.server.register_function(self.cleanup, 'cleanup')
 
         # Diagnostics
-        self.server.register_function(self.get_status, 'get_status')
-        self.server.register_function(self.get_config, 'get_config')
-        self.server.register_function(self.check_imports, 'check_imports')
-        self.server.register_function(self.test_embedding_retrieval, 'test_embedding_retrieval')
-        self.server.register_function(self.get_processing_status, 'get_processing_status')
-        self.server.register_function(self.print_processing_report, 'print_processing_report')
-        self.server.register_function(self.inspect_vector_index, 'diagnostics/inspect_vector_index')
+        self.server.register_function(self.get_status, 'diagnostics/get_status')
+        self.server.register_function(self.get_config, 'diagnostics/get_config')
+        self.server.register_function(self.check_imports, 'diagnostics/check_imports')
+        self.server.register_function(self.test_embedding_retrieval, 'diagnostics/test_embedding_retrieval')
+        self.server.register_function(self.get_processing_status, 'diagnostics/get_processing_status')
+        self.server.register_function(self.print_processing_report, 'diagnostics/print_processing_report')
+        self.server.register_function(self.get_available_models, 'diagnostics/get_available_models')
+        self.server.register_function(self.get_default_model, 'diagnostics/get_default_model')
 
         # Sync
-        self.server.register_function(self.sync_library, 'sync_library')
-        self.server.register_function(self.bulk_process_snapshot, 'bulk_process_snapshot')
+        self.server.register_function(self.bulk_process_snapshot, 'sync/bulk_process')
         
         # Query
-        self.server.register_function(self.get_similar_nodes, 'get_similar_nodes')
-        self.server.register_function(self.find_similar_nodes_friendly, 'find_similar_nodes_friendly')
-        self.server.register_function(self.search_nodes_by_content, 'search_nodes_by_content')
-        self.server.register_function(self.get_node_context_friendly, 'get_node_context_friendly')
+        self.server.register_function(context.query_handler.get_similar_nodes, 'query/get_similar_nodes')
         
         # Autotag
-        self.server.register_function(self.extract_entities_for_tagging, 'extract_entities_for_tagging')
-        self.server.register_function(self.force_extract_entities_for_tagging, 'force_extract_entities_for_tagging')
-        self.server.register_function(self.batch_extract_entities_for_tagging, 'batch_extract_entities_for_tagging')
-        self.server.register_function(self.rag_extract_tag_patterns, 'rag_extract_tag_patterns')
-        self.server.register_function(self.get_tag_similarity_suggestions, 'get_tag_similarity_suggestions')
-        
-        # Tag Governance
-        self.server.register_function(self.sync_tag_event, 'sync_tag_event')
-        self.server.register_function(self.update_tag_status, 'update_tag_status')
-        self.server.register_function(self.update_tag_rules, 'update_tag_rules')
-        self.server.register_function(self.update_relation_type, 'update_relation_type')
-        self.server.register_function(self.update_relation_rules, 'update_relation_rules')
-        
-        # Batch Tag Processing
-        self.server.register_function(self.batch_generate_tags, 'batch_generate_tags')
-        self.server.register_function(self.generate_single_node_tags, 'generate_single_node_tags')
-        
-        # Proactive Features
-        self.server.register_function(self.proactive_get_resonance, 'proactive_get_resonance')
-        
+        self.server.register_function(self.batch_generate_tags, 'autotag/batch_generate_tags')
+        self.server.register_function(self.generate_single_node_tags, 'autotag/generate_single_node_tags')
+         
         # RAG Assistant
-        self.server.register_function(self.analyze_note, 'rag/analyze_note')
-        self.server.register_function(self.continue_conversation, 'rag/continue_conversation')
+        self.server.register_function(self.query, 'rag/query')
+        
+        # AI Commands (dedicated interfaces for chat commands)
+        self.server.register_function(self.suggest_tags, 'ai/suggest-tags')
+        self.server.register_function(self.find_connections, 'ai/find-connections')
+        self.server.register_function(self.expand_content, 'ai/expand')
+
+        # Embedding maintenance
+        self.server.register_function(self.refresh_stale_tags, 'embedding/refresh_stale_tags')
         
         # Reasoning
-        self.server.register_function(self.run_reasoning_cycle, 'reasoning/run_cycle')
+        # New KnowledgeHandler cycle (replaces old reasoning/run_cycle)
+        self.server.register_function(self.run_knowledge_cycle, 'knowledge/run_cycle')
+        # Maintain backward compatibility with older Emacs versions
+        self.server.register_function(self.run_inference_cycle, 'reasoning/run_cycle')
+        # New queue status interface
+        self.server.register_function(self.get_knowledge_queue_status, 'knowledge/get_queue_status')
+        # Backward compatibility
+        self.server.register_function(self.get_reasoning_queue_status, 'reasoning/get_queue_status')
+
+        # Feedback
+        self.server.register_function(self.submit_feedback, 'feedback/submit')
+        self.server.register_function(self.debug_payload, 'debug/payload')
+        
+        # Smart Companion
+        self.server.register_function(self.analyze_tag_context, 'smart_companion/analyze_tag_context')
+        
+        # Task Management
+        self.server.register_function(self._get_running_tasks, 'diagnostics/get_running_tasks')
         
         logger.info("All EPC methods registered successfully.")
 
-    def _init_emacs_client(self, emacs_server_port):
-        if self.emacs_client is None:
-            try:
-                self.emacs_client = EPCClient(("127.0.0.1", emacs_server_port), log_traceback=True)
-            except Exception as e:
-                logger.error(f"Error initializing EPC client: {e}\n{traceback.format_exc()}")
-
-    def _close_emacs_client(self):
-        if self.emacs_client is not None:
-            try:
-                self.emacs_client.close()
-                self.emacs_client = None
-            except Exception as e:
-                logger.error(f"Error closing EPC client: {e}\n{traceback.format_exc()}")
-
-    def _eval_in_emacs(self, method_name_str, *args):
-        if self.emacs_client is None:
-            logger.error("EPC client to Emacs is not initialized. Cannot eval in Emacs.")
-            return None
-        try:
-            method_symbol = sexpdata.Symbol(method_name_str)
-            processed_args = [sexpdata.Quoted(arg) if isinstance(arg, str) else arg for arg in args]
-            s_expression_parts = [method_symbol] + processed_args
-            sexp_to_eval = sexpdata.dumps(s_expression_parts)
-            self.emacs_client.call("eval-in-emacs", [sexp_to_eval])
-        except Exception as e:
-            logger.error(f"Error evaluating in Emacs: {e}\n{traceback.format_exc()}")
-    
-    def _parse_elisp_to_dict(self, elisp_data: Any) -> Any:
-        """
-        Recursively converts complex Elisp-style data structures from EPC into
-        standard Python dictionaries and lists. It specifically handles:
-        1.  The special EPC serialization for a LIST of hash-tables:
-            `[Symbol('#s'), <hash_list1>, Symbol('#s'), <hash_list2>, ...]`
-        2.  s-expressions for single hash-tables: `{'#s': [Symbol('hash-table'), ...]}`
-        3.  Standard alists and plists.
-        """
-        # Case 1: A list, which could be various Elisp structures
-        if isinstance(elisp_data, list):
-            # Subcase 1.1: EPC serialization of a list of hash-tables
-            if len(elisp_data) >= 2 and elisp_data[0] == sexpdata.Symbol('#s'):
-                logger.debug("Parsing EPC-serialized list of hash-tables.")
-                nodes = []
-                it = iter(elisp_data)
-                try:
-                    while True:
-                        s_symbol = next(it)
-                        if s_symbol != sexpdata.Symbol('#s'):
-                            logger.warning(f"Expected '#s' symbol, but got {s_symbol}. List may be malformed.")
-                            break
-                        
-                        hash_content_list = next(it)
-                        reconstructed_hash_dict = {'#s': hash_content_list}
-                        nodes.append(self._parse_elisp_to_dict(reconstructed_hash_dict))
-                except StopIteration:
-                    pass # Consumed all items
-                return nodes
-
-            # Subcase 1.2: Standard alist (dotted or simple)
-            is_alist_dotted = all(isinstance(i, list) and len(i) == 3 and isinstance(i[1], sexpdata.Symbol) and i[1].value() == '.' for i in elisp_data)
-            if is_alist_dotted:
-                logger.debug("Parsing Elisp alist (dotted).")
-                return {item[0]: self._parse_elisp_to_dict(item[2]) for item in elisp_data}
-            
-            is_alist_simple = all(isinstance(i, list) and len(i) == 2 for i in elisp_data)
-            if is_alist_simple:
-                logger.debug("Parsing Elisp alist (simple).")
-                return {item[0]: self._parse_elisp_to_dict(item[1]) for item in elisp_data}
-            
-            # Subcase 1.3: Fallback for a regular list of other items
-            return [self._parse_elisp_to_dict(item) for item in elisp_data]
-
-        # Case 2: s-expression for a SINGLE Elisp hash-table
-        if isinstance(elisp_data, dict) and '#s' in elisp_data:
-            s_exp = elisp_data['#s']
-            if isinstance(s_exp, list) and s_exp and s_exp[0] == sexpdata.Symbol('hash-table'):
-                logger.debug("Parsing single Elisp hash-table s-expression.")
-                res_dct = {}
-                try:
-                    data_symbol = sexpdata.Symbol('data')
-                    data_index = s_exp.index(data_symbol)
-                    kv_list = s_exp[data_index + 1]
-                    
-                    it = iter(kv_list)
-                    while True:
-                        try:
-                            key = next(it)
-                            value = next(it)
-                            key_str = key.value() if isinstance(key, sexpdata.Symbol) else str(key)
-                            res_dct[key_str] = self._parse_elisp_to_dict(value)
-                        except StopIteration:
-                            break
-                    return res_dct
-                except (ValueError, IndexError, StopIteration, TypeError) as e:
-                    logger.error(f"Failed to parse hash-table s-expression content: {e}", exc_info=True)
-                    return {}
-            return elisp_data
-
-        # Case 3: A standard Python dictionary
-        if isinstance(elisp_data, dict):
-            return {self._parse_elisp_to_dict(k): self._parse_elisp_to_dict(v) for k, v in elisp_data.items()}
-
-        # Case 4: A primitive value or a Symbol
-        if isinstance(elisp_data, sexpdata.Symbol):
-            return elisp_data.value()
-
-        return elisp_data
-
     def echo(self, message):
-        logger.info(f"Received message from Emacs to echo: {message}")
+        """Echoes back the received message."""
+        logger.info(f"Received echo request: {message}")
         return message
 
     def ping(self):
+        """A simple method to check if the server is alive."""
+        logger.info("Received ping.")
         return "pong"
 
     def cleanup(self):
-        logger.info("Starting graceful shutdown...")
-        # 1. Broadcast that shutdown has started.
+        """Shuts down the bridge and its resources gracefully."""
+        logger.info("Received shutdown request. Cleaning up resources...")
         self.shutdown_event.set()
-        logger.info("Shutdown event set. No new async tasks will be accepted.")
-
-        # 2. Stop the EPC server to prevent new requests
-        if self.server:
-            self.server.shutdown()
-            logger.info("EPC server has been shut down. No new requests will be accepted.")
-
-        # 3. Schedule the final cleanup coroutine in the event loop
         if self.loop.is_running():
-            logger.info("Scheduling final cleanup tasks in the event loop...")
-            # This coroutine will wait for all currently running tasks to finish or be cancelled,
-            # then shut down services, and finally stop the loop.
-            async def final_async_cleanup():
-                # Get all currently running tasks on this loop, excluding the current cleanup task itself
-                tasks = [t for t in asyncio.all_tasks(self.loop) if t is not asyncio.current_task(self.loop)]
-                logger.info(f"Waiting for {len(tasks)} active async tasks to complete or be cancelled.")
-                for task in tasks:
-                    task.cancel() # Request cancellation
-                
-                # Wait for tasks to complete, with a timeout
-                try:
-                    # Use a shorter timeout for individual task cancellation wait
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                except asyncio.CancelledError:
-                    logger.info("Some tasks were cancelled during shutdown.")
-                except Exception as e:
-                    logger.error(f"Error while waiting for tasks to complete during shutdown: {e}", exc_info=True)
-
-                logger.info("All active async tasks have completed or been cancelled.")
-                
-                # Now shut down services
-                await self.container.shutdown_services()
-                logger.info("Async services have been shut down.")
-                
-                # Finally, stop the loop
-                self.loop.stop()
-                logger.info("Event loop stop signal has been sent from within the loop.")
-
-            # Submit this final cleanup coroutine to the event loop
-            future = asyncio.run_coroutine_threadsafe(final_async_cleanup(), self.loop)
-            try:
-                # Wait for the final cleanup to complete. This will block the calling thread.
-                # Give it a bit more time for all tasks + service shutdown
-                future.result(timeout=15) 
-                logger.info("Final async cleanup orchestrated and completed.")
-            except Exception as e:
-                logger.error(f"Error waiting for final async cleanup to complete: {e}", exc_info=True)
-        else:
-            logger.warning("Event loop was not running during cleanup. Skipping async cleanup orchestration.")
-
-        # 4. Close the client connection to Emacs
-        self._close_emacs_client()
+            asyncio.run_coroutine_threadsafe(self.final_async_cleanup(), self.loop)
         logger.info("Graceful shutdown complete.")
 
-    @inject
-    def analyze_note(self, *args, handler: RAGHandler = Provide[AppContainer.rag_handler]):
-        """
-        Analyzes a note using RAG.
-        This is a dispatcher method that finds the right handler and runs it asynchronously.
-        """
-        logger.info(f"Bridge received for analyze_note - type: {type(args)}, content: {args}")
+    async def final_async_cleanup(self):
+        tasks = [t for t in asyncio.all_tasks(loop=self.loop) if t is not asyncio.current_task()]
+        if tasks:
+            logger.info(f"Cancelling {len(tasks)} outstanding async tasks...")
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info("All outstanding async tasks cancelled.")
+        self.loop.stop()
+
+    # --- Method Implementations ---
+    # All methods now delegate to the handlers stored in the global `context`.
+
+    def get_status(self):
+        return context.diagnostics_handler.get_status()
+
+    def get_config(self):
+        return context.diagnostics_handler.get_config()
+
+    def check_imports(self):
+        return context.diagnostics_handler.check_imports()
+
+    def test_embedding_retrieval(self, text: str):
+        return self._run_async(context.diagnostics_handler.test_embedding_retrieval(text))
+
+    def get_processing_status(self):
+        return self._run_async(context.diagnostics_handler.get_processing_status())
+
+    def print_processing_report(self):
+        return self._run_async(context.diagnostics_handler.print_processing_report())
+
+
+
+    def get_available_models(self):
+        return self._run_async(context.diagnostics_handler.get_available_models())
+
+    def get_default_model(self):
+        return self._run_async(context.diagnostics_handler.get_default_model())
+
+    
+
+    def bulk_process_snapshot(self, *args) -> Dict[str, Any]:
         try:
-            return self._run_async(handler.analyze_note(*args))
+            logger.info("Bridge: Received call for bulk_process_snapshot.")
+            payload = normalize_payload(args)
+            logger.info(f"Bridge: Payload normalized. Processing {len(payload.get('entities', []))} entities.")
+
+            # --- Ad-hoc Data Transformation (Temporary) ---
+            # Standardize link types from Elisp symbols to Python strings
+            if 'links' in payload and isinstance(payload['links'], list):
+                for link in payload['links']:
+                    # Elisp sends links as alists, which EPC converts to Python lists of lists.
+                    # e.g., [['type', '.', ':node-tag'], ['from', '.', 'id1'], ...]
+                    type_found = False
+                    for i, pair in enumerate(link):
+                        if isinstance(pair, (list, tuple)) and len(pair) > 0 and pair[0] == 'type':
+                            # Check for Elisp symbol `:'node-tag`
+                            if len(pair) > 2 and pair[2] == "':node-tag":
+                                link[i] = ['type', '.', '"HAS_TAG"']
+                                type_found = True
+                                logger.debug(f"Transformed link type for link from {link[1][2]}")
+                            break
+                    if not type_found:
+                        # If no type specified, assume it's a node-tag link for now
+                        pass # Let the handler deal with it, or insert a default.
+
+            # The coroutine to be executed
+            coro = context.sync_handler.bulk_process_snapshot(payload)
+
+            # Run the async task and get the result
+            result = self._run_async(coro)
+
+            logger.info(f"Bridge: Async task finished. Result before returning to Emacs: {result}")
+
+            # Ensure we always return a dictionary to Emacs
+            if not isinstance(result, dict):
+                logger.error(f"Bridge: Result is not a dictionary (type: {type(result)}). Returning error state.")
+                return {"status": "error", "message": "Internal bridge error: result was not a dictionary."}
+
+            return result
+
         except Exception as e:
-            logger.error(f"Error in analyze_note bridge call: {e}", exc_info=True)
+            logger.error(f"Bridge: Unhandled exception in bulk_process_snapshot: {e}", exc_info=True)
+            return {"status": "error", "message": f"Unhandled bridge exception: {e}"}
+
+    # --- Placeholder Governance Methods ---
+    # def sync_tag_event(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     return self._run_async(context.sync_handler.sync_tag_event(event_data))
+    # def update_tag_status(self, tag_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     return self._run_async(context.sync_handler.update_tag_status(tag_data))
+    # def update_tag_rules(self, tag_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     return self._run_async(context.sync_handler.update_tag_rules(tag_data))
+    # def update_relation_type(self, relation_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     return self._run_async(context.sync_handler.update_relation_type(relation_data))
+    # def update_relation_rules(self, relation_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     return context.sync_handler.update_relation_rules(relation_data)
+
+    # ------------------------------------------------------------------
+    # AI Commands (Dedicated interfaces)
+    # ------------------------------------------------------------------
+
+    def suggest_tags(self, *args):
+        """Generate intelligent tag suggestions for content."""
+        return self._run_async(context.ai_handler.suggest_tags(*args), method_name="ai/suggest-tags", args=args)
+
+    def find_connections(self, *args):
+        """Find knowledge connections for a given tag."""
+        return self._run_async(context.ai_handler.find_connections(*args), method_name="ai/find-connections", args=args)
+
+    def expand_content(self, *args):
+        """Expand and elaborate on given content or topic."""
+        return self._run_async(context.ai_handler.expand_content(*args), timeout=240, method_name="ai/expand", args=args)
+
+    def batch_generate_tags(self, *args):
+        try:
+            payload = normalize_payload(args)
+            coro = context.autotag_handler.batch_generate_tags(payload)
+            return self._run_async(coro)
+        except Exception as e:
+            logger.error(f"""Error in BATCH_GENERATE_TAGS bridge call: {e}\n{traceback.format_exc()}""")
+            return {"error": "batch_generate_tags_failed", "message": str(e)}
+
+    def generate_single_node_tags(self, *args) -> Dict[str, Any]:
+        try:
+            payload = normalize_payload(args)
+            coro = context.autotag_handler.suggest_tags_for_single_node_elisp(payload)
+            return self._run_async(coro)
+        except Exception as e:
+            logger.error(f"""Error calling async generate_single_node_tags handler: {e}\n{traceback.format_exc()}""")
+            return {"status": "error", "message": str(e)}
+
+    
+
+    # ------------------------------------------------------------------
+    # RAG Query (New unified chat endpoint)
+    # ------------------------------------------------------------------
+
+    def query(self, *args):
+        """Forward generic chat/query requests to RAGHandler."""
+        return self._run_async(context.rag_handler.query(*args), method_name="rag/query", args=args)
         
-    @inject
-    def sync_library(self, db_file: str, db_snapshot_json_str: str, handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        return handler.sync_library_from_snapshot_json(db_file, db_snapshot_json_str)
+    # ------------------------------------------------------------------
+    # Knowledge processing cycles
+    # ------------------------------------------------------------------
 
-    @inject
-    def get_similar_nodes(self, query_input: str, top_k: int = 10, handler: QueryHandler = Provide[AppContainer.query_handler]):
-        """Finds nodes semantically similar to the input query string."""
-        return handler.get_similar_nodes(query_input, top_k)
+    def run_knowledge_cycle(self, limit: int = 5):
+        """Preferred new entry point for background knowledge extraction."""
+        return self._run_async(context.knowledge_handler.run_extraction_cycle(limit))
 
-    @inject
-    def find_similar_nodes_friendly(self, query_input: str, top_k: int = 10, handler: QueryHandler = Provide[AppContainer.query_handler]):
-        return handler.find_similar_nodes_friendly(query_input, top_k)
+    # Backward-compat alias
+    def run_inference_cycle(self, limit: int = 5):
+        return self.run_knowledge_cycle(limit)
 
-    @inject
-    def search_nodes_by_content(self, search_query: str, top_k: int = 10, fuzzy_match: bool = True, handler: QueryHandler = Provide[AppContainer.query_handler]):
-        return handler.search_nodes_by_content(search_query, top_k, fuzzy_match)
+    def get_reasoning_queue_status(self):
+        return self._run_async(context.knowledge_handler.get_queue_status())
 
-    @inject
-    def get_node_context_friendly(self, node_identifier: str, handler: QueryHandler = Provide[AppContainer.query_handler]):
-        return handler.get_node_context_friendly(node_identifier)
+    def get_knowledge_queue_status(self):
+        return self._run_async(context.knowledge_handler.get_queue_status())
 
-    @inject
-    def get_status(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]):
-        return handler.get_status()
-
-    @inject
-    def get_config(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]):
-        return handler.get_config()
-
-    @inject
-    def check_imports(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]):
-        return handler.check_imports()
+    def submit_feedback(self, *args):
+        return self._run_async(context.feedback_handler.submit_feedback(*args))
         
-    def _run_async(self, coro):
-        """Helper to run a coroutine from a synchronous context."""
+    def debug_payload(self, *args):
+        logger.info(f"--- DEBUG PAYLOAD ---\nType: {type(args)}\nContent: {args}\n--- END DEBUG ---")
+        return args
+
+    # ------------------------------------------------------------------
+    # Smart Companion Methods
+    # ------------------------------------------------------------------
+
+    def analyze_tag_context(self, *args):
+        """Analyze tag context for smart companion suggestions."""
+        return self._run_async(context.smart_companion_handler.analyze_tag_context(*args))
+
+    def refresh_stale_tags(self, batch_size: int = 20):
+        """RPC: Refresh embeddings for all STALE tags (knowledge_status='STALE')."""
+        logger.info(f"RPC call: embedding/refresh_stale_tags (batch_size={batch_size})")
+        async def _run():
+            await context.embedding_service.refresh_stale_tags(batch_size=batch_size)
+            return {"status": "success"}
+        # Run in event loop and wait for result synchronously for EPC
+        future = asyncio.run_coroutine_threadsafe(_run(), self.loop)
+        return future.result()
+
+    def _generate_request_id(self, method_name: str) -> str:
+        """Generate unique request ID for tracking."""
+        with self.task_lock:
+            self.request_counter += 1
+            return f"{method_name}_{int(time.time())}_{self.request_counter}"
+    
+    def _register_task(self, request_id: str, method_name: str, args: Any) -> None:
+        """Register a running task."""
+        with self.task_lock:
+            self.running_tasks[request_id] = {
+                "method": method_name,
+                "start_time": time.time(),
+                "args": str(args)[:200],  # Truncate for logging
+                "status": "running"
+            }
+            logger.debug(f"Task registered: {request_id} - {method_name}")
+    
+    def _unregister_task(self, request_id: str) -> None:
+        """Unregister a completed task."""
+        with self.task_lock:
+            if request_id in self.running_tasks:
+                task_info = self.running_tasks.pop(request_id)
+                duration = time.time() - task_info["start_time"]
+                logger.debug(f"Task completed: {request_id} - duration: {duration:.2f}s")
+    
+    def _get_running_tasks(self) -> Dict[str, Any]:
+        """Get current running tasks."""
+        with self.task_lock:
+            return dict(self.running_tasks)
+    
+    def _run_async(self, coro, timeout=300, method_name="unknown", args=None):
         if self.shutdown_event.is_set():
             logger.warning("Shutdown in progress. Rejecting new async task.")
-            return {"error": "shutdown_in_progress", "message": "The application is shutting down."}
-
-        if not self.loop_thread.is_alive():
-            logger.error("CRITICAL: Event loop thread is NOT alive before scheduling a task. Cannot proceed.")
-            return {"error": "event_loop_thread_dead", "message": "The event loop thread has died."}
+            return {"error": "shutdown_in_progress"}
+        if not self.loop_thread.is_alive() or not self.loop.is_running():
+            logger.error("CRITICAL: Event loop is not running. Cannot schedule task.")
+            return {"error": "event_loop_dead"}
         
-        if not self.loop.is_running():
-            logger.error("CRITICAL: Event loop is not running, though the thread is alive. Cannot schedule task.")
-            return {"error": "event_loop_not_running", "message": "The event loop is not running."}
-
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        request_id = self._generate_request_id(method_name)
+        self._register_task(request_id, method_name, args)
+        
+        async def tracked_coro():
+            try:
+                result = await coro
+                return {"result": result, "request_id": request_id}
+            except asyncio.CancelledError:
+                logger.warning(f"Task cancelled: {request_id}")
+                raise
+            finally:
+                self._unregister_task(request_id)
+        
+        future = asyncio.run_coroutine_threadsafe(tracked_coro(), self.loop)
         try:
-            return future.result(timeout=300) # 5-minute timeout for long-running tasks
+            response = future.result(timeout=timeout)
+            if isinstance(response, dict) and "request_id" in response:
+                return response["result"]
+            return response
         except asyncio.TimeoutError:
-            logger.error("Async task timed out.")
-            return {"error": "timeout", "message": "The async task timed out."}
+            logger.error(f"Async task timed out: {request_id}")
+            self._unregister_task(request_id)
+            return {"error": "timeout", "request_id": request_id}
         except Exception as e:
-            logger.error(f"Error running async task: {e}", exc_info=True)
-            return {"error": "async_execution_error", "message": str(e)}
-
-    @inject
-    def proactive_get_resonance(self, payload: Dict[str, Any], handler: ResonanceHandler = Provide[AppContainer.resonance_handler]) -> Dict[str, Any]:
-        logger.debug(f"proactive_get_resonance received payload for node: {payload.get('node_id')}")
-        
-        # This handler method is async
-        coro = handler.get_resonance(payload)
-        return self._run_async(coro)
-
-    @inject
-    def test_embedding_retrieval(self, text: str, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]):
-        return handler.test_embedding_retrieval(text)
-
-    @inject
-    def bulk_process_snapshot(self, *args, handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        """
-        Processes a snapshot of nodes and links from Elisp.
-        Uses *args to handle flexible payload structures from EPC.
-        """
-        logger.debug(f"bulk_process_snapshot received {len(args)} raw args.")
-
-        # Defensive coding: The entire payload is expected from Elisp.
-        # EPC seems to be unpacking our list, so we treat all args as part of the payload.
-        # The contract from Elisp is (list HASH-TABLE), which becomes the single argument.
-        if not args:
-            logger.error("bulk_process_snapshot received no arguments.")
-            return {"error": "No data received"}
-
-        # The payload from Elisp is the first element of the args tuple.
-        raw_payload = args[0]
-        
-        try:
-            # The handler expects the raw payload as passed from Elisp.
-            return handler.bulk_process_snapshot(raw_payload)
-        except Exception as e:
-            logger.error(f"Error in bulk_process_snapshot: {e}\\n{traceback.format_exc()}")
-            return {"error": str(e), "traceback": traceback.format_exc()}
-
-    @inject
-    def get_processing_status(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]) -> Dict[str, Any]:
-        return handler.get_processing_status()
-
-    @inject
-    def print_processing_report(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]) -> Dict[str, Any]:
-        return handler.print_processing_report()
-
-    @inject
-    def inspect_vector_index(self, handler: DiagnosticsHandler = Provide[AppContainer.diagnostics_handler]) -> Dict[str, Any]:
-        """Provides a bridge to the diagnostics handler for inspecting the vector index."""
-        return handler.inspect_vector_index()
-
-    @inject
-    def extract_entities_for_tagging(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
-        return handler.extract_entities_for_tagging(payload_list)
-
-    @inject
-    def force_extract_entities_for_tagging(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
-        return handler.force_extract_entities_for_tagging(payload_list)
-
-    @inject
-    def batch_extract_entities_for_tagging(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
-        return handler.batch_extract_entities_for_tagging(payload_list)
-
-    @inject
-    def rag_extract_tag_patterns(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
-        return handler.rag_extract_tag_patterns(payload_list)
-
-    @inject
-    def get_tag_similarity_suggestions(self, payload_list: List[Dict[str, Any]], handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        # Pass the raw payload_list directly to AutotagHandler, which now handles Elisp alist format
-        return handler.get_tag_similarity_suggestions(payload_list)
-
-    @inject
-    def sync_tag_event(self, event_data: Dict[str, Any], handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        """
-        Handles various tag-related events from Elisp.
-        'event_type': 'add', 'remove', 'rename', 'merge'
-        'data': { ... event specific data ... }
-        """
-        event_type = event_data.get('event_type')
-        data = event_data.get('data')
-        
-        # Here you can call different methods on SyncHandler based on event_type
-        # e.g., handler.add_tag(data), handler.remove_tag(data), etc.
-        logger.info(f"Received tag event: {event_type} with data: {data}")
-        return {"status": "received", "event": event_type}
-
-    @inject
-    def update_tag_status(self, tag_data: Dict[str, Any], handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        """
-        Updates the status of a tag (e.g., 'active', 'deprecated').
-        'tag_name': name of the tag
-        'status': new status
-        """
-        tag_name = tag_data.get('tag_name')
-        status = tag_data.get('status')
-        # Call handler.update_tag_status(tag_name, status)
-        logger.info(f"Updating tag '{tag_name}' to status '{status}'")
-        return {"status": "updated", "tag_name": tag_name, "new_status": status}
-
-    @inject
-    def update_tag_rules(self, tag_data: Dict[str, Any], handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        """
-        Updates inference or application rules for a tag.
-        'tag_name': name of the tag
-        'rules': { ... new rules ... }
-        """
-        tag_name = tag_data.get('tag_name')
-        rules = tag_data.get('rules')
-        # Call handler.update_tag_rules(tag_name, rules)
-        logger.info(f"Updating rules for tag '{tag_name}': {rules}")
-        return {"status": "rules_updated", "tag_name": tag_name}
-
-    @inject
-    def update_relation_type(self, relation_data: Dict[str, Any], handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        """
-        Updates a relationship type (e.g., rename, add properties).
-        'type_name': name of the relation type
-        'updates': { ... changes to apply ... }
-        """
-        type_name = relation_data.get('type_name')
-        updates = relation_data.get('updates')
-        # Call handler.update_relation_type(type_name, updates)
-        logger.info(f"Updating relation type '{type_name}': {updates}")
-        return {"status": "relation_type_updated", "type_name": type_name}
-
-    @inject
-    def update_relation_rules(self, relation_data: Dict[str, Any], handler: SyncHandler = Provide[AppContainer.sync_handler]) -> Dict[str, Any]:
-        logger.debug(f"update_relation_rules received data for relation: {relation_data.get('type')}")
-        return handler.update_relation_rules(relation_data)
-
-    @inject
-    def batch_generate_tags(self, *args, handler: AutotagHandler = Provide[AppContainer.autotag_handler]):
-        """
-        Processes a batch of items to generate tags by running the async handler.
-        """
-        logger.debug(f"Bridge batch_generate_tags received {len(args)} arguments")
-        
-        # 详细打印每个参数的信息
-        for i, arg in enumerate(args):
-            logger.debug(f"Argument {i}: type={type(arg)}, content={arg}")
-            if hasattr(arg, 'value') and callable(arg.value):
-                logger.debug(f"Argument {i} is Symbol with value: {arg.value()}")
-        
-        try:
-            # According to unified data contract, pass the arguments as a single parameter
-            # If multiple args are received, take the first one as the payload
-            payload = args[0] if args else None
-            coro = handler.batch_generate_tags(payload)
-            return self._run_async(coro)
-        except Exception as e:
-            logger.error(f"Error running async batch_generate_tags: {e}", exc_info=True)
-            return {"error": "async_execution_error", "message": str(e)}
-
-    @inject
-    def generate_single_node_tags(self, *args, handler: AutotagHandler = Provide[AppContainer.autotag_handler]) -> Dict[str, Any]:
-        """
-        Processes a single node to generate tags by running the async handler.
-        """
-        logger.debug("Bridge received generate_single_node_tags, forwarding to async handler.")
-        try:
-            # According to unified data contract, pass the arguments as a single parameter
-            # If multiple args are received, take the first one as the payload
-            payload = args[0] if args else None
-            coro = handler.suggest_tags_for_single_node_elisp(payload)
-            return self._run_async(coro)
-        except Exception as e:
-            logger.error(f"Error calling async generate_single_node_tags handler: {e}", exc_info=True)
-            return {"status": "error", "message": str(e)}
-
-    @inject
-    def continue_conversation(self, *args, handler: RAGHandler = Provide[AppContainer.rag_handler]):
-        """
-        Continues a RAG conversation.
-        Runs the async handler method in the event loop.
-        """
-        logger.info(f"Bridge received for continue_conversation - type: {type(args)}, content: {args}")
-        try:
-            return self._run_async(handler.continue_conversation(*args))
-        except Exception as e:
-            logger.error(f"Error in continue_conversation bridge call: {e}", exc_info=True)
-            return {"status": "error", "message": str(e)}
-
-    @inject
-    def run_reasoning_cycle(self, limit: int = 5, handler: ReasoningHandler = Provide[AppContainer.reasoning_handler]):
-        """Runs one cycle of relation inference for nodes needing it."""
-        logger.info(f"Received request to run reasoning cycle with limit {limit}.")
-        return handler.run_inference_cycle(limit)
-
-    @inject
-    def get_prompt_template_elisp(self, *args, handler: QueryHandler = Provide[AppContainer.query_handler]):
-        # This method is not provided in the original file or the code block
-        # It's assumed to exist as it's called in the code
-        # Implementation needed
-        pass
+            logger.error(f"Error running async task {request_id}: {e}\n{traceback.format_exc()}")
+            self._unregister_task(request_id)
+            return {"error": "async_execution_error", "message": str(e), "request_id": request_id}
 
 def main():
-    parser = argparse.ArgumentParser(description="Org SuperTag EPC Bridge Server (Python)")
-    parser.add_argument("--emacs-epc-port", type=int, required=True, help="EPC port of the Emacs server")
-    parser.add_argument("--data-directory", type=str, required=True, help="Data directory for org-supertag")
-    parser.add_argument("--config-file", type=str, help="Path to the TOML configuration file")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-
+    parser = argparse.ArgumentParser(description="SimTag EPC Bridge for Emacs.")
+    parser.add_argument("--port-file", type=str, required=True, help="File to write the dynamic port number to.")
+    parser.add_argument("--data-directory", type=str, required=True, help="Path to the org-supertag data directory.")
+    parser.add_argument("--port", type=int, default=0, help="Port for the Python EPC server. 0 means dynamic.")
+    parser.add_argument("--profile", action='store_true', help="Enable profiling.")
     args = parser.parse_args()
 
-    # --- Config Loading ---
-    config = Config()
-    if args.config_file:
-        try:
-            config = Config.from_toml(args.config_file)
-            print(f"Configuration loaded from {args.config_file}", file=sys.stderr)
-        except FileNotFoundError:
-            print(f"Warning: Config file not found at {args.config_file}. Using default settings.", file=sys.stderr)
-        except Exception as e:
-            print(f"Error loading config file: {e}. Using default settings.", file=sys.stderr)
+    # Initialize the bridge. This will also initialize the context and all services.
+    bridge = SimTagBridge(
+        port_file=args.port_file,
+        data_directory=args.data_directory,
+        server_port=args.port
+    )
 
-    # Override config with command line arguments
-    if args.data_directory:
-        config.data_directory = args.data_directory
-    if args.debug:
-        config.debug = args.debug
-    
-    # --- Logging Setup ---
-    logger = setup_simtag_logging(config.data_directory)
-
-    # --- Dependency Injection Container Setup ---
-    try:
-        container = AppContainer()
-        container.config.from_dict(config.to_dict())
-        container.wire(modules=[__name__])
-        logger.info("Dependency injection container wired successfully.")
-    except Exception as e:
-        logger.error(f"Failed to wire dependency injection container: {e}\n{traceback.format_exc()}")
-        sys.exit(1)
-
-    # --- Start EPC Server ---
-    try:
-        bridge = SimTagBridge(container, args.emacs_epc_port)
-        logger.info("SimTagBridge initialized. Python backend is ready.")
-        
-        # Keep the main thread alive for the server thread
-        while not bridge.shutdown_event.is_set():
-            # Use a mechanism that allows for graceful shutdown if needed
-            # For now, just sleep.
-            import time
-            time.sleep(0.1) # Shorter sleep to react faster to shutdown signal
-
-    except KeyboardInterrupt:
-        logger.info("Shutting down SimTagBridge due to KeyboardInterrupt.")
-        if 'bridge' in locals() and bridge:
-            bridge.shutdown_event.set() # Set shutdown event on Ctrl+C
-    except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}\n{traceback.format_exc()}")
-    finally:
-        if 'bridge' in locals() and bridge:
-            bridge.cleanup()
-        logger.info("SimTagBridge has been shut down.")
-
-if __name__ == "__main__":
-    # To enable profiled run:
-    # Set environment variable: `export ENABLE_PROFILING=1`
-    # Then run the script. The profile `simtag_bridge.prof` will be saved on exit.
-    if os.environ.get("ENABLE_PROFILING"):
+    # Profiling setup
+    profiler = None
+    if args.profile:
         import cProfile
-        import atexit
-        
-        print("Profiling is enabled. Profile will be saved to 'simtag_bridge.prof'.", file=sys.stderr)
-        
         profiler = cProfile.Profile()
         
         def save_profile():
-            profiler.dump_stats("simtag_bridge.prof")
-            print("Profiling data saved.", file=sys.stderr)
-
-        atexit.register(save_profile)
+            profile_dir = os.path.join(args.data_directory, "profiles")
+            if not os.path.exists(profile_dir):
+                os.makedirs(profile_dir)
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            profile_file = os.path.join(profile_dir, f"simtag_bridge_{timestamp}.prof")
+            profiler.dump_stats(profile_file)
+            logging.getLogger("simtag_bridge").info(f"Profiling data saved to {profile_file}")
 
         def profiled_run():
             try:
                 profiler.enable()
-                main()
+                bridge.shutdown_event.wait()
             finally:
                 profiler.disable()
+                save_profile()
         
-        profiled_run()
+        profiled_thread = threading.Thread(target=profiled_run, daemon=True)
+        profiled_thread.start()
     else:
-        main() 
+        bridge.shutdown_event.wait()
+
+    logging.getLogger("simtag_bridge").info("Shutdown event received. Exiting main thread.")
+
+if __name__ == '__main__':
+    main() 

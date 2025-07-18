@@ -10,56 +10,243 @@ from typing import Optional, List, Dict, Any, Union
 import requests       # NEW: Import for requests library
 import asyncio        # For running sync code in async
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
 # from simtag.config import Config # LLMClient will expect an llm_config dict
+from ..config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Standardized Data Structures
+# =============================================================================
+
+@dataclass
+class LLMResult:
+    """Standardized result for all LLM operations."""
+    success: bool
+    content: str = ""
+    error_message: Optional[str] = None
+    provider_name: Optional[str] = None
+    model_used: Optional[str] = None
+    response_time: Optional[float] = None
+
+# =============================================================================
+# Backend Abstraction
+# =============================================================================
+
+class LLMBackend(ABC):
+    """Abstract Base Class for all LLM provider backends."""
+    
+    @property
+    @abstractmethod
+    def provider_name(self) -> str:
+        """The name of the backend provider (e.g., 'ollama', 'openai')."""
+        pass
+    
+    @abstractmethod
+    async def generate(self,
+                     prompt: str,
+                     model: str,
+                     format_json: bool,
+                     options: Optional[Dict[str, Any]],
+                     system_prompt: Optional[str] = None,
+                     **kwargs: Any
+                    ) -> LLMResult:
+        """Abstract method for single text generation."""
+        pass
+
+    @abstractmethod
+    async def chat(self,
+                   messages: List[Dict[str, str]],
+                   model: str,
+                   format_json: bool,
+                   options: Optional[Dict[str, Any]],
+                   **kwargs: Any
+                  ) -> LLMResult:
+        """Abstract method for chat completions."""
+        pass
+
+# =============================================================================
+# Ollama Backend Implementation
+# =============================================================================
+
+class OllamaBackend(LLMBackend):
+    """LLM Backend implementation for Ollama."""
+    
+    def __init__(self, base_url: str, default_model: str, timeout: int):
+        self.base_url = base_url
+        self.default_model = default_model
+        self.timeout = timeout
+
+    @property
+    def provider_name(self) -> str:
+        return "ollama"
+
+    async def generate(self,
+                     prompt: str,
+                     model: str,
+                     format_json: bool,
+                     options: Optional[Dict[str, Any]],
+                     system_prompt: Optional[str] = None,
+                     **kwargs: Any
+                    ) -> LLMResult:
+        api_url = f"{self.base_url}/api/generate"
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False, # Ensure no streaming
+        }
+        if format_json:
+            payload["format"] = "json"
+        if system_prompt:
+            payload["system"] = system_prompt
+        if options:
+            payload["options"] = options
+
+        logger.debug(f"Ollama payload: {json.dumps(payload)}")
+        logger.debug(f"Making Ollama generate request to {api_url} with model {model} using requests")
+        start_time = time.time()
+
+        def do_request():
+            # This function will be executed in a separate thread
+            try:
+                return requests.post(api_url, json=payload, timeout=self.timeout)
+            except requests.RequestException as e:
+                return e # Return exception to be re-raised in main thread
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(None, do_request)
+
+            if isinstance(response, requests.RequestException):
+                raise response # Re-raise exception from the thread
+
+            response.raise_for_status()
+            response_json = response.json()
+
+            # Ollama's non-streaming response aggregates the 'response' field.
+            content = response_json.get('response', '').strip()
+
+            return LLMResult(
+                success=True,
+                content=content,
+                provider_name=self.provider_name,
+                model_used=model,
+                response_time=time.time() - start_time
+            )
+        except requests.RequestException as e:
+            msg = f"Failed to connect to Ollama service using requests: {e}"
+            logger.error(f"Ollama generate request failed for model {model}: {msg}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+        except requests.HTTPError as e:
+            # Use e.response.text to get the body, which might have more info
+            response_text = e.response.text if e.response else "(No response text)"
+            msg = f"Ollama service returned status {e.response.status_code}: {response_text}"
+            logger.error(f"Ollama generate request failed for model {model} with status {e.response.status_code}: {response_text}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+        except Exception as e:
+            msg = f"An unexpected error occurred: {e}"
+            logger.error(f"An unexpected error occurred during Ollama generate call for model {model}: {msg}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+
+    async def chat(self,
+                   messages: List[Dict[str, str]],
+                   model: str,
+                   format_json: bool,
+                   options: Optional[Dict[str, Any]],
+                   **kwargs: Any
+                  ) -> LLMResult:
+        api_url = f"{self.base_url}/api/chat"
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+        }
+        if format_json:
+            payload["format"] = "json"
+        if options:
+            payload["options"] = options
+
+        logger.debug(f"Making Ollama chat request to {api_url} with model {model} using requests")
+        start_time = time.time()
+
+        def do_request():
+            try:
+                return requests.post(api_url, json=payload, timeout=self.timeout)
+            except requests.RequestException as e:
+                return e
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(None, do_request)
+
+            if isinstance(response, requests.RequestException):
+                raise response
+
+            response.raise_for_status()
+            response_json = response.json()
+            content = response_json.get('message', {}).get('content', '').strip()
+
+            return LLMResult(
+                success=True,
+                content=content,
+                provider_name=self.provider_name,
+                model_used=model,
+                response_time=time.time() - start_time
+            )
+        except requests.RequestException as e:
+            msg = f"Failed to connect to Ollama service using requests: {e}"
+            logger.error(f"Ollama chat request failed for model {model}: {msg}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+        except requests.HTTPError as e:
+            response_text = e.response.text if e.response else "(No response text)"
+            msg = f"Ollama service returned status {e.response.status_code}: {response_text}"
+            logger.error(f"Ollama chat request failed for model {model} with status {e.response.status_code}: {response_text}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+        except Exception as e:
+            msg = f"An unexpected error occurred: {e}"
+            logger.error(f"An unexpected error occurred during Ollama chat call for model {model}: {msg}")
+            return LLMResult(success=False, error_message=msg, provider_name=self.provider_name, model_used=model)
+
+# =============================================================================
+# Unified LLM Client
+# =============================================================================
+
 class LLMClient:
     """
-    LLM客户端，支持通过嵌入服务的多后端架构
+    Unified LLM Client that manages multiple backends.
     """
     
-    def __init__(self, provider: str, config: Dict[str, Any]):
-        """
-        Initializes the LLMClient.
+    def __init__(self, config: Union[Dict, 'LLMConfig']):
+        if not isinstance(config, dict):
+            config = LLMConfig()
 
-        Args:
-            provider (str): The LLM provider.
-            config (Dict[str, Any]): Configuration dictionary for the LLM provider.
-        """
-        self.provider = provider
         self.config = config
-        self.base_url = config.get('base_url', 'http://localhost:11434')
-        self.default_model = config.get('default_model', 'gemma3:4b')
-        self.timeout = config.get('timeout', 300)
+        self.backends: Dict[str, LLMBackend] = {}
+        self.primary_backend: Optional[str] = None
+        self._init_backends()
+
+    def _init_backends(self):
+        """Initializes all configured LLM backends."""
+        backends = getattr(self.config, 'backends', {})
+        if "ollama" in backends:
+            ollama_config = backends["ollama"]
+            self.backends["ollama"] = OllamaBackend(
+                base_url=ollama_config.base_url,
+                default_model=ollama_config.default_model,
+                timeout=ollama_config.timeout
+            )
+            logger.info("Initialized 'ollama' LLM backend.")
         
-        self._client: Optional[httpx.AsyncClient] = None # Initialize to None
-
-    async def _get_httpx_client(self) -> httpx.AsyncClient:
-        """Lazily initializes and returns the httpx.AsyncClient."""
-        if self._client is None or self._client.is_closed:
-            logger.info("Creating new httpx.AsyncClient instance.")
-            self._client = httpx.AsyncClient(timeout=self.timeout)
-        return self._client
-
-    async def check_availability(self) -> bool:
-        """Checks if the configured LLM service is available."""
-        if self.provider == 'ollama':
-            try:
-                client = await self._get_httpx_client()
-                response = await client.get(f"{self.base_url}/api/tags")
-                response.raise_for_status()
-                logger.info(f"Ollama service available at {self.base_url}")
-                return True
-            except httpx.RequestError as e:
-                logger.warning(f"Ollama service unavailable at {self.base_url}: {e}")
-                return False
-            except httpx.HTTPStatusError as e:
-                logger.warning(f"Ollama service returned error status at {self.base_url}: {e.response.status_code} - {e.response.text}")
-                return False
-        logger.warning(f"Availability check not implemented for provider: {self.provider}")
-        return False
+        self.primary_backend = getattr(self.config, 'primary_backend', 'ollama')
+        if not self.primary_backend or self.primary_backend not in self.backends:
+            if self.backends:
+                self.primary_backend = list(self.backends.keys())[0]
+                logger.warning(f"Primary LLM backend not configured or available. Falling back to '{self.primary_backend}'.")
+            else:
+                logger.error("No LLM backends are available or configured.")
 
     async def generate(self,
                        prompt: str,
@@ -67,100 +254,119 @@ class LLMClient:
                        model: Optional[str] = None,
                        format_json: bool = False,
                        options: Optional[Dict[str, Any]] = None,
+                       use_chat_endpoint: bool = False,
                        **kwargs: Any
-                      ) -> str:
-        """
-        Generates text using the configured LLM provider.
-        """
-        target_model = model if model else self.config.get('default_model', self.default_model)
+                      ) -> LLMResult:
+        if use_chat_endpoint:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            return await self.chat(messages=messages, model=model, format_json=format_json, options=options, **kwargs)
 
-        if self.provider == 'ollama':
-            return await self._call_ollama_generate_async(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=target_model,
-                format_json=format_json,
-                options=options,
-                **kwargs
-            )
-        logger.warning(f"Generation not implemented for provider: {self.provider}")
-        return f"Error: Generation not implemented for provider {self.provider}"
+        backend_name = self.primary_backend
+        if not backend_name or backend_name not in self.backends:
+            return LLMResult(success=False, error_message="No suitable LLM backend is available.")
 
-    async def _call_ollama_generate_async(self,
-                                        prompt: str,
-                                        system_prompt: Optional[str],
-                                        model: str,
-                                        format_json: bool,
-                                        options: Optional[Dict[str, Any]],
-                                        **kwargs: Any
-                                       ) -> str:
-        """
-        Asynchronous version using httpx.
-        """
-        api_url = f"{self.base_url}/api/generate"
+        llm_backend = self.backends[backend_name]
+        
+        target_model = model
+        if not target_model and isinstance(llm_backend, OllamaBackend):
+             target_model = llm_backend.default_model
 
-        payload_dict: Dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": True,
-            "format": "json" if format_json else ""
-        }
+        if not target_model:
+            return LLMResult(success=False, error_message="No model specified and backend has no default.", provider_name=llm_backend.provider_name)
 
-        if system_prompt:
-            payload_dict["system"] = system_prompt
+        return await llm_backend.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=target_model,
+            format_json=format_json,
+            options=options,
+            **kwargs
+        )
+    async def chat(self,
+                   messages: List[Dict[str, str]],
+                   model: Optional[str] = None,
+                   format_json: bool = False,
+                   options: Optional[Dict[str, Any]] = None,
+                   backend: Optional[str] = None,
+                   **kwargs: Any
+                  ) -> LLMResult:
+        backend_name = backend or self.primary_backend
+        if not backend_name or backend_name not in self.backends:
+            return LLMResult(success=False, error_message="No suitable LLM backend is available.")
 
-        if options:
-            payload_dict["options"] = options
+        llm_backend = self.backends[backend_name]
+        
+        # Use the backend's default model if no specific model is requested
+        target_model = model
+        if not target_model and isinstance(llm_backend, OllamaBackend): # Example of backend-specific logic
+             target_model = llm_backend.default_model
 
-        logger.debug(f"Making generate request to {api_url} with model {model}")
+        if not target_model:
+            return LLMResult(success=False, error_message="No model specified and backend has no default.", provider_name=llm_backend.provider_name)
 
-        try:
-            client = await self._get_httpx_client()
-            response = await client.post(
-                api_url,
-                json=payload_dict,
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout
-            )
+        return await llm_backend.chat(
+            messages=messages,
+            model=target_model,
+            format_json=format_json,
+            options=options,
+            **kwargs
+        )
 
-            response.raise_for_status()
-
-            full_response = ""
-            async for line in response.aiter_lines():
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        if 'response' in chunk:
-                            full_response += chunk['response']
-                        if chunk.get('done', False):
-                            break
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse JSON chunk: {line}")
-                        continue
-
-            logger.debug(f"Successfully generated response with model {model}")
-            return full_response
-
-        except httpx.RequestError as e:
-            logger.error(f"Async Ollama request failed for model {model}: {e}")
-            return f"Error: Failed to connect to Ollama service at {self.base_url}"
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Async Ollama request failed for model {model} with status {e.response.status_code}: {e.response.text}")
-            return f"Error: Ollama service returned status {e.response.status_code} - {e.response.text}"
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during async Ollama call for model {model}: {e}")
-            return f"Error: An unexpected error occurred: {e}"
-
-    
+    async def check_availability(self) -> bool:
+        """Checks if the configured LLM service is available."""
+        if self.primary_backend in self.backends:
+            backend = self.backends[self.primary_backend]
+            if isinstance(backend, OllamaBackend):
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        response = await client.get(f"{backend.base_url}/api/tags")
+                        response.raise_for_status()
+                        logger.info(f"LLM service available at {backend.base_url}")
+                        return True
+                except httpx.RequestError as e:
+                    logger.warning(f"LLM service unavailable at {backend.base_url}: {e}")
+                    return False
+                except httpx.HTTPStatusError as e:
+                    logger.warning(f"LLM service returned error status at {backend.base_url}: {e.response.status_code} - {e.response.text}")
+                    return False
+        logger.warning(f"Availability check not implemented for primary backend: {self.primary_backend}")
+        return False
 
     async def close(self):
-        """Closes the underlying HTTP client."""
-        if hasattr(self, '_client') and self._client and not self._client.is_closed:
-            await self._client.aclose()
-            logger.info("LLMClient HTTP client closed.")
+        """Closes the underlying HTTP client. (No-op now)"""
+        logger.info("LLMClient.close() called, but client is now managed per-request.")
+        pass
+
+    async def get_available_models(self) -> List[str]:
+        """Gets the available models from the LLM API."""
+        if self.primary_backend in self.backends:
+            backend = self.backends[self.primary_backend]
+            if isinstance(backend, OllamaBackend):
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        response = await client.get(f"{backend.base_url}/api/tags")
+                        response.raise_for_status()
+                        models_data = response.json()
+                        return [model['name'] for model in models_data.get('models', [])]
+                except Exception as e:
+                    logger.error(f"Failed to get available models from LLM: {e}")
+                    return []
+        return []
+
+    def get_default_model(self) -> str:
+        """Gets the default model from the config."""
+        if self.primary_backend in self.backends:
+            backends = getattr(self.config, 'backends', {})
+            backend_config = backends.get(self.primary_backend)
+            if backend_config:
+                return backend_config.default_model
+        return ''
 
 
-# Example Usage (Illustrative - requires an Ollama server running for full test)
+# Example Usage (Illustrative - requires an LLM server running for full test)
 async def main_test_llm_client():
     """测试LLMClient的功能"""
     
@@ -174,7 +380,7 @@ async def main_test_llm_client():
     client = LLMClient(provider='ollama', config=test_config)
     
     is_available = await client.check_availability()
-    print(f"Ollama service available: {is_available}")
+    print(f"LLM service available: {is_available}")
     if not is_available:
         return
 

@@ -1,211 +1,113 @@
 import logging
+import json
 import asyncio
-from typing import List, Dict, Any
-from dependency_injector.wiring import inject, Provide
+from typing import Dict, Any, List
 
-from ..utils.unified_tag_processor import TagResult
+from .. import prompts
+from ..services.llm_client import LLMClient
+from ..utils.unified_tag_processor import normalize_payload, TagResult
+from ..prompts import AUTOTAG_SUGGESTION_PROMPT
+from ..utils.utils import extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
-# 注意：_parse_autotag_payload 函数已被移除
-# 现在 Elisp 端遵循统一数据合约，使用标准的 normalize_payload 处理数据
-
 class AutotagHandler:
-    """处理自动标签生成的业务逻辑 (异步)"""
-    
-    @inject
-    def __init__(self, 
-                 llm_client=Provide['llm_client'],
-                 ner_service=Provide['ner_service']):
+    """
+    Handles autotagging of notes by generating suggested tags using an LLM.
+    """
+    def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
-        self.ner_service = ner_service
-        logger.info("AutotagHandler initialized with injected dependencies")
+        self.logger = logging.getLogger(__name__)
 
-    async def batch_generate_tags(self, payload) -> Dict[str, Any]:
+    async def _suggest_tags_for_node(self, node: Dict[str, Any], model_config: Dict) -> List[str]:
         """
-        批量生成标签 (异步版本)
+        Core logic to generate tags for a single, clean node dictionary.
+        This now uses the dedicated AUTOTAG_SUGGESTION_PROMPT.
+        """
+        if not isinstance(node, dict):
+            raise ValueError(f"Expected a 'node' dictionary, got {type(node)}")
+
+        content = node.get('content', '')
+        if not content:
+            return []
+
+        prompt = AUTOTAG_SUGGESTION_PROMPT.format(text_content=content)
+        llm_result = await self.llm_client.generate(prompt, format_json=False, **model_config)
+
+        if not llm_result.success:
+            self.logger.error(f"LLM generation failed for node {node.get('id')}: {llm_result.error_message}")
+            return []
+
+        response_json = extract_json_from_response(llm_result.content)
+        if response_json and isinstance(response_json.get("tags"), list):
+            return response_json["tags"]
         
-        使用原始的 normalize_payload 处理数据
+        self.logger.warning(f"Failed to extract valid 'tags' list from LLM response for node {node.get('id')}")
+        return []
+
+    async def suggest_tags_for_single_node_elisp(self, payload: Any) -> Dict[str, Any]:
         """
+        Adapter method for single node tag generation from Elisp.
+        It normalizes the payload and then calls the core logic.
+        """
+        node_id = 'unknown'
         try:
-            logger.debug(f"batch_generate_tags received payload of type: {type(payload)}")
-            
-            # 使用原始的统一数据处理方式
-            from ..utils.unified_tag_processor import normalize_payload
             data_dict = normalize_payload(payload)
-            
-            nodes_data = data_dict.get('nodes', [])
-            model_config = data_dict.get('model_config', {})
-            
-            logger.debug(f"Extracted {len(nodes_data)} nodes and model_config with keys: {list(model_config.keys()) if isinstance(model_config, dict) else type(model_config)}")
-            
-            if not nodes_data:
-                logger.warning("No nodes found in autotag payload.")
-                logger.warning(f"Available keys in data_dict: {list(data_dict.keys())}")
-                logger.warning(f"Full data_dict content: {data_dict}")
-                return {'suggestions': [], 'failed_count': 0, 'total_processed': 0, 'successful': 0}
-
-            # 确保 nodes_data 是列表格式
-            if isinstance(nodes_data, dict):
-                nodes_list = [nodes_data]
-            elif isinstance(nodes_data, list):
-                nodes_list = nodes_data
-            else:
-                logger.warning(f"Unexpected nodes_data type: {type(nodes_data)}")
-                return {'suggestions': [], 'failed_count': 0, 'total_processed': 0, 'successful': 0}
-
-            logger.info(f"Processing batch tag generation for {len(nodes_list)} nodes")
-
-            # 使用 asyncio.gather 并发处理所有节点
-            tasks = [self._generate_tags_for_node(node_data, model_config) for node_data in nodes_list]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 处理结果
-            final_results = []
-            for i, res in enumerate(results):
-                node_data = nodes_list[i]
-                node_id = "unknown"
-                try:
-                    node_id = node_data.get('id', f'node_{i}') if isinstance(node_data, dict) else f'node_{i}'
-                except (TypeError, ValueError):
-                    logger.warning(f"Could not extract node_id from node_data at index {i}")
-
-                if isinstance(res, Exception):
-                    logger.error(f"Error processing node {i} (id: {node_id}): {res}", exc_info=True)
-                    final_results.append({
-                        'node_id': node_id,
-                        'tags': [],
-                        'status': 'error',
-                        'error': str(res)
-                    })
-                else:
-                    final_results.append({
-                        'node_id': node_id,
-                        'tags': [tag.__dict__ for tag in res],
-                        'status': 'success'
-                    })
-            
-            # Convert to the format expected by ELisp callback
-            suggestions = []
-            failed_count = 0
-            
-            for result in final_results:
-                if result['status'] == 'success' and result['tags']:
-                    # Convert tag format for ELisp
-                    node_suggestions = []
-                    for tag in result['tags']:
-                        node_suggestions.append({
-                            'tag_name': tag.get('tag_name', ''),
-                            'confidence': tag.get('confidence', 0.5),
-                            'reasoning': tag.get('reasoning', '')
-                        })
-                    
-                    if node_suggestions:  # Only add if there are actual suggestions
-                        suggestions.append({
-                            'node_id': result['node_id'],
-                            'suggestions': node_suggestions
-                        })
-                elif result['status'] == 'error':
-                    failed_count += 1
-            
-            return {
-                'suggestions': suggestions,
-                'failed_count': failed_count,
-                'total_processed': len(nodes_list),
-                'successful': len([r for r in final_results if r['status'] == 'success'])
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in batch_generate_tags: {str(e)}", exc_info=True)
-            return {
-                'error': str(e),
-                'suggestions': [],
-                'failed_count': 0,
-                'total_processed': 0,
-                'successful': 0
-            }
-
-    async def suggest_tags_for_single_node_elisp(self, payload) -> Dict[str, Any]:
-        """
-        为单个节点生成标签 (异步版本)，使用原始的 normalize_payload。
-        """
-        try:
-            logger.debug(f"suggest_tags_for_single_node_elisp received payload of type: {type(payload)}")
-            
-            # 使用原始的统一数据处理方式
-            from ..utils.unified_tag_processor import normalize_payload
-            data_dict = normalize_payload(payload)
-
-            # 对于单节点，可能直接在 nodes 中，或者在 node 键中
             node = data_dict.get('node')
             if not node:
                 nodes = data_dict.get('nodes', [])
                 if nodes and len(nodes) > 0:
-                    node = nodes[0]  # 取第一个节点
-            
-            model_config = data_dict.get('model_config', {})
+                    node = nodes[0]
 
-            if not isinstance(node, dict):
-                raise ValueError(f"Expected a 'node' dictionary in payload, but got {type(node)}")
+            if not node:
+                return {'node_id': 'unknown', 'tags': [], 'status': 'no_node_data'}
 
             node_id = node.get('id', 'unknown')
-            logger.info(f"Processing single node tag generation for node: {node_id}")
-            
-            tags = await self._generate_tags_for_node(node, model_config)
-            
-            return {
-                'node_id': node_id,
-                'tags': [tag.__dict__ for tag in tags],
-                'status': 'success'
-            }
-            
+            model_config = data_dict.get("model_config", {})
+
+            tags = await self._suggest_tags_for_node(node, model_config)
+
+            return {'node_id': node_id, 'tags': tags, 'status': 'success'}
+
         except Exception as e:
-            logger.error(f"Error in suggest_tags_for_single_node_elisp: {str(e)}", exc_info=True)
-            return {
-                'node_id': 'unknown',
-                'tags': [],
-                'status': 'error',
-                'error': str(e)
-            }
+            self.logger.error(f"Error in suggest_tags_for_single_node_elisp (node: {node_id}): {str(e)}", exc_info=True)
+            return {'node_id': node_id, 'tags': [], 'status': 'error', 'error': str(e)}
 
-    async def _generate_tags_for_node(self, node_data: Dict, model_config: Dict[str, Any]) -> List[TagResult]:
+    async def batch_generate_tags(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        为单个节点生成标签的内部方法 (异步版本)
+        Generates tags for a batch of nodes concurrently by calling the core node processing logic.
         """
-        if not isinstance(node_data, dict):
-            logger.error(f"Could not process node_data, expected a dict but got {type(node_data)}")
-            return []
+        data = normalize_payload(payload)
+        nodes = data.get("nodes")
+        model_config = data.get("model_config", {})
 
-        try:
-            node_id = node_data.get('id', 'unknown')
-            content = node_data.get('content', '')
-            
-            if not content:
-                logger.warning(f"Node {node_id} has no content")
-                return []
-            
-            # 使用正确的 NERService 方法: suggest_tags_batch (async)
-            suggested_tags_raw_batch = await self.ner_service.suggest_tags_batch([content], [[]])
-            suggested_tags_raw = suggested_tags_raw_batch[0] if suggested_tags_raw_batch else []
-            logger.debug(f"NER service suggested {len(suggested_tags_raw)} tags for node {node_id}")
+        if not nodes:
+            logger.warning("batch_generate_tags called with no 'nodes' in payload.")
+            return [{"error": "Payload missing 'nodes' key."}]
 
-            # 将原始建议转换为 TagResult 格式
-            tags = []
-            for suggestion in suggested_tags_raw:
-                if isinstance(suggestion, dict):
-                    tag = TagResult(
-                        tag_name=suggestion.get('tag_name', ''),
-                        confidence=suggestion.get('confidence', 0.5),
-                        reasoning=suggestion.get('reasoning', 'Suggested by LLM.'),
-                        source="llm_ner"
-                    )
-                    tags.append(tag)
-                else:
-                    logger.warning(f"Received non-dict suggestion for node {node_id}: {suggestion}")
-            
-            logger.debug(f"Generated {len(tags)} tags for node {node_id}")
-            return tags
-            
-        except Exception as e:
-            logger.error(f"Error generating tags for node {node_data.get('id', 'unknown')}: {str(e)}", exc_info=True)
-            return [] 
+        logger.info(f"Starting batch tag generation for {len(nodes)} nodes.")
+
+        tasks = [self._suggest_tags_for_node(node, model_config) for node in nodes]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        processed_results = []
+        for i, result in enumerate(results):
+            node_info = nodes[i] if i < len(nodes) else {}
+            node_id = node_info.get('id', f'unknown_node_{i}')
+
+            if isinstance(result, Exception):
+                logger.error(f"Error processing node {node_id} in batch: {result}", exc_info=result)
+                processed_results.append({
+                    "node_id": node_id,
+                    "tags": [],
+                    "error": str(result)
+                })
+            else:
+                processed_results.append({
+                    "node_id": node_id,
+                    "tags": result
+                })
+
+        logger.info(f"Batch tag generation completed for {len(nodes)} nodes.")
+        return processed_results

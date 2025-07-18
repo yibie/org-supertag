@@ -103,17 +103,17 @@ Return a string containing node title and content."
                              "\\([\\n]\\)[\\n]+" "\\1"  ; Replace multiple empty lines with single empty line
                              (string-trim no-drawer-content))))
          ;; Combine title and content
-        (concat "# " title "\n\n" cleaned-content))))
+        (concat "# " title "\n\n" cleaned-content)))))
 
 (defun org-plist-delete (plist prop)
   "Delete property PROP from PLIST.
 Returns a new plist with the property removed."
   (let (result)
     (while plist
-      (unless (eq (car plist) prop)
+      (unless (equal (car plist) prop)
         (setq result (cons (cadr plist) (cons (car plist) result))))
       (setq plist (cddr plist)))
-    (nreverse result))))
+    (nreverse result)))
 
 (provide 'org-supertag-util)
 

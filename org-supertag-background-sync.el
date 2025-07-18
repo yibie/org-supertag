@@ -52,6 +52,20 @@ Example: '(\"09:00\" \"18:00\") for sync at 9 AM and 6 PM daily."
   :type '(repeat string)
   :group 'org-supertag)
 
+(defcustom org-supertag-tag-refresh-time "03:00"
+  "Daily time (HH:MM) to refresh STALE tag embeddings via embedding/refresh_stale_tags."
+  :type 'string
+  :group 'org-supertag)
+
+;; === Knowledge cycle configuration ===
+
+(defcustom org-supertag-knowledge-cycle-interval 300
+  "Interval (in seconds) for triggering the backend knowledge extraction cycle.
+This controls how often Emacs 调用 `knowledge/run_cycle` 以及队列检查逻辑。
+建议值：300 (5 分钟) 到 1800 (30 分钟) 之间。"
+  :type 'integer
+  :group 'org-supertag)
+
 ;; === Runtime variables ===
 
 (defvar org-supertag-background-sync--registered-task-ids nil
@@ -63,6 +77,12 @@ Example: '(\"09:00\" \"18:00\") for sync at 9 AM and 6 PM daily."
 - :waiting-backend - Waiting for Python backend to be ready
 - :embedding       - Phase 1: Syncing embeddings and metadata
 - :reasoning       - Phase 2: Inferring relations for nodes")
+
+(defvar org-supertag-background-sync--timer nil
+  "Timer for interval-based background sync.")
+
+(defvar org-supertag-background-sync--schedule-timer nil
+  "Timer for scheduled background sync.")
 
 (defvar org-supertag-background-sync--last-sync-time nil
   "Last successful sync time.")
@@ -86,7 +106,9 @@ Value: hash string")
   (expand-file-name "sync_hashes.json" org-supertag-data-directory)
   "Hash record persistence file path.")
 
-;; === Hash Persistence ===
+;;------------------------------------------------------------------------------ 
+;; Hash Persistence 
+;;------------------------------------------------------------------------------
 
 (defun org-supertag-background-sync--save-hashes ()
   "Save the current sync hashes to the hash file in JSON format.
@@ -136,13 +158,109 @@ from current database state to enable incremental sync."
             (message "[background-sync] Hashes loaded from JSON file %s. Total: %d"
                      org-supertag-background-sync--hash-file
                      (hash-table-count org-supertag-background-sync--last-sync-hashes)))))
-    ;; Hash file doesn't exist - create baseline from current database state
+    ;; Hash file doesn't exist - check if database has content before creating baseline
     (progn
-      (message "[background-sync] JSON hash file not found. Creating baseline from current database state...")
-      (org-supertag-background-sync--create-baseline-hashes)
-      (message "[background-sync] Baseline created with %d hash records. Incremental sync now enabled."
-               (hash-table-count org-supertag-background-sync--last-sync-hashes)))))
+      (message "[background-sync] JSON hash file not found.")
+      (if (and (boundp 'org-supertag-db--object)
+               (hash-table-p org-supertag-db--object)
+               (> (hash-table-count org-supertag-db--object) 0))
+          (progn
+            (message "[background-sync] Database has content. Creating baseline from current database state...")
+            (org-supertag-background-sync--create-baseline-hashes)
+            (message "[background-sync] Baseline created with %d hash records. Incremental sync now enabled."
+                     (hash-table-count org-supertag-background-sync--last-sync-hashes)))
+        (progn
+          (message "[background-sync] Database is empty or not loaded. Hash baseline will be created when database has content.")
+          (clrhash org-supertag-background-sync--last-sync-hashes))))))
 
+;;;###autoload
+(defun org-supertag-background-sync-regenerate-baseline ()
+  "Manually regenerate the baseline hash file from current database state.
+This is useful when the hash file is missing or corrupted, or when you want to
+reset the incremental sync baseline."
+  (interactive)
+  (if (and (boundp 'org-supertag-db--object)
+           (hash-table-p org-supertag-db--object)
+           (> (hash-table-count org-supertag-db--object) 0))
+      (progn
+        (message "[background-sync] Regenerating baseline from current database state...")
+        (org-supertag-background-sync--create-baseline-hashes)
+        (message "[background-sync] Baseline regenerated successfully with %d hash records."
+                 (hash-table-count org-supertag-background-sync--last-sync-hashes)))
+    (message "[background-sync] Cannot regenerate baseline: database is empty or not loaded.")))
+
+;;;###autoload
+(defun org-supertag-background-sync-check-hash-status ()
+  "Check the status of the hash file and provide recommendations."
+  (interactive)
+  (let ((hash-file-exists (file-exists-p org-supertag-background-sync--hash-file))
+        (hash-count (hash-table-count org-supertag-background-sync--last-sync-hashes))
+        (db-objects (if (and (boundp 'org-supertag-db--object)
+                            (hash-table-p org-supertag-db--object))
+                       (hash-table-count org-supertag-db--object)
+                     0))
+        (db-links (if (and (boundp 'org-supertag-db--link)
+                          (hash-table-p org-supertag-db--link))
+                     (hash-table-count org-supertag-db--link)
+                   0)))
+    
+    (with-current-buffer (get-buffer-create "*org-supertag-hash-status*")
+      (erase-buffer)
+      (insert "=== org-supertag Background Sync Hash Status ===\n\n")
+      
+      (insert (format "Hash file path: %s\n" org-supertag-background-sync--hash-file))
+      (insert (format "Hash file exists: %s\n" (if hash-file-exists "Yes" "No")))
+      (insert (format "In-memory hash count: %d\n" hash-count))
+      (insert (format "Database objects: %d\n" db-objects))
+      (insert (format "Database links: %d\n\n" db-links))
+      
+      (cond
+       ;; Case 1: Everything looks good
+       ((and hash-file-exists (> hash-count 0) (> db-objects 0))
+        (insert "✅ Status: GOOD\n")
+        (insert "Hash file exists and contains data. Incremental sync is working properly.\n"))
+       
+       ;; Case 2: Hash file missing but database has content
+       ((and (not hash-file-exists) (> db-objects 0))
+        (insert "⚠️  Status: HASH FILE MISSING\n")
+        (insert "Database has content but hash file is missing.\n")
+        (insert "Recommendation: Run M-x org-supertag-background-sync-regenerate-baseline\n"))
+       
+       ;; Case 3: Hash file exists but empty
+       ((and hash-file-exists (= hash-count 0) (> db-objects 0))
+        (insert "⚠️  Status: HASH FILE EMPTY\n")
+        (insert "Hash file exists but contains no data.\n")
+        (insert "Recommendation: Run M-x org-supertag-background-sync-regenerate-baseline\n"))
+       
+       ;; Case 4: Database is empty
+       ((= db-objects 0)
+        (insert "ℹ️  Status: DATABASE EMPTY\n")
+        (insert "Database has no content. Hash baseline will be created automatically\n")
+        (insert "when database is populated with nodes.\n"))
+       
+       ;; Case 5: Mismatch between hash count and database content
+       ((and (> hash-count 0) (> db-objects 0) 
+             (> (abs (- hash-count (+ db-objects db-links))) 10))
+        (insert "⚠️  Status: HASH/DATABASE MISMATCH\n")
+        (insert "Significant difference between hash count and database content.\n")
+        (insert "This may indicate the hash file is outdated.\n")
+        (insert "Recommendation: Run M-x org-supertag-background-sync-regenerate-baseline\n"))
+       
+       ;; Default case
+       (t
+        (insert "❓ Status: UNKNOWN\n")
+        (insert "Unable to determine status. Please check manually.\n")))
+      
+      (insert "\n=== Actions ===\n")
+      (insert "• M-x org-supertag-background-sync-regenerate-baseline - Regenerate hash baseline\n")
+      (insert "• M-x org-supertag-background-sync-reset-and-force-resync - Reset and force full resync\n")
+      (insert "• M-x org-supertag-background-sync-status - Check background sync status\n")
+      
+      (display-buffer (current-buffer)))
+    
+    (message "Hash status displayed in *org-supertag-hash-status* buffer")))
+
+;; Hash calculation functions 
 (defun org-supertag-background-sync--create-baseline-hashes ()
   "Create baseline hashes from current database state.
 This scans all objects and links in the current database and calculates
@@ -156,11 +274,17 @@ incremental sync when no hash file exists."
                  (plist-get props :node-id)
                  (plist-get props :tag-id)
                  (plist-get props :link-id)
-                 ;; For links, try source/target as fallback
-                 (when (eq (plist-get props :type) :link)
-                   (format "%s->%s" 
-                           (or (plist-get props :source) "")
-                           (or (plist-get props :target) ""))))))
+                 ;; 修复链接 ID 提取逻辑
+                 (when (or (eq (plist-get props :type) :link)
+                          (eq (plist-get props :type) :tag-relation)
+                          (string-match-p "relation" (format "%s" (plist-get props :type))))
+                   (let ((source (plist-get props :source))
+                         (target (plist-get props :target)))
+                     (when (and source target)
+                       (format "%s->%s" source target))))
+                 ;; 如果以上都失败，尝试使用哈希表的 key 作为 ID
+                 ;; 这在 maphash 中会作为第一个参数传入
+                 nil))) ; 在 maphash 中，我们需要使用传入的 id 参数
     
     (let ((processed-objects 0)
           (processed-links 0)
@@ -169,35 +293,57 @@ incremental sync when no hash file exists."
       ;; 1. Process all objects in the main object table
       (maphash
        (lambda (id props)
-         (let ((actual-id (extract-id props)))
-           (if actual-id
-               (condition-case err
-                   (let ((hash (org-supertag-background-sync--calculate-object-hash props)))
-                     (when hash
-                       (puthash actual-id hash org-supertag-background-sync--last-sync-hashes)
-                       (cl-incf processed-objects)))
-                 (error
-                  (cl-incf failed-objects)
-                  (message "[background-sync] Failed to hash object %s: %s" 
-                           actual-id (error-message-string err))))
-             (cl-incf failed-objects))))
+         ;; Only process objects that are not :metadata
+         (unless (eq (plist-get props :type) :metadata)
+           (let ((actual-id (or (extract-id props) id)))
+             (when actual-id
+               (puthash actual-id t current-ids)
+               (let* ((type-key (when (string-match "^:\\([^:]+\\):" id)
+                                  (intern (concat ":" (match-string 1 id)))))
+                      (props-with-type (if type-key
+                                           (plist-put (copy-sequence props) :type type-key)
+                                         props))
+                      (current-hash (org-supertag-background-sync--calculate-object-hash props-with-type))
+                      (last-hash (gethash actual-id org-supertag-background-sync--last-sync-hashes)))
+                 (unless (and current-hash last-hash (string= current-hash last-hash))
+                   (cl-incf changed-count)
+                   (push props-with-type links-to-upsert)
+                   ;; 同步其关联实体
+                   (when-let ((source-id (plist-get props-with-type :from)))
+                     (unless (gethash source-id entities-to-upsert)
+                       (when-let ((entity-data (org-supertag-db-get source-id)))
+                         (puthash source-id entity-data entities-to-upsert))))
+                   (when-let ((target-id (plist-get props-with-type :to)))
+                     (unless (gethash target-id entities-to-upsert)
+                       (when-let ((entity-data (org-supertag-db-get target-id)))
+                         (puthash target-id entity-data entities-to-upsert)))))))))
        org-supertag-db--object)
       
       ;; 2. Process all links in the link table
       (maphash
        (lambda (id props)
-         (let ((actual-id (extract-id props)))
-           (if actual-id
-               (condition-case err
-                   (let ((hash (org-supertag-background-sync--calculate-object-hash props)))
-                     (when hash
-                       (puthash actual-id hash org-supertag-background-sync--last-sync-hashes)
-                       (cl-incf processed-links)))
-                 (error
-                  (cl-incf failed-objects)
-                  (message "[background-sync] Failed to hash link %s: %s" 
-                           actual-id (error-message-string err))))
-             (cl-incf failed-objects))))
+         (unless (eq (plist-get props :type) :metadata)
+           (let ((actual-id (or (extract-id props) id)))
+             (when actual-id
+               (puthash actual-id t current-ids)
+               (let* ((type-key (when (string-match "^:\\([^:]+\\):" id)
+                                  (intern (concat ":" (match-string 1 id)))))
+                      (props-with-type (if type-key
+                                           (plist-put (copy-sequence props) :type type-key)
+                                         props))
+                      (current-hash (org-supertag-background-sync--calculate-object-hash props-with-type))
+                      (last-hash (gethash actual-id org-supertag-background-sync--last-sync-hashes)))
+                 (unless (and current-hash last-hash (string= current-hash last-hash))
+                   (cl-incf changed-count)
+                   (push props-with-type links-to-upsert)
+                   (when-let ((source-id (plist-get props-with-type :from)))
+                     (unless (gethash source-id entities-to-upsert)
+                       (when-let ((entity-data (org-supertag-db-get source-id)))
+                         (puthash source-id entity-data entities-to-upsert))))
+                   (when-let ((target-id (plist-get props-with-type :to)))
+                     (unless (gethash target-id entities-to-upsert)
+                       (when-let ((entity-data (org-supertag-db-get target-id)))
+                         (puthash target-id entity-data entities-to-upsert)))))))))
        org-supertag-db--link)
       
       ;; 3. Save the baseline to file
@@ -215,33 +361,70 @@ incremental sync when no hash file exists."
       (list :processed-objects processed-objects
             :processed-links processed-links
             :failed-objects failed-objects
-            :total-hashes (hash-table-count org-supertag-background-sync--last-sync-hashes)))))
+            :total-hashes (hash-table-count org-supertag-background-sync--last-sync-hashes)))))))
 
-;; === Hash calculation functions ===
+
+(defun org-supertag-background-sync-create-baseline ()
+  "Create baseline hashes from current database state."
+  (interactive)
+  (org-supertag-background-sync--create-baseline-hashes))  
 
 (defun org-supertag-background-sync--calculate-object-hash (props)
-  "Calculate object hash from its property list.
-Excludes time-sensitive and position-sensitive fields to ensure stable hashes."
+  "Calculate object hash based on its type and core content fields.
+For `:node`, hash is based on `:title`, `:content`, and `:tags`.
+For `:tag`, hash is based on `:id`.
+For links, hash is based on their core properties like `:type`, `:from`, and `:to`.
+This ensures the hash is stable and only changes when meaningful data is modified."
   (when (plistp props)
-    (let ((stable-props '())
-          ;; Fields to exclude from hash calculation.
-          (excluded-fields '(:modified-at :created-at :last-modified 
-                            :timestamp :update-time :sync-time
-                            ;; Exclude positional fields
-                            :pos :begin :contents-begin :contents-end :olp
-                            ;; File path is essential, but other transient fields should be excluded.
-                            )))
-      ;; Build a new plist with only stable fields
-      (let ((remaining props))
-        (while remaining
-          (let ((key (car remaining))
-                (value (cadr remaining)))
-            (unless (memq key excluded-fields)
-              (setq stable-props (append stable-props (list key value))))
-            (setq remaining (cddr remaining)))))
-      ;; Calculate hash from stable properties only
-      (let ((hash-content (format "%S" stable-props)))
-        (secure-hash 'sha1 hash-content)))))
+    (let* ((type (plist-get props :type))
+           (stable-props
+            (pcase type
+              (:node
+               (let (plist)
+                 (when-let ((title (plist-get props :title)))
+                   (setq plist (plist-put plist :title title)))
+                 (when-let ((content (plist-get props :content)))
+                   (setq plist (plist-put plist :content content)))
+                 (when-let ((tags (plist-get props :tags)))
+                   ;; Sort tags to ensure hash is stable regardless of order.
+                   (setq plist (plist-put plist :tags (sort (copy-sequence tags) #'string<))))
+                 plist))
+              (:tag
+               (let (plist)
+                 (when-let ((id (plist-get props :id)))
+                   (setq plist (plist-put plist :id id)))
+                 plist))
+              ;; Handle all known link types.
+              ((or :node-tag :tag-ref :tag-tag :relation-group :relation-member)
+               (let (plist)
+                 (setq plist (plist-put plist :type type))
+                 (when-let ((from (plist-get props :from)))
+                   (setq plist (plist-put plist :from from)))
+                 (when-let ((to (plist-get props :to)))
+                   (setq plist (plist-put plist :to to)))
+                 plist))
+              (:node-field
+               (let (plist)
+                 (setq plist (plist-put plist :type type))
+                 (when-let ((from (plist-get props :from)))
+                   (setq plist (plist-put plist :from from)))
+                 (when-let ((to (plist-get props :to)))
+                   (setq plist (plist-put plist :to to)))
+                 (when-let ((value (plist-get props :value)))
+                   (setq plist (plist-put plist :value value)))
+                 (when-let ((tag-id (plist-get props :tag-id)))
+                   (setq plist (plist-put plist :tag-id tag-id)))
+                 plist))
+              ;; Default/fallback for any other types.
+              (_
+               (let (plist)
+                 (when-let ((id (plist-get props :id)))
+                   (setq plist (plist-put plist :id id)))
+                 plist)))))
+      ;; Only calculate hash if we have stable properties to work with.
+      (when stable-props
+        (let ((hash-content (format "%S" stable-props)))
+          (secure-hash 'sha1 hash-content))))))
 
 (defun org-supertag-background-sync--is-alist-p (data)
   "Check if DATA is likely an alist (a list of cons pairs).
@@ -307,96 +490,122 @@ correctly serializes into a JSON object."
    ;; --- Fallback for any other data type ---
    (t data)))
 
+;; ---------------------------------------------------------------------------
+;; Incremental change detection
+;; ---------------------------------------------------------------------------
 (defun org-supertag-background-sync--get-changed-objects ()
-  "Get all changed objects (nodes, tags, links) since the last sync.
-This function iterates over both `org-supertag-db--object` and
-`org-supertag-db--link` to build a complete picture of the changes."
-  ;; Helper function to extract ID from properties (same as in update-hashes)
-  (cl-flet ((extract-id (props)
-             (or (plist-get props :id)
-                 (plist-get props :node-id)
-                 (plist-get props :tag-id)
-                 (plist-get props :link-id)
-                 ;; For links, try source/target as fallback
-                 (when (eq (plist-get props :type) :link)
-                   (format "%s->%s" 
-                           (or (plist-get props :source) "")
-                           (or (plist-get props :target) ""))))))
-    
-    (let ((nodes-to-upsert '())
-          (tags-to-upsert '())
-          (links-to-upsert '())
-          (ids-to-delete '())
-          (current-ids (make-hash-table :test 'equal))
-          (changed-count 0))
+  "Scan DB, compare with baseline hashes, and return (ENTITIES LINKS IDS-TO-DELETE).
 
-      ;; 1. Find created/updated objects from the main object table
-      (maphash
-       (lambda (id props)
-         (let ((actual-id (extract-id props)))
-           (when actual-id
-             (puthash actual-id t current-ids) ; Track current IDs using extracted ID
-             (let ((current-hash (org-supertag-background-sync--calculate-object-hash props))
-                   (last-hash (gethash actual-id org-supertag-background-sync--last-sync-hashes)))
-               (unless (and current-hash last-hash (string= current-hash last-hash))
-                 (cl-incf changed-count)
-                 (let ((type (plist-get props :type)))
-                   (cond
-                    ((eq type :node) (push props nodes-to-upsert))
-                    ((eq type :tag) (push props tags-to-upsert))
-                    (t nil))))))))
-       org-supertag-db--object)
+ENTITIES     - list of node/tag property plists that need to be upserted.
+LINKS        - list of link property plists that need to be upserted.
+IDS-TO-DELETE - list of IDs that existed in previous baseline but are now missing.
 
-      ;; 2. Find created/updated links from the link table
-      (maphash
-       (lambda (id props)
-         (let ((actual-id (extract-id props)))
-           (when actual-id
-             (puthash actual-id t current-ids) ; Also track link IDs using extracted ID
-             (let ((current-hash (org-supertag-background-sync--calculate-object-hash props))
-                   (last-hash (gethash actual-id org-supertag-background-sync--last-sync-hashes)))
-               (unless (and current-hash last-hash (string= current-hash last-hash))
-                 (cl-incf changed-count)
-                 (push props links-to-upsert))))))
-       org-supertag-db--link)
+The function skips any object whose `:type` is `:metadata`.
+It also ensures each link plist contains both `:link-id` and `:id` so that
+subsequent hash-update logic can extract identifiers reliably."
+  (let* ((entities-to-upsert (make-hash-table :test 'equal)) ; id -> props
+         (links-to-upsert   '())
+         (current-ids       (make-hash-table :test 'equal)))
 
-      ;; 3. Find deleted objects by comparing old hashes with current IDs
-      (maphash
-       (lambda (id _last-hash)
-         (unless (gethash id current-ids)
-           (cl-incf changed-count)
-           (push id ids-to-delete)))
-       org-supertag-background-sync--last-sync-hashes)
+    ;; Helper to extract stable ID from props or fallback to key supplied by maphash
+    (cl-labels
+        ((extract-id
+          (id-from-hash props)
+          (or (plist-get props :id)
+              (plist-get props :node-id)
+              (plist-get props :tag-id)
+              (plist-get props :link-id)
+              id-from-hash))
+         (ensure-entity-upsert
+          (entity-id)
+          (when (and entity-id (not (gethash entity-id entities-to-upsert)))
+            (when-let ((entity-data (org-supertag-db-get entity-id)))
+              (puthash entity-id entity-data entities-to-upsert)))))
 
-      (message "[background-sync] checked %d objects, found %d changes: %d nodes, %d tags, %d links, %d deletions"
-               (+ (hash-table-count org-supertag-db--object)
-                  (hash-table-count org-supertag-db--link))
-               changed-count
-               (length nodes-to-upsert)
-               (length tags-to-upsert)
-               (length links-to-upsert)
-               (length ids-to-delete))
+      ;; ----------------------------- Objects (nodes / tags) ---------------
+      (when (hash-table-p org-supertag-db--object)
+        (maphash
+         (lambda (id props)
+           (unless (eq (plist-get props :type) :metadata)
+             (let* ((actual-id (extract-id id props))
+                    (current-hash (org-supertag-background-sync--calculate-object-hash props))
+                    (baseline-hash (and actual-id (gethash actual-id org-supertag-background-sync--last-sync-hashes))))
+               (when actual-id (puthash actual-id t current-ids))
+               ;; New object or hash changed ⇒ upsert
+               (unless (and current-hash baseline-hash (string= current-hash baseline-hash))
+                 (puthash actual-id props entities-to-upsert)))))
+         org-supertag-db--object))
 
-      (list nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete))))
+      ;; ----------------------------- Links ---------------------------------
+      (when (hash-table-p org-supertag-db--link)
+        (maphash
+         (lambda (id props)
+           (unless (eq (plist-get props :type) :metadata)
+             ;; Prepare a copy with explicit IDs for later steps
+             (let* ((props-copy (copy-sequence props))
+                    (_ (setq props-copy (plist-put props-copy :link-id id)))
+                    (_ (setq props-copy (plist-put props-copy :id id)))
+                    (actual-id id)
+                    (current-hash (org-supertag-background-sync--calculate-object-hash props-copy))
+                    (baseline-hash (gethash actual-id org-supertag-background-sync--last-sync-hashes)))
+               (puthash actual-id t current-ids)
+               ;; Changed or new link
+               (unless (and current-hash baseline-hash (string= current-hash baseline-hash))
+                 (push props-copy links-to-upsert)
+                 ;; Also enqueue the related entities for upsert to keep hashes fresh
+                 (ensure-entity-upsert (plist-get props-copy :from))
+                 (ensure-entity-upsert (plist-get props-copy :to))))))
+         org-supertag-db--link))
 
-;; === Main sync function ===
+      ;; ----------------------------- Deletions -----------------------------
+      (let (ids-to-delete)
+        (maphash (lambda (baseline-id _hash)
+                   (unless (gethash baseline-id current-ids)
+                     (push baseline-id ids-to-delete)))
+                 org-supertag-background-sync--last-sync-hashes)
+
+        ;; Return three lists: entities, links, deletions
+        (list (ht-values entities-to-upsert)
+              (nreverse links-to-upsert)
+              ids-to-delete)))))
+
+
+;; ---------------------------------------------------------------------------
+;; Main sync function
+;; ---------------------------------------------------------------------------
 
 (defun org-supertag-background-sync--finish-sync (&optional status)
-  "Finalizes the sync process, resetting state and logging completion."
-  (message "[background-sync] Finishing sync process with status: %s." (or status "completed"))
+  "Finalizes the sync process, resetting state and logging completion.
+This function is now more robust to prevent type errors in logging."
+  (message "[background-sync] Finishing sync process with status: %s."
+           (cond
+            ((null status) "completed")
+            ((symbolp status) (symbol-name status))
+            ((stringp status) status)
+            ;; Use %S for any other type to prevent errors.
+            (t (format "%S" status))))
   (org-supertag-background-sync--finish-progress)
-  (setq org-supertag-background-sync--phase :idle))
+  (setq org-supertag-background-sync--phase :idle)
+  t) ;; Explicitly return t to avoid returning :idle to the scheduler.
 
 (defun org-supertag-background-sync--handle-reasoning-result (result)
   "Callback to handle the result of a reasoning cycle.
 If more nodes were processed, it triggers the next cycle.
 Otherwise, it finalizes the entire sync process."
   (if (and result (equal (plist-get result :status) "success"))
-      (let ((processed (plist-get result :processed_count)))
-        (message "[background-sync::reasoning] Cycle complete. Processed %d nodes." processed)
-        (if (> processed 0)
+      (let* ((stage-a-raw (plist-get result :stage_a_processed))
+             (stage-b-raw (plist-get result :stage_b_processed))
+             (total-raw (or (plist-get result :total_processed) ; Use new key
+                            (plist-get result :processed_count))) ; Fallback
+             (stage-a (if (numberp stage-a-raw) stage-a-raw (string-to-number (format "%s" (or stage-a-raw 0)))))
+             (stage-b (if (numberp stage-b-raw) stage-b-raw (string-to-number (format "%s" (or stage-b-raw 0)))))
+             (total (if (numberp total-raw) total-raw (string-to-number (format "%s" (or total-raw 0))))))
+        (message "[background-sync::reasoning] Cycle complete. Processed %d nodes (Stage A: %d, Stage B: %d)." total stage-a stage-b)
+        (if (> total 0)
             ;; More nodes to process, continue the cycle.
-            (org-supertag-background-sync--trigger-reasoning-cycle)
+            (progn
+              (message "[background-sync::reasoning] More nodes to process, triggering next cycle...")
+              (org-supertag-background-sync--trigger-reasoning-cycle))
           ;; No more nodes to process, finish the entire sync.
           (progn
             (message "[background-sync::reasoning] All nodes processed. Finalizing sync.")
@@ -410,126 +619,353 @@ Otherwise, it finalizes the entire sync process."
   "Initiates one cycle of the relation inference process."
   (message "[background-sync::reasoning] Triggering relation inference cycle...")
   (setq org-supertag-background-sync--phase :reasoning)
-  (org-supertag-bridge-call-async "reasoning/run_cycle"
+  (org-supertag-bridge-call-async "knowledge/run_cycle"
                                  nil
                                  #'org-supertag-background-sync--handle-reasoning-result))
 
 (defun org-supertag-background-sync--do-sync ()
   "Perform a full, two-phase background sync operation: embedding then reasoning."
   (setq org-supertag-background-sync--phase :embedding)
-  (condition-case-unless-debug err
-      (let* ((start-time (current-time))
-             (changes (org-supertag-background-sync--get-changed-objects))
-             (nodes-to-upsert (nth 0 changes))
-             (tags-to-upsert (nth 1 changes))
-             (links-to-upsert (nth 2 changes))
-             (ids-to-delete (nth 3 changes))
-             (total-changed (+ (length nodes-to-upsert)
-                               (length tags-to-upsert)
-                               (length links-to-upsert)
-                               (length ids-to-delete))))
-        (if (= total-changed 0)
-            (progn
-              (message "[background-sync] No changes detected. Sync complete.")
-              (org-supertag-background-sync--finish-sync :no-changes))
+  (let* ((start-time (current-time))
+         (changes (org-supertag-background-sync--get-changed-objects))
+         (entities-to-upsert (nth 0 changes))
+         (links-to-upsert (nth 1 changes))
+         (ids-to-delete (nth 2 changes)))
+
+    (let ((total-changed (+ (length entities-to-upsert)
+                            (length links-to-upsert)
+                            (length ids-to-delete))))
+      (if (= total-changed 0)
           (progn
-            (message "[background-sync::embedding] Starting embedding sync for %d changes." total-changed)
-            (org-supertag-background-sync--start-progress total-changed)
-            (let* ((nodes-data (org-supertag-background-sync--prepare-nodes-for-python nodes-to-upsert))
-                   (tags-data (org-supertag-background-sync--prepare-tags-for-python tags-to-upsert))
-                   (links-data (org-supertag-background-sync--prepare-links-for-python links-to-upsert))
-                   (snapshot-data `(("nodes" . ,nodes-data)
-                                    ("links" . ,links-data)
-                                    ("ids_to_delete" . ,ids-to-delete)
-                                    ("sync_timestamp" . ,(format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t)))))
-              (org-supertag-api-bulk-process-snapshot
-               snapshot-data
-               (lambda (result)
-                 (message "[background-sync::embedding] Callback received, result status: %s" 
-                          (if result (plist-get result :status) "nil"))
-                 (if (and result (equal (plist-get result :status) "success"))
-                     (progn
-                       ;; Phase 1 (Embedding) is successful. Update hashes and proceed to Phase 2 (Reasoning).
-                       (message "[background-sync::embedding] Updating hashes for %d nodes, %d tags, %d links, deleting %d" 
-                                (length nodes-to-upsert) (length tags-to-upsert) 
-                                (length links-to-upsert) (length ids-to-delete))
-                       (org-supertag-background-sync--update-hashes nodes-to-upsert tags-to-upsert links-to-upsert ids-to-delete)
-                       (setq org-supertag-background-sync--stats
-                             (list :synced-nodes (length nodes-to-upsert)
-                                   :synced-tags (length tags-to-upsert)
-                                   :synced-links (length links-to-upsert)
-                                   :deleted-count (length ids-to-delete)
-                                   :total-objects total-changed))
-                       (message "[background-sync::embedding] Phase 1 (Embedding) successful. Proceeding to Phase 2 (Reasoning).")
-                       ;; --- Trigger Phase 2 ---
-                       (org-supertag-background-sync--trigger-reasoning-cycle))
-                   ;; Phase 1 (Embedding) failed. Terminate the entire sync process.
+            (message "[background-sync] No changes detected. Sync complete.")
+            (org-supertag-background-sync--finish-sync :no-changes)
+            nil) ;; Explicitly return nil for success, as the scheduler expects.
+        (progn
+          (message "[background-sync::embedding] Starting embedding sync for %d changes." total-changed)
+          (org-supertag-background-sync--start-progress total-changed)
+          (let* ((snapshot-data (org-supertag-background-sync--prepare-snapshot-for-contract 
+                                entities-to-upsert links-to-upsert ids-to-delete)))
+            (unless (org-supertag-background-sync--validate-snapshot-data snapshot-data)
+              (error "[background-sync] Snapshot data validation failed"))
+            
+            (message "[background-sync] Data validation passed, sending to backend...")
+             (org-supertag-api-sync-bulk-process
+              snapshot-data
+             (lambda (result)
+               (message "[background-sync::embedding] Callback received, result status: %s"
+                        (if result (plist-get result :status) "nil"))
+               (if (and result (equal (plist-get result :status) "success"))
                    (progn
-                     (message "[background-sync::embedding] sync failed: %s" (or (plist-get result :message) "Unknown error"))
-                     (org-supertag-background-sync--finish-sync :embedding-failed)))))))))
-    (error
-     (message "[background-sync] error during sync: %s" (error-message-string err))
-     (org-supertag-background-sync--finish-sync :error))))
+                     (message "[background-sync::embedding] Updating hashes for %d entities, %d links, deleting %d"
+                              (length entities-to-upsert) (length links-to-upsert) (length ids-to-delete))
+                     (org-supertag-background-sync--update-hashes entities-to-upsert links-to-upsert ids-to-delete)
+                     (setq org-supertag-background-sync--stats
+                           (list :synced-entities (length entities-to-upsert)
+                                 :synced-links (length links-to-upsert)
+                                 :deleted-count (length ids-to-delete)
+                                 :total-objects total-changed))
+                     (message "[background-sync::embedding] Phase 1 (Embedding) successful. Proceeding to Phase 2 (Reasoning).")
+                     (org-supertag-background-sync--trigger-reasoning-cycle))
+                 (message "[background-sync::embedding] sync failed: %s" (or (plist-get result :message) "Unknown error"))
+                 (org-supertag-background-sync--finish-sync :embedding-failed))))))))))
 
-(defun org-supertag-background-sync--prepare-nodes-for-python (nodes)
-  "Prepare node data for sending to Python, using deep conversion."
-  (mapcar
-   (lambda (node-props)
-     (org-supertag-background-sync--deep-prepare-for-python node-props))
-   nodes))
+;; ---------------------------------------------------------------------------
+;; Data contract preparation functions
+;; ---------------------------------------------------------------------------
+(defun org-supertag-background-sync--prepare-entity-for-contract (entity-props)
+  "Prepare a single entity for the data contract.
+Ensure the entity contains the required fields: id, type, and other standard fields."
+  (let* ((entity-type (or (plist-get entity-props :type)
+                         (plist-get entity-props 'type)))
+         (entity-id (or (plist-get entity-props :id)
+                       (plist-get entity-props :node-id)
+                       (plist-get entity-props :tag-id)
+                       (plist-get entity-props 'id)
+                       (plist-get entity-props 'node-id)
+                       (plist-get entity-props 'tag-id)))
+         (title (or (plist-get entity-props :title)
+                   (plist-get entity-props :name)
+                   (plist-get entity-props 'title)
+                   (plist-get entity-props 'name)))
+         (content (or (plist-get entity-props :content)
+                     (plist-get entity-props 'content)))
+         (file-path (or (plist-get entity-props :file-path)
+                       (plist-get entity-props 'file-path)))
+         (pos (or (plist-get entity-props :pos)
+                 (plist-get entity-props 'pos)))
+         (properties (or (plist-get entity-props :properties)
+                        (plist-get entity-props 'properties)))
+         (modified-at (or (plist-get entity-props :modified-at)
+                         (plist-get entity-props 'modified-at)
+                         (format-time-string "%Y-%m-%dT%H:%M:%S"))))
 
-(defun org-supertag-background-sync--prepare-tags-for-python (tags)
-  "Prepare tag data for sending to Python, using deep conversion."
-  (mapcar
-   (lambda (tag-props)
-     (org-supertag-background-sync--deep-prepare-for-python tag-props))
-   tags))
+    ;; Normalize fields
+    (setq entity-id (org-supertag-background-sync--normalize-link-field entity-id "id"))
+    (setq title (org-supertag-background-sync--normalize-link-field title "title"))
+    
+    ;; Validate required fields
+    (unless entity-id
+      (error "Entity missing required 'id' field: %S" entity-props))
+    (unless entity-type
+      (error "Entity missing required 'type' field: %S" entity-props))
+    
+    ;; Normalize type field
+    (setq entity-type 
+          (cond
+           ((or (eq entity-type :node) (string= entity-type "node")) "node")
+           ((or (eq entity-type :tag) (string= entity-type "tag")) "tag")
+           (t (error "Invalid entity type %S, must be 'node' or 'tag'" entity-type))))
 
-(defun org-supertag-background-sync--prepare-links-for-python (links)
-  "Prepare link data for sending to Python, using deep conversion."
-  (mapcar
-   (lambda (link-props)
-     (org-supertag-background-sync--deep-prepare-for-python link-props))
-   links))
+    ;; Build entity data according to the data contract
+    (let ((entity-data `((id . ,entity-id)
+                        (type . ,entity-type))))
+      
+      ;; Add optional fields (only add if non-empty)
+      (when title
+        (setq entity-data (append entity-data `((title . ,title)))))
+      (when content
+        (setq entity-data (append entity-data `((content . ,content)))))
+      (when file-path
+        (setq entity-data (append entity-data `((file_path . ,file-path)))))
+      (when pos
+        (setq entity-data (append entity-data `((pos . ,pos)))))
+      (when modified-at
+        (setq entity-data (append entity-data `((modified_at . ,modified-at)))))
+      
+      ;; Process properties field
+      (when properties
+        (let ((normalized-props
+               (cond
+                ;; If already an alist, use it directly
+                ((and (listp properties) 
+                      (org-supertag-background-sync--is-alist-p properties))
+                 properties)
+                ;; If a plist, convert to an alist
+                ((plistp properties)
+                 (let (alist)
+                   (while (and properties (cdr properties))
+                     (let ((key (pop properties))
+                           (value (pop properties)))
+                       (push (cons (cond
+                                   ((keywordp key) (substring (symbol-name key) 1))
+                                   ((symbolp key) (symbol-name key))
+                                   ((stringp key) key)
+                                   (t (format "%s" key)))
+                                 value) alist)))
+                   (nreverse alist)))
+                ;; For other cases, try to use directly
+                (t properties))))
+          (setq entity-data (append entity-data `((properties . ,normalized-props))))))
+      
+      entity-data)))
 
-(defun org-supertag-background-sync--update-hashes (nodes-upserted tags-upserted links-upserted ids-deleted)
+(defun org-supertag-background-sync--normalize-link-field (field field-name)
+  "Recursively clean and normalize a field to ensure it's a valid string ID.
+This function is the single gatekeeper for sanitizing data before it's
+sent to Python. It handles various data types, including symbols, numbers,
+and malformed, nested list structures from completion frameworks."
+  (cond
+   ;; Base case: Already a clean string.
+   ((stringp field) field)
+   ;; Base case: Nil, normalize to empty string.
+   ((null field) "")
+   ;; Base case: A symbol, convert to its name.
+   ((symbolp field) (symbol-name field))
+   ;; Base case: A number, convert to string.
+   ((numberp field) (number-to-string field))
+
+   ;; Recursive case: A list, which is often a malformed structure.
+   ((listp field)
+    (if (null field)
+        ""
+      ;; The core assumption is that the actual text is the first element
+      ;; of some list, which may itself be nested. We recursively process
+      ;; the first element of the list until we hit a base case (a non-list atom).
+      (let ((car (car field)))
+        (message "[background-sync] Normalizing list in '%s', processing first element: %S" field-name car)
+        (org-supertag-background-sync--normalize-link-field car field-name))))
+
+   ;; Final fallback for any other unexpected data type.
+   (t
+    (message "[background-sync] Warning: Invalid type '%s' for field '%s', converting to string representation."
+             (type-of field) field-name)
+    (format "%S" field))))
+
+(defun org-supertag-background-sync--prepare-link-for-contract (link-props)
+  "Prepare a single link for the data contract.
+Ensure the link contains the required fields: source, target, and optional type field."
+  (let* ((source (or (plist-get link-props :source)
+                    (plist-get link-props 'source)
+                    (plist-get link-props :from)
+                    (plist-get link-props 'from)))
+         (target (or (plist-get link-props :target)
+                    (plist-get link-props 'target)
+                    (plist-get link-props :to)
+                    (plist-get link-props 'to)))
+         (link-type (or (plist-get link-props :type)
+                       (plist-get link-props 'type)
+                       "REF_TO")))
+
+    ;; Clean and normalize source and target fields
+    (setq source (org-supertag-background-sync--normalize-link-field source "source"))
+    (setq target (org-supertag-background-sync--normalize-link-field target "target"))
+
+    ;; Validate required fields
+    (unless source
+      (error "Link missing required 'source' field: %S" link-props))
+    (unless target
+      (error "Link missing required 'target' field: %S" link-props))
+    (unless (stringp source)
+      (error "Link 'source' must be a string, got %s: %S" (type-of source) link-props))
+    (unless (stringp target)
+      (error "Link 'target' must be a string, got %s: %S" (type-of target) link-props))
+
+    ;; Normalize type field
+    (setq link-type
+          (cond
+           ((symbolp link-type) (symbol-name link-type))
+           ((stringp link-type) link-type)
+           (t "REF_TO")))
+
+    ;; Build link data according to the data contract
+    `((source . ,source)
+      (target . ,target)
+      (type . ,link-type))))
+
+(defun org-supertag-background-sync--prepare-snapshot-for-contract (entities links ids-to-delete)
+  "Prepare a complete snapshot of data according to the data contract.
+Ensure the data structure matches the expected format for the Python backend."
+  (let ((prepared-entities '())
+        (prepared-links '())
+        (valid-ids-to-delete '()))
+
+    ;; Prepare entity data
+    (dolist (entity entities)
+      ;; Skip metadata-type entities
+      (let ((entity-type (or (plist-get entity :type)
+                           (plist-get entity 'type))))
+        (unless (eq entity-type :metadata)
+          (condition-case err
+              (let ((prepared-entity (org-supertag-background-sync--prepare-entity-for-contract entity)))
+                (push prepared-entity prepared-entities))
+            (error
+             (message "[background-sync] Failed to prepare entity %S: %s" 
+                      entity (error-message-string err)))))))
+
+    ;; Prepare link data
+    (dolist (link links)
+      ;; Skip links with nil source or target
+      (let ((source (or (plist-get link :source)
+                       (plist-get link 'source)
+                       (plist-get link :from)
+                       (plist-get link 'from)))
+            (target (or (plist-get link :target)
+                       (plist-get link 'target)
+                       (plist-get link :to)
+                       (plist-get link 'to))))
+        (when (and source target)  ; Only process valid links
+          (condition-case err
+              (let ((prepared-link (org-supertag-background-sync--prepare-link-for-contract link)))
+                (push prepared-link prepared-links))
+            (error
+             (message "[background-sync] Failed to prepare link %S: %s" 
+                      link (error-message-string err)))))))
+
+    ;; Validate deletion ID list
+    (dolist (id ids-to-delete)
+      (if (and id (stringp id) (not (string-empty-p (string-trim id))))
+          (push (string-trim id) valid-ids-to-delete)
+        (message "[background-sync] Invalid deletion ID: %S" id)))
+
+    ;; Build final snapshot data
+    (let ((snapshot `((entities . ,(nreverse prepared-entities))
+                     (links . ,(nreverse prepared-links))
+                     (ids_to_delete . ,(nreverse valid-ids-to-delete)))))
+      
+      (message "[background-sync] Prepared snapshot: %d entities, %d links, %d deletions"
+               (length prepared-entities)
+               (length prepared-links)
+               (length valid-ids-to-delete))
+      
+      snapshot)))
+
+(defun org-supertag-background-sync--validate-entity-data (entity)
+  "Validate entity data against the data contract in Elisp."
+  (let ((id (alist-get 'id entity))
+        (type (alist-get 'type entity)))
+    (and id
+         (stringp id)
+         (not (string-empty-p (string-trim id)))
+         type
+         (member type '("node" "tag")))))
+
+(defun org-supertag-background-sync--validate-link-data (link)
+  "Validate link data against the data contract in Elisp."
+  (let ((source (alist-get 'source link))
+        (target (alist-get 'target link)))
+    (and source
+         (stringp source)
+         (not (string-empty-p (string-trim source)))
+         target
+         (stringp target)
+         (not (string-empty-p (string-trim target))))))
+
+(defun org-supertag-background-sync--validate-snapshot-data (snapshot)
+  "Validate snapshot data against the data contract in Elisp."
+  (let ((entities (alist-get 'entities snapshot))
+        (links (alist-get 'links snapshot))
+        (ids-to-delete (alist-get 'ids_to_delete snapshot)))
+    (and (listp entities)
+         (listp links)
+         (listp ids-to-delete)
+         (cl-every #'org-supertag-background-sync--validate-entity-data entities)
+         (cl-every #'org-supertag-background-sync--validate-link-data links)
+         (cl-every (lambda (id) (and (stringp id) (not (string-empty-p (string-trim id))))) ids-to-delete))))
+
+;; ---------------------------------------------------------------------------
+;; Update hashes
+;; ---------------------------------------------------------------------------
+
+(defun org-supertag-background-sync--update-hashes (entities-upserted links-upserted ids-deleted)
   "Update hash records for synchronized objects and save them."
-  ;; Helper function to extract ID from properties
+  ;; Helper function to extract ID from properties, now consistent with get-changed-objects
   (cl-flet ((extract-id (props)
              (or (plist-get props :id)
                  (plist-get props :node-id)
                  (plist-get props :tag-id)
                  (plist-get props :link-id)
-                 ;; For links, try source/target as fallback
-                 (when (eq (plist-get props :type) :link)
-                   (format "%s->%s" 
-                           (or (plist-get props :source) "")
-                           (or (plist-get props :target) ""))))))
+                 ;; This logic reconstructs a link ID from its properties.
+                 ;; It's crucial that the `props` has a :type field for this to work.
+                 (when-let ((type (plist-get props :type)))
+                   (when (memq type '(:node-tag :node-field :tag-ref :tag-tag :relation-group :relation-member))
+                     (when-let ((from (plist-get props :from))
+                                (to (plist-get props :to)))
+                       (format "%s:%s->%s" type from to)))))))
     
-    ;; Update hashes for upserted nodes
-    (dolist (props nodes-upserted)
+    ;; Update hashes for upserted entities (nodes and tags)
+    (dolist (props entities-upserted)
       (let* ((id (extract-id props))
              (hash (org-supertag-background-sync--calculate-object-hash props)))
-        (when (and id hash)
-          (puthash id hash org-supertag-background-sync--last-sync-hashes))))
-    
-    ;; Update hashes for upserted tags
-    (dolist (props tags-upserted)
-      (let* ((id (extract-id props))
-             (hash (org-supertag-background-sync--calculate-object-hash props)))
-        (when (and id hash)
-          (puthash id hash org-supertag-background-sync--last-sync-hashes))))
+        (if (and id hash)
+            (progn
+              (puthash id hash org-supertag-background-sync--last-sync-hashes)
+              (message "[background-sync] Updated hash for entity: %s" id))
+          (message "[background-sync] Failed to update hash for entity, ID or hash missing: %S" props))))
     
     ;; Update hashes for upserted links
     (dolist (props links-upserted)
       (let* ((id (extract-id props))
              (hash (org-supertag-background-sync--calculate-object-hash props)))
-        (when (and id hash)
-          (puthash id hash org-supertag-background-sync--last-sync-hashes))))
+        (if (and id hash)
+            (progn
+              (puthash id hash org-supertag-background-sync--last-sync-hashes)
+              (message "[background-sync] Updated hash for link: %s" id))
+          (message "[background-sync] Failed to update hash for link, ID or hash missing: %S" props))))
     
     ;; Remove hashes for deleted objects
     (dolist (id ids-deleted)
-      (remhash id org-supertag-background-sync--last-sync-hashes))
+      (when (remhash id org-supertag-background-sync--last-sync-hashes)
+        (message "[background-sync] Removed hash for deleted object: %s" id)))
     
     ;; Persist the updated hashes to the file
     (org-supertag-background-sync--save-hashes)))
@@ -539,7 +975,9 @@ Otherwise, it finalizes the entire sync process."
   (unless (file-exists-p org-supertag-data-directory)
     (make-directory org-supertag-data-directory t)))
 
-;; === Timer management ===
+;; ---------------------------------------------------------------------------
+;; Timer management
+;; ---------------------------------------------------------------------------
 
 (defun org-supertag-background-sync--python-ready-p ()
   "Check if Python backend is ready."
@@ -598,10 +1036,58 @@ Otherwise, it finalizes the entire sync process."
   (when (eq org-supertag-background-sync--phase :idle)
     ;; Here Python backend should be ready, but just to be safe, check again
     (if (org-supertag-background-sync--python-ready-p)
-        (org-supertag-background-sync--do-sync)
+        (org-supertag-background-sync--check-queue-and-sync)
       ;; If backend is not available, re-enter waiting state
       ;; (message "[background-sync] Python backend connection lost, re-waiting...")
       (org-supertag-background-sync--wait-for-backend))))
+
+(defun org-supertag-background-sync--check-queue-and-sync ()
+  "Check the queue status and decide whether to sync."
+  (org-supertag-bridge-call-async "knowledge/get_queue_status"
+                                 nil
+                                 #'org-supertag-background-sync--handle-queue-status-result))
+
+(defun org-supertag-background-sync--handle-queue-status-result (result)
+  "Handle the result of the queue status check and decide the next action."
+  (if (and result (equal (plist-get result :status) "success"))
+      (let* ((pending-count (or (plist-get result :pending)   ; New backend field
+                                (plist-get result :pending_count) ; Old field
+                                0))
+             (next-delay (* 5 60))) ; Default to 5 minutes if not otherwise set
+        (message "[background-sync] Pending nodes in queue: %d" pending-count)
+        (cond
+         ;; If there's a large backlog, sync immediately and schedule the next check soon.
+         ((> pending-count 500)
+          (message "[background-sync] Large backlog detected. Syncing now and will re-check in 1 minute.")
+          (setq next-delay 60) ; 1 minute
+          (org-supertag-background-sync--do-sync))
+         
+         ;; If there's a medium backlog, sync and schedule a check sooner than the default.
+         ((> pending-count 50)
+          (message "[background-sync] Medium backlog detected. Syncing now and will re-check in 15 minutes.")
+          (setq next-delay (* 15 60)) ; 15 minutes
+          (org-supertag-background-sync--do-sync))
+         
+         ;; If there's a small backlog, sync and use the default interval.
+         ((> pending-count 0)
+          (message "[background-sync] Small backlog detected. Syncing now. (Queue: %d)" pending-count)
+          (setq next-delay org-supertag-knowledge-cycle-interval)
+          (org-supertag-background-sync--do-sync))
+         
+         ;; If the queue is empty, just schedule the next check at the default interval.
+         (t
+          (message "[background-sync] Queue is empty. Scheduling next check.")
+          (setq next-delay org-supertag-knowledge-cycle-interval)))
+        
+        ;; Cancel any existing timer and set a new one with the calculated delay.
+        (when (timerp org-supertag-background-sync--timer)
+          (cancel-timer org-supertag-background-sync--timer))
+        (setq org-supertag-background-sync--timer
+              (run-with-timer next-delay nil #'org-supertag-background-sync--check-queue-and-sync))
+        (message "[background-sync] Next queue check scheduled in %d seconds." next-delay))
+    
+    (message "[background-sync] Failed to get queue status: %s" (or (plist-get result :message) "Unknown error"))))
+
 
 (defun org-supertag-background-sync-start (&optional force)
   "Start background sync service by registering tasks with the central scheduler.
@@ -636,7 +1122,15 @@ If FORCE is non-nil or called interactively, ignore auto-start setting."
                 :time time-str)
                (push task-id org-supertag-background-sync--registered-task-ids))))
           ('manual
-           (message "[background-sync] Manual mode. No tasks registered.")))))))
+           (message "[background-sync] Manual mode. No tasks registered.")))
+        ;; Register daily tag embedding refresh task (runs after other tasks)
+        (let ((task-id 'tag-embedding-refresh-daily))
+          (org-supertag-scheduler-register-task
+           task-id
+           :daily
+           #'org-supertag-background-sync-refresh-stale-tags
+           :time org-supertag-tag-refresh-time)
+          (push task-id org-supertag-background-sync--registered-task-ids))))))
 
 (defun org-supertag-background-sync-stop ()
   "Stop background sync service by deregistering its tasks from the scheduler.
@@ -665,14 +1159,16 @@ This function will only print a message if tasks were actually deregistered."
                "Background sync will start automatically when bridge is ready."
              "Use M-x org-supertag-background-sync-start to start manually.")))
 
-;;; === Manual sync and status query ===
+;; ---------------------------------------------------------------------------
+;; Manual sync and status query
+;; ---------------------------------------------------------------------------
 
 (defun org-supertag-background-sync-run-now ()
   "Run background sync immediately."
   (interactive)
   (cond 
    ((not (eq org-supertag-background-sync--phase :idle))
-    (message "[background-sync] Already running, please wait (current phase: %s)..." org-supertag-background-sync--phase))
+    (message "[background-sync] Already running, please wait (current phase: %s)..." (symbol-name org-supertag-background-sync--phase)))
    
    ((eq org-supertag-background-sync--phase :waiting-backend)
     (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
@@ -714,9 +1210,9 @@ This function will only print a message if tasks were actually deregistered."
 - Auto-start: %s
 - Python backend: %s
 - Last sync: %s
-- Last sync stats: nodes %d, tags %d, links %d, total %d
+- Last sync stats: entities %d, links %d, total %d
 - Hash records: %d"
-                  org-supertag-background-sync--phase
+                  (symbol-name org-supertag-background-sync--phase)
                   mode-info
                   timer-status
                   (if org-supertag-background-sync-auto-start "Enabled" "Disabled")
@@ -724,15 +1220,16 @@ This function will only print a message if tasks were actually deregistered."
                   (if org-supertag-background-sync--last-sync-time
                       (format-time-string "%Y-%m-%d %H:%M:%S" org-supertag-background-sync--last-sync-time)
                     "Never synced")
-                  (plist-get org-supertag-background-sync--stats :synced-nodes)
-                  (plist-get org-supertag-background-sync--stats :synced-tags)
+                  (plist-get org-supertag-background-sync--stats :synced-entities)
                   (plist-get org-supertag-background-sync--stats :synced-links)
                   (plist-get org-supertag-background-sync--stats :total-objects)
                   (hash-table-count org-supertag-background-sync--last-sync-hashes))))
     (message "%s" status-msg)
     status-msg))
 
-;;; === Scheduled Sync Functions ===
+;; ---------------------------------------------------------------------------
+;; Scheduled Sync Functions
+;; ---------------------------------------------------------------------------
 
 (defun org-supertag-background-sync--start-schedule-timer ()
   "Start the scheduled sync timer that checks every minute."
@@ -828,73 +1325,84 @@ LIMIT: Maximum number of records to display, default 10."
      org-supertag-background-sync--last-sync-hashes)
     (message "Total hash records: %d" (hash-table-count org-supertag-background-sync--last-sync-hashes))))
 
-;;; Progress handling
+;; ---------------------------------------------------------------------------
+;; Progress tracking functions
+;; ---------------------------------------------------------------------------
 
-(defvar org-supertag-background-sync--current-progress nil
-  "Current sync progress information, format (current total start-time).")
+(defvar org-supertag-background-sync--progress-total 0
+  "Total number of items to process in current sync.")
 
-(defun org-supertag-background-sync--update-progress (current total)
-  "Update sync progress. Called by Python backend."
-  (when org-supertag-background-sync--current-progress
-    (let* ((start-time (nth 2 org-supertag-background-sync--current-progress))
-           (elapsed (float-time (time-subtract (current-time) start-time)))
-           (percentage (if (> total 0) (/ (* current 100.0) total) 0))
-           (eta (if (and (> current 0) (> total current))
-                    (/ (* elapsed (- total current)) current)
-                  0)))
-      
-      (setq org-supertag-background-sync--current-progress (list current total start-time))
-      
-      ;; (message "[background-sync] Progress: %d/%d (%.1f%%) - Elapsed time %.1fs%s"
-      ;;          current total percentage elapsed
-      ;;          (if (> eta 0) (format " - 预计剩余 %.1fs" eta) ""))
-      )))
+(defvar org-supertag-background-sync--progress-current 0
+  "Current number of items processed in current sync.")
 
 (defun org-supertag-background-sync--start-progress (total)
-  "Start progress tracking."
-  (setq org-supertag-background-sync--current-progress 
-        (list 0 total (current-time)))
-  ;; (message "[background-sync] Starting sync of %d objects..." total)
-  )
+  "Start progress tracking for sync operation with TOTAL items."
+  (setq org-supertag-background-sync--progress-total total)
+  (setq org-supertag-background-sync--progress-current 0)
+  (message "[background-sync] Starting sync progress tracking for %d items" total))
 
 (defun org-supertag-background-sync--finish-progress ()
-  "Finish progress tracking."
-  (setq org-supertag-background-sync--current-progress nil))
+  "Finish progress tracking for sync operation."
+  (setq org-supertag-background-sync--progress-total 0)
+  (setq org-supertag-background-sync--progress-current 0)
+  (message "[background-sync] Progress tracking completed"))
 
-;; Hook registration moved to org-supertag.el to avoid duplication
-;; (when org-supertag-background-sync-auto-start
-;;   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start))
+(defun org-supertag-background-sync--update-progress (processed)
+  "Update progress tracking with PROCESSED items."
+  (setq org-supertag-background-sync--progress-current processed)
+  (when (> org-supertag-background-sync--progress-total 0)
+    (let ((percentage (/ (* 100.0 processed) org-supertag-background-sync--progress-total)))
+      (message "[background-sync] Progress: %d/%d (%.1f%%)" 
+               processed org-supertag-background-sync--progress-total percentage))))
 
-;; Load hashes on startup, after all functions are defined.
-(org-supertag-background-sync--load-hashes)
+;; ---------------------------------------------------------------------------  
+;; Reset and force resync functions
+;; ---------------------------------------------------------------------------
 
+(defun org-supertag-background-sync-reset-and-force-resync ()
+  "Reset all hash records and force a full resync.
+This will delete all existing hash records, ensuring that all objects
+are considered changed during the next sync."
+  (interactive)
+  (when (y-or-n-p "This will reset all sync status and force a full resync. Continue?")
+    (message "[background-sync] Starting reset and force resync...")
+    
+    ;; 1. Clear hash table in memory
+    (clrhash org-supertag-background-sync--last-sync-hashes)
+    (message "[background-sync] Cleared hash table in memory")
+    
+    ;; 2. Delete hash file
+    (when (file-exists-p org-supertag-background-sync--hash-file)
+      (delete-file org-supertag-background-sync--hash-file)
+      (message "[background-sync] Deleted hash file: %s" org-supertag-background-sync--hash-file))
+    
+    ;; 3. Reset sync time
+    (setq org-supertag-background-sync--last-sync-time nil)
+    (message "[background-sync] Reset sync time")
+    
+    ;; 4. Reset sync phase
+    (setq org-supertag-background-sync--phase :idle)
+    (message "[background-sync] Reset sync phase")
+    
+    ;; 5. Clear statistics
+    (setq org-supertag-background-sync--stats nil)
+    (message "[background-sync] Cleared statistics")
+    
+    ;; 6. Immediately start a full sync
+    (message "[background-sync] Starting full sync...")
+    (org-supertag-background-sync-run-now)
+    
+    (message "[background-sync] Reset and force resync started")))
 
-;; When the vertor database is broken, use this command to re-generated one.
-
-(defun org-supertag-force-resync-to-python ()
-    "Safely force a full resynchronization of the Elisp DB to the Python backend.
-  This function is a safe alternative to org-supertag-sync-force-all.
-  It works by deleting the sync hash file and clearing the in-memory hash cache,
-  which tricks the background sync mechanism into thinking all objects are new,
-  triggering a full, one-time sync to Python for embedding and reasoning."
-    (interactive)
-    (when (y-or-n-p "This will force a full resync to the Python backend. This may take some time. Continue? ")
-      (let ((hash-file org-supertag-background-sync--hash-file))
-        ;; 1. Delete the on-disk hash file to remove the old sync state.
-        (when (file-exists-p hash-file)
-          (delete-file hash-file)
-          (message "Deleted sync hash file: %s" hash-file))
-
-        ;; 2. Clear the in-memory hash table. This is the crucial step.
-        ;;    This prevents ...--create-baseline-hashes from running and
-        ;;    makes ...--get-changed-objects see everything as new.
-        (clrhash org-supertag-background-sync--last-sync-hashes)
-        (message "Cleared in-memory hash cache.")
-
-        ;; 3. Trigger the background sync.
-        ;;    It will now find no previous hashes and send all data to Python.
-        (message "Triggering a full sync to Python backend...")
-        (org-supertag-background-sync-run-now))))
+(defun org-supertag-background-sync-refresh-stale-tags ()
+  "Call backend RPC to refresh embeddings for STALE tags."
+  (interactive)
+  (message "[background-sync] Triggering backend refresh of STALE tag embeddings...")
+  (org-supertag-bridge-call-async
+   "embedding/refresh_stale_tags"
+   nil
+   (lambda (result)
+     (message "[background-sync] refresh_stale_tags result: %S" result))))
 
 
 (provide 'org-supertag-background-sync)

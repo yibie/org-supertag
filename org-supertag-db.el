@@ -57,7 +57,19 @@
 (require 'ht)
 (require 'cl-lib)
 (require 'org-element)
+(require 'f)
 
+(defun org-supertag-db--delete-duplicates (list)
+  "Return a new list with duplicate elements removed from LIST.
+This is a simple implementation to avoid compatibility issues with
+`delete-dups` or `cl-delete-duplicates` across Emacs versions."
+  (let ((result '())
+        (seen (make-hash-table :test 'equal)))
+    (dolist (item list)
+      (unless (gethash item seen)
+        (puthash item t seen)
+        (push item result)))
+    (nreverse result)))
 
 ;;------------------------------------------------------------------------------
 ;; Type System
@@ -309,7 +321,8 @@ Valid types are :node-tag, :node-field, :tag-ref, and :tag-tag.
 Returns:
 - t if valid
 - nil if invalid"
-  (memq type '(:node-tag :node-field :tag-ref :tag-tag)))
+  (or (memq type '(:node-tag :node-field :tag-ref :tag-tag))
+      (and (stringp type) (> (length type) 0))))
 
 (defun org-supertag-db-valid-link-p (type from to props)
   "Validate link data.
@@ -415,10 +428,17 @@ It converts alists to plists and cleans up keys and values."
    ((and (listp data) (consp (car data)) (not (keywordp (caar data))))
     (let (plist)
       (dolist (pair data)
-        (let ((key (car pair))
-              (val (cdr pair)))
-          (push (org-supertag-db--canonicalize-props val) plist)
-          (push (intern (format ":%S" key)) plist)))
+        (let* ((key (car pair))
+               (val (cdr pair))
+               (clean-val (org-supertag-db--canonicalize-props val)))
+          ;; Replace placeholder values "???" or :??? with nil
+          (when (or (and (stringp clean-val) (string= clean-val "???"))
+                    (and (symbolp clean-val) (string= (symbol-name clean-val) "???")))
+            (setq clean-val nil))
+
+          ;; Push KEY first so that after `nreverse` we retain key-value order.
+          (push (intern (concat ":" (if (symbolp key) (symbol-name key) key))) plist)
+          (push clean-val plist)))
       (nreverse plist)))
 
    ;; A regular list (or a plist already) is processed element by element.
@@ -547,10 +567,10 @@ PROPS: Optional link properties
 Returns:
 - Link ID if successful
 - Signals error if validation fails"
-  (let* ((base-props (list :from from :to to))
-         (full-props (if props 
-                        (append base-props props)
-                      base-props))
+  (let* ((base-props (list :type type :from from :to to))
+         (full-props (if props
+                         (append props base-props)
+                       base-props))
          (rel-id (format "%s:%s->%s" type from to)))
     ;; 1. Validate
     ;; 1.1 Validate link type
@@ -694,6 +714,13 @@ Returns:
 ;; org-supertag-db-get (Single Entity Query)
 ;;     ├── org-supertag-db-get-prop (Property Access)
 ;;     │       └── org-supertag-db-get-type (Type Access Helper)
+
+(defun org-supertag-db-get-pos (node-id)
+  "Get buffer position for node with NODE-ID.
+Returns position number or marker if found, nil otherwise."
+  (condition-case nil
+      (org-id-find node-id t)
+    (error nil)))
 
 (defun org-supertag-db-get-node-tags (node-id)
   "Get all tags for a node.
@@ -867,31 +894,15 @@ Returns a list of node IDs."
     nodes))
 
 (defun org-supertag-get-all-files ()
-  "Get list of all org files in database.
-If the database is empty, it falls back to scanning the configured sync directories.
-Returns:
-- List of absolute file paths
-- nil if no files found
-
-Notes:
-1. Only returns files associated with nodes
-2. Removes duplicates
-3. Ensures paths exist"
-  (let ((files nil))
-    (maphash
-     (lambda (id props)
-       (when (and (eq (plist-get props :type) :node)
-                 (plist-get props :file-path))
-         (let ((file-path (plist-get props :file-path)))
-           (when (file-exists-p file-path)
-             (push file-path files)))))
-     org-supertag-db--object)
-    (let ((db-files (delete-dups (nreverse files))))
-      (if (and (null db-files) (fboundp 'org-supertag-scan-sync-directories))
-          (progn
-            (message "Database is empty, scanning sync directories for files...")
-            (org-supertag-scan-sync-directories t))
-        db-files))))
+  "Get all unique file paths from database."
+  (let ((files '()))
+    (maphash (lambda (id props)
+               (when-let* ((file-path (plist-get props :file-path)))
+                 (when (and (eq (plist-get props :type) :node)
+                            file-path)
+                   (push file-path files))))
+             org-supertag-db--object)
+    (org-supertag-db--delete-duplicates (nreverse files))))
 
 ;;---------------------------------------------------------------------------------
 ;; Data Operation: Find
@@ -1048,61 +1059,83 @@ Returns nil if entity does not exist"
         ;; 1. Get entity and check existence
         (let ((entity (org-supertag-db-get id)))
           (if (null entity)
-              (progn 
-                (message "Entity %s not found, nothing to remove" id)
-                nil) 
-            ;; 2. Entity exists, get type
-            (let ((type (plist-get entity :type)))
-              (if (null type)
-                  (message "Entity %s has no type, cannot remove properly" id)                
-                ;; 3. Get related links (use empty list as default)
-                (let ((outgoing-links (or (org-supertag-db-get-link nil id) '()))
-                      (incoming-links (or (org-supertag-db-get-link-reverse nil id) '()))
-                      (removed-data (list :entity entity)))
-                  
-                  ;; 4. Trigger events
-                  (org-supertag-db-emit 'entity:before-remove type id entity)
-                  
-                  ;; 5. Execute deletion (unless dry-run)
-                  (unless dry-run
-                    ;; 5.1 Delete all outgoing links
-                    (let ((link-count (org-supertag-db-unlink-all id)))
-                      (message "Removed %d outgoing links for entity %s" link-count id))
-                    
-                    ;; 5.2 Delete all incoming links
-                    (dolist (rev-link incoming-links)
-                      (when (car rev-link) ;; Ensure source exists
-                        (org-supertag-db-unlink nil (car rev-link) id)))
-                    
-                    ;; 5.3 Execute specific cleanup based on type
-                    (pcase type
-                      (:node
-                       (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
-                       (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
-                       (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
-                      (:tag
-                       (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
-                       (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
-                    
-                    ;; 5.4 Remove entity from database
-                    (message "Removing entity %s of type %s from database" id type)
-                    (ht-remove! org-supertag-db--object id)
-                    
-                    ;; 5.5 Clean up cache
-                    (org-supertag-db--cache-remove 'entity id)
-                    (org-supertag-db--cache-remove 'query (format "type:%s" type))
-                    
-                    ;; 5.6 Trigger deletion completion event
-                    (org-supertag-db-emit 'entity:removed type id entity removed-data)
-                    
-                    ;; 5.7 Mark database as dirty and execute save
-                    (message "Marking database as dirty")
+              (progn
+                ;; Even if the entity itself is missing, there may still be links referencing it.
+                (let ((removed-links-count 0))
+                  (ht-map (lambda (k v)
+                            (when (and (plist-get v :from)
+                                       (plist-get v :to)
+                                       (or (equal (plist-get v :from) id)
+                                           (equal (plist-get v :to) id)))
+                              ;; Remove link and caches
+                              (ht-remove! org-supertag-db--link k)
+                              (org-supertag-db--cache-remove 'link k)
+                              (pcase (plist-get v :type)
+                                (:node-field (org-supertag-db--cache-remove 'query (format "node-fields:%s" (plist-get v :from))))
+                                (:node-tag  (org-supertag-db--cache-remove 'query (format "node-tags:%s" (plist-get v :from))))
+                                (:tag-ref   (progn
+                                              (org-supertag-db--cache-remove 'query (format "tag-refs:%s" (plist-get v :from)))
+                                              (org-supertag-db--cache-remove 'query (format "tag-refs:%s" (plist-get v :to))))))
+                              (cl-incf removed-links-count)))
+                          org-supertag-db--link)
+                  (when (> removed-links-count 0)
+                    (message "Removed %d orphan links for non-existent entity %s" removed-links-count id)
                     (org-supertag-db--mark-dirty)
-                    (message "Scheduling database save")
                     (org-supertag-db--schedule-save))
-                  
-                  ;; 6. Return deleted data
-                  (cons entity (append outgoing-links incoming-links))))))))
+                  ;; Return cons with nil entity and maybe removed links count for consistency
+                  (cons nil removed-links-count)))
+               ;; 2. Entity exists, get type
+               (let ((type (plist-get entity :type)))
+                 (if (null type)
+                     (message "Entity %s has no type, cannot remove properly" id)                
+                   ;; 3. Get related links (use empty list as default)
+                   (let ((outgoing-links (or (org-supertag-db-get-link nil id) '()))
+                         (incoming-links (or (org-supertag-db-get-link-reverse nil id) '()))
+                         (removed-data (list :entity entity)))
+                     
+                     ;; 4. Trigger events
+                     (org-supertag-db-emit 'entity:before-remove type id entity)
+                     
+                     ;; 5. Execute deletion (unless dry-run)
+                     (unless dry-run
+                       ;; 5.1 Delete all outgoing links
+                       (let ((link-count (org-supertag-db-unlink-all id)))
+                         (message "Removed %d outgoing links for entity %s" link-count id))
+                       
+                       ;; 5.2 Delete all incoming links
+                       (dolist (rev-link incoming-links)
+                         (when (car rev-link) ;; Ensure source exists
+                           (org-supertag-db-unlink nil (car rev-link) id)))
+                       
+                       ;; 5.3 Execute specific cleanup based on type
+                       (pcase type
+                         (:node
+                          (org-supertag-db--cache-remove 'query (format "node-tags:%s" id))
+                          (org-supertag-db--cache-remove 'query (format "node-fields:%s" id))
+                          (org-supertag-db--cache-remove 'query (format "node-refs:%s" id)))
+                         (:tag
+                          (org-supertag-db--cache-remove 'query (format "tag-fields:%s" id))
+                          (org-supertag-db--cache-remove 'query (format "tag-refs:%s" id))))
+                       
+                       ;; 5.4 Remove entity from database
+                       (message "Removing entity %s of type %s from database" id type)
+                       (ht-remove! org-supertag-db--object id)
+                       
+                       ;; 5.5 Clean up cache
+                       (org-supertag-db--cache-remove 'entity id)
+                       (org-supertag-db--cache-remove 'query (format "type:%s" type))
+                       
+                       ;; 5.6 Trigger deletion completion event
+                       (org-supertag-db-emit 'entity:removed type id entity removed-data)
+                       
+                       ;; 5.7 Mark database as dirty and execute save
+                       (message "Marking database as dirty")
+                       (org-supertag-db--mark-dirty)
+                       (message "Scheduling database save")
+                       (org-supertag-db--schedule-save))
+                     
+                     ;; 6. Return deleted data
+                     (cons entity (append outgoing-links incoming-links))))))))
     
     ;; Error handling
     (error
@@ -1196,6 +1229,103 @@ Returns property value if found, nil otherwise."
 
 (require 'org-element)
 
+(defun org-supertag-db-parse-node-properties ()
+  "Parse node properties at current point.
+Returns a plist of properties including :id, :title, :tags, etc.
+This version now also extracts inline tags (e.g., #tag) from the headline
+and parses node content for id-links."
+      (let* ((element (org-element-at-point))
+             (type (org-element-type element)))
+        (when (eq type 'headline)
+          (let* (;; Basic properties from org-element
+                 (id (org-element-property :ID element))
+                 (raw-value (org-element-property :raw-value element))
+                 (title (org-element-property :title element))
+                 (tags (org-element-property :tags element))
+                 (level (org-element-property :level element))
+                 (todo-type (org-element-property :todo-type element))
+                 (priority (org-element-property :priority element))
+                 (scheduled (org-element-property :scheduled element))
+                 (deadline (org-element-property :deadline element))
+                 (properties (org-element-property :properties element))
+                 (file-path (buffer-file-name))
+                 (pos (point))
+                 (olp (org-get-outline-path))
+    
+                 ;; Reference and content parsing
+                 (refs-to '())
+                 (old-node (and id (org-supertag-db-get id)))
+                 (ref-from (if old-node (plist-get old-node :ref-from) '()))
+                 (content
+                  (save-excursion
+                    (org-end-of-meta-data t)
+                    (let ((beg (point))
+                          (end (save-excursion
+                                 (if (re-search-forward org-heading-regexp nil t)
+                                     (match-beginning 0)
+                                   (point-max)))))
+                      (when (> end beg)
+                        ;; Parse refs-to from content
+                        (save-excursion
+                          (goto-char beg)
+                          (while (re-search-forward org-link-any-re end t)
+                            (let* ((link-element (org-element-context))
+                                   (link-type (org-element-property :type link-element))
+                                   (path (org-element-property :path link-element)))
+                              (when (and path (equal link-type "id") (org-uuidgen-p path))
+                                (push path refs-to)))))
+                        ;; Extract content string
+                        (string-trim (buffer-substring-no-properties beg end))))))
+                 
+                 ;; Inline tag parsing
+                 (inline-tags '())
+                 (content-inline-tags '()))
+    
+            ;; Extract inline tags (e.g., #some-tag) from the raw headline value.
+            (when raw-value
+              (let ((case-fold-search nil))
+                (save-match-data
+                  (let ((start 0))
+                    (while (string-match "#\\(\\w[-_[:alnum:]]*\\)" raw-value start)
+                      (push (match-string 1 raw-value) inline-tags)
+                      (setq start (match-end 0)))))))
+            
+            ;; Extract inline tags from the content body.
+            (when content
+              (let ((case-fold-search nil))
+                (save-match-data
+                  (let ((start 0))
+                    (while (string-match "#\\(\\w[-_[:alnum:]]*\\)" content start)
+                      (push (match-string 1 content) content-inline-tags)
+                      (setq start (match-end 0)))))))
+    
+            (list
+             :type :node
+             :id id
+             :title title
+             :raw-value raw-value
+             :tags (org-supertag-db--delete-duplicates 
+                    (append tags (nreverse inline-tags) (nreverse content-inline-tags)))
+             :level level
+             :todo-type todo-type
+             :priority priority
+             :scheduled scheduled
+             :deadline deadline
+             :properties properties
+             :file-path file-path
+             :pos pos
+             :olp olp
+             :content content
+             :ref-to (org-supertag-db--delete-duplicates refs-to)
+             :ref-from ref-from
+             :ref-count (length ref-from)
+             :created-at (current-time)
+             :modified-at (current-time))))))
+
+(defun org-supertag-db-get-node-by-id (id)
+  "Get a node from the database by its ID."
+  (org-supertag-db-get id))
+
 (defun org-supertag-db--normalize-props (props)
   "Normalize property list to ensure correct order and no duplicates.
 This function is now a wrapper around the canonicalization function."
@@ -1213,7 +1343,7 @@ Returns a clean string without any text properties."
 
 (defun org-supertag-db--get-node-title ()
   "Get current node title in plain text format."
-  (condition-case err
+  (condition-case err-info
       (org-supertag-db--clean-text
        (or (org-get-heading t t t t)  ; Remove tags, TODO states etc
            (save-excursion
@@ -1226,102 +1356,14 @@ Returns a clean string without any text properties."
                 "" raw)))
            ""))
     (error
-     (message "Error getting node title: %s" (error-message-string err))
+     (message "Error getting node title: %s" (error-message-string err-info))
      "")))
 
+
 (defun org-supertag-db--parse-node-at-point ()
-  "Parse node data at current point."
-  (save-excursion
-    (condition-case err
-        (let* ((element (org-element-at-point))
-               (type (org-element-type element)))
-          (message "Parsing node at point: type=%s" type)
-          (when (and (eq type 'headline)
-                     ;; Only process nodes with existing ID
-                     (org-entry-get nil "ID"))
-            ;; Parse headline
-            (let* ((title (org-supertag-db--get-node-title))
-                   (level (org-element-property :level element))
-                   (id (org-entry-get nil "ID"))
-                   ;; Task properties - Use more reliable retrieval methods
-                   (todo-state (org-entry-get nil "TODO"))
-                   (priority (org-entry-get nil "PRIORITY"))
-                   (scheduled (condition-case nil
-                                (org-get-scheduled-time (point))
-                              (error nil)))
-                   (deadline (condition-case nil
-                               (org-get-deadline-time (point))
-                             (error nil)))
-                   ;; Get outline path
-                   (olp (org-get-outline-path t))
-                   ;; Other properties
-                   (tags (org-get-tags))
-                   (properties (org-entry-properties nil 'standard))
-                   ;; parse reference relations
-                   (refs-to nil)
-                   (existing-node (org-supertag-db-get id))
-                   (refs-from (when existing-node
-                                (plist-get existing-node :ref-from)))
-                   ;; Get node content directly
-                   (content (save-excursion
-                              (org-end-of-meta-data t)
-                              (let* ((begin (point))
-                                     (end (org-element-property :contents-end element))
-                                     ;; Find next heading position
-                                     (next-heading (save-excursion
-                                                   (org-next-visible-heading 1)
-                                                   (point))))
-                                ;; go to begin
-                                (goto-char begin)
-                                ;; use more accurate boundary
-                                (let ((content-end (cond
-                                                  ;; if there is a next heading and in the current node content range
-                                                  ((and next-heading end (< next-heading end))
-                                                   (1- next-heading))
-                                                  ;; use the content end position of the node
-                                                  (end end)
-                                                  ;; if none, use the end position of the current node
-                                                  (t (org-entry-end-position)))))
-                                  ;; collect references
-                                  (while (re-search-forward org-link-any-re content-end t)
-                                    (let* ((link (org-element-context))
-                                           (link-type (org-element-property :type link))
-                                           (link-path (org-element-property :path link)))
-                                      (when (and (equal link-type "id")
-                                               (org-uuidgen-p link-path))
-                                        (push link-path refs-to))))
-                                  ;; only return content when begin and end are valid and have content
-                                  (when (and begin content-end (< begin content-end))
-                                    (org-supertag-db--clean-text
-                                     (buffer-substring-no-properties begin content-end))))))))
-              
-              (message "Parsed headline: id=%s title=%s level=%s todo=%s priority=%s refs=%d" 
-                      id title level todo-state priority (length refs-to))
-              
-              (list :type :node
-                    :id id
-                    :title title
-                    :file-path (buffer-file-name)
-                    :pos (org-element-property :begin element)
-                    :olp olp
-                    :level level
-                    ;; Task properties
-                    :todo todo-state
-                    :priority priority
-                    :scheduled scheduled
-                    :deadline deadline
-                    ;; Other properties
-                    :properties properties
-                    :tags tags
-                    :content content
-                    ;; Reference relations
-                    :ref-to (delete-dups refs-to)
-                    :ref-from (or refs-from nil)
-                    :ref-count (+ (length refs-to) (length refs-from))
-                    :created-at (current-time)))))
-      (error
-       (message "Error parsing node at point: %s" (error-message-string err))
-       nil))))
+  "Parse node data at current point.
+This is now a simple wrapper around the authoritative public parser."
+  (org-supertag-db-parse-node-properties))
 
 (defun org-supertag-db--validate-node-props (props)
   "Validate node property completeness."
@@ -1329,102 +1371,49 @@ Returns a clean string without any text properties."
     (cl-every (lambda (key)
                 (when-let* ((value (plist-get props key)))
                   (not (string-empty-p (format "%s" value)))))
-                required)))
+                required)))  
+
+
 
 ;;------------------------------------------------------------------------------
-;; Batch Node Parsing
-;;------------------------------------------------------------------------------    
-
-(defun org-supertag-db-get-pos (node-id)
-  "Get buffer position for node with NODE-ID.
-Returns position number or marker if found, nil otherwise."
-  (condition-case nil
-      (org-id-find node-id t)
-    (error nil)))
-
+;; Reference Reconciliation
 ;;------------------------------------------------------------------------------
-;; Node Reference Parsing
-;;------------------------------------------------------------------------------    
 
-(defun org-supertag-db--parse-node-all-ref ()
-  "Parse all references in current node.
-Returns list of referenced node IDs.
-References are parsed from org links in node content."
-  (let ((ref-to nil)
-        (node-id (org-supertag-db--get-current-node-id)))
-    (when node-id
-      ;; Parse links in entire node range
-      (let ((start (org-entry-beginning-position))
-            (end (org-entry-end-position)))
-        (save-excursion
-          (goto-char start)
-          (while (re-search-forward org-link-any-re end t)
-            (let* ((link (org-element-context))
-                   (type (org-element-property :type link))
-                   (path (org-element-property :path link)))
-              (when (and (equal type "id")
-                       (org-uuidgen-p path))
-                (push path ref-to)))))
-        ;; Update reference relationships
-        (let ((ref-to (delete-dups (nreverse ref-to))))
-          (org-supertag-db--update-node-all-ref node-id ref-to)
-          ref-to)))))
-
-(defun org-supertag-db--update-node-all-ref (node-id ref-to)
-  "Update all reference relationships for a node.
-NODE-ID is the current node ID
-REF-TO is a list of referenced node IDs"
-  (message "Starting to update node references - Node ID: %s" node-id)
-  (message "New reference list: %S" ref-to)
-  (let* ((node (org-supertag-db-get node-id))
-         (old-refs (plist-get node :ref-to)))
-    (message "Original reference list: %S" old-refs)
-    ;; Update current node's references
-    (org-supertag-db-add node-id
-                         (plist-put node :ref-to ref-to))
-    (message "Updated current node's references")
-    ;; Update back-references of referenced nodes and trigger new reference events
-    (dolist (ref-id ref-to)
-      (message "Processing referenced node: %s" ref-id)
-      (unless (member ref-id old-refs)  ; Only trigger events for new references
-        (message "Found new reference, triggering event")
-        (org-supertag-db-emit 'ref:created node-id ref-id nil))
-      (when-let* ((ref-node (org-supertag-db-get ref-id)))
-        (let* ((ref-from (plist-get ref-node :ref-from))
-               (new-ref-from (cons node-id (delete node-id ref-from))))
-          (message "Updating back-references of referenced node: %S" new-ref-from)
-          (org-supertag-db-add ref-id
-                              (plist-put ref-node 
-                                        :ref-from 
-                                        (delete-dups new-ref-from))))))
-    ;; Clean up old references and trigger removal events
+(defun org-supertag-db-reconcile-references (node-id new-refs old-refs)
+  "Reconcile references for a node.
+NODE-ID: The ID of the node being updated.
+NEW-REFS: The new list of referenced node IDs.
+OLD-REFS: The old list of referenced node IDs."
+  (let ((old-refs (or old-refs '())))
+    ;; Add new references and trigger creation events
+    (dolist (ref-id new-refs)
+      (unless (member ref-id old-refs)
+        (org-supertag-db-emit 'ref:created node-id ref-id nil)
+        (when-let* ((ref-node (org-supertag-db-get ref-id)))
+          (let* ((new-ref-from (org-supertag-db--delete-duplicates (cons node-id (plist-get ref-node :ref-from))))
+                 (new-props (plist-put (plist-put ref-node :ref-from new-ref-from)
+                                       :ref-count (length new-ref-from))))
+            (org-supertag-db-add ref-id new-props)))))
+    
+    ;; Remove old references and trigger removal events
     (dolist (old-ref old-refs)
-      (unless (member old-ref ref-to)
-        (message "Cleaning up old reference: %s" old-ref)
+      (unless (member old-ref new-refs)
         (org-supertag-db-emit 'ref:removed node-id old-ref nil)
         (when-let* ((ref-node (org-supertag-db-get old-ref)))
-          (let ((ref-from (delete node-id (plist-get ref-node :ref-from))))
-            (message "Updating back-references of previously referenced node: %S" ref-from)
-            (org-supertag-db-add old-ref
-                                (plist-put ref-node :ref-from ref-from))))))
-    (message "Node reference relationships update completed")))
-
-(defun org-supertag-db--get-current-node-id ()
-  "Get the ID of current node."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((id (or (org-id-get)
-                  (org-id-get-create))))
-      (message "Got current node ID: %s" id)
-      id)))
+          (let* ((ref-from (remove node-id (plist-get ref-node :ref-from) :test #'string=))
+                 (new-props (plist-put (plist-put ref-node :ref-from ref-from)
+                                       :ref-count (length ref-from))))
+            (org-supertag-db-add old-ref new-props)))))))
 
 ;;------------------------------------------------------------------------------
 ;; Field Relate System
 ;;------------------------------------------------------------------------------      
 
 (defun org-supertag-db-get-links-by-type (type &key from to)
-  "Find all links of a specific TYPE, optionally filtered by FROM and/or TO.
-This provides a more flexible way to query links than the old find-links function."
+  "Get all links of a specific type.
+TYPE is the link type to search for.
+FROM (optional) is the source object ID.
+TO (optional) is the target object ID."
   (let ((results '()))
     (maphash (lambda (id props)
                (when (and (eq (plist-get props :type) type)
@@ -1847,6 +1836,50 @@ Steps:
 (add-hook 'org-supertag-db-before-load-hook #'org-supertag-db--cache-clear)
 
 
+;;------------------------------------------------------------------------------
+;; Recompute all hashes
+;;------------------------------------------------------------------------------
+(defun org-supertag-db-recompute-all-hashes ()
+  "Re-compute and update the hash for all objects in the database.
+This function iterates through every object, calculates its hash using the
+current `org-supertag-background-sync--calculate-object-hash` logic,
+and updates the object if the hash has changed or was missing.
+
+This is useful after changing the hashing logic. It assumes that
+`org-supertag-background-sync.el` is loaded."
+  (interactive)
+  (message "Starting to re-compute all object hashes...")
+  (let ((processed-count 0)
+        (updated-count 0)
+        ;; Get a snapshot of all object IDs to avoid issues with modifying the hash table while iterating
+        (all-ids (ht-keys org-supertag-db--object)))
+
+    (dolist (id all-ids)
+      (cl-incf processed-count)
+      ;; Get the latest props for the id
+      (when-let* ((props (org-supertag-db-get id)))
+          (let* ((old-hash (plist-get props :hash))
+                 ;; Use funcall to avoid circular dependency issues at compile time.
+                 ;; This requires org-supertag-background-sync.el to be loaded when run.
+                 (new-hash (funcall 'org-supertag-background-sync--calculate-object-hash props)))
+
+            ;; Update if hash is new or different, and the ID is valid.
+            (when (and new-hash (not (equal old-hash new-hash)))
+              (cl-incf updated-count)
+              (let ((new-props (plist-put (copy-sequence props) :hash new-hash)))
+                ;; Use org-supertag-db-add to ensure all caches and hooks are handled correctly.
+                (org-supertag-db-add id new-props))))))
+
+    (message "Hash re-computation complete. Processed: %d, Updated: %d."
+             processed-count updated-count)
+
+    (if (> updated-count 0)
+        (progn
+          (message "Saving updated hashes to the database...")
+          ;; The save is scheduled by db-add, but we can force it for immediate feedback.
+          (org-supertag-db-save)
+          (message "Database saved."))
+      (message "No hash updates were necessary."))))
 
 (provide 'org-supertag-db)
 ;;; org-supertag-db.el ends here
