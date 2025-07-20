@@ -1,10 +1,23 @@
-;;; org-supertag-view-chat.el --- Chat view for org-supertag -*- lexical-binding: t; -*-
+;; -*- lexical-binding: t; -*-
+;;; org-supertag-view-chat.el --- Chat View for org-supertag
 
+;; Author: Yi Bin Chen <yibin@yibin.org>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "27.1"))
+;; Keywords: org-mode, chat, ai
+;; URL: https://github.com/yibit/org-supertag
+
+;;; Commentary:
+;; Chat View for org-supertag.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'org-supertag-bridge)
 (require 'org-supertag-api)
 (require 'org-supertag-node)
 (require 'org-supertag-db)
 (require 'org-supertag-query)
-(require 'org-supertag-bridge)
 
 (defcustom org-supertag-view-chat-buffer-name "*Org SuperTag Chat View*"
   "The name of the buffer for the chat view."
@@ -46,8 +59,8 @@
         
         ;; Basic markdown to org conversions
         ;; Headers: # title -> * title
-        (while (re-search-forward "^#+ \\(.*\\)" nil t) 
-          (replace-match (concat (make-string (length (match-string 1)) ?*) " " (match-string 1))))
+        (while (re-search-forward "^\\(#+\\) " nil t) 
+          (replace-match (concat (make-string (length (match-string 1)) ?*) nil nil nil 1)))
         
         ;; Bold: **bold** -> *bold*
         (while (re-search-forward "\\*\\*\\(.*?\\)\\*\\*" nil t) 
@@ -94,10 +107,10 @@
       (unless (bolp) (insert "\n"))
       (let ((headline
              (if org-supertag-view-chat--current-command
-                 (format "* User [%s]:" org-supertag-view-chat--current-command)
-               "* User:")))
+                 (format "* User [%s]: " org-supertag-view-chat--current-command)
+               "* User: ")))
         (insert (propertize headline 'face 'org-supertag-chat-prompt-face))
-        (insert "\n"))))
+        (setq org-supertag-view-chat--prompt-start (point-marker))))))
 
 ;; --- Async Callback ---
 (defun org-supertag-view-chat--handle-response (result)
@@ -179,36 +192,21 @@ RESULT is the plist returned from the Python backend."
                                             'help-echo (format "Open node %s" id)
                                             'face 'org-link)
                         (insert (format ": %s\n" snippet))))
-                    ;; Create overlay for context lines only
-                    (let ((ov (make-overlay content-start (point))))
-                      (overlay-put ov 'invisible 'org-st-chat-context)
-                      (overlay-put ov 'intangible nil)))
-                  ;; 自动收起 Context 区块
-                  (require 'org)
-                  (run-at-time
-                   0.1 nil
-                   (lambda ()
-                     (with-current-buffer (current-buffer)
-                       (save-excursion
-                         (goto-char (point-min))
-                         (when (re-search-forward "^\\*\\*\\* Context" nil t)
-                           (when (fboundp 'org-fold-hide-subtree)
-                             (org-fold-hide-subtree))))))))
+                  ;; Fold the context block at the point
+                  (save-excursion
+                    ;; Search for the Context title
+                    (forward-line -1)
+                    (while (and (not (looking-at "^\\*\\*\\* Context")) (not (bobp)))
+                      (forward-line -1))
+                    (when (looking-at "^\\*\\*\\* Context")
+                      (when (fboundp 'org-fold-hide-subtree)
+                        (org-fold-hide-subtree))))
                   ))
 
             ;; Finalize buffer state for success
             (insert "\n\n")
             (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
-            (org-supertag-view-chat--insert-prompt))
-
-        ;; --- ELSE: ERROR CASE ---
-        (progn
-          (insert (propertize "--- ERROR ---" 'face 'font-lock-warning-face))
-          (insert (format "\n%s\n\nRaw Response:\n%S" error-message result))
-          ;; Finalize buffer state for error
-          (insert "\n\n")
-          (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
-          (org-supertag-view-chat--insert-prompt)))))))
+            (org-supertag-view-chat--insert-prompt)))))))))
 
 (defun org-supertag-view-chat--open-node (id)
   "Corresponding to the node ID, jump to the org buffer and locate the node."
@@ -227,12 +225,11 @@ RESULT is the plist returned from the Python backend."
 (defconst org-supertag-view-chat--prompt-regexp "^> *")
 
 (defun org-supertag-view-chat--extract-latest-input ()
-  "Return text after the last prompt line (> )."
+  "Return text after the last prompt line (* User: ...)."
   (save-excursion
     (goto-char (point-max))
-    (when (re-search-backward org-supertag-view-chat--prompt-regexp nil t)
-      (let ((start (match-end 0)))
-        (string-trim (buffer-substring-no-properties start (line-end-position)))))))
+    (when (re-search-backward "^\\* User.*?:[ ]*\\(.*\\)$" nil t)
+      (string-trim (match-string 1)))))
 
 (defun org-supertag-view-chat--current-input ()
   "Return current prompt line user text (string without surrounding spaces).
@@ -247,7 +244,7 @@ the prompt marker is unexpectedly nil or misplaced."
     (when (or (not txt) (string-empty-p txt))
       (save-excursion
         (beginning-of-line)
-        (when (looking-at "^> *\\(.*\\)$")
+        (when (looking-at "^\\* User.*?:[ ]*\\(.*\\)$")
           (setq txt (string-trim (match-string 1))))))
     (if (and txt (not (string-empty-p txt)))
         txt
@@ -304,10 +301,12 @@ the prompt marker is unexpectedly nil or misplaced."
 
 ;; Parse /define command, return (name . prompt) or nil
 (defun org-supertag-view-chat--parse-define (input)
-  (when (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\(.*\)\"$" input)
-    (let ((name (match-string 1 input))
-          (prompt (match-string 2 input)))
-      (cons name prompt))))
+  "Parse /define command input."
+  (when (and input (stringp input))  
+    (if (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"(.*)\"$" input)
+        (let ((name (match-string 1 input))
+              (prompt (match-string 2 input)))
+          (cons name prompt)))))
 
 ;; Only a built-in command /create-question
 (defconst org-supertag-view-chat--builtin-commands
@@ -341,8 +340,6 @@ Handles both regular chat queries and special /commands."
     (let* ((raw (org-supertag-view-chat--current-input))
            (lang (symbol-value 'org-supertag-view-chat-lang))
            (input (when raw (string-trim (substring-no-properties raw)))))
-      (message "[Chat Debug] send-input called. Raw input: %S"
-               (substring-no-properties (or raw "")))
       ;; /define
       (let ((define-pair (org-supertag-view-chat--parse-define input)))
         (when define-pair
@@ -399,14 +396,15 @@ Handles both regular chat queries and special /commands."
                        (point)
                      (when (re-search-backward org-supertag-view-chat--prompt-regexp nil t)
                        (match-beginning 0))))))
-            (when prompt-line-start
-              (goto-char prompt-line-start)
-              (delete-region prompt-line-start (line-end-position))
-              (insert "* User\n")
-              (insert (format "%s\n" input))
-              (insert "\n")))
-          (setq org-supertag-view-chat--response-start-marker (point-marker))
-          (insert (propertize "Assistant is thinking..." 'face 'italic))
+            (if prompt-line-start
+                (progn
+                  (goto-char prompt-line-start)
+                  (delete-region prompt-line-start (line-end-position))
+                  (insert "\n"))  ;; 先换行，确保 Assistant is thinking... 单独成行
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n")))
+            (setq org-supertag-view-chat--response-start-marker (point-marker))
+            (insert (propertize "Assistant is thinking..." 'face 'italic)))
           ;; Variable replacement when sending
           (let* ((prompt (cond
                           ((and org-supertag-view-chat--current-command
@@ -424,6 +422,7 @@ Handles both regular chat queries and special /commands."
                             ("lang" . ,lang)
                             ("command" . ,org-supertag-view-chat--current-command)
                             ("history" . ,org-supertag-view-chat--conversation-history))))
+            ;;(message "[Chat] Sending payload: %S" payload)
             (org-supertag-bridge-call-async
              "rag/query"
              (list payload)
@@ -539,13 +538,12 @@ Handles both regular chat queries and special /commands."
 
 ;; --- Command System ---
 (defun org-supertag-view-chat--parse-command (input)
-  "Parse Chat View input for special commands."
-  (message "[Chat Debug] parse-command input: %S" input)
-  (when (string-match "^/\\([a-z-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
-    (let ((cmd (match-string 1 input))
-          (args (string-trim (or (match-string 2 input) "")))) ; Ensure args is a string, not nil
-      (message "[Chat Debug] parse-command matched - cmd: %S, args: %S" cmd args)
-      (cons cmd args))))
+  "Parse command input, return (command . args) or nil."
+  (when (and input (stringp input)) 
+    (if (string-match "^/\\([a-z-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
+        (let ((cmd (match-string 1 input))
+              (args (string-trim (or (match-string 2 input) ""))))
+          (cons cmd args)))))
 
 ;; --- Enhanced Send Logic ---
 (defun org-supertag-view-chat--handle-command-response (response)

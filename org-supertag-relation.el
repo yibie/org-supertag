@@ -4,6 +4,27 @@
 ;; in org-supertag.  It supports recording, querying, and analyzing tag
 ;; co-occurrence relationships.
 
+;;; Commentary:
+;; This file provides functionality for managing relationships between tags
+;; in org-supertag. It now stores co-occurrence relationships directly in the
+;; main database as :tag-tag relations with :relation-type 'cooccurrence.
+;; This simplifies the architecture by removing the need for a separate
+;; co-occurrence file and allows for direct display in the relation-management interface.
+
+;;; Current State:
+;;; - Co-occurrence data stored directly in main database as :tag-tag relations
+;;; - Co-occurrence relationships identified by :relation-type 'cooccurrence
+;;; - Simplified architecture with no separate co-occurrence file
+;;; - Direct display in relation-management interface
+
+;;; Benefits:
+;;; - Unified data management
+;;; - Simplified architecture
+;;; - Direct access in relation-management interface
+;;; - Reduced complexity and potential data inconsistencies
+
+;;; Code:
+
 ;;; Code:
 
 (require 'ht)
@@ -87,20 +108,9 @@ When set to t, adding a relation will automatically add its complementary relati
   :type 'boolean
   :group 'org-supertag-relation)
 
-(defcustom org-supertag-relation-cooccurrence-file
-  (org-supertag-data-file "relation-cooccurrence.el")
-  "File to store co-occurrence relationship data."
-  :type 'file
-  :group 'org-supertag-relation)
 
-(defvar org-supertag-relation--cooccurrence-db (make-hash-table :test 'equal)
-  "In-memory database for co-occurrence statistics.")
 
-(defvar org-supertag-relation--db-dirty nil
-  "Flag indicating if the co-occurrence database has unsaved changes.")
 
-(defvar org-supertag-relation--save-timer nil
-  "Timer for delayed saving of the co-occurrence database.")
 
 (defun org-supertag-relation--clean-completion (value)
   "Safely extract a string from VALUE returned by `completing-read`."
@@ -108,113 +118,33 @@ When set to t, adding a relation will automatically add its complementary relati
       (car value)
     value))
 
-(defun org-supertag-relation--mark-dirty ()
-  "Mark the co-occurrence database as dirty."
-  (setq org-supertag-relation--db-dirty t))
 
-(defun org-supertag-relation-save-db ()
-  "Save the co-occurrence database to its file."
-  (when org-supertag-relation--db-dirty
-    (message "Attempting to save co-occurrence database to %s..." org-supertag-relation-cooccurrence-file)
-    ;; Ensure the data directory exists before saving.
-    (make-directory (file-name-directory org-supertag-relation-cooccurrence-file) t)
-    (with-temp-buffer
-      (let ((print-level nil) (print-length nil)
-            ;; Explicitly set coding system to prevent errors on write.
-            (coding-system-for-write 'utf-8-emacs-unix))
-        (prin1 org-supertag-relation--cooccurrence-db (current-buffer))
-        (write-region (point-min) (point-max) org-supertag-relation-cooccurrence-file)))
-    (setq org-supertag-relation--db-dirty nil)
-    (message "Co-occurrence database saved successfully.")))
 
-(defun org-supertag-relation--schedule-save ()
-  "Schedule a delayed save for the co-occurrence database."
-  (when org-supertag-relation--save-timer
-    (cancel-timer org-supertag-relation--save-timer))
-  (setq org-supertag-relation--save-timer
-        (run-with-idle-timer 2 nil #'org-supertag-relation-save-db)))
 
-(defun org-supertag-relation-load-db ()
-  "Load the co-occurrence database from its file."
-  (when (file-exists-p org-supertag-relation-cooccurrence-file)
-    (with-temp-buffer
-      ;; Explicitly read with UTF-8 to match the saving process.
-      (let ((coding-system-for-read 'utf-8))
-        (insert-file-contents org-supertag-relation-cooccurrence-file))
-      ;; Handle empty or invalid file case gracefully
-      (goto-char (point-min))
-      (unless (eobp)
-        (let ((data (condition-case nil
-                        (read (current-buffer))
-                      (error nil))))
-          (if (hash-table-p data)
-              (setq org-supertag-relation--cooccurrence-db data)
-            (message "Warning: org-supertag co-occurrence DB file is corrupt.")))))))
 
-(defun org-supertag-relation--migrate-from-old-db ()
-  "Try to find and extract co-occurrence data from the old DB format.
-The old format stored this data in a special ':metadata' object in the main DB."
-  (let* ((metadata-object (gethash "metadata" org-supertag-db--object)))
-    (when (and metadata-object (plist-get metadata-object :type) (eq (plist-get metadata-object :type) :metadata))
-      (let ((cooccurrence-data (plist-get metadata-object :data)))
-        (when (hash-table-p cooccurrence-data)
-          cooccurrence-data)))))
 
 (defun org-supertag-relation-init ()
-  "Initialize the relation module, loading its database or migrating old data."
-  ;; First, load whatever is in the new DB file, if anything.
-  (org-supertag-relation-load-db)
-
-  ;; If the newly loaded DB is empty, check if we need to migrate from the old format.
-  (when (= 0 (hash-table-count org-supertag-relation--cooccurrence-db))
-    (message "Co-occurrence DB is empty. Checking for old data to migrate...")
-    (let ((migrated-data (org-supertag-relation--migrate-from-old-db)))
-      (when migrated-data
-        (message "Found old data. Starting migration...")
-        (setq org-supertag-relation--cooccurrence-db migrated-data)
-        (org-supertag-relation--mark-dirty)
-        (org-supertag-relation-save-db)
-        (message "Successfully migrated %d co-occurrence records from old database." (hash-table-count migrated-data))))))
-
-;; Save on exit.
-(add-hook 'kill-emacs-hook #'org-supertag-relation-save-db)
-
+  "Initialize the relation module."
+  ;; Ensure co-occurrence relations are always up-to-date in the main DB.
+  (org-supertag-relation-analyze-cooccurrence-patterns))
 
 ;;----------------------------------------------------------------------
 ;; Co-occurrence relation management
 ;;----------------------------------------------------------------------
 
-(defun org-supertag-relation--upsert-relation (from-tag to-tag rel-type strength)
-  "Add or update a tag relation with a specific strength."
-  (let ((rel-id (format ":tag-relation:%s->%s:%s" from-tag to-tag rel-type)))
-    (let ((props (list :from from-tag
-                       :to to-tag
-                       :type rel-type
-                       :strength strength
-                       :created-at (or (when-let (old-props (gethash rel-id org-supertag-db--link))
-                                         (plist-get old-props :created-at))
-                                       (current-time)))))
-      (puthash rel-id props org-supertag-db--link)
-      (org-supertag-db-emit 'link:updated :tag-relation from-tag to-tag props)
-      (org-supertag-db--mark-dirty)
-      (org-supertag-db--schedule-save))))
-
 (defun org-supertag-relation--update-cooccurrence-strength (from-tag to-tag)
-  "Update (or create) the co-occurrence relation using raw frequency only.
-方案 A: 不再计算归一化强度，也不再基于最小阈值删除关系，
-而是直接把累计出现次数写入 :strength 字段，供后续统计使用。" 
+  "Update (or create) the co-occurrence relation in the main database.
+This function calculates the strength based on raw frequency and stores it
+as a :tag-tag relation with :relation-type 'cooccurrence."
   (let* ((freq (org-supertag-relation--get-cooccurrence-count from-tag to-tag))
          (norm-factor org-supertag-relation-cooccurrence-normalization-factor)
          (strength (if (> (+ freq norm-factor) 0)
-                        (/ freq (+ freq norm-factor))
-                      0)))
+                       (/ freq (+ freq norm-factor))
+                     0)))
     (if (< strength org-supertag-relation-min-strength)
-        (org-supertag-relation-remove-relation from-tag to-tag 'cooccurrence)
-      (org-supertag-relation--upsert-relation from-tag to-tag 'cooccurrence strength)))
-
-  ;; 方案 A: 直接使用频次作为 strength，永不自动删除。
-  (let ((freq (org-supertag-relation--get-cooccurrence-count from-tag to-tag)))
-    (org-supertag-relation--upsert-relation from-tag to-tag 'cooccurrence freq)))
+        (org-supertag-db-unlink :tag-tag from-tag to-tag)
+      (org-supertag-db-link :tag-tag from-tag to-tag
+                            `(:relation-type cooccurrence :strength ,strength)))))
 
 (defun org-supertag-relation-record-cooccurrence (node-id tag-id)
   "Record the co-occurrence relationship of tags, unidirectionally propagated from parent node to child node.
@@ -223,7 +153,9 @@ TAG-ID: Tag ID
 
 This function will:
 1. Record the co-occurrence relationship between tags on the same node
-2. Record the unidirectional co-occurrence relationship from parent node tags"
+2. Record the unidirectional co-occurrence relationship from parent node tags
+
+Co-occurrence data is stored as :tag-tag relations in the main database."
   ;; --- FIX: Sanitize all incoming and retrieved tag IDs at the source ---
   ;; This prevents contaminated strings from being used to build DB keys.
   (let* ((clean-tag-id (substring-no-properties (format "%s" tag-id)))
@@ -231,6 +163,16 @@ This function will:
          (clean-existing-tags (mapcar (lambda (t) (substring-no-properties (format "%s" t))) existing-tags))
          (parent-tags (org-supertag-node-get-parent-tags node-id))
          (clean-parent-tags (mapcar (lambda (t) (substring-no-properties (format "%s" t))) parent-tags)))
+    
+    ;; Filter out nil and invalid tag IDs to prevent "emacs --[cooccurrence]--> nil" issues
+    (setq clean-tag-id (when (and clean-tag-id (not (string-empty-p clean-tag-id))) clean-tag-id))
+    (setq clean-existing-tags (cl-remove-if (lambda (t) (or (null t) (string-empty-p t))) clean-existing-tags))
+    (setq clean-parent-tags (cl-remove-if (lambda (t) (or (null t) (string-empty-p t))) clean-parent-tags))
+    
+    ;; Skip processing if the main tag ID is invalid
+    (unless clean-tag-id
+      (message "WARNING: Invalid tag ID '%s' for node '%s', skipping cooccurrence recording" tag-id node-id)
+      (cl-return-from org-supertag-relation-record-cooccurrence))
 
     ;; 1. Process co-occurrence between same-level tags
     (dolist (other-tag clean-existing-tags)
@@ -253,9 +195,24 @@ This function will:
             (org-supertag-relation--update-cooccurrence-strength parent-tag clean-tag-id)
             (org-supertag-relation--update-cooccurrence-strength clean-tag-id parent-tag)))))))
 
+(defun org-supertag-relation--update-cooccurrence-strength (from-tag to-tag)
+  "Update (or create) the co-occurrence relation in the main database.
+This function calculates the strength based on raw frequency and stores it
+as a :tag-tag relation with :relation-type 'cooccurrence."
+  (let* ((freq (org-supertag-relation--get-cooccurrence-count from-tag to-tag))
+         (norm-factor org-supertag-relation-cooccurrence-normalization-factor)
+         (strength (if (> (+ freq norm-factor) 0)
+                       (/ freq (+ freq norm-factor))
+                     0)))
+    (if (< strength org-supertag-relation-min-strength)
+        (org-supertag-db-unlink :tag-tag from-tag to-tag)
+      (org-supertag-db-link :tag-tag from-tag to-tag
+                            `(:relation-type cooccurrence :strength ,strength)))))
+
 (defun org-supertag-relation-unrecord-cooccurrence (node-id removed-tag-id)
   "Decrement co-occurrence relationships when a tag is removed from a node.
-This is the reverse operation of `org-supertag-relation-record-cooccurrence'."
+This is the reverse operation of `org-supertag-relation-record-cooccurrence'.
+It updates the co-occurrence strength in the main database."
   (let ((remaining-tags (org-supertag-node-get-tags node-id)) ; This is after the tag link is removed
         (parent-tags (org-supertag-node-get-parent-tags node-id)))
     ;; 1. Update relationships with same-level tags that are still on the node
@@ -277,35 +234,23 @@ This is the reverse operation of `org-supertag-relation-record-cooccurrence'."
           (org-supertag-relation--update-cooccurrence-strength removed-tag-id parent-tag))))))
 
 (defun org-supertag-relation--get-cooccurrence-count (tag1 tag2)
-  "Get the number of co-occurrences between TAG1 and TAG2.
+  "Get the co-occurrence count (strength) between TAG1 and TAG2 from the main database.
 If there is no co-occurrence record, return 0."
-  (let* ((rel-id-key (format "tag-cooccur:%s:%s" tag1 tag2)))
-    (or (gethash rel-id-key org-supertag-relation--cooccurrence-db 0) 0)))
+  (let* ((link (car (org-supertag-db-find-links :tag-tag tag1 tag2)))
+         (cooccur-link (cl-find-if (lambda (l) (and (eq (plist-get l :relation-type) 'cooccurrence)
+                                                  (equal (plist-get l :to) tag2))) link)))
+    (if cooccur-link
+        (plist-get cooccur-link :strength) ; Assuming strength is the count for now
+      0)))
 
 (defun org-supertag-relation--set-cooccurrence-count (tag1 tag2 count)
-  "Set the co-occurrence count between TAG1 and TAG2 to COUNT."
-  (let* ((rel-id-key1 (format "tag-cooccur:%s:%s" tag1 tag2))
-         (rel-id-key2 (format "tag-cooccur:%s:%s" tag2 tag1)))
-    ;; Store the count in both directions for easy lookup
-    (puthash rel-id-key1 count org-supertag-relation--cooccurrence-db)
-    (puthash rel-id-key2 count org-supertag-relation--cooccurrence-db)
-    (org-supertag-relation--mark-dirty)
-    (org-supertag-relation--schedule-save)))
+  "Set the co-occurrence count (strength) between TAG1 and TAG2 in the main database."
+  (org-supertag-db-link :tag-tag tag1 tag2 `(:relation-type cooccurrence :strength ,(float count))))
 
-(defun org-supertag-relation--set-metadata (key value)
-  "Set metadata KEY to VALUE in the co-occurrence database."
-  (puthash key value org-supertag-relation--cooccurrence-db)
-  (org-supertag-relation--mark-dirty)
-  (org-supertag-relation--schedule-save))
-
-(defun org-supertag-relation--get-metadata (key)
-  "Get metadata for KEY from the co-occurrence database."
-  (gethash key org-supertag-relation--cooccurrence-db))
-
-;; Function to analyze co-occurrence patterns across the entire database
 (defun org-supertag-relation-analyze-cooccurrence-patterns ()
   "Analyze co-occurrence patterns across all tags and update relationship strength."
   (interactive)
+  (message "Starting to analyze co-occurrence patterns...")
   (let* ((nodes (org-supertag-db-find-by-type :node))
          (tag-counts (make-hash-table :test 'equal))  ; Count of nodes per tag
          (cooccur-counts (make-hash-table :test 'equal))  ; Co-occurrence counts
@@ -325,49 +270,35 @@ If there is no co-occurrence record, return 0."
               (let ((key (format "%s:%s" tag1 tag2)))
                 (puthash key (1+ (or (gethash key cooccur-counts) 0)) cooccur-counts)))))))
     
-    ;; Save the global tag frequency data to metadata
-    (org-supertag-relation--set-metadata 'tag-frequency-data tag-counts)
-    (org-supertag-relation--set-metadata 'tag-total-nodes total-nodes)
-    (org-supertag-relation--set-metadata 'tag-analysis-timestamp (current-time))
-    
     ;; Calculate the point mutual information (PMI) for each co-occurrence
     (maphash
      (lambda (key count)
        (let* ((tags (split-string key ":"))
               (tag1 (car tags))
               (tag2 (cadr tags))
-              (prob-t1 (/ (float (gethash tag1 tag-counts)) total-nodes))
-              (prob-t2 (/ (float (gethash tag2 tag-counts)) total-nodes))
-              (prob-t1t2 (/ (float count) total-nodes))
-              (pmi (log (/ prob-t1t2 (* prob-t1 prob-t2)) 2))
-              (norm-pmi (/ (1+ pmi) 2))  ; Normalize to 0-1 range
-              (strength (min 1.0 (max 0.1 norm-pmi))))  ; Limit to 0.1-1.0 range
-         
-         ;; Update co-occurrence count
-         (org-supertag-relation--set-cooccurrence-count tag1 tag2 count)
-         
-         ;; Store PMI value in metadata for statistical access
-         (org-supertag-relation--set-metadata (format "tag-pmi:%s:%s" tag1 tag2) norm-pmi)
-         
-         ;; If strength is meaningful, update the relation with the new strength
-         (when (>= strength org-supertag-relation-min-strength)
-           (org-supertag-relation-add-relation tag1 tag2 'cooccurrence)
-           (org-supertag-relation-add-relation tag2 tag1 'cooccurrence))))
+              (prob-t1 (if (> total-nodes 0) (/ (float (gethash tag1 tag-counts 0)) total-nodes) 0.0))
+              (prob-t2 (if (> total-nodes 0) (/ (float (gethash tag2 tag-counts 0)) total-nodes) 0.0))
+              (prob-t1t2 (if (> total-nodes 0) (/ (float count) total-nodes) 0.0))
+              (pmi (if (and (> prob-t1 0) (> prob-t2 0) (> prob-t1t2 0))
+                       (log (/ prob-t1t2 (* prob-t1 prob-t2)) 2)
+                     0.0)))
+         ;; Normalize PMI to 0-1 range, ensuring it's always positive
+         (let* ((norm-pmi (if (>= pmi 0) (/ pmi (+ pmi 1)) (/ pmi (- pmi 1)))) ; Sigmoid-like normalization
+                (strength (min 1.0 (max 0.0 norm-pmi)))) ; Ensure strength is between 0 and 1
+           
+           ;; If strength is meaningful, update the relation with the new strength
+           (when (>= strength org-supertag-relation-min-strength)
+             (org-supertag-db-link :tag-tag tag1 tag2 `(:relation-type cooccurrence :strength ,strength))))))
      cooccur-counts)
     
-    (message "Co-occurrence analysis completed. Analyzed %d nodes and %d tag pairs. Saving results..."
-             total-nodes (hash-table-count cooccur-counts))
-    ;; Force an immediate save after this heavy operation.
-    (org-supertag-relation-save-db)))
+    (message "Co-occurrence analysis completed. Analyzed %d nodes and %d tag pairs." total-nodes (hash-table-count cooccur-counts))))
 
 (defun org-supertag-relation-get-strength (tag1 tag2)
   "Get the strength of the relationship between TAG1 and TAG2.
 If the relation does not exist, return nil."
-  (let ((rel (car (cl-remove-if
-                  (lambda (r) (equal (plist-get r :to) tag2))
-                  (org-supertag-relation-get-all tag1)))))
-    (when rel
-      (plist-get rel :strength))))
+  (let* ((link (car (org-supertag-db-find-links :tag-tag tag1 tag2)))
+         (strength (and link (plist-get link :strength))))
+    strength))
 
 ;; Add a command to display co-occurrence relations
 (defun org-supertag-relation-find-cooccurrence-tags ()
@@ -376,13 +307,14 @@ If the relation does not exist, return nil."
   (let ((tag-id org-supertag-relation--current-tag))
     (if (not tag-id)
         (user-error "Current tag not set. Please re-select tag")
-      (let* ((relations (cl-remove-if-not
-                        (lambda (rel) (eq (plist-get rel :type) 'cooccurrence))
-                        (org-supertag-relation-get-all tag-id)))
+      (let* ((relations (org-supertag-db-find-links :tag-tag tag-id nil))
+             (cooccur-relations (cl-remove-if-not
+                                  (lambda (rel) (eq (plist-get rel :relation-type) 'cooccurrence))
+                                  relations))
              (related-tags '()))
         
         ;; Collect related tags
-        (dolist (rel relations)
+        (dolist (rel cooccur-relations)
           (let* ((other-tag-id (plist-get rel :to))
                  (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
                  (strength (or (plist-get rel :strength) 0.0)))
@@ -575,20 +507,28 @@ Return the list of (other-tag-id . rel-type)."
        org-supertag-db--link)
       result)))
 
-(defun org-supertag-relation-get-all (tag-id)
+(defun org-supertag-relation-get-all (tag-id &optional relation-type-filter)
   "Get all relations involving the TAG-ID.
 Return the list of relations, each relation is a plist with :from, :to and :type keys.
-Only returns outgoing relations (where TAG-ID is the :from tag)."
+Only returns outgoing relations (where TAG-ID is the :from tag).
+Optionally filter by RELATION-TYPE-FILTER."
   (if (null tag-id)
       nil
-    (let ((result nil))
-      (maphash
-       (lambda (rel-id props)
-         (when (and (string-prefix-p ":tag-relation:" rel-id)
-                    (equal (plist-get props :from) tag-id))
-           (push props result)))
-       org-supertag-db--link)
-      result)))
+    (let ((all-links (org-supertag-db-find-links nil tag-id nil)))
+      (cl-remove-if-not
+       (lambda (link)
+         (let ((link-type (plist-get link :type))
+               (rel-type (plist-get link :relation-type)))
+           (cond
+            ((eq link-type :tag-tag)
+             (if relation-type-filter
+                 (eq rel-type relation-type-filter)
+               t)) ; Include all tag-tag relations if no filter
+            (t ; For other link types, just check if filter is nil or matches
+             (if relation-type-filter
+                 (eq link-type relation-type-filter)
+               t))))) ; Include all other link types if no filter
+       all-links))))
 
 (defun org-supertag-relation-get-tag-frequency (tag-id)
   "Compute the frequency of the TAG-ID in the database.
@@ -663,21 +603,20 @@ TAG-ID: The ID of the current tag being edited."
             (current-point (point)))
         (erase-buffer)
         (let ((tag-name (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag)))
-          (insert (propertize (format "Tag Relation Management - %s\n\n" tag-name)
-                             'face '(:height 1.5 :weight bold))))
+          (insert (propertize (format "Tag Relation Management - %s\n\n" tag-name) 'face '(:height 1.5 :weight bold))))
 
         ;; Existing relations
-        (insert (propertize "\nExisting Relations (Manually set):\n" 'face '(:weight bold)))
+        (insert (propertize "Existing Relations (Manually set):\n" 'face 'org-level-2))
         (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
-               (relations (cl-remove-duplicates
-                         (cl-remove-if
-                          (lambda (rel)
-                            (or (eq (plist-get rel :type) 'cooccurrence)
-                                (equal (plist-get rel :to) org-supertag-relation--current-tag)))
-                          all-relations)
-                         :test #'equal)))
-          (if relations
-              (dolist (rel relations)
+               (manual-relations (cl-remove-duplicates
+                                (cl-remove-if
+                                 (lambda (rel)
+                                   (or (eq (plist-get rel :relation-type) 'cooccurrence)
+                                       (equal (plist-get rel :to) org-supertag-relation--current-tag)))
+                                 all-relations)
+                                :test #'equal)))
+          (if manual-relations
+              (dolist (rel manual-relations)
                 (let* ((other-tag-id (plist-get rel :to))
                        (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
                        (rel-type (plist-get rel :type))
@@ -685,7 +624,7 @@ TAG-ID: The ID of the current tag being edited."
                        (relation-symbol (if is-complementary "◎" "→"))
                        (relation-face (if is-complementary '(:foreground "green") '(:foreground "blue")))
                        (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
-                  (insert " ")
+                  (insert "")
                   (insert-text-button remove-button-text
                                     'action 'org-supertag-relation--remove-button-action
                                     'other-tag-id other-tag-id
@@ -699,16 +638,45 @@ TAG-ID: The ID of the current tag being edited."
                     (let ((complement-type (org-supertag-relation-get-complement rel-type)))
                       (insert (format " (bidirectional: %s)" complement-type))))
                   (insert "\n")))
-            (insert "  (No existing relations)\n")))
+            (insert "  No existing relations\n")))
+
+        ;; Co-occurrence relations
+        (insert (propertize "\nCo-occurrence Relations (Auto-generated):\n" 'face 'org-level-2))
+        (let* ((cooccur-relations (org-supertag-relation-get-all org-supertag-relation--current-tag 'cooccurrence)))
+          (if cooccur-relations
+              (dolist (rel cooccur-relations)
+                (let* ((other-tag-id (plist-get rel :to))
+                       (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
+                       ;; Get strength from the original link data
+                       (strength (plist-get rel :strength))
+                       (strength-text (format "%.2f" strength))
+                       (strength-face (cond
+                                      ((>= strength 0.7) 'shadow)
+                                      ((>= strength 0.4) 'shadow)
+                                      (t 'shadow))))
+                  (insert "")
+                  (insert-text-button (propertize "[+]" 'face '(:foreground "green"))
+                                    'action 'org-supertag-relation--convert-cooccurrence-to-explicit
+                                    'from-tag-id org-supertag-relation--current-tag
+                                    'to-tag-id other-tag-id
+                                    'follow-link t
+                                    'help-echo "Click or press RET to convert this co-occurrence to an explicit relation")
+                  (insert " ")
+                  (insert (propertize "⋈" 'face '(:weight bold :foreground "green")))
+                  (insert (format " %s " (propertize "cooccurrence" 'face '(:foreground "white" :background "black"))))
+                  (insert (format " %s " other-tag-name))
+                  (insert (propertize (format "(strength: %s)" strength-text) 'face strength-face))
+                  (insert "\n")))
+            (insert "  No co-occurrence relations found\n")))
 
         ;; Shortcuts help moved to bottom
-        (insert (propertize "\nShortcuts:\n" 'face '(:weight bold)))
-        (insert " [a] - Batch add relations to other tags\n")
-        (insert " [RET] on a line to Remove an existing relation\n")
-        (insert " [q] - Quit    [r] - Refresh\n\n")
+        (insert (propertize "\nShortcuts:\n" 'face 'org-level-2))
+        (insert "[a] - Batch add relations to other tags\n")
+        (insert "[RET] on a line to Remove an existing relation\n")
+        (insert "[q] - Quit    [r] - Refresh\n")
 
         ;; Relation Types help moved to bottom
-        (insert (propertize "Relation Types:\n" 'face '(:weight bold)))
+        (insert (propertize "\nRelation Types:\n" 'face 'org-level-2))
         (insert " " (propertize "◎" 'face '(:foreground "green")) " - Bidirectional (adds reverse relation automatically)\n")
         (insert " " (propertize "→" 'face '(:foreground "blue")) " - Unidirectional\n\n")
 
@@ -748,6 +716,7 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
       (define-key map (kbd "q") 'org-supertag-relation-quit)
       (define-key map (kbd "n") 'org-supertag-relation--next-line)
       (define-key map (kbd "p") 'org-supertag-relation--prev-line)
+      (define-key map (kbd "+") 'org-supertag-relation--convert-cooccurrence-to-explicit)
       (define-key map (kbd "RET") 'org-supertag-relation--select-current-line)
   map))
 
@@ -793,11 +762,36 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
   (org-supertag-relation--refresh-display))
 
 (defun org-supertag-relation-quit ()
-  "Close the relation management buffer."
+  "Close the relation management buffer and its window."
   (interactive)
-  (kill-buffer org-supertag-relation-manage--buffer-name)
-  (kill-buffer))
+  (let ((buffer (get-buffer org-supertag-relation-manage--buffer-name)))
+    (when buffer
+      (kill-buffer buffer)
+      (delete-window))))
 
+
+(defun org-supertag-relation--convert-cooccurrence-to-explicit (button)
+  "Convert a co-occurrence relation to an explicit relation."
+  (interactive)
+  (let* ((from-tag-id (button-get button 'from-tag-id))
+         (to-tag-id (button-get button 'to-tag-id))
+         (rel-choices (org-supertag-relation--get-relation-type-choices))
+         (selected-rel-type-str (completing-read "Select explicit relation type: " rel-choices nil t))
+         (selected-rel-type (org-supertag-relation--get-type-from-choice selected-rel-type-str)))
+
+    (when (and from-tag-id to-tag-id selected-rel-type)
+      ;; 1. Add the new explicit relation
+      (org-supertag-relation-add-relation from-tag-id to-tag-id selected-rel-type)
+
+      ;; 2. Remove the co-occurrence relation
+      (org-supertag-db-unlink :tag-tag from-tag-id to-tag-id)
+
+      ;; 3. Refresh the display
+      (org-supertag-relation--refresh-display)
+      (message "Co-occurrence relation from %s to %s converted to explicit %s relation." 
+               (org-supertag-tag-get-name-by-id from-tag-id)
+               (org-supertag-tag-get-name-by-id to-tag-id)
+               selected-rel-type))))
 
 (defun org-supertag-relation--remove-button-action (button)
   "Handle the action of clicking the remove relation button."
@@ -894,11 +888,46 @@ also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
   (with-current-buffer org-supertag-relation-manage--buffer-name
     (let ((button (save-excursion
                     (beginning-of-line)
-Æ`                    (when (re-search-forward "\\[Mark\\]" (line-end-position) t)
+                    (when (re-search-forward "\\[Mark\\]" (line-end-position) t)
                       (button-at (match-beginning 0))))))
       (when button
         (org-supertag-relation-toggle-tag-selection button)))))
 
+
+;;----------------------------------------------------------------------
+;; Debug Functions
+;;----------------------------------------------------------------------
+
+(defun org-supertag-relation-debug-show-all-relations ()
+  "Debug function to show all relations in the database."
+  (interactive)
+  (let ((tag-relations '())
+        (tag-tag-relations '()))
+    ;; Collect all relations
+    (maphash
+     (lambda (key value)
+       (cond
+        ((string-prefix-p ":tag-relation:" key)
+         (push (cons key value) tag-relations))
+        ((string-prefix-p ":tag-tag:" key)
+         (push (cons key value) tag-tag-relations))))
+     org-supertag-db--link)
+    
+    ;; Display results
+    (with-output-to-temp-buffer "*Org-Supertag Relations Debug*"
+      (princ "=== Tag Relations (:tag-relation: prefix) ===\n")
+      (if tag-relations
+          (dolist (rel tag-relations)
+            (princ (format "Key: %s\n" (car rel)))
+            (princ (format "Value: %S\n\n" (cdr rel))))
+        (princ "No tag relations found\n"))
+      
+      (princ "\n=== Tag-Tag Relations (:tag-tag: prefix) ===\n")
+      (if tag-tag-relations
+          (dolist (rel tag-tag-relations)
+            (princ (format "Key: %s\n" (car rel)))
+            (princ (format "Value: %S\n\n" (cdr rel))))
+        (princ "No tag-tag relations found\n")))))
 
 (provide 'org-supertag-relation)
 
