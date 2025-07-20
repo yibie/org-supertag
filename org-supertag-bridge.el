@@ -27,7 +27,7 @@
   :group 'org-supertag ; Assuming 'org-supertag group exists or is desired
   :prefix "org-supertag-bridge-")
 
-(defcustom org-supertag-bridge-python-command "python3"
+(defcustom org-supertag-bridge-python-command (expand-file-name ".venv/bin/python" org-supertag-project-root)
   "The Python interpreter used to run `simtag_bridge.py`."
   :type 'string
   :group 'org-supertag-bridge)
