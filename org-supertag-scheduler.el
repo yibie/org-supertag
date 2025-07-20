@@ -170,8 +170,8 @@ daily task per cycle, ensuring a smoother startup experience."
                    (current-time-str (format-time-string "%H:%M" now))
                    (scheduled-time-str (plist-get task :time))
                    (last-run-date (plist-get task :last-run)))
-              (message "[Scheduler-Debug] Checking daily task '%s': Now=%s, Scheduled=%s, LastRun=%s, Today=%s"
-                       id current-time-str scheduled-time-str (or last-run-date "never") today-str)
+              ;;(message "[Scheduler-Debug] Checking daily task '%s': Now=%s, Scheduled=%s, LastRun=%s, Today=%s"
+              ;;         id current-time-str scheduled-time-str (or last-run-date "never") today-str)
               (when (and (string-greaterp current-time-str scheduled-time-str)
                          (not (equal last-run-date today-str)))
                 (message "[Scheduler-Debug] -> Conditions MET for '%s'. Running..." id)

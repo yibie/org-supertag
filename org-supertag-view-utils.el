@@ -7,10 +7,6 @@
       (cl-loop for (key _) on props by #'cddr
                collect key))))
 
-(declare-function org-supertag-sim-find-similar "org-supertag-sim")
-(declare-function org-supertag-sim-init "org-supertag-sim")
-(defvar org-supertag-sim--initialized)
-
 ;; Database status check function
 (defun org-supertag-db-initialized-p ()
   "Check if the org-supertag database is initialized.

@@ -96,7 +96,9 @@ This is particularly important for local providers like Ollama."
   :type 'string
   :group 'org-supertag-auto-tag)
 
-;;; === Global Variables ===
+;;----------------------------------------------------------------------
+;; Global Variables
+;;----------------------------------------------------------------------
 
 (defvar org-supertag-auto-tag--suggestion-queue '()
   "Global queue for storing tag suggestions. Each element is a plist representing a suggestion.")
@@ -107,7 +109,9 @@ This is particularly important for local providers like Ollama."
 (defvar org-supertag-auto-tag--last-prompt-date nil
   "Date (YYYY-MM-DD) of last reminder prompt, to avoid duplicate reminders.")
 
-;;; === Auto Mode and Background Scanning ===
+;;----------------------------------------------------------------------
+;; Auto Mode and Background Scanning
+;;----------------------------------------------------------------------
 
 (defun org-supertag-auto-tag--prompt-for-review ()
   "Prompt user to review tags if conditions are met."
@@ -151,98 +155,47 @@ This mode registers and deregisters the background tasks with the central schedu
 
 (defun org-supertag-auto-tag-silent-scan-and-generate ()
   "Scan database for untagged nodes and generate tag suggestions in batch.
-Nodes for which suggestions already exist in the queue are skipped to avoid reprocessing.
-If `org-supertag-auto-tag-batch-enable-limit` is t,
-process at most `org-supertag-auto-tag-batch-max-nodes-per-run` nodes per run."
+This function now iterates through all potential nodes to find a batch
+of nodes that meet the minimum content length requirement, avoiding getting
+stuck on short-content nodes."
   (interactive)
-  (message "[Auto-tag] org-supertag-auto-tag-silent-scan-and-generate called at %s" (format-time-string "%H:%M:%S.%3N"))
+  (message "[Auto-tag] Silent scan called at %s" (format-time-string "%H:%M:%S.%3N"))
   (let* ((all-nodes (org-supertag-node-get-all))
          (untagged-nodes-all (seq-filter
                               (lambda (node-id)
                                 (seq-empty-p (org-supertag-node-get-tags node-id)))
                               all-nodes))
-         ;; Get IDs of nodes that are already in the suggestion queue
          (processed-node-ids (delete-dups (mapcar (lambda (s) (plist-get s :node-id)) org-supertag-auto-tag--suggestion-queue)))
-         ;; Filter out already processed nodes
-         (nodes-to-process (seq-remove (lambda (node-id) (member node-id processed-node-ids))
-                                       untagged-nodes-all))
-         (untagged-nodes (if (and org-supertag-auto-tag-batch-enable-limit
-                                  (> (length nodes-to-process) org-supertag-auto-tag-batch-max-nodes-per-run))
-                             (seq-take nodes-to-process org-supertag-auto-tag-batch-max-nodes-per-run)
-                           nodes-to-process)))
-    (if (seq-empty-p untagged-nodes)
-        (message "Auto-tag: No new untagged nodes found to process.")
+         (candidate-nodes (seq-remove (lambda (node-id) (member node-id processed-node-ids))
+                                      untagged-nodes-all))
+         (eligible-nodes-payload '())
+         (limit (if org-supertag-auto-tag-batch-enable-limit
+                    org-supertag-auto-tag-batch-max-nodes-per-run
+                  (length candidate-nodes))))
+
+    ;; Iterate through candidates to build a batch of eligible nodes
+    (let ((remaining-candidates candidate-nodes))
+      (while (and remaining-candidates (< (length eligible-nodes-payload) limit))
+        (let* ((node-id (car remaining-candidates))
+               (node-data (org-supertag-db-get node-id)))
+          (when-let* ((content (org-supertag-auto-tag--get-node-content node-data)))
+            (let* ((title (plist-get node-data :title))
+                   (combined (concat (or title "") " " (or content ""))))
+              (when (>= (length (string-trim combined)) org-supertag-auto-tag-batch-min-content-length)
+                (push `(("id" . ,node-id) ("content" . ,combined)) eligible-nodes-payload)))))
+        (setq remaining-candidates (cdr remaining-candidates))))
+
+    (if (seq-empty-p eligible-nodes-payload)
+        (message "Auto-tag: No new untagged nodes with sufficient content found to process.")
       (progn
-        (message "Auto-tag: Found %d new untagged nodes to process (total untagged: %d, with suggestions: %d). Generating..."
-                 (length untagged-nodes)
-                 (length untagged-nodes-all)
-                 (length processed-node-ids))
-        (org-supertag-auto-tag--batch-extract-and-send-content untagged-nodes)))))
-
-(defun org-supertag-auto-tag--batch-extract-and-send-content (node-ids)
-  "Extract content from given node IDs and send asynchronously to the backend.
-The data is structured according to the unified data contract."
-  (message "[Auto-tag] org-supertag-auto-tag--batch-extract-and-send-content called at %s" (format-time-string "%H:%M:%S.%3N"))
-  (let ((nodes-to-process '()))
-    ;; 1. Create a simplified data structure that EPC can properly serialize
-    (dolist (node-id node-ids)
-      (when-let* ((node-data (org-supertag-db-get node-id))
-                  (content (org-supertag-auto-tag--get-node-content node-data)))
-        (let* ((title (plist-get node-data :title))
-               (combined (concat (or title "") " " (or content ""))))
-          (when (>= (length (string-trim combined)) org-supertag-auto-tag-batch-min-content-length)
-            (let ((node-dict `(("id" . ,node-id)
-                               ("content" . ,combined))))
-              (push node-dict nodes-to-process))))))
-
-    ;; 2. Only send data to backend when there are eligible nodes.
-    (if nodes-to-process
-        (progn
-          (message "Auto-tag: Preparing to send %d eligible nodes to backend for processing..." (length nodes-to-process))
-          ;; Construct the final payload using list format for proper EPC serialization
-          (let* ((reversed-nodes (reverse nodes-to-process))
-                 (model-config (org-supertag-auto-tag--get-model-config))
-                 ;; Use list format instead of alist - EPC serializes this as Python dict
-                 (payload `(("nodes" ,reversed-nodes)
-                           ("model_config" ,model-config))))
-
-            ;; (message "--- ELISP DEBUG: PAYLOAD SENT ---")
-            ;; (message "Payload type: %s" (type-of payload))
-            ;; (message "Payload content: %S" payload)
-            ;; (message "--- END ELISP DEBUG ---")
-
-            ;; print the first 5 nodes
-            ;; (let ((node-count 0))
-            ;;   (dolist (node reversed-nodes)
-            ;;     (when (< node-count 5)
-            ;;       (message "--- Node %d ---" (1+ node-count))
-            ;;       (message "Node structure type: %s" (type-of node))
-            ;;       (message "Node is list with length: %d" (length node))
-            ;;       (dolist (pair node)
-            ;;         (when (listp pair)
-            ;;           (message "  %S => %S (type: %s)" (car pair) (cadr pair) (type-of (cadr pair)))))
-            ;;       (cl-incf node-count))))
-
-            ;; (message "--- Final Payload Structure ---")
-            ;; (message "Payload type: %s" (type-of payload))
-            ;; (message "Payload is list with length: %d" (length payload))
-            ;; (dolist (top-pair payload)
-            ;;   (when (listp top-pair)
-            ;;     (message "  Top-level %S => type: %s" (car top-pair) (type-of (cadr top-pair)))
-            ;;     (when (string= (car top-pair) "nodes")
-            ;;       (message "    Nodes count: %d" (length (cadr top-pair))))
-            ;;     (when (string= (car top-pair) "model_config")
-            ;;       (message "    Model config: %S" (cadr top-pair)))))
-            ;; (message "=== END ELISP DEBUG ===")
-
-            ;; (message "Auto-tag DEBUG: Sending payload with %d nodes to API layer." (length reversed-nodes))
-            ;; The API layer will wrap this payload in a list before sending.
-            (org-supertag-api-batch-generate-tags
-             (list payload) ;; Wrap the payload in a list to conform to the data contract
-             #'org-supertag-auto-tag--batch-handle-completion)))
-
-      ;; If no eligible nodes, just print a message, do nothing.
-      (message "Auto-tag: All untagged nodes' content is too short or cannot be extracted, skipped."))))
+        (message "Auto-tag: Found %d eligible untagged nodes to process. Sending to backend..." (length eligible-nodes-payload))
+        (let* ((nodes-to-send (reverse eligible-nodes-payload))
+               (model-config (org-supertag-auto-tag--get-model-config))
+               (payload `(("nodes" ,nodes-to-send)
+                         ("model_config" ,model-config))))
+          (org-supertag-api-batch-generate-tags
+           (list payload)
+           #'org-supertag-auto-tag--batch-handle-completion))))))
 
 (defun org-supertag-auto-tag--get-model-config ()
   "Get model configuration for auto-tagging from this module's custom variables.
