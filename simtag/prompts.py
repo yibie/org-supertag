@@ -301,6 +301,13 @@ CHAT_LANGUAGE_INSTRUCTIONS = {
     "English": "Answer the following question in English: {question}",
     "Chinese": "请用中文回答以下问题: {question}",
     "Spanish": "Por favor responda a la siguiente pregunta en español: {question}",
+    "Japanese": "以下の質問に日本語で回答してください: {question}",
+    "Korean": "다음 질문에 대한 답변을 한국어로 해주세요: {question}",
+    "French": "Veuillez répondre à la question suivante en français: {question}",
+    "German": "Bitte antworte auf die folgende Frage auf Deutsch: {question}",
+    "Italian": "Per favore rispondi alla seguente domanda in italiano: {question}",
+    "Portuguese": "Por favor, responda a seguinte pergunta em português: {question}",
+    "Russian": "Пожалуйста, ответьте на следующий вопрос на русском языке: {question}",
 }
 
 def generate_query_with_language_instruction(language: str, question: str) -> str:

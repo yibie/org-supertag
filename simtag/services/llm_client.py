@@ -105,7 +105,7 @@ class OllamaBackend(LLMBackend):
         if options:
             payload["options"] = options
 
-        logger.debug(f"Ollama payload: {json.dumps(payload)}")
+        #logger.debug(f"Ollama payload: {json.dumps(payload)}")
         logger.debug(f"Making Ollama generate request to {api_url} with model {model} using requests")
         start_time = time.time()
 

@@ -6,123 +6,122 @@ Unify data Processer
 Data Contract Specification
 ==========================================
 
-### 1. Elisp 端数据准备规范
+1. Elisp Side Data Preparation Specification
 
-Elisp 端必须按照以下规范准备数据，确保数据结构符合 sync_handler.py 的期望：
+Elisp Side must prepare data according to the following specification to ensure the data structure matches the expectations of sync_handler.py:
 
-#### 1.1 实体 (Entity) 数据格式
+1.1 Entity Data Format
 ```elisp
-;; 每个实体必须包含以下字段：
-'((id . "entity-id")           ; 必需：实体唯一标识
-  (type . "node")              ; 必需：实体类型 ("node" | "tag")
-  (title . "实体标题")         ; 可选：实体标题
-  (content . "实体内容")       ; 可选：实体内容
-  (properties . properties-alist) ; 可选：属性列表
-  (file_path . "/path/to/file")    ; 可选：文件路径
-  (pos . 123)                      ; 可选：位置信息
-  ;; ... 其他字段
+;; Each entity must contain the following fields:
+'((id . "entity-id")           ; Required: Entity unique identifier
+  (type . "node")              ; Required: Entity type ("node" | "tag")
+  (title . "entity title")     ; Optional: Entity title
+  (content . "entity content") ; Optional: Entity content
+  (properties . properties-alist) ; Optional: Properties list
+  (file_path . "/path/to/file")    ; Optional: File path
+  (pos . 123)                      ; Optional: Position information
+  ;; ... other fields
   )
 ```
 
-#### 1.2 快照 (Snapshot) 数据格式
+1.2 Snapshot Data Format
 ```elisp
-;; 完整的同步快照数据：
-'((entities . (entity1 entity2 ...))     ; 要更新的实体列表
-  (links . (link1 link2 ...))           ; 要更新的链接列表
-  (ids_to_delete . ("id1" "id2" ...))   ; 要删除的实体ID列表
+;; Complete snapshot data:
+'((entities . (entity1 entity2 ...))     ; List of entities to update
+  (links . (link1 link2 ...))           ; List of links to update
+  (ids_to_delete . ("id1" "id2" ...))   ; List of entity IDs to delete
   )
 ```
 
-#### 1.3 链接 (Link) 数据格式
+1.3 Link Data Format
 ```elisp
-;; 链接数据：
-'((source . "source-id")       ; 必需：源实体ID
-  (target . "target-id")       ; 必需：目标实体ID
-  (type . "REF_TO")           ; 可选：链接类型
-  ;; ... 其他属性
+;; Link data:
+'((source . "source-id")       ; Required: Source entity ID
+  (target . "target-id")       ; Required: Target entity ID
+  (type . "REF_TO")           ; Optional: Link type
+  ;; ... other fields
   )
 ```
 
-### 2. Python 端处理规范
+2. Python Side Processing Specification
 
-#### 2.1 normalize_payload 函数职责
-- 接收 Elisp 传输的数据 (通过 EPC 协议)
-- 将 Elisp alist 转换为 Python dict
-- 处理 Symbol 类型和特殊值 (t, nil)
-- 递归处理嵌套结构
+2.1 normalize_payload Function Responsibilities
+- Receive data from Elisp (via EPC protocol)
+- Convert Elisp alist to Python dict
+- Handle Symbol type and special values (t, nil)
+- Recursively process nested structures
 
-#### 2.2 期望的输出格式
+2.2 Expected Output Format
 ```python
 {
     "entities": [
         {
             "id": "entity-id",
             "type": "node",
-            "title": "实体标题",
-            "content": "实体内容",
+            "title": "entity title",
+            "content": "entity content",
             "properties": {...},
-            # ... 其他字段
+            # ... other fields
         },
-        # ... 更多实体
+        # ... more entities
     ],
     "links": [
         {
             "source": "source-id",
             "target": "target-id",
             "type": "REF_TO",
-            # ... 其他属性
+            # ... other fields
         },
-        # ... 更多链接
+        # ... more links
     ],
     "ids_to_delete": ["id1", "id2", ...]
 }
 ```
 
-### 3. 数据验证规则
+3. Data Validation Rules
 
-#### 3.1 必需字段验证
-- 实体必须有 'id' 和 'type' 字段
-- 链接必须有 'source' 和 'target' 字段
+3.1 Required Field Validation
+- Entity must have 'id' and 'type' fields
+- Link must have 'source' and 'target' fields
 
-#### 3.2 数据类型验证
-- ID 字段必须是字符串
-- type 字段必须是 "node" 或 "tag"
-- properties 必须是字典或能转换为字典的结构
+3.2 Data Type Validation
+- ID field must be a string
+- type field must be "node" or "tag"
+- properties must be a dictionary or a structure that can be converted to a dictionary
 
-数据传输约定 (Elisp -> Python)
+Data Transmission Agreement (Elisp -> Python)
 ---------------------------------
-为了确保跨语言通信的稳定性和一致性，所有从 Elisp 发送到 Python 的数据
-都必须遵循以下统一格式：
+To ensure stability and consistency of cross-language communication, all data sent from Elisp to Python
+must follow the following unified format:
 
-1.  **Elisp 端**:
-    - 所有数据必须被构建成一个 **关联列表 (alist)**，例如 
-      `'(("entities" . entities-list) ("links" . links-list))`。
-      这是最可靠的序列化格式，必须取代 hash-table。
-    - 在调用 `org-supertag-bridge` 的任何函数时，此 alist 必须被包裹在一个
-      **列表中**，例如 `(list payload-alist)`。
+1.  **Elisp Side**:
+    - All data must be constructed as an **alist**, e.g.
+      `'(("entities" . entities-list) ("links" . links-list))`.
+      This is the most reliable serialization format, and must replace hash-table.
+    - When calling any function of `org-supertag-bridge`, this alist must be wrapped in a
+      **list**, e.g. `(list payload-alist)`.
 
-2.  **Python 端**:
-    - `normalize_payload` 函数是所有 Python 端 EPC 方法处理数据的
-      **唯一入口点**。
-    - 它期望接收一个列表 `[...]`，并智能地处理两种情况：
-      a.  理想情况：列表只包含一个元素 `[alist]`。
-      b.  兼容情况：由于EPC行为，列表可能被解包，直接收到裸的 `alist`。
-    - 无论哪种情况，它都会将 alist 可靠地转换为一个 Python **字典 (dict)**。
+2.  **Python Side**:
+    - `normalize_payload` function is the **only entry point** for all Python EPC methods to process data.
+    - It expects a list `[...]`, and intelligently handles two cases:
+      a.  Ideal case: The list only contains one element `[alist]`.
+      b.  Compatible case: Due to EPC behavior, the list may be unpacked, and the raw `alist` may be received directly.
+    - In both cases, it will reliably convert the alist to a Python **dictionary (dict)**.
 
-此约定避免了 EPC 桥接层对不同数据类型进行不可预测的序列化，
-确保了数据格式的绝对统一。
+This agreement avoids unpredictable serialization of different data types by the EPC bridge layer,
+ensures absolute uniformity of data formats.
 
-数据传输约定 (Python -> Elisp)
+Data Transmission Agreement (Python -> Elisp)
 ---------------------------------
-从 Python 返回数据到 Elisp 时，也应遵循统一格式：
+When returning data from Python to Elisp, it should also follow the unified format:
 
-1.  **Python 端**:
-    - 所有函数返回值都应是一个标准的 Python **字典 (dict)**。
+1.  **Python Side**:
+    - All function return values should be a standard Python **dictionary (dict)**.
 
-2.  **Elisp 端**:
-    - EPC 桥接层会将 Python 字典自动反序列化为一个 **属性列表 (plist)**。
-    - 所有 Elisp 回调函数都应期望接收一个 plist，并使用 `(plist-get result :key)`
-      来安全地访问数据。
+2.  **Elisp Side**:
+    - The EPC bridge layer will automatically deserialize the Python dictionary into a **property list (plist)**.
+    - All Elisp callback functions should expect to receive a plist, and use `(plist-get result :key)`
+      to safely access data.
 """
 
 import json
@@ -134,11 +133,10 @@ from sexpdata import Symbol
 
 logger = logging.getLogger(__name__)
 
-# ====== 标准数据格式定义 ======
-
+# ====== Standard Data Format Definitions ======
 @dataclass
 class TagResult:
-    """标准标签结果格式"""
+    """Standard Tag Result Format"""
     tag_name: str
     confidence: float  # 0.0-1.0
     reasoning: str
@@ -146,21 +144,21 @@ class TagResult:
 
 @dataclass
 class NoteResult:
-    """单个笔记的处理结果"""
+    """Single Note Processing Result"""
     note_id: str
     tags: List[TagResult]
     error: Optional[str] = None # To store any processing errors
 
 @dataclass
 class BatchResult:
-    """批量处理的完整结果"""
+    """Complete Batch Processing Result"""
     notes: List[NoteResult]
     total_time: float
     stats: Dict[str, Any]
 
 @dataclass
 class TagGovernanceData:
-    """标签治理数据格式"""
+    """Tag Governance Data Format"""
     tag_id: str
     tag_name: str
     tag_status: Optional[str] = None
@@ -169,7 +167,7 @@ class TagGovernanceData:
 
 @dataclass
 class TagRelationData:
-    """标签关系数据格式"""
+    """Tag Relation Data Format"""
     from_tag: str
     to_tag: str
     rel_type: Optional[str] = None

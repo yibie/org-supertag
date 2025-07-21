@@ -503,9 +503,10 @@ Ensures node has ID and is properly registered in database."
                  (message "[org-supertag] File %s not in sync state, marking its nodes for removal" file)
                  ;; Collect all nodes from this file
                  (maphash (lambda (id node)
-                           (when (and (eq (plist-get node :type) :node)
-                                    (string= (expand-file-name (plist-get node :file-path)) file))
-                             (push id nodes-to-remove)))
+                           (when-let ((node-file-path (plist-get node :file-path)))
+                             (when (and (eq (plist-get node :type) :node)
+                                      (string= (expand-file-name node-file-path) file))
+                               (push id nodes-to-remove))))
                          org-supertag-db--object)))
              files-in-db)
     
@@ -521,29 +522,7 @@ Ensures node has ID and is properly registered in database."
       (message "[org-supertag] No nodes need to be removed - all database files are in sync state"))))
 
 (defun org-supertag-sync-save-state ()
-  "Save sync state to file."
-  ;; Clean up non-existent files from sync state only
-  (let ((files-to-remove nil))
-    (message "Debug - Current sync directories: %S" org-supertag-sync-directories)
-    (message "Debug - Current sync state has %d files" (hash-table-count org-supertag-sync--state))
-    
-    (maphash (lambda (file _state)
-               (let ((exists (file-exists-p file))
-                     (in-scope (org-supertag-sync--in-sync-scope-p file)))
-                 (when (or (not exists)
-                          (not in-scope))
-                   (push file files-to-remove))))
-             org-supertag-sync--state)
-    
-    (message "Debug - Files to remove from sync state: %S" files-to-remove)
-    
-    ;; Remove files from sync state only (not from database)
-    (dolist (file files-to-remove)
-      (remhash file org-supertag-sync--state))
-    
-    (message "Debug - After cleanup, sync state has %d files" 
-             (hash-table-count org-supertag-sync--state)))
-  
+  "Save the current sync state to file."
   (with-temp-file org-supertag-sync-state-file
     (let ((print-length nil)
           (print-level nil))
@@ -733,7 +712,8 @@ Returns the number of cleaned nodes."
   "Check and synchronize modified files.
 This is the main sync function called periodically."
   ;; Clean up non-existent files and files out of sync scope from sync state
-  (let ((files-to-remove nil))
+  (let ((files-to-remove nil)
+        (state-changed nil)) ; Flag to track if state was modified
     (maphash (lambda (file _state)
                (when (or (not (file-exists-p file))
                         (not (org-supertag-sync--in-sync-scope-p file)))
@@ -741,23 +721,31 @@ This is the main sync function called periodically."
              org-supertag-sync--state)
     
     ;; Remove files from sync state and their nodes from database
-    (dolist (file files-to-remove)
-      (message "[org-supertag] Removing file from sync state (file %s or out of scope): %s"
-               (if (file-exists-p file) "exists" "doesn't exist")
-               file)
-      (remhash file org-supertag-sync--state)
-      ;; Remove nodes from these files in database
-      (maphash (lambda (id node)
-                 (when (and (eq (plist-get node :type) :node)
-                           (string= (plist-get node :file-path) file))
-                   (org-supertag-db-remove-object id)))
-               org-supertag-db--object)))
+    (when files-to-remove
+      (setq state-changed t)
+      (dolist (file files-to-remove)
+        (message "[org-supertag] Removing file from sync state (file %s or out of scope): %s"
+                 (if (file-exists-p file) "exists" "doesn't exist")
+                 file)
+        (remhash file org-supertag-sync--state)
+        ;; Remove nodes from these files in database
+        (maphash (lambda (id node)
+                   (when (and (eq (plist-get node :type) :node)
+                              (string= (plist-get node :file-path) file))
+                     (org-supertag-db-remove-object id)))
+                 org-supertag-db--object)))
+
+    ;; Save the state to disk if it was changed.
+    (when state-changed
+      (org-supertag-sync-save-state)))
 
   ;; Check for new files first
   (let ((new-files (org-supertag-scan-sync-directories)))
     (when new-files
       (dolist (file new-files)
-        (org-supertag-sync-update-state file))))
+        (org-supertag-sync-update-state file))
+      ;; Also save state if new files were added
+      (org-supertag-sync-save-state)))
   
   ;; Original sync logic
   (let ((modified-files (org-supertag-get-modified-files))
@@ -812,7 +800,7 @@ This is the main sync function called periodically."
                                     (hash-table-count old-nodes))))
               (setq nodes-deleted (+ nodes-deleted deleted-in-file)))
             (org-supertag-sync-update-state file)
-            (cl-incf updated)))))
+            (cl-incf updated))))
     
     ;; Cleanup zombie nodes after processing modified files
     (when modified-files
@@ -822,7 +810,7 @@ This is the main sync function called periodically."
           (message "[org-supertag] Cleaned up %d zombie nodes" cleaned-nodes))))
     
     ;; Report results
-    (message "[org-supertag] Node Sync Completed")))
+    (message "[org-supertag] Node Sync Completed"))))
 
 (defun org-supertag-sync-start-auto-sync (&optional interval)
   "Start automatic synchronization with INTERVAL seconds.

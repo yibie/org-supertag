@@ -67,6 +67,7 @@ class SimTagBridge:
         # --- Component Setup ---
         self._init_event_loop()
         
+        
         # 1. Initialize the EPC Server
         self.server = ThreadingEPCServer((self.server_host, self.port), log_traceback=True)
         self.server.allow_reuse_address = True
@@ -143,6 +144,7 @@ class SimTagBridge:
         
         # Query
         self.server.register_function(context.query_handler.get_similar_nodes, 'query/get_similar_nodes')
+        self.server.register_function(self.get_similar_entities, 'query/get_similar_entities')
         
         # Autotag
         self.server.register_function(self.batch_generate_tags, 'autotag/batch_generate_tags')
@@ -211,6 +213,10 @@ class SimTagBridge:
 
     # --- Method Implementations ---
     # All methods now delegate to the handlers stored in the global `context`.
+
+    def get_similar_entities(self, *args):
+        """Run get_similar_entities in the async event loop."""
+        return self._run_async(context.query_handler.get_similar_entities(*args))
 
     def get_status(self):
         return context.diagnostics_handler.get_status()

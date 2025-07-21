@@ -1081,8 +1081,6 @@ Returns node-id if found, nil otherwise."
      org-supertag-db--object)
     result))
 
-
-
 (defun org-supertag-node-add-reference ()
   "Add reference to current node.
 If region is active:
