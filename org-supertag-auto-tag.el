@@ -670,4 +670,22 @@ This function now correctly registers the tag in the database."
                 (insert "\n")
                 (add-text-properties node-start (point) `(node-id ,node-id))))))))))
 
+(defun org-supertag-auto-tag-show-suggestion-ui (suggestions)
+  "Show tag SUGGESTIONS to the user and let them add them.
+This is a compatibility function for modules like smart-companion.
+SUGGESTIONS is a list of plists, where each plist has :node_id and :tags."
+  (interactive)
+  (when suggestions
+    (let* ((suggestion (car suggestions))
+           (tags (plist-get suggestion :tags)))
+      (when tags
+        (let ((selected-tags (completing-read-multiple "Select tags to add: " tags nil t)))
+          (when selected-tags
+            (save-excursion
+              (org-back-to-heading t)
+              (let ((node-id (org-id-get-create)))
+                (dolist (tag selected-tags)
+                  (org-supertag-inline-add tag node-id))
+                (message "Added tags: %s" (string-join selected-tags ", "))))))))))
+
 (provide 'org-supertag-auto-tag)
