@@ -681,6 +681,7 @@ This function now correctly registers the tag in the database."
                 (insert "\n")
                 (add-text-properties node-start (point) `(node-id ,node-id))))))))))
 
+
 ;;; === Suggestion UI Mode ===
 
 (defvar org-supertag-auto-tag--suggestion-node-id nil "Current suggestion node ID")
