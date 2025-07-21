@@ -8,6 +8,54 @@ org-supertag 为 org-mode 带来更加现代化的笔记体验，这体现在各
 
 org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存，同时提供更多可能性。
 
+* org-supertag 4.0.0 更新内容
+** 新增
+*** AI Chat 服务
+- 用户可以 M-x org-supertag-view-chat 打开 AI Chat 界面
+  - 用户在 * User: 后输入内容，直接按 RET 即可发送消息
+  - 对话中提供 RAG 系统检索的 Context 内容，展开后直接点击可以直接跳转到源内容
+- 支持类似 Claude Code 的 /commands 命令系统
+  - 输入 / 和命令名称，即可唤出命令
+  - 使用 /define 命令，可以定义新的命令
+    - 语法是 /define <command-name> "Prompt"，例子 /define branstrom "帮我头脑风暴该主题"
+    - 支持识别 Prompt 中的 $INPUT 变量
+- 支持多语言对话，提供 ~org-supertag-view-chat-lang~ 自定义项
+  - 可以直接设置英语、中文、日文、韩文、法文、德文、意大利文、葡萄牙文、俄文
+*** RAG 服务：org-supertag 现在可以作为 RAG 服务，提供更智能的标签推荐和搜索功能
+- RAG 服务将自动检查数据库当中的变更，自动将变化增量更新到 SQLite-vss 数据库中
+- 用户可以 M-x org-supertag-backgorund-run-now 手动运行 RAG 同步
+- RAG 将在后台为 LLM 提供准确地资料检索
+*** 标签：新增自动推荐标签功能
+- LLM 将在后端自动为没有标签的 node 生成标签建议
+- 提供统一的标签建议应用界面
+*** 智能伙伴：新增智能伙伴功能
+- 智能伙伴将自动为没有标签的 node 生成标签建议
+- 提供统一的标签建议应用界面
+*** 定时任务：用于管理后台各类服务
+
+** 重构
+*** EPC：完全重构了 EPC 服务器后端
+- 更少的代码，更加清晰的结构
+*** 关系：标签的「同现关系」不再单独保存在独立的文件，而是和其它标签关系一样，统一保存到 LINK 数据对象中
+*** 关系：重新设计了 *Org Supertag Relation Management* 界面
+- 放弃对 Find by Groups、Isolate Tag 等功能的支持，令功能更加聚焦
+*** 补全：放弃对 Company 直接的支持，改为使用 Emacs 内置的 completion-at-point function
+- 不管用户使用是 Company 还是 Corfu，都将无缝衔接
+*** 标签：放弃对原本「预设标签」机制的支持
+*** 标签：放弃对 org-mode 传统 TAGS 的支持，仅支持自定义的 #inline-tag 标签
+- 不再受 org-mode 本身对 TAGS 输入字符的限制
+- 可以在任何地方输入 #inline-tag
+*** 属性：放弃直接对 org-mode 的 PROPERTIES 的修改
+- 用户目前可以通过 M-x org-supertag-view-node 打开 node 管理界面，在上面修改 Fields，数据将直接保存到数据库中
+- org-supertag-tag-set-field-and-value 不再可用
+*** Behavior 系统：将其中的定时运行功能抽取出来，单独作为一个定时任务组建（org-supertag-scheduler.el），为 org-supertag 其它服务提供支持
+
+** 移除
+*** 移除 org-supertag-backlink.el
+- 相关功能已经整合进 org-supertag-view-node 中
+- 它所提供的命令不再可用
+
+
 * 功能
 ** 🏷️ 为 org-mode 带来更加现代化的笔记体验
 *** 标签与属性同步设置，提升组织效率

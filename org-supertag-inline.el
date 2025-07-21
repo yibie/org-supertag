@@ -201,7 +201,8 @@ Rules:
 - Position cursor at the beginning of a new line below the headline
 - If there's a property drawer, position below the drawer
 - If there's an existing tag line, move to the end of that line
-- Always ensure we're on a separate line, not on the headline itself"
+- Always ensure we're on a separate line, not on the headline itself
+- Ensure there's a blank line between tags and content"
   (org-back-to-heading t)
   (let ((drawer-end (org-supertag-inline--find-drawer-end))
         (existing-tag-line (org-supertag-inline--find-existing-tag-line)))
@@ -337,16 +338,58 @@ Smart spacing rules:
     (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]+"))))
 
 (defun org-supertag-inline--insert-tag-for-autotag (tag-name)
-  "Insert tag for auto-tag system with safe line insertion to preserve document structure.
+  "Insert tag for auto-tag system with improved formatting.
 TAG-NAME is the tag name to insert.
-This function uses a two-line insertion strategy to avoid disrupting existing content."
-  ;; Always insert two newlines first to create safe space
-  (insert "\n\n")
-  ;; Move back to the first line and insert the tag
-  (forward-line -2)
+This function ensures proper spacing and formatting for tags."
+  ;; Check if we're at the beginning of a line
+  (unless (bolp)
+    (insert "\n"))
+  
+  ;; Insert the tag
   (insert "#" tag-name)
-  ;; Move cursor to the end of the tag insertion area
-  (forward-line 1))
+  
+  ;; Ensure we end with a newline for proper separation from content
+  (unless (eolp)
+    (insert "\n"))
+  
+  ;; Add an extra newline if the next line is not empty and not a tag line
+  (forward-line 1)
+  (unless (or (eobp)
+              (looking-at-p "^[ \t]*$")
+              (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]+"))
+              (org-at-heading-p))
+    (insert "\n"))
+  (forward-line -1))
+
+(defun org-supertag-inline--insert-multiple-tags-for-autotag (tag-names)
+  "Insert multiple tags for auto-tag system with proper formatting.
+TAG-NAMES is a list of tag names to insert.
+This function ensures all tags are properly spaced and formatted."
+  (when tag-names
+    ;; Check if we're at the beginning of a line
+    (unless (bolp)
+      (insert "\n"))
+    
+    ;; Insert all tags with proper spacing
+    (let ((first t))
+      (dolist (tag-name tag-names)
+        (unless first
+          (insert " ")) ; Space between tags
+        (insert "#" tag-name)
+        (setq first nil)))
+    
+    ;; Ensure we end with a newline for proper separation from content
+    (unless (eolp)
+      (insert "\n"))
+    
+    ;; Add an extra newline if the next line is not empty and not a tag line
+    (forward-line 1)
+    (unless (or (eobp)
+                (looking-at-p "^[ \t]*$")
+                (looking-at-p (concat "^[ \t]*#[" org-supertag-inline--valid-tag-chars "]+"))
+                (org-at-heading-p))
+      (insert "\n"))
+    (forward-line -1)))
 
 (defun org-supertag-inline--establish-relationship (tag-result node-id)
   "Establish relationship between tag and node.
@@ -384,14 +427,14 @@ This function uses our custom node location finder to avoid dependency on org-id
                 (org-back-to-heading t)
                 ;; Use the smart positioning logic for tag insertion
                 (org-supertag-inline--smart-position-for-insertion)
-                ;; Create tag and insert
+                ;; Create tag and insert using the new batch function
                 (let* ((display-name (org-supertag-sanitize-tag-name tag-name))
                        (tag-entity (or (org-supertag-tag-get display-name)
                                        (progn
                                          (org-supertag-tag--create display-name)
                                          (org-supertag-tag-get display-name)))))
-                  ;; Insert tag with simple format for auto-tag system
-                  (org-supertag-inline--insert-tag-for-autotag display-name)
+                  ;; Insert tag with improved formatting
+                  (org-supertag-inline--insert-multiple-tags-for-autotag (list display-name))
                   (when tag-entity
                     (org-supertag-node-db-add-tag node-id (plist-get tag-entity :id)))
                   ;; Save the buffer to ensure tag is written to file
@@ -646,6 +689,31 @@ use it. If there are multiple, prompt the user to select one."
                   ;; Inform the user once the relation has been added
                   (message "Added relation: %s -[%s]-> %s" source-tag-name rel-type other-tag-name))
             (user-error "Target tag not found or is empty: %s" other-tag-name))))))
+
+;;----------------------------------------------------------------------
+;; Test Functions
+;;----------------------------------------------------------------------
+(defun org-supertag-inline-test-formatting ()
+  "Test function to verify improved tag formatting.
+This function creates a test node with multiple tags to demonstrate the improved formatting."
+  (interactive)
+  (let ((test-content "**** Test Node for Tag Formatting
+:PROPERTIES:
+:ID:       TEST-1234-5678-9ABC-DEF012345678
+:END:
+
+This is a test node to demonstrate improved tag formatting.
+
+The tags should be properly spaced and separated from the content."))
+    (with-current-buffer (get-buffer-create "*Tag Formatting Test*")
+      (org-mode)
+      (erase-buffer)
+      (insert test-content)
+      (goto-char (point-min))
+      (org-back-to-heading t)
+      (org-supertag-inline--smart-position-for-insertion)
+      (org-supertag-inline--insert-multiple-tags-for-autotag '("test_tag" "formatting" "improved"))
+      (message "Test completed. Check the buffer for improved tag formatting."))))
 
 (provide 'org-supertag-inline)
 ;;; org-supertag-inline.el ends here 

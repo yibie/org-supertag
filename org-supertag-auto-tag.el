@@ -456,7 +456,7 @@ RESULTS is a vector of plists, each representing a suggestion for a node."
   (when-let* ((tag-info (org-supertag-auto-tag--batch-get-current-tag))
               (tag-name (car tag-info))
               (node-id (cdr tag-info)))
-    (org-supertag-auto-tag--apply-tag-to-node node-id tag-name)
+    (org-supertag-auto-tag--apply-multiple-tags-to-node node-id (list tag-name))
     (message "Auto-tag: Applied tag %s" tag-name)
     (let ((inhibit-read-only t))
       (org-supertag-auto-tag--batch-refresh-display))))
@@ -464,14 +464,22 @@ RESULTS is a vector of plists, each representing a suggestion for a node."
 (defun org-supertag-auto-tag--batch-apply-all-selected ()
   "Apply all selected tags and close the window if any were applied."
   (interactive)
-  (let ((total-applied 0))
+  (let ((total-applied 0)
+        (tags-by-node (make-hash-table :test 'equal)))
+    
+    ;; Group tags by node for batch processing
     (maphash (lambda (node-id selected-tags)
                (when selected-tags
-                 (dolist (tag-name selected-tags)
-                   (org-supertag-auto-tag--apply-tag-to-node node-id tag-name)
-                   (cl-incf total-applied))
-                 (puthash node-id nil org-supertag-auto-tag--batch-all-selected)))
+                 (puthash node-id selected-tags tags-by-node)))
              org-supertag-auto-tag--batch-all-selected)
+    
+    ;; Apply tags in batches per node
+    (maphash (lambda (node-id selected-tags)
+               (when selected-tags
+                 (org-supertag-auto-tag--apply-multiple-tags-to-node node-id selected-tags)
+                 (setq total-applied (+ total-applied (length selected-tags)))
+                 (puthash node-id nil org-supertag-auto-tag--batch-all-selected)))
+             tags-by-node)
 
     (if (> total-applied 0)
         (progn
@@ -485,13 +493,14 @@ RESULTS is a vector of plists, each representing a suggestion for a node."
   (when-let* ((node-id (org-supertag-auto-tag--batch-get-current-node-id))
               (tag-name (read-string "Add tag to current node: ")))
     (when (and tag-name (> (length (string-trim tag-name)) 0))
-      (org-supertag-auto-tag--apply-tag-to-node node-id (string-trim tag-name))
+      (org-supertag-auto-tag--apply-multiple-tags-to-node node-id (list (string-trim tag-name)))
       (message "Added tag: %s" tag-name)
       (let ((inhibit-read-only t))
         (org-supertag-auto-tag--batch-refresh-display)))))
 
 (defun org-supertag-auto-tag--apply-tag-to-node (node-id tag-name)
-  "Apply tag to node, ensuring it's fully registered in the database and file."
+  "Apply tag to node, ensuring it's fully registered in the database and file.
+This function now supports both single tag and batch tag application."
   (message "Applying tag '%s' to node '%s'..." tag-name node-id)
   ;; 1. Sanitize the tag name to get a valid ID.
   (let ((tag-id (org-supertag-sanitize-tag-name tag-name)))
@@ -515,6 +524,55 @@ RESULTS is a vector of plists, each representing a suggestion for a node."
              (string= (plist-get q-item :node-id) node-id))
            org-supertag-auto-tag--suggestion-queue))
     (message "Tag '%s' applied and all suggestions for this node removed from queue." tag-name)))
+
+(defun org-supertag-auto-tag--apply-multiple-tags-to-node (node-id tag-names)
+  "Apply multiple tags to node with improved formatting.
+NODE-ID is the node identifier.
+TAG-NAMES is a list of tag names to apply.
+This function ensures all tags are properly formatted and spaced."
+  (when (and node-id tag-names)
+    (message "Applying %d tags to node '%s'..." (length tag-names) node-id)
+    
+    ;; 1. Process all tags in the database first
+    (dolist (tag-name tag-names)
+      (let ((tag-id (org-supertag-sanitize-tag-name tag-name)))
+        ;; Ensure tag exists in database
+        (unless (org-supertag-tag-get tag-id)
+          (message "Tag '%s' not found in DB, creating it." tag-id)
+          (org-supertag-tag--create tag-id))
+        
+        ;; Link node to tag in database
+        (org-supertag-node-db-add-tag node-id tag-id)))
+    
+    ;; 2. Insert all tags visually into the Org file with proper formatting
+    (let ((found-location (org-supertag-find-node-location node-id)))
+      (if found-location
+          (let ((pos (car found-location))
+                (file-path (cdr found-location)))
+            (with-current-buffer (find-file-noselect file-path)
+              (save-excursion
+                (goto-char pos)
+                (org-back-to-heading t)
+                ;; Use the smart positioning logic for tag insertion
+                (org-supertag-inline--smart-position-for-insertion)
+                ;; Insert all tags with proper formatting
+                (org-supertag-inline--insert-multiple-tags-for-autotag tag-names)
+                ;; Save the buffer to ensure tags are written to file
+                (save-buffer)
+                (message "Auto-inserted %d tags for node %s at %s" (length tag-names) node-id file-path))))
+        (error "Could not find node with ID: %s" node-id)))
+    
+    ;; 3. Remove suggestions from the queue
+    (setq org-supertag-auto-tag--suggestion-queue
+          (cl-remove-if
+           (lambda (q-item)
+             (string= (plist-get q-item :node-id) node-id))
+           org-supertag-auto-tag--suggestion-queue))
+    
+    (message "Applied %d tags to node %s: %s" 
+             (length tag-names) 
+             node-id 
+             (mapconcat #'identity tag-names ", "))))
 
 (defun org-supertag-auto-tag-get-tags-from-llm (nodes callback)
   "Send text chunks in NODES to LLM and get tags asynchronously."
@@ -622,5 +680,151 @@ This function now correctly registers the tag in the database."
                         (put-text-property line-start (point) 'node-id node-id)))))
                 (insert "\n")
                 (add-text-properties node-start (point) `(node-id ,node-id))))))))))
+
+;;; === Suggestion UI Mode ===
+
+(defvar org-supertag-auto-tag--suggestion-node-id nil "Current suggestion node ID")
+(defvar org-supertag-auto-tag--suggestion-tags nil "Current suggestion tags")
+(defvar org-supertag-auto-tag--suggestion-selected nil "Selected tags for current suggestion")
+
+(defvar org-supertag-auto-tag-suggestion-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "n") 'next-line)
+    (define-key map (kbd "p") 'previous-line)
+    (define-key map (kbd "SPC") 'org-supertag-auto-tag--suggestion-toggle-tag)
+    (define-key map (kbd "RET") 'org-supertag-auto-tag--suggestion-apply-current-tag)
+    (define-key map (kbd "A") 'org-supertag-auto-tag--suggestion-apply-all-selected)
+    (define-key map (kbd "M") 'org-supertag-auto-tag--suggestion-add-manual-tag)
+    (define-key map (kbd "q") 'quit-window)
+    map)
+  "Suggestion UI mode key mapping")
+
+(define-derived-mode org-supertag-auto-tag-suggestion-mode special-mode "Suggestion-UI"
+  "Suggestion UI mode for single node tag suggestions"
+  (setq buffer-read-only t)
+  (setq truncate-lines t)
+  (use-local-map org-supertag-auto-tag-suggestion-mode-map))
+
+(defun org-supertag-auto-tag--suggestion-insert-compact-display ()
+  "Insert compact display for single node suggestion"
+  (let* ((node-data (org-supertag-db-get org-supertag-auto-tag--suggestion-node-id))
+         (title (plist-get node-data :title))
+         (file-path (plist-get node-data :file-path))
+         (content (org-supertag-auto-tag--get-node-content node-data)))
+    
+    (insert (propertize "Tag Suggestion Interface\n" 'face 'org-level-1))
+    (insert "\n")
+    
+    ;; Node information
+    (insert (propertize (format "📄 %s" (or title "Untitled Node")) 'face 'bold) "\n")
+    (insert (propertize (format "    %s" (if file-path (file-name-nondirectory file-path) "<No File>")) 'face 'org-meta-line) "\n\n")
+    
+    ;; Content preview
+    (when content
+      (let ((content-lines (split-string content "\n" t)))
+        (dotimes (i (min 3 (length content-lines)))
+          (let ((line (nth i content-lines)))
+            (when (and line (> (length (string-trim line)) 0))
+              (insert "    " (substring line 0 (min (length line) 76))
+                      (if (> (length line) 76) "..." "") "\n")))))
+      (insert "\n"))
+    
+    ;; Suggested tags
+    (insert (propertize "    🏷️ Suggested Tags:\n" 'face 'org-level-2))
+    (if (or (not org-supertag-auto-tag--suggestion-tags) (seq-empty-p org-supertag-auto-tag--suggestion-tags))
+        (insert "        No suggestions available.\n")
+      (dolist (tag-name org-supertag-auto-tag--suggestion-tags)
+        (when (stringp tag-name)
+          (let* ((selected-p (member tag-name org-supertag-auto-tag--suggestion-selected))
+                 (line-start (point)))
+            (insert (format "        %s %s\n"
+                            (if selected-p "✓" "□")
+                            (propertize tag-name 'face 'bold)))
+            (put-text-property line-start (point) 'tag-name tag-name)
+            (put-text-property line-start (point) 'node-id org-supertag-auto-tag--suggestion-node-id)))))
+    
+    (insert "\n")
+    (insert (propertize "SPC: toggle select RET: apply current A: apply all M: manual add q: quit" 
+                       'face 'org-meta-line))))
+
+(defun org-supertag-auto-tag--suggestion-get-current-tag ()
+  "Get current cursor tag name"
+  (save-excursion
+    (beginning-of-line)
+    (when (re-search-forward "^\\s-*\\(?:[✓□]\\) \\(.+?\\)\\s-*$" (line-end-position) t)
+      (string-trim (match-string-no-properties 1)))))
+
+(defun org-supertag-auto-tag--suggestion-toggle-tag ()
+  "Toggle current cursor tag selection state"
+  (interactive)
+  (when-let* ((tag-name (org-supertag-auto-tag--suggestion-get-current-tag)))
+    (if (member tag-name org-supertag-auto-tag--suggestion-selected)
+        (setq org-supertag-auto-tag--suggestion-selected (remove tag-name org-supertag-auto-tag--suggestion-selected))
+      (push tag-name org-supertag-auto-tag--suggestion-selected))
+    (let ((pos (point))
+          (win-start (window-start)))
+      (let ((inhibit-read-only t))
+        (org-supertag-auto-tag--suggestion-refresh-display))
+      (goto-char pos)
+      (set-window-start (selected-window) win-start))))
+
+(defun org-supertag-auto-tag--suggestion-apply-current-tag ()
+  "Apply current cursor tag"
+  (interactive)
+  (when-let* ((tag-name (org-supertag-auto-tag--suggestion-get-current-tag)))
+    (org-supertag-auto-tag--apply-multiple-tags-to-node org-supertag-auto-tag--suggestion-node-id (list tag-name))
+    (message "Auto-tag: Applied tag %s" tag-name)
+    (let ((inhibit-read-only t))
+      (org-supertag-auto-tag--suggestion-refresh-display))))
+
+(defun org-supertag-auto-tag--suggestion-apply-all-selected ()
+  "Apply all selected tags and close the window if any were applied."
+  (interactive)
+  (if org-supertag-auto-tag--suggestion-selected
+      (progn
+        (org-supertag-auto-tag--apply-multiple-tags-to-node org-supertag-auto-tag--suggestion-node-id org-supertag-auto-tag--suggestion-selected)
+        (message "Auto-tag: Applied %d tags. Closing window." (length org-supertag-auto-tag--suggestion-selected))
+        (quit-window))
+    (message "Auto-tag: No tags were selected to apply.")))
+
+(defun org-supertag-auto-tag--suggestion-add-manual-tag ()
+  "Add manual tag to current node"
+  (interactive)
+  (when-let* ((tag-name (read-string "Add tag to current node: ")))
+    (when (and tag-name (> (length (string-trim tag-name)) 0))
+      (org-supertag-auto-tag--apply-multiple-tags-to-node org-supertag-auto-tag--suggestion-node-id (list (string-trim tag-name)))
+      (message "Added tag: %s" tag-name)
+      (let ((inhibit-read-only t))
+        (org-supertag-auto-tag--suggestion-refresh-display)))))
+
+(defun org-supertag-auto-tag--suggestion-refresh-display ()
+  "Refresh suggestion UI display"
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (org-supertag-auto-tag--suggestion-insert-compact-display)))
+
+;;;###autoload
+(defun org-supertag-auto-tag-show-suggestion-ui (suggestions)
+  "Show tag SUGGESTIONS to the user with a compact interface similar to batch mode.
+This function now provides a rich interface with keyboard navigation and visual feedback.
+SUGGESTIONS is a list of plists, where each plist has :node_id and :tags."
+  (interactive)
+  (when suggestions
+    ;; Assuming suggestions are for the current node, and there's only one suggestion in the list.
+    (let* ((suggestion (car suggestions))
+           (node-id (plist-get suggestion :node_id))
+           (tags (plist-get suggestion :tags)))
+      (when (and node-id tags)
+        (let ((buffer (get-buffer-create "*Org Supertag Suggestion*")))
+          (with-current-buffer buffer
+            (org-supertag-auto-tag-suggestion-mode)
+            (setq org-supertag-auto-tag--suggestion-node-id node-id
+                  org-supertag-auto-tag--suggestion-tags tags
+                  org-supertag-auto-tag--suggestion-selected '())
+            
+            (let ((inhibit-read-only t))
+              (org-supertag-auto-tag--suggestion-refresh-display))
+            
+            (pop-to-buffer buffer)))))))
 
 (provide 'org-supertag-auto-tag)

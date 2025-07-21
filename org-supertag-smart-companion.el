@@ -306,14 +306,14 @@ When nil, provide suggestions for all org files regardless of sync status."
   "Suggest tags for current headline using auto-tag infrastructure."
   (save-excursion
     (org-back-to-heading t)
-    (let* ((node-data (list :file-path (buffer-file-name)
+    (let* ((node-id (org-id-get-create))
+           (node-data (list :file-path (buffer-file-name)
                            :pos (point)
                            :title (org-get-heading t t t t)))
            (content (org-supertag-auto-tag--get-node-content node-data)))
       (when (and content
                  (>= (length content) org-supertag-auto-tag-batch-min-content-length))
-        (let* ((temp-id (format "temp-%d-%d" (point) (random 10000)))
-               (node-dict `(("id" ,temp-id)
+        (let* ((node-dict `(("id" ,node-id)
                            ("content" ,content)))
                (model-config (org-supertag-auto-tag--get-model-config))
                (payload `(("nodes" ,(list node-dict))
