@@ -1,10 +1,17 @@
-;;; org-supertag-view-chat.el --- Chat view for org-supertag -*- lexical-binding: t; -*-
+;; -*- lexical-binding: t; -*-
+;;; org-supertag-view-chat.el --- Chat View for org-supertag
 
+;;; Commentary:
+;; Chat View for org-supertag.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'org-supertag-bridge)
 (require 'org-supertag-api)
 (require 'org-supertag-node)
 (require 'org-supertag-db)
 (require 'org-supertag-query)
-(require 'org-supertag-bridge)
 
 (defcustom org-supertag-view-chat-buffer-name "*Org SuperTag Chat View*"
   "The name of the buffer for the chat view."
@@ -45,32 +52,60 @@
         (goto-char (point-min))
         
         ;; Basic markdown to org conversions
-        ;; Headers: # title -> * title
-        (while (re-search-forward "^#+ \\(.*\\)" nil t) 
-          (replace-match (concat (make-string (length (match-string 1)) ?*) " " (match-string 1))))
         
-        ;; Bold: **bold** -> *bold*
-        (while (re-search-forward "\\*\\*\\(.*?\\)\\*\\*" nil t) 
-          (replace-match "*\\1*"))
-        
-        ;; Italics: *italic* -> /italic/
-        (while (re-search-forward "\\*\\(.*?\\)\\*" nil t) 
-          (replace-match "/\\1/"))
+        ;; Headers: # title -> ** title, ## title -> *** title, etc. 
+        (while (re-search-forward "^\\(#+\\) " nil t) 
+          (let ((header-level (match-string 1)))
+            (when header-level 
+              (replace-match (concat (make-string (1+ (length header-level)) ?*) " ")))))
         
         ;; Inline code: `code` -> =code= (handle before other transformations)
         (goto-char (point-min))
         (while (re-search-forward "`\\([^`]*?\\)`" nil t)
-          (replace-match "=\\1="))
+          (let ((code-text (match-string 1)))
+            (when code-text  
+              (replace-match (concat "=" code-text "=")))))
         
-        ;; Lists: - item -> - item (ensure proper spacing)
+        ;; Bold: **bold** -> *bold* (handle before single asterisk)
         (goto-char (point-min))
-        (while (re-search-forward "^\\([ \t]*\\)[*-+] \\(.*\\)$" nil t)
-          (replace-match (concat (match-string 1) "- \\2")))
+        (while (re-search-forward "\\*\\*\\([^*]+?\\)\\*\\*" nil t) 
+          (let ((bold-text (match-string 1)))
+            (when bold-text  
+              (replace-match (concat "*" bold-text "*")))))
+        
+        ;; Italics: *italic* -> /italic/ (handle after bold)
+        (goto-char (point-min))
+        (while (re-search-forward "\\*\\([^*]+?\\)\\*" nil t) 
+          (let ((italic-text (match-string 1)))
+            (when (and italic-text 
+                       (not (string-match "^\\s-*$" italic-text)))  
+              (replace-match (concat "/" italic-text "/")))))
+        
+        ;; Ordered lists: 1. item -> 1. item (preserve numbering)
+        (goto-char (point-min))
+        (while (re-search-forward "^\\([ \t]*\\)\\([0-9]+\\)\\. \\(.*\\)$" nil t)
+          (let ((indent (match-string 1))
+                (number (match-string 2))
+                (list-text (match-string 3)))
+            (when (and indent number list-text)  
+              (replace-match (concat indent number ". " list-text)))))
+        
+        ;; Unordered lists: - item -> - item, * item -> - item, + item -> - item
+        (goto-char (point-min))
+        (while (re-search-forward "^\\([ \t]*\\)\\([-*+]\\) \\(.*\\)$" nil t)
+          (let ((indent (match-string 1))
+                (marker (match-string 2))
+                (list-text (match-string 3)))
+            (when (and indent marker list-text)  
+              (replace-match (concat indent "- " list-text)))))
         
         ;; Links: [text](url) -> [[url][text]]
         (goto-char (point-min))
         (while (re-search-forward "\\[\\(.*?\\)\\](\\(.*?\\))" nil t)
-          (replace-match "[[\\2][\\1]]"))
+          (let ((link-text (match-string 1))
+                (link-url (match-string 2)))
+            (when (and link-text link-url)  
+              (replace-match (concat "[[" link-url "][" link-text "]]")))))
         
         ;; Horizontal rules: --- -> -----
         (goto-char (point-min))
@@ -94,10 +129,10 @@
       (unless (bolp) (insert "\n"))
       (let ((headline
              (if org-supertag-view-chat--current-command
-                 (format "* User [%s]:" org-supertag-view-chat--current-command)
-               "* User:")))
+                 (format "* User [%s]: " org-supertag-view-chat--current-command)
+               "* User: ")))
         (insert (propertize headline 'face 'org-supertag-chat-prompt-face))
-        (insert "\n"))))
+        (setq org-supertag-view-chat--prompt-start (point-marker))))))
 
 ;; --- Async Callback ---
 (defun org-supertag-view-chat--handle-response (result)
@@ -106,133 +141,96 @@ RESULT is the plist returned from the Python backend."
   (with-current-buffer (get-buffer-create org-supertag-view-chat-buffer-name)
     (let ((inhibit-read-only t)
           (response-content nil)
-          (history nil)
-          (status "error")
-          (error-message "No valid response from backend."))
+          (history nil))
 
-      ;; Check for bridge/EPC error first
-      (if (and (listp result) (eq (car result) :error))
-          (setq error-message (format "Backend Error: %s" (cadr result)))
-        ;; Otherwise, parse the plist from the handler
-        ;; Handle both direct results and wrapped results from _run_async
-        (let ((actual-result (if (and (listp result) (plist-get result :result))
-                                 (plist-get result :result)
-                               result)))
-          (setq response-content (or (plist-get actual-result :answer) 
-                                     (plist-get actual-result :response)
-                                     (plist-get actual-result :analysis)))
-          (setq history (plist-get actual-result :conversation-history))
-          (setq status (or (plist-get actual-result :status) "success"))
-          (when (plist-get actual-result :error)
-            (setq status "error")
-            (setq error-message (plist-get actual-result :error))))
+      ;; Parse the plist from the handler
+      ;; Handle both direct results and wrapped results from _run_async
+      (let ((actual-result (if (and (listp result) (plist-get result :result))
+                               (plist-get result :result)
+                             result)))
+        (setq response-content (or (plist-get actual-result :answer) 
+                                   (plist-get actual-result :response)
+                                   (plist-get actual-result :analysis)))
+        (setq history (plist-get actual-result :conversation-history)))
 
       ;; Go to the response start marker to clear the "Fetching..." message
-      (goto-char org-supertag-view-chat--response-start-marker)
-      (delete-region (point) (point-max))
+      (when org-supertag-view-chat--response-start-marker
+        (goto-char org-supertag-view-chat--response-start-marker)
+        (delete-region (point) (point-max)))
 
-      ;; Debug: log raw result
-      ;; (message "[Chat Debug] Raw result: %S" result)
-      ;; (message "[Chat Debug] Result keys: %S" (when (and (listp result) (evenp (length result))) 
-      ;;                                          (cl-loop for (key val) on result by #'cddr collect key)))
-      ;; (let ((actual-result (if (and (listp result) (plist-get result :result))
-      ;;                          (plist-get result :result)
-      ;;                        result)))
-      ;;   (message "[Chat Debug] Actual result: %S" actual-result)
-      ;;   (message "[Chat Debug] Actual result keys: %S" (when (and (listp actual-result) (evenp (length actual-result)))
-      ;;                                                    (cl-loop for (key val) on actual-result by #'cddr collect key)))
-      ;;   (message "[Chat Debug] Answer: %S" (plist-get actual-result :answer))
-      ;;   (message "[Chat Debug] Response: %S" (plist-get actual-result :response))
-      ;;   (message "[Chat Debug] Analysis: %S" (plist-get actual-result :analysis)))
-      ;; (message "[Chat Debug] Response content: %S" response-content)
-      ;; (message "[Chat Debug] Status: %S" status)
+      ;; Insert the content if we have a response
+      (when response-content
+        (setq org-supertag-view-chat--conversation-history history)
+        ;; push assistant message to history
+        (push (list :role "assistant" :content response-content)
+              org-supertag-view-chat--conversation-history)
+        (insert "** Assistant\n")
+        (insert (format "%s\n" (org-supertag-view-chat--md-to-org response-content)))
+        (insert "\n")
 
-      ;; Insert the content. This is the primary conditional logic.2
-      (if (and (string= status "success") response-content)
-          ;; --- THEN: SUCCESS CASE ---
-          (progn
-            (setq org-supertag-view-chat--conversation-history history)
-            ;; push assistant message to history
-            (push (list :role "assistant" :content response-content)
-                  org-supertag-view-chat--conversation-history)
-            (insert "** Assistant\n")
-            (insert (format "%s\n" (org-supertag-view-chat--md-to-org response-content)))
-            (insert "\n")
+        ;; Context block
+        (when-let ((sources (plist-get result :source_nodes)))
+          (when (and (listp sources) (> (length sources) 0))
+            ;; Deduplicate by id
+            (let* ((unique-sources
+                    (cl-remove-duplicates sources :key (lambda (s) (plist-get s :id)) :test #'equal)))
+              ;; Insert org-mode context block
+              (insert "*** Context\n")
+              (let ((content-start (point)))
+                (dolist (src unique-sources)
+                  (let* ((id (plist-get src :id))
+                         (title (or (plist-get src :title) "Untitled"))
+                         (snippet (or (plist-get src :snippet) "No snippet")))
+                    (when (and id title snippet)  
+                      (insert (format "- "))
+                      (insert-text-button title
+                                          'action (lambda (_btn) (org-supertag-view-chat--open-node id))
+                                          'follow-link t
+                                          'help-echo (format "Open node %s" id)
+                                          'face 'org-link)
+                      (insert (format ": %s\n" snippet))))))
+              ;; Fold the context block at the point
+              (save-excursion
+                ;; Search for the Context title
+                (forward-line -1)
+                (while (and (not (looking-at "^\\*\\*\\* Context")) (not (bobp)))
+                  (forward-line -1))
+                (when (looking-at "^\\*\\*\\* Context")
+                  (when (fboundp 'org-fold-hide-subtree)
+                    (org-fold-hide-subtree))))))
 
-            ;; Context block
-            (when-let ((sources (plist-get result :source_nodes)))
-              (when (and (listp sources) (> (length sources) 0))
-                ;; Deduplicate by id
-                (let* ((unique-sources
-                        (cl-remove-duplicates sources :key (lambda (s) (plist-get s :id)) :test #'equal)))
-                  ;; Insert org-mode context block
-                  (insert "*** Context\n")
-                  (let ((content-start (point)))
-                    (dolist (src unique-sources)
-                      (let* ((id (plist-get src :id))
-                             (title (or (plist-get src :title) "Untitled"))
-                             (snippet (or (plist-get src :snippet) "No snippet")))
-                        (insert (format "- "))
-                        (insert-text-button title
-                                            'action (lambda (_btn) (org-supertag-view-chat--open-node id))
-                                            'follow-link t
-                                            'help-echo (format "Open node %s" id)
-                                            'face 'org-link)
-                        (insert (format ": %s\n" snippet))))
-                    ;; Create overlay for context lines only
-                    (let ((ov (make-overlay content-start (point))))
-                      (overlay-put ov 'invisible 'org-st-chat-context)
-                      (overlay-put ov 'intangible nil)))
-                  ;; 自动收起 Context 区块
-                  (require 'org)
-                  (run-at-time
-                   0.1 nil
-                   (lambda ()
-                     (with-current-buffer (current-buffer)
-                       (save-excursion
-                         (goto-char (point-min))
-                         (when (re-search-forward "^\\*\\*\\* Context" nil t)
-                           (when (fboundp 'org-fold-hide-subtree)
-                             (org-fold-hide-subtree))))))))
-                  ))
+        ;; Finalize buffer state
+        (insert "\n\n")
+        (when org-supertag-view-chat--response-start-marker
+          (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)))
 
-            ;; Finalize buffer state for success
-            (insert "\n\n")
-            (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
-            (org-supertag-view-chat--insert-prompt))
-
-        ;; --- ELSE: ERROR CASE ---
-        (progn
-          (insert (propertize "--- ERROR ---" 'face 'font-lock-warning-face))
-          (insert (format "\n%s\n\nRaw Response:\n%S" error-message result))
-          ;; Finalize buffer state for error
-          (insert "\n\n")
-          (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
-          (org-supertag-view-chat--insert-prompt)))))))
+      ;; Always insert the next prompt
+      (org-supertag-view-chat--insert-prompt)))))
 
 (defun org-supertag-view-chat--open-node (id)
   "Corresponding to the node ID, jump to the org buffer and locate the node."
   (interactive "sNode ID: ")
-  (let ((marker (org-id-find id t)))
-    (if marker
-        (progn
-          (switch-to-buffer (marker-buffer marker))
-          (goto-char marker)
-          (org-show-entry)
-          (message "Jumped to node %s" id))
-      (message "Node %s not found" id))))
+  (when (and id (stringp id)) 
+    (let ((marker (org-id-find id t)))
+      (if marker
+          (progn
+            (switch-to-buffer (marker-buffer marker))
+            (goto-char marker)
+            (org-show-entry)
+            (message "Jumped to node %s" id))
+        (message "Node %s not found" id)))))
 
 ;; --- Sending Logic ---
 ;; Prompt begins with ">" followed by optional spaces.
 (defconst org-supertag-view-chat--prompt-regexp "^> *")
 
 (defun org-supertag-view-chat--extract-latest-input ()
-  "Return text after the last prompt line (> )."
+  "Return text after the last prompt line (* User: ...)."
   (save-excursion
     (goto-char (point-max))
-    (when (re-search-backward org-supertag-view-chat--prompt-regexp nil t)
-      (let ((start (match-end 0)))
-        (string-trim (buffer-substring-no-properties start (line-end-position)))))))
+    (when (re-search-backward "^\\* User.*?:[ ]*\\(.*\\)$" nil t)
+      (let ((input-text (match-string 1)))
+        (string-trim (or input-text ""))))))
 
 (defun org-supertag-view-chat--current-input ()
   "Return current prompt line user text (string without surrounding spaces).
@@ -247,8 +245,9 @@ the prompt marker is unexpectedly nil or misplaced."
     (when (or (not txt) (string-empty-p txt))
       (save-excursion
         (beginning-of-line)
-        (when (looking-at "^> *\\(.*\\)$")
-          (setq txt (string-trim (match-string 1))))))
+        (when (looking-at "^\\* User.*?:[ ]*\\(.*\\)$")
+          (let ((input-text (match-string 1)))
+            (setq txt (string-trim (or input-text "")))))))
     (if (and txt (not (string-empty-p txt)))
         txt
       (org-supertag-view-chat--extract-latest-input))))
@@ -304,14 +303,16 @@ the prompt marker is unexpectedly nil or misplaced."
 
 ;; Parse /define command, return (name . prompt) or nil
 (defun org-supertag-view-chat--parse-define (input)
-  (when (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\(.*\)\"$" input)
-    (let ((name (match-string 1 input))
-          (prompt (match-string 2 input)))
-      (cons name prompt))))
+  "Parse /define command input."
+  (when (and input (stringp input))  
+    (if (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"(.*)\"$" input)
+        (let ((name (match-string 1 input))
+              (prompt (match-string 2 input)))
+          (cons name (or prompt ""))))))
 
 ;; Only a built-in command /create-question
 (defconst org-supertag-view-chat--builtin-commands
-  '(("create-question" . "Please list all important questions related to $input.")))
+  '(("create-question" . "Please list all important questions related to $input in $lang.")))
 
 ;; When switch prompt, display content
 (defun org-supertag-view-chat--show-current-command-prompt ()
@@ -341,8 +342,6 @@ Handles both regular chat queries and special /commands."
     (let* ((raw (org-supertag-view-chat--current-input))
            (lang (symbol-value 'org-supertag-view-chat-lang))
            (input (when raw (string-trim (substring-no-properties raw)))))
-      (message "[Chat Debug] send-input called. Raw input: %S"
-               (substring-no-properties (or raw "")))
       ;; /define
       (let ((define-pair (org-supertag-view-chat--parse-define input)))
         (when define-pair
@@ -399,14 +398,15 @@ Handles both regular chat queries and special /commands."
                        (point)
                      (when (re-search-backward org-supertag-view-chat--prompt-regexp nil t)
                        (match-beginning 0))))))
-            (when prompt-line-start
-              (goto-char prompt-line-start)
-              (delete-region prompt-line-start (line-end-position))
-              (insert "* User\n")
-              (insert (format "%s\n" input))
-              (insert "\n")))
-          (setq org-supertag-view-chat--response-start-marker (point-marker))
-          (insert (propertize "Assistant is thinking..." 'face 'italic))
+            (if prompt-line-start
+                (progn
+                  (goto-char prompt-line-start)
+                  (delete-region prompt-line-start (line-end-position))
+                  (insert "\n"))  ;; 先换行，确保 Assistant is thinking... 单独成行
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n")))
+            (setq org-supertag-view-chat--response-start-marker (point-marker))
+            (insert (propertize "Assistant is thinking..." 'face 'italic)))
           ;; Variable replacement when sending
           (let* ((prompt (cond
                           ((and org-supertag-view-chat--current-command
@@ -416,14 +416,20 @@ Handles both regular chat queries and special /commands."
                                 (gethash org-supertag-view-chat--current-command org-supertag-view-chat--user-commands))
                            (gethash org-supertag-view-chat--current-command org-supertag-view-chat--user-commands))
                           (t nil)))
-                 (final-input (if (and prompt (string-match-p "\\$input" prompt))
-                                  (replace-regexp-in-string "\\$input" input prompt)
+                 (final-input (if (and prompt (string-match-p "\\$input\\|\\$lang" prompt))
+                                  (let ((temp-input (if (string-match-p "\\$input" prompt)
+                                                       (replace-regexp-in-string "\\$input" input prompt)
+                                                     prompt)))
+                                    (if (string-match-p "\\$lang" temp-input)
+                                        (replace-regexp-in-string "\\$lang" lang temp-input)
+                                      temp-input))
                                 input))
                  (payload `(("query" . ,final-input)
                             ("query_text" . ,final-input)
                             ("lang" . ,lang)
                             ("command" . ,org-supertag-view-chat--current-command)
                             ("history" . ,org-supertag-view-chat--conversation-history))))
+            ;;(message "[Chat] Sending payload: %S" payload)
             (org-supertag-bridge-call-async
              "rag/query"
              (list payload)
@@ -539,13 +545,12 @@ Handles both regular chat queries and special /commands."
 
 ;; --- Command System ---
 (defun org-supertag-view-chat--parse-command (input)
-  "Parse Chat View input for special commands."
-  (message "[Chat Debug] parse-command input: %S" input)
-  (when (string-match "^/\\([a-z-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
-    (let ((cmd (match-string 1 input))
-          (args (string-trim (or (match-string 2 input) "")))) ; Ensure args is a string, not nil
-      (message "[Chat Debug] parse-command matched - cmd: %S, args: %S" cmd args)
-      (cons cmd args))))
+  "Parse command input, return (command . args) or nil."
+  (when (and input (stringp input)) 
+    (if (string-match "^/\\([a-z-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
+        (let ((cmd (match-string 1 input))
+              (args (string-trim (or (match-string 2 input) ""))))
+          (cons (or cmd "") args)))))
 
 ;; --- Enhanced Send Logic ---
 (defun org-supertag-view-chat--handle-command-response (response)
@@ -555,7 +560,7 @@ Handles both regular chat queries and special /commands."
       (goto-char org-supertag-view-chat--response-start-marker)
       (delete-region (point) (point-max))
       (insert "** Assistant\n")
-      (insert (format "%s\n" (org-supertag-view-chat--md-to-org response)))
+      (insert (format "%s\n" (org-supertag-view-chat--md-to-org (or response ""))))
       (insert "\n")
       (put-text-property org-supertag-view-chat--response-start-marker (point) 'read-only t)
       (org-supertag-view-chat--insert-prompt))))
@@ -581,24 +586,25 @@ Handles both regular chat queries and special /commands."
 
 (defun org-supertag-view-chat--format-conversation (conversation)
   "Format conversation for org-mode display."
-  (let ((formatted (replace-regexp-in-string "^" "> " conversation)))
+  (let ((formatted (replace-regexp-in-string "^" "> " (or conversation ""))))
     (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" formatted)))
 
 (defun org-supertag-view-chat--save-as-new-file (conversation title)
   "Save conversation as new org file."
-  (let ((filename (expand-file-name (concat title ".org") org-supertag-chat-save-directory)))
-    (make-directory org-supertag-chat-save-directory t)
-    (with-current-buffer (find-file-noselect filename)
-      (insert (format "#+TITLE: %s\n#+DATE: %s\n#+TAGS: ai-conversation\n\n"
-                      title (format-time-string "%Y-%m-%d")))
-      (insert "* AI Conversation\n\n")
-      (insert (org-supertag-view-chat--format-conversation conversation))
-      (save-buffer)
-      (message "Conversation saved to: %s" filename))))
+  (when (and conversation title (stringp conversation) (stringp title))  ; 确保参数存在且为字符串
+    (let ((filename (expand-file-name (concat title ".org") org-supertag-chat-save-directory)))
+      (make-directory org-supertag-chat-save-directory t)
+      (with-current-buffer (find-file-noselect filename)
+        (insert (format "#+TITLE: %s\n#+DATE: %s\n#+TAGS: ai-conversation\n\n"
+                        title (format-time-string "%Y-%m-%d")))
+        (insert "* AI Conversation\n\n")
+        (insert (org-supertag-view-chat--format-conversation conversation))
+        (save-buffer)
+        (message "Conversation saved to: %s" filename)))))
 
 (defun org-supertag-view-chat--save-append-to-node (conversation)
   "Append conversation to current org headline."
-  (when (org-at-heading-p)
+  (when (and conversation (stringp conversation) (org-at-heading-p))  ; 确保参数存在且为字符串
     (save-excursion
       (org-end-of-subtree t)
       (insert "\n\n* AI Assistant Conversation\n")
@@ -609,7 +615,7 @@ Handles both regular chat queries and special /commands."
 
 (defun org-supertag-view-chat--save-as-subnode (conversation title)
   "Create new subnode under current headline."
-  (when (org-at-heading-p)
+  (when (and conversation title (stringp conversation) (stringp title) (org-at-heading-p))  ; 确保参数存在且为字符串
     (save-excursion
       (org-end-of-subtree t)
       (insert "\n")
@@ -624,34 +630,37 @@ Handles both regular chat queries and special /commands."
 (defun org-supertag-view-chat--save-conversation (conversation)
   "Save Chat View conversation with user choice of method."
   (interactive "sConversation: ")
-  (let* ((title (read-string "Conversation title: "
-                             (format "Chat-%s" (format-time-string "%Y%m%d"))))
-         (choice (completing-read "Save conversation as: "
-                                  '("new file" "append to current node" "create new subnode")
-                                  nil t)))
-    (pcase choice
-      ("new file" (org-supertag-view-chat--save-as-new-file conversation title))
-      ("append to current node" (org-supertag-view-chat--save-append-to-node conversation))
-      ("create new subnode" (org-supertag-view-chat--save-as-subnode conversation title)))))
+  (when (and conversation (stringp conversation))  ; 确保参数存在且为字符串
+    (let* ((title (read-string "Conversation title: "
+                               (format "Chat-%s" (format-time-string "%Y%m%d"))))
+           (choice (completing-read "Save conversation as: "
+                                    '("new file" "append to current node" "create new subnode")
+                                    nil t)))
+      (pcase choice
+        ("new file" (org-supertag-view-chat--save-as-new-file conversation title))
+        ("append to current node" (org-supertag-view-chat--save-append-to-node conversation))
+        ("create new subnode" (org-supertag-view-chat--save-as-subnode conversation title))))))
 
 (defun org-supertag-view-chat--quick-save (conversation)
   "Save using default method without prompting."
-  (let ((method (if (eq org-supertag-chat-default-save-method 'ask)
-                    (completing-read "Save as: "
-                                     '("new file" "append to current node" "create new subnode") nil t)
-                  org-supertag-chat-default-save-method)))
-    (pcase method
-      ("new file" (org-supertag-view-chat--save-as-new-file
-                   conversation (format "Chat-%s" (format-time-string "%Y%m%d"))))
-      ("append to current node" (org-supertag-view-chat--save-append-to-node conversation))
-      ("create new subnode" (org-supertag-view-chat--save-as-subnode
-                            conversation (format "AI-Conversation-%s" (format-time-string "%Y%m%d")))))))
+  (when (and conversation (stringp conversation))  ; 确保参数存在且为字符串
+    (let ((method (if (eq org-supertag-chat-default-save-method 'ask)
+                      (completing-read "Save as: "
+                                       '("new file" "append to current node" "create new subnode") nil t)
+                    org-supertag-chat-default-save-method)))
+      (pcase method
+        ("new file" (org-supertag-view-chat--save-as-new-file
+                     conversation (format "Chat-%s" (format-time-string "%Y%m%d"))))
+        ("append to current node" (org-supertag-view-chat--save-append-to-node conversation))
+        ("create new subnode" (org-supertag-view-chat--save-as-subnode
+                              conversation (format "AI-Conversation-%s" (format-time-string "%Y%m%d"))))))))
 
 (define-key org-supertag-view-chat-mode-map (kbd "C-c C-s")
   (lambda ()
     (interactive)
     (let ((conversation (buffer-substring-no-properties (point-min) (point-max))))
-      (org-supertag-view-chat--quick-save conversation))))
+      (when (and conversation (stringp conversation))  ; 确保参数存在且为字符串
+        (org-supertag-view-chat--quick-save conversation)))))
 
 (provide 'org-supertag-view-chat)
 

@@ -5,15 +5,16 @@ import logging
 import time
 import traceback
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 from typing import Dict, Any, List
 
 from ..core.graph_service import GraphService
 from ..utils.unified_tag_processor import normalize_payload
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,8 @@ class QueryHandler:
         """
         node_id = None  # Initialize for logging in case of early failure
         try:
-            payload = normalize_payload(args)
+            # The payload from Elisp is the first element in the *args tuple.
+            payload = normalize_payload(args[0] if args else {})
             node_id = payload.get("node_id")
             top_k = payload.get("top_k", 5)
 

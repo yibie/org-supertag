@@ -19,13 +19,16 @@
 (defun org-supertag-sanitize-tag-name (name)
   "Convert a name into a valid tag name.
 NAME is the name to convert. It removes leading/trailing whitespace,
-removes all text properties, and converts internal whitespace sequences
-to single underscores."
+a leading '#', removes all text properties, and converts internal
+whitespace sequences to single underscores."
   (if (or (null name) (string-empty-p name))
       (error "Tag name cannot be empty")
     (let* ((clean-name (substring-no-properties name))
            (trimmed (string-trim clean-name))
-           (sanitized (replace-regexp-in-string "\\s-+" "_" trimmed)))
+           (no-hash (if (string-prefix-p "#" trimmed)
+                        (substring trimmed 1)
+                      trimmed))
+           (sanitized (replace-regexp-in-string "\s-+" "_" no-hash)))
       (if (string-empty-p sanitized)
           (error "Invalid tag name: %s" name)
         sanitized))))
@@ -263,7 +266,10 @@ NODE-ID: The node identifier"
   (org-supertag-db-remove-link :node-tag node-id tag-id)
   (let ((tag (org-supertag-tag-get tag-id)))
     (dolist (field-def (plist-get tag :fields))
-      (org-supertag-field-remove-value field-def node-id tag-id))))
+      (org-supertag-field-remove-value field-def node-id tag-id)))
+  ;; Clean up cooccurrence relations when removing a tag
+  (when (featurep 'org-supertag-relation)
+    (org-supertag-relation-unrecord-cooccurrence node-id tag-id)))
 
 ;;----------------------------------------------------------------------
 ;; Tag User Command (Now data-layer functions)
@@ -304,6 +310,11 @@ TAG-ID: The tag identifier to delete."
                   (to (plist-get link-props :to)))
               (org-supertag-db-remove-link link-type from to)))))
       
+      ;; Clean up cooccurrence relations for the deleted tag
+      (when (featurep 'org-supertag-relation)
+        (dolist (node-id nodes)
+          (org-supertag-relation-unrecord-cooccurrence node-id tag-id)))
+      
       (org-supertag-db-remove-object tag-id)
       (org-supertag-db--mark-dirty)
       (org-supertag-db-save)
@@ -318,43 +329,6 @@ The hook functions are called with one argument:
 - tag-id: The ID of the deleted tag"
   :type 'hook
   :group 'org-supertag)
-
-;;----------------------------------------------------------------------
-;; Preset Tag
-;;----------------------------------------------------------------------
-
-(defcustom org-supertag-preset-tags
-  '()
-  "Default preset tags with their field definitions."
-  :type '(repeat (cons (string :tag "Tag name")
-                      (repeat (plist :options ((:name string)
-                                              (:type (choice (const string)
-                                                             (const options)
-                                                             (const date)))
-                                              (:options (repeat string))
-                                              (:description string))))))
-  :group 'org-supertag
-  :set (lambda (sym val) (set-default sym val)))
-
-(defun org-supertag-get-preset-fields (tag-name)
-  "Get predefined fields for a tag.
-TAG-NAME is the name of the tag."
-  (when-let* ((preset (assoc tag-name org-supertag-preset-tags)))
-    (let ((fields (cdr preset)))
-      (cl-loop for field in fields
-               collect (let* ((name (plist-get field :name))
-                              (type (plist-get field :type))
-                              (options (plist-get field :options))
-                              (description (plist-get field :description)))
-                         (unless (and name type)
-                           (error "Invalid field definition in preset tag %s: missing name or type" tag-name))
-                         (append
-                          (list :name name
-                                :type type)
-                          (when description
-                            (list :description description))
-                          (when (and options (eq type 'options))
-                            (list :options options))))))))
 
 (defun org-supertag-tag--set-field-value (tag-id node-id field-name value)
   "Helper function to set a field value in the database."

@@ -27,7 +27,7 @@ existing_tags = [["performance"], ["docker"]]
 prompt = processor.create_standard_prompt(notes, existing_tags)
 
 # Process LLM response
-llm_response = "..."  # LLM 返回的原始文本
+llm_response = "..."  #
 results = processor.process_llm_response(
     llm_response, 
     len(notes),
