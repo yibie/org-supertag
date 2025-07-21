@@ -10,6 +10,53 @@ org-supertag brings a more modern note experience to org-mode, which is reflecte
 
 org-supertag adopts a non-intrusive design, harmoniously coexisting with the original functions of org-mode, while providing more possibilities.
 
+* org-supertag 4.0.0 Update Content
+** New Features
+*** AI Chat Service
+- Users can open the AI Chat interface with M-x org-supertag-view-chat
+  - Users can input content after * User: and press RET directly to send messages
+  - The conversation provides Context content retrieved by the RAG system, which can be expanded and clicked to directly jump to the source content
+- Supports a /commands system similar to Claude Code
+  - Enter / and command name to invoke commands
+  - Use the /define command to define new commands
+    - Syntax is /define <command-name> "Prompt", example /define branstrom "Help me brainstorm this topic"
+    - Supports recognizing $INPUT variables in Prompts
+- Supports multilingual conversations, provides ~org-supertag-view-chat-lang~ customization option
+  - Can directly set English, Chinese, Japanese, Korean, French, German, Italian, Portuguese, Russian
+*** RAG Service: org-supertag can now serve as a RAG service, providing more intelligent tag recommendations and search functionality
+- The RAG service will automatically check for changes in the database and incrementally update changes to the SQLite-vss database
+- Users can manually run RAG synchronization with M-x org-supertag-backgorund-run-now
+- RAG will provide accurate document retrieval for LLM in the background
+*** Tags: New automatic tag recommendation feature
+- LLM will automatically generate tag suggestions for nodes without tags in the backend
+- Provides a unified tag suggestion application interface
+*** Smart Companion: New smart companion feature
+- Smart companion will automatically generate tag suggestions for nodes without tags
+- Provides a unified tag suggestion application interface
+*** Scheduled Tasks: For managing various background services
+
+** Refactoring
+*** EPC: Completely refactored the EPC server backend
+- Less code, clearer structure
+*** Relations: Tag "co-occurrence relationships" are no longer stored separately in independent files, but are unified with other tag relationships and saved to LINK data objects
+*** Relations: Redesigned the *Org Supertag Relation Management* interface
+- Abandoned support for Find by Groups, Isolate Tag and other features to make functionality more focused
+*** Completion: Abandoned direct support for Company, switched to using Emacs built-in completion-at-point function
+- Whether users use Company or Corfu, it will seamlessly integrate
+*** Tags: Abandoned support for the original "preset tags" mechanism
+*** Tags: Abandoned support for org-mode traditional TAGS, only supporting custom #inline-tag tags
+- No longer limited by org-mode's input character restrictions for TAGS
+- Can input #inline-tag anywhere
+*** Properties: Abandoned direct modification of org-mode PROPERTIES
+- Users can currently open the node management interface with M-x org-supertag-view-node, modify Fields on it, and data will be directly saved to the database
+- org-supertag-tag-set-field-and-value is no longer available
+*** Behavior System: Extracted the scheduled execution functionality from it as a separate scheduled task component (org-supertag-scheduler.el) to support other org-supertag services
+
+** Removed
+*** Removed org-supertag-backlink.el
+- Related functionality has been integrated into org-supertag-view-node
+- Commands it provided are no longer available
+
 * Features
 ** 🏷️ Bring a more modern note experience to org-mode
 *** 🔖 Synchronize tags and properties, improve organizational efficiency
