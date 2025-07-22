@@ -76,52 +76,55 @@ class AIHandler:
 
     async def find_connections(self, payload: Dict) -> Dict[str, Any]:
         """
-        Find knowledge connections for a given tag.
-        
-        Args:
-            payload: Dict containing 'tag' key with tag name
-            
-        Returns:
-            Dict with related nodes, tags, and connection insights
+        Find knowledge connections for a given tag based on co-occurrence.
         """
         try:
             data = normalize_payload(payload)
-            tag = data.get('tag')
-            
-            if not tag:
-                return {"error": "Tag is required for finding connections"}
-                
-            self.logger.info(f"Finding connections for tag: {tag}")
-            
-            # Get nodes with this tag
-            nodes_with_tag = await self.graph_service.find_nodes_by_tag(tag)
-            
-            # Get related tags via co-occurrence
-            related_tags = await self.graph_service.get_related_tags(tag)
-            
-            # Get similar concepts
+            tag_name = data.get('tag')
+
+            if not tag_name:
+                return {"error": "Tag name is required for finding connections"}
+
+            self.logger.info(f"Finding connections for tag: {tag_name}")
+
+            # 1. get tag node
+            tag_node = self.graph_service.get_node_by_id(tag_name)
+            if not tag_node:
+                return {"error": f"Tag '{tag_name}' not found in the graph."}
+            tag_id = tag_node['node_id']
+
+            # 2. get nodes with tag
+            nodes_with_tag = self.graph_service.get_nodes_linked_to_tag(tag_id)
+
+            # 3. count co-occurrence related tags
+            co_occurring_tags = {}
+            for node in nodes_with_tag:
+                # get all tags of the node
+                tag_neighbors = self.graph_service.get_neighbors(node['node_id'], relation_type='HAS_TAG')
+                for rel_node in tag_neighbors:
+                    rel_tag_id = rel_node['node_id']
+                    if rel_tag_id != tag_id:
+                        co_occurring_tags[rel_tag_id] = co_occurring_tags.get(rel_tag_id, 0) + 1
+
+            # 4. sort by co-occurrence frequency
+            sorted_related_tags = sorted(co_occurring_tags.items(), key=lambda item: item[1], reverse=True)
+            related_tag_names = [tag_id for tag_id, _ in sorted_related_tags[:5]]
+
+            # 5. AI analysis
             prompt = f"""
-            Find knowledge connections and relationships for the tag "{tag}".
-            Consider:
-            1. Related concepts and themes
-            2. Practical applications and use cases
-            3. Connections to other knowledge areas
-            4. Common workflows or processes involving this tag
-            
-            Provide insights about how this tag connects to the broader knowledge graph.
+            Analyze the connections for the tag \"{tag_name}\".\nIt frequently co-occurs with these tags: {', '.join(related_tag_names)}.\nBased on this, what are the likely relationships, underlying themes, or common use cases?\nProvide a brief analysis.
             """
-            
             ai_insights = await self.rag_service.query(prompt)
-            
+
             return {
                 "status": "success",
-                "tag": tag,
+                "tag": tag_name,
                 "nodes_count": len(nodes_with_tag),
-                "related_tags": related_tags[:10],
-                "ai_insights": ai_insights.get("answer", "") if ai_insights.get("status") == "success" else "",
-                "nodes": nodes_with_tag[:5]  # Limit to 5 nodes for brevity
+                "related_tags": [{"tag": tag_id, "count": count} for tag_id, count in sorted_related_tags[:10]],
+                "ai_insights": ai_insights.get("answer", "") if ai_insights.get("status") == "success" else "Could not generate AI insights.",
+                "nodes": [n['node_id'] for n in nodes_with_tag[:5]]
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error in find_connections: {e}", exc_info=True)
             return {"error": f"Failed to find connections: {str(e)}"}

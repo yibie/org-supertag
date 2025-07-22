@@ -22,14 +22,19 @@
 (defun org-supertag-field-set-value (node-id field-name value &optional tag-id)
   "Set a field value for a given node in the database.
 This function creates or updates the node-field link.
-If VALUE is nil or an empty string, the field is removed.
-TAG-ID is optional. If provided, the field is associated with a specific tag."
-  (let ((link-id (format ":node-field:%s->%s" node-id field-name)))
-    (if (and value (not (string-empty-p value)))
+If VALUE is a list, it will be serialized into a comma-separated string.
+If VALUE is nil or an empty string, the field is removed."
+  (message "DEBUG: set-value node-id=%S field-name=%S value=%S (type=%S)" node-id field-name value (type-of value))
+  (let ((link-id (format ":node-field:%s->%s" node-id field-name))
+        (final-value (if (listp value)
+                         (mapconcat #'identity value ",")
+                       value)))
+    (message "DEBUG: set-value final-value=%S (type=%S)" final-value (type-of final-value))
+    (if (and final-value (not (string-empty-p final-value)))
         (let ((props (list :type :node-field
                            :from node-id
                            :to field-name
-                           :value value
+                           :value final-value
                            :created-at (current-time))))
           (when tag-id
             (setq props (plist-put props :tag-id tag-id)))
@@ -97,7 +102,7 @@ If TAG-ID is provided, it will only delete if the field belongs to that tag."
               :description "Email"))
     (tag . (:validator org-supertag-validate-tag
             :formatter org-supertag-format-tag
-            :reader org-supertag-read-tag-field
+            :reader org-supertag-read-multiple-tags-field
             :description "Tag Reference"))
     ;; (range . (:validator org-supertag-validate-range
     ;;           :formatter org-supertag-format-range
@@ -278,11 +283,16 @@ VALUE can contain any characters except colons and whitespace."
            (not (string-empty-p (string-trim value)))
            (not (string-match-p "[:[:space:]]" (string-trim value)))))))
 
-(defun org-supertag-format-tag (value &optional _field-def)
-  "Format tag value to a single string (first tag from list if multiple)."
-  (if (listp value)
-      (car value)
-    value))
+;; format tag field, support multiple values serialization
+(defun org-supertag-format-tag (value &optional field-def)
+  "Format tag value for storage. If multiple, serialize as comma-separated string."
+  (let ((is-multiple (and field-def (plist-get field-def :multiple))))
+    (cond
+     ((and is-multiple (listp value))
+      (mapconcat #'identity value ","))
+     ((listp value)
+      (car value))
+     (t value))))
 
 (defun org-supertag-validate-options (value &optional field-def)
   "Validate options value.
@@ -485,10 +495,6 @@ VALUE: Value to convert."
   (let ((options (plist-get field-def :options)))
     (completing-read prompt options nil t current-value)))
 
-(defun org-supertag-read-tag-field (prompt current-value)
-  "Read a tag reference from the user."
-  (let ((tag-names (org-supertag-get-all-tags)))
-    (completing-read prompt tag-names nil t current-value)))
 
 (defun org-supertag-read-url-field (prompt current-value)
   "Read a URL from the user."
@@ -498,6 +504,34 @@ VALUE: Value to convert."
   "Read an email from the user."
   (read-string prompt current-value))
 
+;; support multiple tag values
+(defun org-supertag-read-multiple-tags-field (prompt current-values)
+  "Read multiple tag references from the user，support comma separated and multi-segment completion."
+  (let* ((tag-names (org-supertag-get-all-tags))
+         (crm-separator ",")
+         (input (let ((crm-separator crm-separator))
+                  (completing-read-multiple
+                   prompt tag-names nil nil
+                   (when (listp current-values)
+                     (mapconcat #'identity current-values ", ")))))
+         )
+    (mapcar #'string-trim input)))
+
+;; get field value and deserialize (multiple values return list)
+(defun org-supertag-field-get-value-for-display (node-id field-def)
+  "Get a field's value, deserializing it if it is a tag field (always split for tag type)."
+  (let* ((field-name (plist-get field-def :name))
+         (tag-id (plist-get field-def :tag-id))
+         (field-type (plist-get field-def :type))
+         (raw-value (org-supertag-field-get-value node-id field-name tag-id)))
+    (message "DEBUG: get-value node-id=%S field-name=%S field-type=%S raw-value=%S (type=%S)"
+             node-id field-name field-type raw-value (type-of raw-value))
+    (if (and (eq field-type 'tag) raw-value (stringp raw-value))
+        (let ((result (split-string raw-value "," t)))
+          (message "DEBUG: get-value split result: %S" result)
+          result)
+      raw-value)))
+
 
 ;;----------------------------------------------------------------------
 ;; High-Level Interactive Field Editor
@@ -505,20 +539,16 @@ VALUE: Value to convert."
 
 (defun org-supertag-field-read-and-validate-value (field-def &optional current-value)
   "Interactively read and validate a field value based on its definition.
-This is the unified, high-level entry point for editing field values from any UI component.
-It shows a prompt, reads a value using the appropriate method for the field type,
-and then validates it. It will re-prompt on invalid input.
-
-FIELD-DEF is a property list defining the field (e.g., from `org-supertag-tag-get-field-def`).
-CURRENT-VALUE is the existing value of the field, if any.
-
-Returns the validated and formatted new value, or nil if the user cancels."
+Handles single values, multiple values (for tags), and dynamic creation of new tags."
   (let* ((field-name (plist-get field-def :name))
          (field-type (plist-get field-def :type))
-         (type-info (or (org-supertag-get-field-type field-type)
-                        (org-supertag-get-field-type 'string))) ; Fallback to string
+         (is-multiple (and (eq field-type 'tag) (plist-get field-def :multiple)))
+         (type-info (or (org-supertag-get-field-type field-type) (org-supertag-get-field-type 'string)))
          (reader-fn (plist-get type-info :reader))
-         (prompt (format "Edit %s (%s): " field-name (or (plist-get type-info :description) "Value")))
+         (prompt (format "Edit %s (%s%s): "
+                         field-name
+                         (or (plist-get type-info :description) "Value")
+                         (if is-multiple ", separate with commas" "")))
          new-value-raw
          validated-value
          valid-input-p)
@@ -528,23 +558,37 @@ Returns the validated and formatted new value, or nil if the user cancels."
 
     (while (not valid-input-p)
       (setq new-value-raw
-            (condition-case nil
-                (cond
-                 ((eq field-type 'options) (funcall reader-fn prompt current-value field-def))
-                 (t (funcall reader-fn prompt current-value)))
-              (quit nil)))
-
-      (if (null new-value-raw) ; User cancelled input (e.g., C-g)
-          (progn
-            (message "Cancelled.")
-            (setq validated-value nil)
-            (setq valid-input-p t))
-        (setq validated-value (org-supertag-field--validate-and-format-value new-value-raw field-def))
-        (if validated-value
-            (setq valid-input-p t)
-          (message "Invalid value. Please try again.")
-          (sit-for 1)))) ; Pause to let user read the message
-
+            (funcall reader-fn prompt current-value))
+      (if (null new-value-raw)
+          (progn (setq validated-value nil) (setq valid-input-p t))
+        (if (eq field-type 'tag)
+            ;; --- Multi-value Tag Logic ---
+            (let* ((input-tags new-value-raw)
+                   (all-tags (org-supertag-get-all-tags))
+                   (final-tags '())
+                   (all-valid t))
+              (dolist (tag-str input-tags)
+                (if (member tag-str all-tags)
+                    (push tag-str final-tags)
+                  (if (y-or-n-p (format "Tag '%s' does not exist. Create it? " tag-str))
+                      (progn
+                        (org-supertag-tag--create tag-str)
+                        (push tag-str final-tags))
+                    (progn
+                      (message "Aborted. Please re-enter all required tags.")
+                      (setq all-valid nil)))))
+              (when all-valid
+                (setq validated-value (nreverse final-tags))
+                (setq valid-input-p t)))
+          ;; --- 其它类型 ---
+          (let ((validated-single-value (org-supertag-field--validate-and-format-value new-value-raw field-def)))
+            (if validated-single-value
+                (progn
+                  (setq validated-value validated-single-value)
+                  (setq valid-input-p t))
+              (message "Invalid value. Please try again.")
+              (sit-for 1))))))
+    (message "DEBUG: field-read-and-validate-value returning %S (type=%S)" validated-value (type-of validated-value))
     validated-value))
 
 ;;----------------------------------------------------------------------
