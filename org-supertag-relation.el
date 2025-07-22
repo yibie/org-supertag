@@ -382,7 +382,8 @@ STRENGTH: Relation strength (optional, default is 1.0)"
       ;; Add the relation
       (let ((props (list :from from-tag
                         :to to-tag
-                        :type rel-type
+                        :type :tag-tag ; 链接类型始终是 :tag-tag
+                        :relation-type rel-type ; 具体的语义关系类型
                         :strength (or strength 1.0)
                         :created-at (current-time))))
         (puthash rel-id props org-supertag-db--link)
