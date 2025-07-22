@@ -95,46 +95,20 @@ Otherwise, return VALUE as a string."
 (defun org-supertag-view-node--insert-relations-section (node-id)
   (insert (propertize "🔗 Relations\n" 'face 'org-level-2))
   (let ((tags (org-supertag-node-get-tags node-id))
-        (relations '())
-        (valid-relations '()))
-    ;; collect all tag relations
+        (relations '()))
     (dolist (tag-id tags)
-      (let ((tag-relations (org-supertag-relation-get-all tag-id)))
+      (let ((tag-relations (org-supertag-relation-get-all tag-id 'cooccurrence)))
         (setq relations (append relations tag-relations))))
-    ;; filter invalid relations to prevent nil display
-    (dolist (rel relations)
-      (let* ((source-id (plist-get rel :from))
-             (target-id (plist-get rel :to))
-             (type (plist-get rel :type))
-             (relation-type (plist-get rel :relation-type))
-             (strength (plist-get rel :strength))
-             (source-name (org-supertag-tag-get-name-by-id source-id))
-             (target-name (org-supertag-tag-get-name-by-id target-id)))
-        ;; only show valid tag relations
-        (when (and source-name target-name (not (string-empty-p source-name)) (not (string-empty-p target-name)))
-          (push (list :source-id source-id :target-id target-id :type type :relation-type relation-type :strength strength :source-name source-name :target-name target-name) valid-relations))))
-    (if valid-relations
-        (dolist (rel valid-relations)
-          (let* ((source-name (plist-get rel :source-name))
-                 (target-name (plist-get rel :target-name))
-                 (relation-type (plist-get rel :relation-type))
-                 (type (plist-get rel :type))
-                 (strength (plist-get rel :strength)))
-            (insert (propertize (format "    %s " source-name) 'face 'org-tag))
-            ;; show relation-type first
-            (cond
-             ((eq relation-type 'cooccurrence)
-              ;; cooccurrence relation, show strength
-              (insert (propertize (format "--[cooccurrence]-->") 'face 'font-lock-keyword-face)))
-             ((and relation-type (symbolp relation-type))
-              (insert (propertize (format "--[%s]-->" (symbol-name relation-type)) 'face 'font-lock-keyword-face)))
-             (relation-type
-              (insert (propertize (format "--[%s]-->" relation-type) 'face 'font-lock-keyword-face)))
-             (type
-              (insert (propertize (format "--[%s]-->" type) 'face 'font-lock-keyword-face)))
-             (t
-              (insert (propertize "--[?]-->" 'face 'font-lock-keyword-face))))
-            (insert (propertize (format " %s\n" target-name) 'face 'org-tag))))
+    (if relations
+        (dolist (rel relations)
+          (let* ((source-name (org-supertag-tag-get-name-by-id (plist-get rel :from)))
+                 (target-name (org-supertag-tag-get-name-by-id (plist-get rel :to))))
+            (insert (propertize source-name 'face 'org-tag))
+            (insert " ")
+            (insert (propertize "⋈" 'face '(:foreground "green" :weight bold)))
+            (insert " ")
+            (insert (propertize target-name 'face 'org-tag))
+            (insert "\n")))
       (insert (propertize "    No relations found.\n" 'face 'shadow))))
   (insert "\n"))
 

@@ -31,8 +31,8 @@
 (require 'cl-lib)
 (require 'org-element)
 (require 'org-supertag-db)
-(require 'org-supertag-node nil t)  
-(require 'org-supertag-tag nil t)   
+(require 'org-supertag-node nil t)
+(require 'org-supertag-tag nil t)
 
 
 
@@ -41,28 +41,15 @@
   :group 'org-supertag)
 
 (defcustom org-supertag-relation-types
-  '((contrast . "A ⋮ B, A compare with B") ; contrast relationship
-    (relate . "A ~ B, A relate to B")   ; general relation
-    (influence . "A → B, A influence B") ; influence relationship
-    (contain . "A ⊃ B, A contain B")  ; containment (parent)
-    (belong . "A ⊂ B, A belong to B")   ; belonging (child)
-    (parallel . "A ∥ B, A parallel with B") ; parallel relationship
-    (dependency . "A ⇒ B, A depend on B") ; dependency relationship
-    (prerequisite . "A ⊃ B, A prerequisite B") ; prerequisite relationship
-    (cause . "A ⤳ B, A cause B")    ; causal relationship
-    (effect . "A ⤝ B, A effect B")   ; effect relationship
-    (cooccurrence . "A ⋈ B, A co-occur with B")) ; co-occurrence relationship
-  "Predefined relation types.
-Each relation type contains a symbol and a description text."
+  '((cooccurrence . "A ⋈ B, A co-occur with B"))
+  "Predefined relation types. Only cooccurrence is supported."
   :type '(alist :key-type symbol :value-type string)
   :group 'org-supertag-relation)
 
 (defcustom org-supertag-relation-groups
-  '((default . (cooccurrence contrast relate influence contain belong))
-    (knowledge . (contrast relate influence contain belong))
+  '((default . (cooccurrence))
     (cooccurrence . (cooccurrence)))
-  "Predefined relation groups.
-Each group contains a list of relation types."
+  "Predefined relation groups. Only cooccurrence is supported."
   :type '(alist :key-type symbol :value-type (repeat symbol))
   :group 'org-supertag-relation)
 
@@ -73,8 +60,7 @@ Each group contains a list of relation types."
   :group 'org-supertag-relation)
 
 (defcustom org-supertag-relation-min-strength 0.2
-  "Tag relationship strength threshold below which relationships are ignored.
-This setting determines the minimum strength value for a relationship to be considered significant."
+  "Tag relationship strength threshold below which relationships are ignored."
   :type 'float
   :group 'org-supertag-relation)
 
@@ -92,25 +78,6 @@ Enabling this option will update related co-occurrences immediately when tags ar
   :type 'boolean
   :group 'org-supertag-relation)
 
-(defcustom org-supertag-relation-complementary-pairs
-  '((contain . belong)
-    (cause . effect)
-    (dependency . prerequisite))
-  "Define complementary relation pairs.
-When adding a relation, the system will automatically add its complementary relation.
-For example, when A contains B, B belongs to A."
-  :type '(alist :key-type symbol :value-type symbol)
-  :group 'org-supertag-relation)
-
-(defcustom org-supertag-relation-auto-complement t
-  "Whether to automatically add complementary relations.
-When set to t, adding a relation will automatically add its complementary relation."
-  :type 'boolean
-  :group 'org-supertag-relation)
-
-
-
-
 
 (defun org-supertag-relation--clean-completion (value)
   "Safely extract a string from VALUE returned by `completing-read`."
@@ -118,19 +85,14 @@ When set to t, adding a relation will automatically add its complementary relati
       (car value)
     value))
 
-
-
-
-
-
 (defun org-supertag-relation-init ()
   "Initialize the relation module."
   ;; Ensure co-occurrence relations are always up-to-date in the main DB.
   (org-supertag-relation-analyze-cooccurrence-patterns))
 
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 ;; Co-occurrence relation management
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 
 (defun org-supertag-relation--update-cooccurrence-strength (from-tag to-tag)
   "Update (or create) the co-occurrence relation in the main database.
@@ -329,9 +291,9 @@ If the relation does not exist, return nil."
             (dolist (tag (sort related-tags (lambda (a b) (> (string-to-number (cdr a)) (string-to-number (cdr b))))))
               (princ (format "- %s (Strength: %s)\n" (car tag) (cdr tag))))))))))
 
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 ;; Relation Type Management
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 
 (defun org-supertag-relation--get-all-relation-types ()
   "Get all available relation types."
@@ -382,8 +344,8 @@ STRENGTH: Relation strength (optional, default is 1.0)"
       ;; Add the relation
       (let ((props (list :from from-tag
                         :to to-tag
-                        :type :tag-tag ; 链接类型始终是 :tag-tag
-                        :relation-type rel-type ; 具体的语义关系类型
+                        :type :tag-tag 
+                        :relation-type rel-type 
                         :strength (or strength 1.0)
                         :created-at (current-time))))
         (puthash rel-id props org-supertag-db--link)
@@ -545,9 +507,9 @@ Return the number of nodes associated with this tag."
        org-supertag-db--link)
       count)))
 
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 ;; Tag Relation Interface
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 
 (defvar org-supertag-relation--current-tag nil
   "The ID of the current tag being edited.")
@@ -555,137 +517,55 @@ Return the number of nodes associated with this tag."
 (defvar org-supertag-relation-manage--buffer-name "*Org-Supertag Relation Management*"
   "The name of the buffer for the relation management interface.")
 
-(defvar org-supertag-relation--current-section 'existing
-  "Current section in the relation management buffer.
-Can be 'existing, 'cooccurrence, or 'recommended.")
-
-(defvar org-supertag-relation--current-item-index 0
-  "Current item index in the current section.")
-
-(defvar org-supertag-relation--selected-tags nil
-  "List of selected tags for batch operations.")
+(defun org-supertag-relation--refresh-display ()
+  "Refresh the relation management interface display."
+  (when (get-buffer org-supertag-relation-manage--buffer-name)
+    (with-current-buffer org-supertag-relation-manage--buffer-name
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (let ((tag-name (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag)))
+          (insert (propertize (format "Tag - %s\n\n" tag-name)
+                              'face 'org-level-1)))
+        (insert (propertize "Co-occurring Tags (sorted by strength):\n" 'face 'org-level-2))
+        (let* ((relations (cl-remove-if-not
+                           (lambda (rel) (eq (plist-get rel :relation-type) 'cooccurrence))
+                           (org-supertag-relation-get-all org-supertag-relation--current-tag)))
+               (related-tags '()))
+          (dolist (rel relations)
+            (let* ((other-tag-id (plist-get rel :to))
+                   (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
+                   (strength (or (plist-get rel :strength) 0.0)))
+              (when other-tag-name
+                (push (list other-tag-name strength) related-tags))))
+          (if related-tags
+              (dolist (tag-info (sort related-tags (lambda (a b) (> (cadr a) (cadr b)))))
+                (insert (format "- %s (Strength: %.2f)\n" (car tag-info) (cadr tag-info))))
+            (insert "  (No co-occurring tags found)\n")))
+        (insert (propertize "\nShortcuts:\n" 'face 'org-level-2))
+        (insert " [q] - Quit    [r] - Refresh\n")
+        (goto-char (point-min))))))
 
 (defun org-supertag-relation-manage ()
-  "Manage tag relations interface entry point."
+  "Show the co-occurrence relation management interface for a tag."
   (interactive)
   (let* ((tags (org-supertag-get-all-tags))
-         (tag-name (completing-read "Select a tag to manage relations: " tags nil t)))
+         (tag-name (completing-read "Select a tag to view co-occurrence: " tags nil t)))
     (if (or (null tag-name) (string-empty-p tag-name))
         (user-error "No valid tag selected")
       (let ((tag-id (org-supertag-tag-get-id-by-name tag-name)))
         (if (null tag-id)
             (user-error "No tag ID found for: %s" tag-name)
-          (org-supertag-relation--show-management-interface tag-id))))))
+          (when (get-buffer org-supertag-relation-manage--buffer-name)
+            (kill-buffer org-supertag-relation-manage--buffer-name))
+          (with-current-buffer (get-buffer-create org-supertag-relation-manage--buffer-name)
+            (org-supertag-relation-mode)
+            (setq-local org-supertag-relation--current-tag tag-id)
+            (org-supertag-relation--refresh-display))
+          (pop-to-buffer org-supertag-relation-manage--buffer-name))))))
 
-(defun org-supertag-relation--show-management-interface (tag-id)
-  "Show the tag relations management interface.
-TAG-ID: The ID of the current tag being edited."
-  (when (get-buffer org-supertag-relation-manage--buffer-name)
-    (kill-buffer org-supertag-relation-manage--buffer-name))
-  
-  (with-current-buffer (get-buffer-create org-supertag-relation-manage--buffer-name)
-    (org-supertag-relation-mode)
-    (setq-local org-supertag-relation--current-tag tag-id)
-    (org-supertag-relation--refresh-display))
-  
-  (let ((display-buffer-alist
-         '(( "\\*Org-Supertag Relation\\*"
-            (display-buffer-in-side-window)
-            (side . right)
-            (window-width . 0.5)
-            (slot . 0)))))
-    (pop-to-buffer org-supertag-relation-manage--buffer-name)))
-
-(defun org-supertag-relation--refresh-display ()
-  "Refresh the relation management interface display."
-  (when (get-buffer org-supertag-relation-manage--buffer-name)
-    (with-current-buffer org-supertag-relation-manage--buffer-name
-      (let ((inhibit-read-only t)
-            (current-point (point)))
-        (erase-buffer)
-        (let ((tag-name (org-supertag-tag-get-name-by-id org-supertag-relation--current-tag)))
-          (insert (propertize (format "Tag Relation Management - %s\n\n" tag-name) 'face '(:height 1.5 :weight bold))))
-
-        ;; Existing relations
-        (insert (propertize "Existing Relations (Manually set):\n" 'face 'org-level-2))
-        (let* ((all-relations (org-supertag-relation-get-all org-supertag-relation--current-tag))
-               (manual-relations (cl-remove-duplicates
-                                (cl-remove-if
-                                 (lambda (rel)
-                                   (or (eq (plist-get rel :relation-type) 'cooccurrence)
-                                       (equal (plist-get rel :to) org-supertag-relation--current-tag)))
-                                 all-relations)
-                                :test #'equal)))
-          (if manual-relations
-              (dolist (rel manual-relations)
-                (let* ((other-tag-id (plist-get rel :to))
-                       (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
-                       (rel-type (plist-get rel :type))
-                       (is-complementary (org-supertag-relation-has-complement-p rel-type))
-                       (relation-symbol (if is-complementary "◎" "→"))
-                       (relation-face (if is-complementary '(:foreground "green") '(:foreground "blue")))
-                       (remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
-                  (insert "")
-                  (insert-text-button remove-button-text
-                                    'action 'org-supertag-relation--remove-button-action
-                                    'other-tag-id other-tag-id
-                                    'follow-link t
-                                    'help-echo "Click or press RET to remove this relation")
-                  (insert " ")
-                  (insert (propertize relation-symbol 'face relation-face))
-                  (insert (format " %s " (propertize (format "%s" rel-type) 'face '(:foreground "white" :background "black"))))
-                  (insert (format " %s" other-tag-name))
-                  (when is-complementary
-                    (let ((complement-type (org-supertag-relation-get-complement rel-type)))
-                      (insert (format " (bidirectional: %s)" complement-type))))
-                  (insert "\n")))
-            (insert "  No existing relations\n")))
-
-        ;; Co-occurrence relations
-        (insert (propertize "\nCo-occurrence Relations (Auto-generated):\n" 'face 'org-level-2))
-        (let* ((cooccur-relations (org-supertag-relation-get-all org-supertag-relation--current-tag 'cooccurrence)))
-          (if cooccur-relations
-              (dolist (rel cooccur-relations)
-                (let* ((other-tag-id (plist-get rel :to))
-                       (other-tag-name (org-supertag-tag-get-name-by-id other-tag-id))
-                       ;; Get strength from the original link data
-                       (strength (plist-get rel :strength))
-                       (strength-text (format "%.2f" strength))
-                       (strength-face (cond
-                                      ((>= strength 0.7) 'shadow)
-                                      ((>= strength 0.4) 'shadow)
-                                      (t 'shadow))))
-                  (insert "")
-                  (insert-text-button (propertize "[+]" 'face '(:foreground "green"))
-                                    'action 'org-supertag-relation--convert-cooccurrence-to-explicit
-                                    'from-tag-id org-supertag-relation--current-tag
-                                    'to-tag-id other-tag-id
-                                    'follow-link t
-                                    'help-echo "Click or press RET to convert this co-occurrence to an explicit relation")
-                  (insert " ")
-                  (insert (propertize "⋈" 'face '(:weight bold :foreground "green")))
-                  (insert (format " %s " (propertize "cooccurrence" 'face '(:foreground "white" :background "black"))))
-                  (insert (format " %s " other-tag-name))
-                  (insert (propertize (format "(strength: %s)" strength-text) 'face strength-face))
-                  (insert "\n")))
-            (insert "  No co-occurrence relations found\n")))
-
-        ;; Shortcuts help moved to bottom
-        (insert (propertize "\nShortcuts:\n" 'face 'org-level-2))
-        (insert "[a] - Batch add relations to other tags\n")
-        (insert "[RET] on a line to Remove an existing relation\n")
-        (insert "[q] - Quit    [r] - Refresh\n")
-
-        ;; Relation Types help moved to bottom
-        (insert (propertize "\nRelation Types:\n" 'face 'org-level-2))
-        (insert " " (propertize "◎" 'face '(:foreground "green")) " - Bidirectional (adds reverse relation automatically)\n")
-        (insert " " (propertize "→" 'face '(:foreground "blue")) " - Unidirectional\n\n")
-
-        (goto-char current-point)))))
-
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 ;; Helper Functions
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 (defun org-supertag-tag-get-name-by-id (tag-id)
   "Get the name of the tag with the given ID.
 TAG-ID: The ID of the tag."
@@ -705,21 +585,17 @@ REL-TYPE: The relation type symbol, such as 'default, 'knowledge, etc.
 GROUP: The group symbol, such as 'default, 'knowledge, etc."
   (memq rel-type (org-supertag-relation--get-types-in-group group)))
 
-;;----------------------------------------------------------------------
+;;---------------------------------------------------------------------
 ;; Main Functions
-;;----------------------------------------------------------------------  
+;;---------------------------------------------------------------------
 
 (defvar org-supertag-relation-mode-map
   (let ((map (make-sparse-keymap)))
-      (define-key map (kbd "a") 'org-supertag-relation-batch-add)
-      (define-key map (kbd "d") 'org-supertag-relation-remove)
-      (define-key map (kbd "r") 'org-supertag-relation-refresh-display)
-      (define-key map (kbd "q") 'org-supertag-relation-quit)
-      (define-key map (kbd "n") 'org-supertag-relation--next-line)
-      (define-key map (kbd "p") 'org-supertag-relation--prev-line)
-      (define-key map (kbd "+") 'org-supertag-relation--convert-cooccurrence-to-explicit)
-      (define-key map (kbd "RET") 'org-supertag-relation--select-current-line)
-  map))
+    (define-key map (kbd "r") 'org-supertag-relation-refresh-display)
+    (define-key map (kbd "q") 'org-supertag-relation-quit)
+    (define-key map (kbd "n") 'org-supertag-relation--next-line)
+    (define-key map (kbd "p") 'org-supertag-relation--prev-line)
+    map))
 
 (define-derived-mode org-supertag-relation-mode special-mode "Org-Supertag-Relation"
   :group 'org-supertag
@@ -727,36 +603,6 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
   (setq truncate-lines t)
   (setq header-line-format
         (propertize " Org-Supertag Relation Management" 'face '(:weight bold))))
-
-(defun org-supertag-relation-batch-add ()
-  "Batch add relations from the current tag to multiple other tags."
-  (interactive)
-  (let* ((tag-id org-supertag-relation--current-tag)
-         (tag-name (org-supertag-tag-get-name-by-id tag-id)))
-    (if (not tag-id)
-        (user-error "Current tag not set. Please re-open the relation view.")
-      (let* ((all-tags (remove tag-name (org-supertag-get-all-tags)))
-             (target-names (completing-read-multiple (format "Batch relate '%s' to: " tag-name) all-tags nil t)))
-        (if (not target-names)
-            (message "No target tags selected.")
-          (let* ((rel-choices (org-supertag-relation--get-relation-type-choices))
-                 (choice (completing-read "Select relation type: " rel-choices nil t))
-                 (rel-type (org-supertag-relation--get-type-from-choice choice))
-                 (added-count 0))
-            (dolist (target-name target-names)
-              (let ((other-tag-id (org-supertag-tag-get-id-by-name target-name)))
-                (when (and other-tag-id rel-type)
-                  (if (org-supertag-relation-has-complement-p rel-type)
-                      (org-supertag-relation-add-with-complement tag-id other-tag-id rel-type)
-                    (org-supertag-relation-add-relation tag-id other-tag-id rel-type))
-                  (cl-incf added-count))))
-            (org-supertag-relation--refresh-display)
-            (message "Batch added %d relations to '%s'." added-count tag-name)))))))
-
-(defun org-supertag-relation-remove ()
-  "Remove the relation between the current tag and the selected tag."
-  (interactive)
-  (org-supertag-relation-remove-relation-interactive))
 
 (defun org-supertag-relation-refresh ()
   (interactive)
@@ -769,47 +615,6 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
     (when buffer
       (kill-buffer buffer)
       (delete-window))))
-
-
-(defun org-supertag-relation--convert-cooccurrence-to-explicit (button)
-  "Convert a co-occurrence relation to an explicit relation."
-  (interactive)
-  (let* ((from-tag-id (button-get button 'from-tag-id))
-         (to-tag-id (button-get button 'to-tag-id))
-         (rel-choices (org-supertag-relation--get-relation-type-choices))
-         (selected-rel-type-str (completing-read "Select explicit relation type: " rel-choices nil t))
-         (selected-rel-type (org-supertag-relation--get-type-from-choice selected-rel-type-str)))
-
-    (when (and from-tag-id to-tag-id selected-rel-type)
-      ;; 1. Add the new explicit relation
-      (org-supertag-relation-add-relation from-tag-id to-tag-id selected-rel-type)
-
-      ;; 2. Remove the co-occurrence relation
-      (org-supertag-db-unlink :tag-tag from-tag-id to-tag-id)
-
-      ;; 3. Refresh the display
-      (org-supertag-relation--refresh-display)
-      (message "Co-occurrence relation from %s to %s converted to explicit %s relation." 
-               (org-supertag-tag-get-name-by-id from-tag-id)
-               (org-supertag-tag-get-name-by-id to-tag-id)
-               selected-rel-type))))
-
-(defun org-supertag-relation--remove-button-action (button)
-  "Handle the action of clicking the remove relation button."
-  (let* ((tag-id org-supertag-relation--current-tag)
-         (other-tag-id (button-get button 'other-tag-id))
-         ;; Get the relation type from the existing relation
-         (rel (car (org-supertag-relation-get tag-id other-tag-id)))
-         (rel-type (and rel (plist-get rel :type))))
-    (when (and tag-id other-tag-id rel-type)
-      (if (org-supertag-relation-has-complement-p rel-type)
-          (org-supertag-relation-remove-with-complement tag-id other-tag-id rel-type)
-        (org-supertag-relation-remove-relation tag-id other-tag-id rel-type))
-      (org-supertag-relation--refresh-display)
-      (message "Relation is removed: %s -[%s]-> %s" 
-               (org-supertag-tag-get-name-by-id tag-id)
-               rel-type
-               (org-supertag-tag-get-name-by-id other-tag-id)))))
 
 (defun org-supertag-relation--next-line ()
   "Move to the next line."
@@ -825,110 +630,7 @@ GROUP: The group symbol, such as 'default, 'knowledge, etc."
     (forward-line -1)
     (beginning-of-line)))
 
-(defun org-supertag-relation--select-current-line ()
-  "Select the button on the current line."
-  (interactive)
-  (with-current-buffer org-supertag-relation-manage--buffer-name
-    (save-excursion
-      (beginning-of-line)
-      (when (re-search-forward "\\(\[-\\]\\|\[Select\]\\)" (line-end-position) t)
-        (let ((button (button-at (match-beginning 0))))
-          (when button
-            (push-button button)))))))
 
-(defun org-supertag-relation-refresh-display ()
-  "Interactive wrapper for org-supertag-relation--refresh-display."
-  (interactive)
-  (org-supertag-relation--refresh-display))
-    
-(defun org-supertag-relation-get-complement (relation-type)
-  "Get the complementary relationship of a relation type.
-RELATION-TYPE: The relation type.
-Returns the complementary relationship type, or nil if none is found."
-  (or (cdr (assq relation-type org-supertag-relation-complementary-pairs))
-      (car (rassq relation-type org-supertag-relation-complementary-pairs))))
-
-(defun org-supertag-relation-has-complement-p (relation-type)
-  "Check if a relation type has a complementary relationship.
-RELATION-TYPE: The relation type.
-Returns t if a complementary relationship is found, otherwise nil."
-  (not (null (org-supertag-relation-get-complement relation-type))))
-
-(defun org-supertag-relation-add-with-complement (tag-id other-tag-id rel-type)
-  "Add a relation of type REL-TYPE between TAG-ID and OTHER-TAG-ID.
-If REL-TYPE has a complement in `org-supertag-relation-complementary-pairs',
-also add the complementary relation from OTHER-TAG-ID to TAG-ID."
-  (let ((complement (org-supertag-relation-get-complement rel-type)))
-    (org-supertag-relation-add-relation tag-id other-tag-id rel-type)
-    (when complement
-      (org-supertag-relation-add-relation other-tag-id tag-id complement))))
-
-(defun org-supertag-relation-remove-with-complement (tag-id other-tag-id rel-type)
-  "Remove a relation of type REL-TYPE between TAG-ID and OTHER-TAG-ID.
-If REL-TYPE has a complement in `org-supertag-relation-complementary-pairs',
-also remove the complementary relation from OTHER-TAG-ID to TAG-ID."
-  (let ((complement (org-supertag-relation-get-complement rel-type)))
-    (org-supertag-relation-remove-relation tag-id other-tag-id rel-type)
-    (when complement
-      (org-supertag-relation-remove-relation other-tag-id tag-id complement))))
-
-(defun org-supertag-relation-unselect-all-tags ()
-  "Unselect all tags."
-  (interactive)
-  (setq org-supertag-relation--selected-tags nil)
-  (org-supertag-relation--refresh-display)
-  (message "Unselected all tags"))
-
-;;----------------------------------------------------------------------
-;; Contextual and Batch Relation Management (New Features)
-;;----------------------------------------------------------------------
-
-(defun org-supertag-relation-toggle-tag-selection-at-point ()
-  "Toggle selection for the tag on the current line in the relation view."
-  (interactive)
-  (with-current-buffer org-supertag-relation-manage--buffer-name
-    (let ((button (save-excursion
-                    (beginning-of-line)
-                    (when (re-search-forward "\\[Mark\\]" (line-end-position) t)
-                      (button-at (match-beginning 0))))))
-      (when button
-        (org-supertag-relation-toggle-tag-selection button)))))
-
-
-;;----------------------------------------------------------------------
-;; Debug Functions
-;;----------------------------------------------------------------------
-
-(defun org-supertag-relation-debug-show-all-relations ()
-  "Debug function to show all relations in the database."
-  (interactive)
-  (let ((tag-relations '())
-        (tag-tag-relations '()))
-    ;; Collect all relations
-    (maphash
-     (lambda (key value)
-       (cond
-        ((string-prefix-p ":tag-relation:" key)
-         (push (cons key value) tag-relations))
-        ((string-prefix-p ":tag-tag:" key)
-         (push (cons key value) tag-tag-relations))))
-     org-supertag-db--link)
-    
-    ;; Display results
-    (with-output-to-temp-buffer "*Org-Supertag Relations Debug*"
-      (princ "=== Tag Relations (:tag-relation: prefix) ===\n")
-      (if tag-relations
-          (dolist (rel tag-relations)
-            (princ (format "Key: %s\n" (car rel)))
-            (princ (format "Value: %S\n\n" (cdr rel))))
-        (princ "No tag relations found\n"))
-      
-      (princ "\n=== Tag-Tag Relations (:tag-tag: prefix) ===\n")
-      (if tag-tag-relations
-          (dolist (rel tag-tag-relations)
-            (princ (format "Key: %s\n" (car rel)))
-            (princ (format "Value: %S\n\n" (cdr rel))))
-        (princ "No tag-tag relations found\n")))))
 
 (provide 'org-supertag-relation)
 
