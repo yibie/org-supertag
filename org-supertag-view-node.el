@@ -183,19 +183,29 @@ Tries current position first"
               :value     value)))))
 
 (defun org-supertag-view-node-edit-field-at-point ()
-  "Edit the field value at the current point."
+  "Edit the field value at the current point. "
   (interactive)
   (when-let* ((field-info (org-supertag-view-node--get-field-info-at-point))
               (field-def (plist-get field-info :field-def)))
     (when field-def
-      (let* ((current-value (plist-get field-info :value))
+      (let* ((current-value (org-supertag-field-get-value-for-display
+                             (plist-get field-info :node-id)
+                             field-def))
              (node-id (plist-get field-info :node-id))
              (tag-id (plist-get field-info :tag-id))
              (field-name (plist-get field-info :field-name))
              (new-value (org-supertag-field-read-and-validate-value field-def current-value)))
+        (message "DEBUG: view-node-edit new-value=%S (type=%S)" new-value (type-of new-value))
         (when new-value
+          (let ((values (if (listp new-value) new-value (list new-value)))
+                (all-tags (org-supertag-get-all-tags)))
+            (dolist (val values)
+              (unless (member val all-tags)
+                (message "Creating new tag: %s" val)
+                (org-supertag-tag--create val))))
           (org-supertag-field-set-value node-id field-name new-value tag-id)
           (org-supertag-view-node-refresh))))))
+
 
 (defun org-supertag-view-node-edit-field-definition-at-point ()
   "Edit the field definition (e.g., its name) at the current point."
