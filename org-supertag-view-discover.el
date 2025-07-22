@@ -37,16 +37,11 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
         (org-supertag-discover-mode)
         
         ;; Header with title
-        (insert (propertize "Tag Discovery\n\n" 
-                           'face '(:height 1.5 :weight bold)))
-        
-        ;; Operation instructions
-        (insert (propertize "Operations:\n" 'face '(:weight bold)))
-        (insert " [a] - Add Filter    [d] - Remove Filter    [r] - Reset Filters    [q] - Quit\n")
-        (insert " [g] - Refresh    [v] - View Node    [m] - Manage Relations\n\n")
+        (insert (propertize "Tag Discovery\n\n" 'face 'org-level-1))
+      
         
         ;; Current filters section
-        (insert (propertize "Current Filters:\n" 'face '(:weight bold)))
+        (insert (propertize "Current Filters:\n" 'face 'org-level-2))
         (if org-supertag-view--current-filters
             (dolist (tag org-supertag-view--current-filters)
               (let ((remove-button-text (propertize "[-]" 'face '(:foreground "red"))))
@@ -61,7 +56,7 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
         (insert "\n")
         
         ;; Co-occurring tags section
-        (insert (propertize "Co-occurring Tags:\n" 'face '(:weight bold)))
+        (insert (propertize "Co-occurring Tags:\n" 'face 'org-level-2))
         (if org-supertag-view--current-filters
             (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
               (message "Found %d nodes for current filters" (length nodes))
@@ -95,13 +90,12 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
         (if org-supertag-view--current-filters
             (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
               (message "Displaying %d matching nodes" (length nodes))
-              (insert (propertize (format "Matching Nodes (%d):\n" (length nodes))
-                                'face '(:weight bold)))
+              (insert (propertize (format "Matching Nodes (%d):\n" (length nodes)) 'face 'org-level-2))
               (if nodes
                   (let ((node-index 0))
                     (dolist (node-id nodes)
                       (let* ((props (gethash node-id org-supertag-db--object))
-                             (title (or (plist-get props :title) "无标题"))
+                             (title (or (plist-get props :title) "No Title"))
                              (type (or (plist-get props :todo-state) ""))
                              (date (format-time-string "%Y-%m-%d" 
                                                       (or (plist-get props :created-at) 
@@ -118,11 +112,15 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
                           (insert (format " %s [%s] (%s)\n" title type date))))))
                 (insert "  No nodes found with these tags.\n\n")))
           (progn
-            (insert (propertize "Matching Nodes:\n" 'face '(:weight bold)))
+            (insert (propertize "Matching Nodes:\n" 'face 'org-level-2))
             (insert "  (select a filter first)\n\n")))
         
         (insert "\n")
-        (insert (propertize "Note: " 'face '(:weight bold)))
+        (insert (propertize "Note: " 'face 'org-level-2))
+        ;; Operation instructions
+        (insert (propertize "Operations:\n" 'face 'org-level-2))
+        (insert " [a] - Add Filter    [d] - Remove Filter    [r] - Reset Filters    [q] - Quit\n")
+        (insert " [g] - Refresh    [v] - View Node    [m] - Manage Relations\n\n")
         (insert "Click [+] to add tags to filter, click [-] to remove filters, click [view] to open node\n"))
       
 
@@ -238,7 +236,7 @@ that are relevant to the current view context."
         (setq node-titles
               (mapcar (lambda (node-id)
                        (let* ((props (gethash node-id org-supertag-db--object))
-                              (title (or (plist-get props :title) "无标题"))
+                              (title (or (plist-get props :title) "No Title"))
                               (tags-text (mapconcat
                                         (lambda (tag-list)
                                           (concat "[" (string-join tag-list ", ") "]"))
@@ -296,7 +294,7 @@ that are relevant to the current view context."
           (let ((node-id (cdr (assoc selected node-titles))))
             (org-supertag-view--goto-node node-id)))))))
 
-;; 保留这个函数作为向后兼容，但直接调用通用函数
+;; Keep this function for backward compatibility
 (defun org-supertag-view--view-node-from-columns ()
   "Select and view a node from the current column view display.
 This is now just a wrapper around `org-supertag-view--view-node`

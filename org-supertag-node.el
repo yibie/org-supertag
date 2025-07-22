@@ -1006,18 +1006,25 @@ DIRECTION specifies reference direction:
 
 Returns:
 List of node IDs"
-  (or (org-supertag-db--cache-get 'query 
-                                 (format "node-refs:%s:%s" node-id direction))
-      (when-let* ((node (org-supertag-db-get node-id)))
-        (let ((refs (pcase direction
-                     ('to (plist-get node :refs-to))
-                     ('from (plist-get node :refs-from))
-                     (_ (append (plist-get node :refs-to)
-                              (plist-get node :refs-from))))))
-          (org-supertag-db--cache-set 'query 
-                                     (format "node-refs:%s:%s" node-id direction)
-                                     refs)
-          refs))))
+(let ((cache-key (format "node-refs:%s:%s" node-id direction)))                                                                                    
+    (or (org-supertag-db--cache-get 'query cache-key)                                                                                               
+        (let ((results '())))                                                                                                                       
+          (cond                                                                                                                                     
+           ((eq direction 'to)                                                                                                                      
+            (setq results (mapcar (lambda (link) (plist-get link :to))                                                                              
+                                  (org-supertag-db-find-links :node-node :from node-id))))                                                           
+           ((eq direction 'from)                                                                                                                    
+            (setq results (mapcar (lambda (link) (plist-get link :from))                                                                            
+                                  (org-supertag-db-find-links :node-node :to node-id))))                                                            
+           (t                                                                                                                                       
+            (let ((to-links (mapcar (lambda (link) (plist-get link :to))                                                                            
+                                    (org-supertag-db-find-links :node-node :from node-id)))                                                         
+                  (from-links (mapcar (lambda (link) (plist-get link :from))                                                                        
+                                      (org-supertag-db-find-links :node-node :to node-id))))                                                        
+              (setq results (delete-duplicates (append to-links from-links))))))                                                                    
+          (org-supertag-db--cache-set 'query cache-key results)                                                                                     
+          results)))                                                                                                                                
+                       
 
 ;; 4. Relationship cleanup
 (defun org-supertag-node-db-remove-reference (from-id to-id)
@@ -1168,26 +1175,19 @@ In both cases:
           ;; Insert reference
           (org-supertag-node--insert-reference node-id)
           ;; Update reference relationships
-          (org-supertag-db--parse-node-all-ref)
           (message "Added reference to: %s" choice))))))
 
 (defun org-supertag-node--collect-reference-id-title ()
   "Collect all reference information in current node.
 Returns: ((title . id) ...)"
   (let ((refs nil)
-        (start (org-entry-beginning-position))
-        (end (org-entry-end-position)))
-    (save-excursion
-      (goto-char start)
-      (while (re-search-forward org-link-any-re end t)
-        (let* ((link (org-element-context))
-               (type (org-element-property :type link))
-               (path (org-element-property :path link)))
-          (when (and (equal type "id")
-                    (org-uuidgen-p path))
-            (when-let* ((node (org-supertag-db-get path))
-                       (title (plist-get node :title)))
-              (push (cons title path) refs))))))))
+        (current-node-id (org-id-get)))
+    (when current-node-id
+      (dolist (ref-node-id (org-supertag-node-db-get-reference current-node-id 'to))
+        (when-let* ((node (org-supertag-db-get ref-node-id))
+                     (title (plist-get node :title)))
+          (push (cons title ref-node-id) refs))))
+    (nreverse refs)))
 
 (defun org-supertag-node-remove-reference (node-id)
   "Remove reference to specified node."
@@ -1198,7 +1198,11 @@ Returns: ((title . id) ...)"
                     "Remove reference: "
                     (mapcar #'car refs)
                     nil t)))
-     (list (cdr (assoc selected refs))))))
+     (list (cdr (assoc selected refs)))))
+  (let ((current-node-id (org-supertag-node--ensure-sync)))
+    (when (and current-node-id node-id)
+      (org-supertag-db-unlink :node-node current-node-id node-id)
+      (message "Removed reference from %s to %s" current-node-id node-id))))
 
 (defun org-supertag-node-db-update-reference (from-id to-id)
   "Update reference relationship in database.

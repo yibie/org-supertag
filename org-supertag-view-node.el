@@ -93,59 +93,24 @@ Otherwise, return VALUE as a string."
     (insert "\n")))
 
 (defun org-supertag-view-node--insert-relations-section (node-id)
+  (insert (propertize "🔗 Relations\n" 'face 'org-level-2))
   (let ((tags (org-supertag-node-get-tags node-id))
-        (relations '())
-        (valid-relations '()))
-    
+        (relations '()))
     (dolist (tag-id tags)
-      (let ((tag-relations (org-supertag-relation-get-all tag-id)))
+      (let ((tag-relations (org-supertag-relation-get-all tag-id 'cooccurrence)))
         (setq relations (append relations tag-relations))))
-    
-    ;; Filter out invalid relations to prevent "emacs --[cooccurrence]--> nil" display
-    (dolist (rel relations)
-      (let* ((source-id (plist-get rel :from))
-             (target-id (plist-get rel :to))
-             (type (plist-get rel :type))
-             (source-name (org-supertag-tag-get-name-by-id source-id))
-             (target-name (org-supertag-tag-get-name-by-id target-id)))
-        ;; Only include relations where both source and target names are valid, and exclude cooccurrence relations
-        (when (and source-name target-name (not (string-empty-p source-name)) (not (string-empty-p target-name)) (not (string= type "cooccurrence")))
-          (push (list :source-id source-id :target-id target-id :type type :source-name source-name :target-name target-name) valid-relations))))
-    
-    ;; Only show relations section if there are valid relations
-    (when valid-relations
-      (insert (propertize "🔗 Relations\n" 'face 'org-level-2))
-      (dolist (rel valid-relations)
-        (let* ((source-name (plist-get rel :source-name))
-               (target-name (plist-get rel :target-name))
-               (type (plist-get rel :type))
-               (target-id (plist-get rel :target-id)))
-          ;; Display the relation
-          (insert (propertize (format "    %s " source-name) 'face 'org-tag))
-          (insert (propertize (format "--[%s]-->" type) 'face 'font-lock-keyword-face))
-          (insert (propertize (format " %s\n" target-name) 'face 'org-tag))
-          
-          ;; Display nodes associated with the target tag
-          (let ((target-nodes (org-supertag-db-get-tag-nodes target-id)))
-            (if target-nodes
-                (progn
-                  (insert (propertize "      📄 Related nodes:\n" 'face '(:slant italic)))
-                  (dolist (node-id target-nodes)
-                    (when-let* ((node (org-supertag-db-get node-id))
-                               (title (plist-get node :title))
-                               (file-path (plist-get node :file-path)))
-                      (let ((file-name (file-name-nondirectory file-path)))
-                        (insert "        • ")
-                        (insert-text-button title
-                                            'action (lambda (_btn) (org-supertag-view--goto-node node-id))
-                                            'follow-link t
-                                            'help-echo (format "Open node %s" node-id)
-                                            'face 'org-link)
-                        (insert (format " (%s)\n" file-name)))))
-                  ;; Limit display to first 5 nodes to avoid overwhelming
-                  (when (> (length target-nodes) 5)
-                    (insert (propertize (format "        ... and %d more nodes\n" (- (length target-nodes) 5)) 'face 'shadow)))))))
-      (insert "\n")))))
+    (if relations
+        (dolist (rel relations)
+          (let* ((source-name (org-supertag-tag-get-name-by-id (plist-get rel :from)))
+                 (target-name (org-supertag-tag-get-name-by-id (plist-get rel :to))))
+            (insert (propertize source-name 'face 'org-tag))
+            (insert " ")
+            (insert (propertize "⋈" 'face '(:foreground "green" :weight bold)))
+            (insert " ")
+            (insert (propertize target-name 'face 'org-tag))
+            (insert "\n")))
+      (insert (propertize "    No relations found.\n" 'face 'shadow))))
+  (insert "\n"))
 
 ;; FIXME: There is a problem with the data contract. simtag.utils.unified_tag_processor - ERROR - Parsed data is not a dict, but <class 'list'>. Returning empty dict
 ;; (defun org-supertag-view-node--insert-similar-entities-section (node-id)
@@ -169,16 +134,28 @@ Otherwise, return VALUE as a string."
 (defun org-supertag-view-node--insert-backlinks-section (node-id)
   (insert (propertize "👉 References\n" 'face 'org-level-2))
   (let ((refs (org-supertag-view-node--get-references node-id)))
-    (if refs
-        (dolist (ref-id refs)
-          (insert (org-supertag-view-node--format-node-content ref-id)))
+    (if (and refs (listp refs) (not (null refs)))
+        (let ((any-inserted nil))
+          (dolist (ref-id refs)
+            (let ((content (org-supertag-view-node--format-node-content ref-id)))
+              (when content
+                (insert content)
+                (setq any-inserted t))))
+          (unless any-inserted
+            (insert (propertize "    No references found\n" 'face 'shadow))))
       (insert (propertize "    No references found\n" 'face 'shadow))))
   (insert "\n")
   (insert (propertize "👈 Referenced By\n" 'face 'org-level-2))
   (let ((refd-by (org-supertag-view-node--get-referenced-by node-id)))
-    (if refd-by
-        (dolist (ref-id refd-by)
-          (insert (org-supertag-view-node--format-node-content ref-id)))       
+    (if (and refd-by (listp refd-by) (not (null refd-by)))
+        (let ((any-inserted nil))
+          (dolist (ref-id refd-by)
+            (let ((content (org-supertag-view-node--format-node-content ref-id)))
+              (when content
+                (insert content)
+                (setq any-inserted t))))
+          (unless any-inserted
+            (insert (propertize "    Not referenced by any nodes\n" 'face 'shadow))))
       (insert (propertize "    Not referenced by any nodes\n" 'face 'shadow))))
   (insert "\n"))
 
@@ -206,19 +183,29 @@ Tries current position first"
               :value     value)))))
 
 (defun org-supertag-view-node-edit-field-at-point ()
-  "Edit the field value at the current point."
+  "Edit the field value at the current point. "
   (interactive)
   (when-let* ((field-info (org-supertag-view-node--get-field-info-at-point))
               (field-def (plist-get field-info :field-def)))
     (when field-def
-      (let* ((current-value (plist-get field-info :value))
+      (let* ((current-value (org-supertag-field-get-value-for-display
+                             (plist-get field-info :node-id)
+                             field-def))
              (node-id (plist-get field-info :node-id))
              (tag-id (plist-get field-info :tag-id))
              (field-name (plist-get field-info :field-name))
              (new-value (org-supertag-field-read-and-validate-value field-def current-value)))
+        (message "DEBUG: view-node-edit new-value=%S (type=%S)" new-value (type-of new-value))
         (when new-value
+          (let ((values (if (listp new-value) new-value (list new-value)))
+                (all-tags (org-supertag-get-all-tags)))
+            (dolist (val values)
+              (unless (member val all-tags)
+                (message "Creating new tag: %s" val)
+                (org-supertag-tag--create val))))
           (org-supertag-field-set-value node-id field-name new-value tag-id)
           (org-supertag-view-node-refresh))))))
+
 
 (defun org-supertag-view-node-edit-field-definition-at-point ()
   "Edit the field definition (e.g., its name) at the current point."
