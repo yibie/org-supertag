@@ -9,6 +9,7 @@
 (require 'org-supertag-view-column)
 (require 'org-supertag-view-node)
 (require 'org-supertag-view-chat)
+(require 'org-supertag-view-kanban)
 
 ;;----------------------------------------------------------------------
 ;; Main functions

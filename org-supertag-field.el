@@ -468,22 +468,22 @@ VALUE: Value to convert."
 ;; Field Value Readers
 ;;----------------------------------------------------------------------
 
-(defun org-supertag-read-string-field (prompt current-value)
+(defun org-supertag-read-string-field (prompt current-value &optional _field-def)
   "Read a string value from the user."
   (read-string prompt current-value))
 
-(defun org-supertag-read-number-field (prompt current-value)
+(defun org-supertag-read-number-field (prompt current-value &optional _field-def)
   "Read a number value from the user."
   (read-string prompt current-value))
 
-(defun org-supertag-read-date-field (prompt current-value)
+(defun org-supertag-read-date-field (prompt current-value &optional _field-def)
   "Read a date value from the user."
   (let ((date (org-read-date nil t nil prompt
                              (when (and current-value (not (string-empty-p current-value)))
                                current-value))))
     (format-time-string "<%Y-%m-%d %a>" date)))
 
-(defun org-supertag-read-timestamp-field (prompt current-value)
+(defun org-supertag-read-timestamp-field (prompt current-value &optional _field-def)
   "Read a timestamp value from the user."
   (let ((date-time (org-read-date t t nil prompt
                                   (when (and current-value (not (string-empty-p current-value)))
@@ -496,16 +496,16 @@ VALUE: Value to convert."
     (completing-read prompt options nil t current-value)))
 
 
-(defun org-supertag-read-url-field (prompt current-value)
+(defun org-supertag-read-url-field (prompt current-value &optional _field-def)
   "Read a URL from the user."
   (read-string prompt current-value))
 
-(defun org-supertag-read-email-field (prompt current-value)
+(defun org-supertag-read-email-field (prompt current-value &optional _field-def)
   "Read an email from the user."
   (read-string prompt current-value))
 
 ;; support multiple tag values
-(defun org-supertag-read-multiple-tags-field (prompt current-values)
+(defun org-supertag-read-multiple-tags-field (prompt current-values &optional _field-def)
   "Read multiple tag references from the user，support comma separated and multi-segment completion."
   (let* ((tag-names (org-supertag-get-all-tags))
          (crm-separator ",")
@@ -558,7 +558,7 @@ Handles single values, multiple values (for tags), and dynamic creation of new t
 
     (while (not valid-input-p)
       (setq new-value-raw
-            (funcall reader-fn prompt current-value))
+            (funcall reader-fn prompt current-value field-def))
       (if (null new-value-raw)
           (progn (setq validated-value nil) (setq valid-input-p t))
         (if (eq field-type 'tag)
