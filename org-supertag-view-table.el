@@ -161,8 +161,9 @@ Strategy:
         ;; Use plain text instead of org heading
         (insert (format "Tag: #%s\n\n" tag))
         (insert "Instructions:\n")
-        (insert " [q] - Quit    [g] - Refresh    [v] - View Node    [m] - Manage Relations\n")
-        (insert " [e] - Smart Edit    [C-c '] - Toggle Edit/Read-only Mode\n")
+        (insert " [q] - Quit    [g] - Refresh    [v] - View Node\n")
+        (insert " [e] - Edit Value\n")
+        (insert " [a] - Add Field    [D] - Delete Field    [E] - Edit Field Definition\n")
         (insert " [Tab] - Next Field    [S-Tab] - Previous Field    [n/p] - Move Up/Down\n")
         (insert " Click the [v] button before a node to directly view its content\n")
         (insert " Editing fields will automatically save changes\n\n")
@@ -390,6 +391,70 @@ Immediately saves the field value to the database after editing."
         (org-supertag-view-table-refresh)))))
 
 ;;----------------------------------------------------------------------
+;; Field Management Functions
+;;----------------------------------------------------------------------
+
+(defun org-supertag-view-table-delete-field ()
+  "Delete the field at the current column from the tag definition and refresh."
+  (interactive)
+  (let* ((field-info (org-supertag-view-table-get-field-info))
+         (tag-id (plist-get field-info :tag))
+         (field-def (plist-get field-info :field)))
+    (if-let ((field-name (plist-get field-def :name)))
+        (when (yes-or-no-p (format "Are you sure you want to delete the field '%s'?" field-name))
+          (when (org-supertag-tag--remove-field tag-id field-name)
+            (org-supertag-view-table-refresh)))
+      (message "Cannot delete. Please place the cursor on a valid field column."))))
+
+(defun org-supertag-view-table-add-field ()
+  "Add a new field to the current tag and refresh the table view."
+  (interactive)
+  (let* ((tag-id (org-supertag-view--get-current-tag)))
+    (when tag-id
+      (when-let ((field-def (org-supertag-tag--create-field-definition)))
+        (org-supertag-tag-add-field tag-id field-def)
+        (message "Field '%s' added successfully." (plist-get field-def :name))
+        (org-supertag-view-table-refresh)))))
+
+(defun org-supertag-view-table-edit-field-definition ()
+  "Edit the definition of the field at the current column and refresh."
+  (interactive)
+  (let* ((field-info (org-supertag-view-table-get-field-info))
+         (tag-id (plist-get field-info :tag))
+         (field-def (plist-get field-info :field)))
+    (if field-def
+        (let* ((field-name (plist-get field-def :name))
+               (current-type (plist-get field-def :type))
+               (current-options (plist-get field-def :options))
+               (action (completing-read "Edit: " '("Name" "Type and Options") nil t)))
+          (cond
+           ((string= action "Name")
+            (let ((new-name (read-string (format "New name for field '%s': " field-name) nil nil field-name)))
+              (when (and new-name (not (string-empty-p new-name)) (not (string= new-name field-name)))
+                (org-supertag-tag-rename-field tag-id field-name new-name)
+                (message "Field renamed successfully.")
+                (org-supertag-view-table-refresh))))
+           ((string= action "Type and Options")
+            (let* ((field-type-choices (org-supertag-get-field-types))
+                   (field-type-str (completing-read "Field type: "
+                                                    (mapcar #'car field-type-choices)
+                                                    nil t nil nil (symbol-name current-type)))
+                   (new-type (cdr (assoc field-type-str field-type-choices)))
+                   (new-field-def (list :name field-name :type new-type)))
+              ;; If it's options type, ask for options
+              (when (eq new-type 'options)
+                (let* ((current-options-str (if (and (eq current-type 'options) current-options)
+                                                (mapconcat #'identity current-options ", ")
+                                              ""))
+                       (options-input (read-string "Options (comma separated): " current-options-str))
+                       (new-options (split-string options-input "," t "[ \t\n\r]+")))
+                  (setq new-field-def (plist-put new-field-def :options new-options))))
+              (when (org-supertag-tag--update-field-definition tag-id field-name new-field-def)
+                (org-supertag-view-table-refresh))))
+          t)
+      (message "Cannot edit. Please place the cursor on a valid field column.")))))
+
+;;----------------------------------------------------------------------
 ;; Mode definitions
 ;;----------------------------------------------------------------------
 
@@ -402,11 +467,10 @@ Immediately saves the field value to the database after editing."
 
 (define-derived-mode org-supertag-view-table-mode org-mode "SuperTag-Table"
   "Major mode for displaying tag content in table format.
-This mode is based on org-mode to ensure compatibility with org table functions.
-\\{org-supertag-view-table-mode-map}"
+This mode is based on org-mode to ensure compatibility with org table functions."
   :group 'org-supertag
   (setq-local org-element-use-cache nil)
-  (setq truncate-lines t)
+  (setq truncate-lines nil) ; Allow multi-line content to avoid truncation
   (setq buffer-read-only t)
   (setq header-line-format
         (propertize " Org-Supertag Table View" 'face '(:weight bold)))
@@ -420,23 +484,28 @@ This mode is based on org-mode to ensure compatibility with org table functions.
     (define-key map (kbd "g") 'org-supertag-view-table-refresh)
     (define-key map (kbd "v") 'org-supertag-view-table-node-at-point)
     (define-key map (kbd "V") 'org-supertag-view-table-view-all-nodes)
-    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
-    (dolist (key '("d" "o" "r" "l" "a" "t"))
-      (define-key map (kbd key)
-                 (lambda ()
-                   (interactive)
-                   (let ((inhibit-read-only t))
-                     (call-interactively
-                      (intern (format "org-supertag-view-edit-%s-field"
-                                     (pcase key
-                                       ("d" "date")
-                                       ("o" "options")
-                                       ("r" "reference")
-                                       ("l" "list")
-                                       ("a" "range")
-                                       ("t" "timestamp")))))))))
+    ;; (define-key map (kbd "m") 'org-supertag-view-manage-relations) ; Removed
+    ;; New keys for field management
+    (define-key map (kbd "a") 'org-supertag-view-table-add-field)
+    (define-key map (kbd "D") 'org-supertag-view-table-delete-field)
+    (define-key map (kbd "E") 'org-supertag-view-table-edit-field-definition)
+    ;; Remove the problematic dolist that calls non-existent functions
+    ;; (dolist (key '("d" "o" "r" "l" "a" "t"))
+    ;;   (define-key map (kbd key)
+    ;;              (lambda ()
+    ;;                (interactive)
+    ;;                (let ((inhibit-read-only t))
+    ;;                  (call-interactively
+    ;;                   (intern (format "org-supertag-view-edit-%s-field"
+    ;;                                  (pcase key
+    ;;                                    ("d" "date")
+    ;;                                    ("o" "options")
+    ;;                                    ("r" "reference")
+    ;;                                    ("l" "list")
+    ;;                                    ("a" "range")
+    ;;                                    ("t" "timestamp")))))))))
     (define-key map (kbd "C-c C-k") 'org-supertag-view-cancel-edit)
-    (define-key map (kbd "C-c '") 'org-supertag-view-edit-table)
+    ;; (define-key map (kbd "C-c '") 'org-supertag-view-edit-table) ; Removed
     (define-key map (kbd "<tab>") 'org-table-next-field)
     (define-key map (kbd "<backtab>") 'org-table-previous-field)
     (define-key map (kbd "M-p") 'org-table-copy-down)

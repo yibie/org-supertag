@@ -27,10 +27,17 @@
   :group 'org-supertag ; Assuming 'org-supertag group exists or is desired
   :prefix "org-supertag-bridge-")
 
-(defcustom org-supertag-bridge-python-command (expand-file-name ".venv/bin/python" org-supertag-project-root)
+(defcustom org-supertag-bridge-python-command nil
   "The Python interpreter used to run `simtag_bridge.py`."
   :type 'string
   :group 'org-supertag-bridge)
+
+(defun org-supertag-bridge--python-command ()
+  "Return the python command, using project root if available."
+  (or org-supertag-bridge-python-command
+      (expand-file-name ".venv/bin/python"
+                        (or (bound-and-true-p org-supertag-project-root)
+                            default-directory))))
 
 (defcustom org-supertag-bridge-python-script
   (expand-file-name "simtag/simtag_bridge.py"
@@ -163,7 +170,7 @@ The new connection logic polls the Python server directly."
 
     ;; 1. Prepare and launch the simtag_bridge.py script
     (setq org-supertag-bridge--ready-p nil)
-    (let* ((python-cmd org-supertag-bridge-python-command)
+    (let* ((python-cmd (org-supertag-bridge--python-command))
            ;; CRITICAL: Use the centralized project root variable.
            (project-root org-supertag-project-root)
            (port-file (expand-file-name "simtag_bridge.port" org-supertag-data-directory))

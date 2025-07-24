@@ -366,6 +366,55 @@ NEW-NAME is the new name for the field."
       (org-supertag-db-add tag-id new-tag)
       (message "Field '%s' renamed to '%s' in tag '%s'." old-name new-name tag-id))))
 
+(defun org-supertag-tag--remove-field (tag-id field-name)
+  "Remove a field from a tag's definition.
+TAG-ID is the ID of the tag.
+FIELD-NAME is the name of the field to remove.
+Returns t if successful, nil otherwise."
+  (when-let ((tag (org-supertag-db-get tag-id)))
+    (let* ((fields (plist-get tag :fields))
+           (new-fields (cl-remove-if (lambda (f)
+                                       (string= (plist-get f :name) field-name))
+                                     fields))
+           (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+      (org-supertag-db-add tag-id new-tag)
+      (message "Field '%s' removed from tag '%s'." field-name tag-id)
+      t)))
+
+(defun org-supertag-tag--update-field-definition (tag-id field-name new-field-def)
+  "Update the complete definition of a field in a tag.
+TAG-ID is the ID of the tag.
+FIELD-NAME is the name of the field to update.
+NEW-FIELD-DEF is the new field definition.
+Returns t if successful, nil otherwise."
+  (when-let ((tag (org-supertag-db-get tag-id))
+             (fields (plist-get tag :fields)))
+    (let* ((new-fields (mapcar (lambda (f)
+                                 (if (string= (plist-get f :name) field-name)
+                                     new-field-def
+                                   f))
+                               fields))
+           (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+      (org-supertag-db-add tag-id new-tag)
+      (message "Field '%s' definition updated in tag '%s'." field-name tag-id)
+      t)))
+
+(defun org-supertag-tag--create-field-definition ()
+  "Interactively create a new field definition.
+Returns a field definition plist, or nil if cancelled."
+  (let* ((field-name (read-string "Field name: "))
+         (field-type-choices (org-supertag-get-field-types))
+         (field-type-str (completing-read "Field type: "
+                                          (mapcar #'car field-type-choices)))
+         (field-type (cdr (assoc field-type-str field-type-choices)))
+         (field-def (list :name field-name :type field-type)))
+    ;; For options type, ask for the options
+    (when (eq field-type 'options)
+      (let* ((options-input (read-string "Options (comma separated): "))
+             (options-list (split-string options-input "," t "[ \t\n\r]+")))
+        (setq field-def (plist-put field-def :options options-list))))
+    field-def))
+
 (defun org-supertag-tag--rename (old-name new-name)
   "Rename a tag in the database.
 This is a data-layer function. Use `org-supertag-inline-rename` for interactive use.
@@ -397,18 +446,5 @@ PREFIX: The prefix to filter tags by."
   (let* ((tags (org-supertag-get-all-tags-with-prefix prefix))
          (selected-tag (completing-read "Select tag: " tags nil t)))
     (message "Selected tag: %s" selected-tag)))
-
-(defun org-supertag-set-field-and-value (tag field value)
-  "Set field and value for a tag.
-This is a convenience function for interactive use."
-  (interactive
-   (let* ((all-tags (org-supertag-get-all-tags))
-          (tag (completing-read "Select tag: " all-tags nil t))
-          (fields (mapcar (lambda (f) (plist-get f :name))
-                          (plist-get (org-supertag-tag-get tag) :fields)))
-          (field (completing-read "Select field: " fields nil t))
-          (value (read-string (format "Enter value for %s: " field))))
-     (list tag field value)))
-  (org-supertag-tag--set-field-value tag (org-id-get) field value))
 
 (provide 'org-supertag-tag)
