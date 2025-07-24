@@ -28,6 +28,22 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
     (when org-supertag-view--current-filters
       (org-supertag-view--show-tag-discover-buffer))))
 
+(defun org-supertag-view--get-cooccurring-tags-from-nodes (nodes filter-tags)
+  "Get tags co-occurring within a given list of NODES.
+NODES is a list of node IDs.
+FILTER-TAGS are tags to be excluded from the result.
+Returns list of (tag-name . count) pairs."
+  (let ((result (make-hash-table :test 'equal)))
+    ;; Find co-occurring tags for the provided nodes
+    (dolist (node-id nodes)
+      (dolist (tag (org-supertag-node-get-tags node-id))
+        (unless (member tag filter-tags)
+          (puthash tag (1+ (gethash tag result 0)) result))))
+    ;; Convert to alist and sort by frequency
+    (let ((alist nil))
+      (maphash (lambda (k v) (push (cons k v) alist)) result)
+      (sort alist (lambda (a b) (> (cdr a) (cdr b)))))))
+
 (defun org-supertag-view--show-tag-discover-buffer ()
   "Show the tag discover buffer with current filters."
   (let ((buffer (get-buffer-create "*Org SuperTag Discover*")))
@@ -35,11 +51,8 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (org-supertag-discover-mode)
-        
         ;; Header with title
         (insert (propertize "Tag Discovery\n\n" 'face 'org-level-1))
-      
-        
         ;; Current filters section
         (insert (propertize "Current Filters:\n" 'face 'org-level-2))
         (if org-supertag-view--current-filters
@@ -54,67 +67,54 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
                 (insert (format " %s\n" tag))))
           (insert "  (no filters applied)\n"))
         (insert "\n")
-        
-        ;; Co-occurring tags section
-        (insert (propertize "Co-occurring Tags:\n" 'face 'org-level-2))
+        ;; --- OPTIMIZED BLOCK START ---
+        ;; If filters are active, get the matching nodes ONCE and reuse the result.
         (if org-supertag-view--current-filters
-            (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
-              (message "Found %d nodes for current filters" (length nodes))
-              (let ((cooccur-tags (org-supertag-view--get-cooccurring-tags org-supertag-view--current-filters))
-                    (count 0))
-                (message "Found %d co-occurring tags" (length cooccur-tags))
-                (if cooccur-tags
+            (let ((matching-nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
+              (message "Found %d nodes for current filters." (length matching-nodes))
+              ;; Co-occurring tags section (uses the new helper function)
+              (insert (propertize "Co-occurring Tags:\n" 'face 'org-level-2))
+              (let* ((cooccur-tags (org-supertag-view--get-cooccurring-tags-from-nodes
+                                    matching-nodes org-supertag-view--current-filters))
+                     (count 0))
+                (message "Found %d co-occurring tags." (length cooccur-tags))
+                (if (not (null cooccur-tags))
                     (dolist (item cooccur-tags)
                       (let* ((tag (car item))
                              (strength (cdr item))
-                             (strength-display (if (> strength 0.1)
-                                                 (format " (%.1f)" strength)
-                                               "")))
-                        (when (and (not (member tag org-supertag-view--current-filters)))
+                             (strength-display (if (> strength 0.1) (format " (%.1f)" strength) "")))
+                        (when (not (member tag org-supertag-view--current-filters))
                           (let ((add-button-text (propertize "[+]" 'face '(:foreground "green"))))
                             (insert " ")
-                            (insert-text-button add-button-text
-                                             'action 'org-supertag-view--add-filter-button-action
-                                             'tag tag
-                                             'follow-link t
-                                             'help-echo "Add this tag to filters")
-                            (insert (format " %s%s\n" 
-                                           tag 
-                                           (propertize strength-display 'face '(:foreground "gray50"))))
+                            (insert-text-button add-button-text 'action 'org-supertag-view--add-filter-button-action 'tag tag 'follow-link t 'help-echo "Add this tag to filters")
+                            (insert (format " %s%s\n" tag (propertize strength-display 'face '(:foreground "gray50"))))
                             (setq count (1+ count))))))
-                  (insert "  (no co-occurring tags found)\n"))))
-          (insert "  (select a filter first)\n"))
-        (insert "\n")
-        
-        ;; Matching nodes section 
-        (if org-supertag-view--current-filters
-            (let ((nodes (org-supertag-view--get-nodes-with-tags org-supertag-view--current-filters)))
-              (message "Displaying %d matching nodes" (length nodes))
-              (insert (propertize (format "Matching Nodes (%d):\n" (length nodes)) 'face 'org-level-2))
-              (if nodes
+                  (insert "  (no co-occurring tags found)\n")))
+              (insert "\n")
+              ;; Matching nodes section (reuses the `matching-nodes` variable)
+              (insert (propertize (format "Matching Nodes (%d):\n" (length matching-nodes)) 'face 'org-level-2))
+              (if matching-nodes
                   (let ((node-index 0))
-                    (dolist (node-id nodes)
+                    (dolist (node-id matching-nodes)
                       (let* ((props (gethash node-id org-supertag-db--object))
                              (title (or (plist-get props :title) "No Title"))
                              (type (or (plist-get props :todo-state) ""))
-                             (date (format-time-string "%Y-%m-%d" 
-                                                      (or (plist-get props :created-at) 
-                                                         (current-time))))
+                             (date (format-time-string "%Y-%m-%d" (or (plist-get props :created-at) (current-time))))
                              (view-button-text (propertize "[view]" 'face 'link)))
                         (insert (format " %d. " (setq node-index (1+ node-index))))
-                        (insert-text-button view-button-text
-                                           'action 'org-supertag-view--view-node-button-action
-                                           'node-id node-id
-                                           'follow-link t
-                                           'help-echo "View this node")
+                        (insert-text-button view-button-text 'action 'org-supertag-view--view-node-button-action 'node-id node-id 'follow-link t 'help-echo "View this node")
                         (if (string-empty-p type)
                             (insert (format " %s (%s)\n" title date))
                           (insert (format " %s [%s] (%s)\n" title type date))))))
                 (insert "  No nodes found with these tags.\n\n")))
+          ;; This block runs if no filters are applied.
           (progn
+            (insert (propertize "Co-occurring Tags:\n" 'face 'org-level-2))
+            (insert "  (select a filter first)\n")
+            (insert "\n")
             (insert (propertize "Matching Nodes:\n" 'face 'org-level-2))
             (insert "  (select a filter first)\n\n")))
-        
+        ;; --- OPTIMIZED BLOCK END ---
         (insert "\n")
         (insert (propertize "Note: " 'face 'org-level-2))
         ;; Operation instructions
@@ -122,8 +122,6 @@ If FILTER-TAGS is nil and no current filters exist, will prompt for a tag."
         (insert " [a] - Add Filter    [d] - Remove Filter    [r] - Reset Filters    [q] - Quit\n")
         (insert " [g] - Refresh    [v] - View Node    [m] - Manage Relations\n\n")
         (insert "Click [+] to add tags to filter, click [-] to remove filters, click [view] to open node\n"))
-      
-
       (message "Displaying tag discovery buffer...")
       (condition-case err
           (progn

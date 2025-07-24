@@ -144,4 +144,42 @@ This opens the node in an appropriate buffer for viewing."
                         org-supertag-view-window-height))
      (preserve-size . t))))
 
+(defun org-supertag-view-util-wrap-text (text available-width)
+  "Wrap TEXT to fit within AVAILABLE-WIDTH. Returns a list of wrapped lines."
+  (if (<= (string-width text) available-width)
+      (list text)
+    (let ((words (split-string text " "))
+          (lines '())
+          (current-line ""))
+      (dolist (word words)
+        (let ((new-line (if (string-empty-p current-line)
+                            word
+                          (concat current-line " " word))))
+          (if (<= (string-width new-line) available-width)
+              (setq current-line new-line)
+            (push current-line lines)
+            (setq current-line word))))
+      (when (not (string-empty-p current-line))
+        (push current-line lines))
+      (nreverse lines))))
+
+(defun org-supertag-view-util-pad-string (str width &optional align)
+  "Pad STR with spaces to fit WIDTH.
+ALIGN can be :left, :right, or :center. Defaults to :left."
+  (let* ((align (or align :left))) ; Set default value
+    (let* ((len (string-width str))
+           (padding-needed (- width len)))
+      (if (<= padding-needed 0)
+         (truncate-string-to-width str width)
+       (pcase align
+         (:left (concat str (make-string padding-needed ?\s)))
+         (:right (concat (make-string padding-needed ?\s) str))
+         (:center (let* ((left-pad (floor padding-needed 2))
+                         (right-pad (- padding-needed left-pad)))
+                   (concat (make-string left-pad ?\s)
+                           str
+                           (make-string right-pad ?\s))))
+         ;; Fallback for safety
+         (t (concat str (make-string padding-needed ?\s))))))))
+
 (provide 'org-supertag-view-utils)

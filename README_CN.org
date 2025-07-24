@@ -32,17 +32,14 @@ sh ./setup.sh
 #+end_src
 
 
-** 第二步 简单了解什么是 Node
-由于太多人对这两个术语感到陌生，所以我将这个简要的解释，先放在开头。我希望你在尝试 org-supertag 之前，务必简单地浏览这一小节。
+** 第二步 简单了解什么是 Node 和 Field
+Node 是 org-supertag 对 org-headline 的转化：
+- 添加 ID
+- 记录到数据库
 
-Node 代表着被 org-supertag 转化之后的 org-headline，表明已经被 org-supertag 记录到数据库，可以被它操作。Node 相当于一般笔记软件里的笔记块，它包括：一个带着 ID 的 org-headline + org-headline 以下所包含的内容。
+Node，包括了标题和内容，相当于其它笔记里的笔记块。
 
-当 org-supertag 操作 Node 的时候，实际上是对整个笔记块进行操作，举个例子：M-x org-supertag-node-delete，将直接删除整个 Node，清理数据库里记录的 ID、Node 与 Node 之间的引用关系，与 Tag 的 Link 关系等等，清理相关的 Field Value。
-
-这种概念上的区分，是为了让用户清晰的知道笔记状态，是否已经记录到数据库。
-
-为了方便表达，在本使用说明里，Node 都简称为笔记，希望大家在阅读的时候，知道是在说一个笔记块。
-
+本说明中 Node 统称为「笔记」。
 ** 第二步 输入第一条笔记
 
 使用 org-supertag 记录笔记现在很简单：
@@ -79,16 +76,16 @@ Node 代表着被 org-supertag 转化之后的 org-headline，表明已经被 or
 org-supertag 提供了 2 种设置 Field 和 Field Value 的方式：
 
 - 单独设置
-在 Node View 中，将光标移动到 Metadata 区，然后跟着操作提示操作：
-
-[RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field
+  - 在 Node View 中，将光标移动到 Metadata 区，然后跟着操作提示操作。
 
 - 批量设置
-~M-x org-supertag-view-table~ 进入 Table 视图。
+  - ~M-x org-supertag-view-table~ 进入 Table 视图。
+  - 和 Node View 同样，可以编辑 Field（增加、删除、修改），也可以设置 Field Value。
+  - 单元格之间的跳转操作，和 org-table 一样。
 
 ** 第五步 查找你的笔记
 
-org-supertag 提供了 2 种方式来查找笔记：
+org-supertag 提供了 2 种方式来查找笔记： 
 
 ~M-x org-supertag-node-find~
 - 将在 minibuffer 直接显示一个候选栏
@@ -110,8 +107,16 @@ org-supertag 提供了 2 种方式来查找笔记：
 ~org-supertag-node-move~ 可以批量移动多个笔记，只需要高亮多个笔记，然后执行该命令即可。
 
 * org-supertag 的高级用法
+** 使用多种视图
+*** 探索视图
+~M-x org-supertag-view-discover~
 
+- 可添加多个标签作为过滤条件
+- 可动态添加、删除过滤条件
 
+[[./picture/figure13.gif]]
+
+我的用法，比如 #prject 这个标签，会与很多设置为    
 ** 2. 添加行为
 
 ** 第八步 启动聊天窗口

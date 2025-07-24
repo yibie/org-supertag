@@ -107,25 +107,13 @@ This function is kept for backward compatibility."
            (col-idx (cl-position selected-col column-names :test 'string=)))
       (when col-idx
         (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
-               (tag-id (org-supertag-tag-get-id-by-name (car current-tags)))
-               ;; Get manually defined relations
-               (related-by-similar (org-supertag-relation-find-tags-by-group tag-id 'similar))
-               (related-by-parent (org-supertag-relation-find-tags-by-group tag-id 'parent))
-               (related-by-child (org-supertag-relation-find-tags-by-group tag-id 'child))
-               (manual-related-names 
-                (mapcar (lambda (id) 
-                         (format "%s (defined relation)" 
-                                (org-supertag-tag-get-name-by-id id)))
-                       (append related-by-similar related-by-parent related-by-child)))
-               ;; Get co-occurring tags
+               ;; 只依赖共现关系
                (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
-               (cooccur-names
+               (all-related
                 (mapcar (lambda (tag-pair)
-                         (format "%s (co-occurs %d times)" 
+                         (format "%s (co-occurs %d times)"
                                 (car tag-pair) (cdr tag-pair)))
-                       cooccurring-tags))
-               ;; Combine both types of relations
-               (all-related (append manual-related-names cooccur-names)))
+                       cooccurring-tags)))
           (if all-related
               (let* ((selected (completing-read "Choose related tag for new column: " 
                                              all-related nil t))
@@ -135,7 +123,7 @@ This function is kept for backward compatibility."
                   ;; Add new column
                   (push (list selected-tag) org-supertag-view--current-columns)
                   (org-supertag-view--refresh-column-view)))
-            (message "No related tags found for the selected column")))))))
+            (message "No related tags found for the selected column")))))))  
 
 (defun org-supertag-view-remove-column ()
   "Remove a column from the multi-column view."
@@ -230,9 +218,6 @@ Each row shows corresponding entries from different tags, with proper vertical a
         (org-supertag-column-mode)
         (insert (propertize "Multi-Column Tag View\n\n" 
                            'face '(:height 1.5 :weight bold)))
-        (insert (propertize "Operations:\n" 'face '(:weight bold)))
-        (insert " [a] - Add Column    [A] - Add Related Column    [d] - Remove Column    [R] - Reset\n")
-        (insert " [t] - Add Tag to Column    [v] - View Node      [m] - Manage Relations\n\n")
         (let* ((all-nodes-lists (mapcar (lambda (tags)
                                          (org-supertag-view--get-nodes-with-tags tags))
                                        org-supertag-view--current-columns))
@@ -349,7 +334,7 @@ Each row shows corresponding entries from different tags, with proper vertical a
             (insert (propertize "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" 
                                'face '(:foreground "white")))
             (insert "Press 'a'/'A' to add a column (A: by relation), 'd' to remove, 'v' to view a node\n")
-            (insert "Press 't'/'T' to add tag to column (T: by relation), 'm' to manage tag relations\n")
+            (insert "Press 't' to add tag to column\n")
             (insert "Each column displays nodes matching all tags in that column's filter.\n"))))
         (pop-to-buffer buffer))))
 
@@ -538,7 +523,6 @@ If database is empty, offers to update it."
     (define-key map (kbd "d") 'org-supertag-view-remove-column)
     (define-key map (kbd "R") 'org-supertag-view-reset-columns)
     (define-key map (kbd "v") 'org-supertag-view-node-at-point)
-    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
     (define-key map (kbd "S") 'org-supertag-view-save-current-columns)
     (define-key map (kbd "L") 'org-supertag-view-load-saved-columns)
     (define-key map (kbd "1") 'org-supertag-view-switch-to-tag-only)
