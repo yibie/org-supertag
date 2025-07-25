@@ -52,16 +52,12 @@
     (define-key map (kbd "d") 'org-supertag-kanban-delete-field-at-point)
     ;; Navigation
     (define-key map (kbd "v") 'org-supertag-kanban-view-node-at-point)
+    (define-key map (kbd "TAB") 'org-supertag-kanban-next-column)
+    (define-key map (kbd "<backtab>") 'org-supertag-kanban-previous-column)
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "p") 'previous-line)
     map)
   "Keymap for `org-supertag-kanban-mode'.")
-
-(define-derived-mode org-supertag-kanban-mode special-mode "Org-SuperTag-Kanban"
-  "Major mode for the interactive Kanban board view."
-  :group 'org-supertag
-  (setq buffer-read-only t)
-  (setq truncate-lines t))
 
 ;;----------------------------------------------------------------------
 ;; Data Preparation
@@ -136,7 +132,7 @@ Returns the card as a list of strings, each correctly padded."
                             'face '(:height 1.5 :weight bold)))
         (insert (propertize "Operations:\n" 'face '(:weight bold)))
         (insert " [h/l] Move Card  [RET] Edit Value  [E] Edit Field Def  [a/d] Add/Del Field\n")
-        (insert " [v] View Node    [g] Refresh     [q] Quit\n\n")
+        (insert " [n/p] Cursor Up/Down [TAB/S-TAB] Column Jump [v] View Node    [g] Refresh     [q] Quit\n\n")
 
         ;; Data Fetching and Preparation
         (let* ((grouped-nodes (org-supertag-kanban--group-nodes-by-field
@@ -146,9 +142,11 @@ Returns the card as a list of strings, each correctly padded."
                (field-def (cl-find org-supertag-kanban--current-group-field
                                    (plist-get tag-def :fields)
                                    :key (lambda (f) (plist-get f :name)) :test #'string=))
-               (column-headers (if (eq (plist-get field-def :type) 'options)
-                                   (plist-get field-def :options)
-                                 (sort (hash-table-keys grouped-nodes) #'string<)))
+               ;; Set the global headers var and use it as a local var. This is the fix.
+               (column-headers (setq org-supertag-kanban--column-headers
+                                     (if (eq (plist-get field-def :type) 'options)
+                                         (plist-get field-def :options)
+                                       (sort (hash-table-keys grouped-nodes) #'string<))))
                (all-nodes-lists (mapcar (lambda (key) (gethash key grouped-nodes)) column-headers))
                (col-count (length column-headers)))
 
@@ -200,6 +198,25 @@ Returns the card as a list of strings, each correctly padded."
         :base-tag (get-text-property (point) 'base-tag)
         :group-field (get-text-property (point) 'group-field)
         :group-value (get-text-property (point) 'group-value)))
+
+(defun org-supertag-kanban--move-horizontally (direction)
+  "Move cursor horizontally by one column in the Kanban view.
+DIRECTION should be 1 for right, -1 for left."
+  (org-supertag-view-util-move-horizontally-in-columns
+   direction
+   40 ; column-width
+   2  ; separator-width
+   (length org-supertag-kanban--column-headers)))
+
+(defun org-supertag-kanban-next-column ()
+  "Move to the next column to the right."
+  (interactive)
+  (org-supertag-kanban--move-horizontally 1))
+
+(defun org-supertag-kanban-previous-column ()
+  "Move to the previous column to the left."
+  (interactive)
+  (org-supertag-kanban--move-horizontally -1))
 
 (defun org-supertag-kanban-move-card (direction)
   "Move the card at point in DIRECTION (:left or :right)."
