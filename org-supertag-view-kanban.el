@@ -186,7 +186,8 @@ Returns the card as a list of strings, each correctly padded."
                       (insert final-line)))
                   (when (< col-idx (1- col-count)) (insert separator)))
                 (insert "\n")))))))
-    (pop-to-buffer buffer)))
+      (switch-to-buffer buffer)
+      (delete-other-windows)))
 
 ;;---------------------------------------------------------------------
 ;; Interactive Commands
