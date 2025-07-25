@@ -182,4 +182,23 @@ ALIGN can be :left, :right, or :center. Defaults to :left."
          ;; Fallback for safety
          (t (concat str (make-string padding-needed ?\s))))))))
 
+(defun org-supertag-view-util-move-horizontally-in-columns (direction column-width separator-width column-count)
+  "Generic helper to move the cursor horizontally by one column in a view.
+DIRECTION is the direction to move (-1 for left, 1 for right).
+COLUMN-WIDTH is the fixed width of a single column.
+SEPARATOR-WIDTH is the width of the space between columns.
+COLUMN-COUNT is the total number of columns in the view."
+  (when (> column-count 0)
+    (let* ((total-col-width (+ column-width separator-width))
+           (current-h-pos (current-column))
+           (current-col-idx (floor current-h-pos total-col-width))
+           (target-col-idx (max 0 (min (1- column-count) (+ current-col-idx direction)))))
+      (when (/= target-col-idx current-col-idx)
+        (let* ((pos-in-col (- current-h-pos (* current-col-idx total-col-width)))
+               (target-h-pos (+ (* target-col-idx total-col-width) (min pos-in-col column-width))))
+          ;; The key fix: temporarily disable read-only, move to BOL, then move to column.
+          (let ((inhibit-read-only t))
+            (beginning-of-line)
+            (move-to-column target-h-pos)))))))
+
 (provide 'org-supertag-view-utils)

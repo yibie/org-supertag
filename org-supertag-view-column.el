@@ -11,7 +11,6 @@
 
 (defun org-supertag-view--show-tag-columns (&optional initial-tag)
   "Show multi-column tag comparison view, optionally starting with INITIAL-TAG."
-  (interactive)
   (let ((starting-tag (or initial-tag
                          (completing-read "Start multi-column view with tag: "
                                           (org-supertag-view--get-all-tags)
@@ -33,7 +32,6 @@ This function is kept for backward compatibility."
     (let* ((available-tags (org-supertag-view--get-all-tags))
            (tag (completing-read "Add tag for new column: " available-tags nil t)))
       (when (and tag (not (string-empty-p tag)))
-        ;; 添加新标签作为独立的一列
         (push (list tag) org-supertag-view--current-columns)
         (org-supertag-view--refresh-column-view)))))
 
@@ -52,7 +50,7 @@ This function is kept for backward compatibility."
         (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
 
                (nodes (org-supertag-view--get-nodes-with-tags current-tags))
-               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
+               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags)))
 
                (available-tags 
                 (seq-filter (lambda (tag-pair)
@@ -72,7 +70,7 @@ This function is kept for backward compatibility."
                   ;; 添加新的列
                   (push (list selected-tag) org-supertag-view--current-columns)
                   (org-supertag-view--refresh-column-view)))
-            (message "No co-occurring tags found for the selected column")))))))
+            (message "No co-occurring tags found for the selected column"))))))
 
 (defun org-supertag-view-add-tag-to-column ()
   "Add a tag to an existing column in multi-column view."
@@ -118,7 +116,7 @@ This function is kept for backward compatibility."
               (let* ((selected (completing-read "Choose related tag for new column: " 
                                              all-related nil t))
                      ;; Extract actual tag name from the formatted string
-                     (selected-tag (replace-regexp-in-string " (.*)" "" selected)))
+                     (selected-tag (replace-regexp-in-string " \(.*\)" "" selected)))
                 (when (and selected-tag (not (string-empty-p selected-tag)))
                   ;; Add new column
                   (push (list selected-tag) org-supertag-view--current-columns)
@@ -167,6 +165,25 @@ This function is kept for backward compatibility."
   (when-let ((node-id (get-text-property (point) 'node-id)))
     (org-supertag-view--goto-node node-id)))
 
+(defun org-supertag-view-column--move-horizontally (direction)
+  "Move cursor horizontally by one column in the column view.
+DIRECTION should be 1 for right, -1 for left."
+  (org-supertag-view-util-move-horizontally-in-columns
+   direction
+   40 ; column-width
+   2  ; separator-width
+   (length org-supertag-view--current-columns)))
+
+(defun org-supertag-view-column-next-column ()
+  "Move to the next column to the right."
+  (interactive)
+  (org-supertag-view-column--move-horizontally 1))
+
+(defun org-supertag-view-column-previous-column ()
+  "Move to the previous column to the left."
+  (interactive)
+  (org-supertag-view-column--move-horizontally -1))
+
 (defun org-supertag-view--refresh-column-view ()
   "Update the multi-column tag comparison view with a clean, aligned layout."
   (interactive)
@@ -180,7 +197,7 @@ This function is kept for backward compatibility."
         ;; Simplified header
         (insert (propertize "Multi-Column Tag View\n\n" 'face '(:height 1.5 :weight bold)))
         (insert " [a/A] Add Column (A: related)  [d] Remove  [t] Add Tag to Column\n")
-        (insert " [v] View Node    [g] Refresh     [q] Quit\n\n")
+        (insert " [n/p] Cursor Up/Down [TAB/S-TAB] Column Jump [v] View Node    [g] Refresh     [q] Quit\n\n")
 
         ;; Data Fetching
         (let* ((all-nodes-lists (mapcar (lambda (tags)
@@ -213,7 +230,7 @@ This function is kept for backward compatibility."
                                 (wrapped-title (org-supertag-view-util-wrap-text title column-width)))
                            (dolist (line wrapped-title)
                              (push (propertize line 'node-id node-id) lines)))
-                         (push "" lines)) ; Blank line separator
+                         (push "" lines))) ; Blank line separator
                        (if (not lines) '() (butlast (nreverse lines)))))
                    all-nodes-lists))
                  (max-height (apply #'max 0 (mapcar #'length rendered-columns))))
@@ -229,7 +246,7 @@ This function is kept for backward compatibility."
                   (when (< col-idx (1- col-count)) (insert separator)))
                 (insert "\n"))))))
         (goto-char (point-min))
-        (pop-to-buffer buffer))))
+        (pop-to-buffer buffer)))
 
 (defun org-supertag-view-find-in-all-nodes ()
   "Find the current tag in all nodes."
@@ -266,7 +283,7 @@ If database is empty, offers to update it."
                        (when button
                          (setq found t)
                          (button-activate button)))
-                   (forward-char 1)))
+                   (forward-char 1))))
           (unless found
             (org-supertag-view--view-node-from-columns))))
       (unless found
@@ -274,7 +291,7 @@ If database is empty, offers to update it."
    ((eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--view-node))
    (t
-    (message "Please move cursor to a node to view it."))))
+    (message "Please move cursor to a node to view it.")))
 
 ;;----------------------------------------------------------------------
 ;; Save and load column view configurations
@@ -387,7 +404,7 @@ If database is empty, offers to update it."
      ;; Switch from table view
      ((and (eq major-mode 'org-mode) 
            (bound-and-true-p org-supertag-view-mode)
-           (string-match-p "\\*Org SuperTag Table View: \\(.*\\)\\*" (buffer-name)))
+           (string-match-p "\\le *Org SuperTag TabView: \\(.*\\)\\*" (buffer-name)))
       (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" (buffer-name))
       (setq current-tag (match-string 1 (buffer-name))))
      
@@ -409,7 +426,7 @@ If database is empty, offers to update it."
 (defvar org-supertag-view-column-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") 'quit-window)
-    (define-key map (kbd "g") 'org-supertag-view--update-column-view)
+    (define-key map (kbd "g") 'org-supertag-view--refresh-column-view)
     (define-key map (kbd "a") 'org-supertag-view-add-column)
     (define-key map (kbd "A") 'org-supertag-view-add-related-column)
     (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
@@ -420,6 +437,8 @@ If database is empty, offers to update it."
     (define-key map (kbd "L") 'org-supertag-view-load-saved-columns)
     (define-key map (kbd "1") 'org-supertag-view-switch-to-tag-only)
     (define-key map (kbd "2") 'org-supertag-view-switch-to-discover)
+    (define-key map (kbd "TAB") 'org-supertag-view-column-next-column)
+    (define-key map (kbd "<backtab>") 'org-supertag-view-column-previous-column)
     (define-key map (kbd "n") 'next-line)  
     (define-key map (kbd "p") 'previous-line)  
     map)
