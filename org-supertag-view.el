@@ -9,6 +9,7 @@
 (require 'org-supertag-view-column)
 (require 'org-supertag-view-node)
 (require 'org-supertag-view-chat)
+(require 'org-supertag-view-kanban)
 
 ;;----------------------------------------------------------------------
 ;; Main functions
@@ -46,7 +47,7 @@ Available views:
         ('columns  (org-supertag-view-column tag))
         (_ (error "Invalid view type"))))))
 
-(define-derived-mode org-supertag-discover-mode special-mode "Org-ST-Discover"
+(define-derived-mode org-supertag-discover-mode special-mode "SuperTag-Discover"
   "Major mode for progressive tag discovery in org-supertag."
   :group 'org-supertag
   (setq buffer-read-only t)
@@ -69,6 +70,16 @@ Available views:
   (setq-local org-element-use-cache nil)
   (setq-local org-mode-hook nil)
   (use-local-map org-supertag-view-column-mode-map))
+
+(define-derived-mode org-supertag-kanban-mode special-mode "SuperTag-Kanban"
+  "Major mode for the interactive Kanban board view."
+  :group 'org-supertag
+  (setq buffer-read-only t)
+  (setq truncate-lines t)
+  (buffer-disable-undo)
+  (setq header-line-format
+        (propertize " Org-Supertag Kanban View" 'face '(:weight bold)))
+  (use-local-map org-supertag-kanban-mode-map))
 
 (defvar org-supertag-view-mode-map
   (let ((map (make-sparse-keymap)))

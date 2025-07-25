@@ -231,7 +231,6 @@ initialization is disabled or failed."
         (message "Initializing vectorization system..."))
       (condition-case err
           (progn
-              ;; 通知背景同步系统
               (org-supertag--notify-backend-ready))
         (error
          (message "Failed to initialize vectorization system: %s" 

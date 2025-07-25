@@ -491,7 +491,7 @@ Returns:
          (message "Not at heading after moving to location")
          nil)))))
 
-(defun org-supertag-node-move-node ()
+(defun org-supertag-node-move ()
   "Interactive command to move current node to another location.
 
 The command will:

@@ -1,4 +1,62 @@
 * Changelog
+* [4.0.0] - 2025-07-21
+** New Features
+*** AI Chat Service
+- Users can open AI Chat interface with M-x org-supertag-view-chat
+  - Input content after * User: and press RET to send message directly
+  - Provides RAG system's Context content during conversation, clicking expands to jump to source content
+- Supports /commands command system similar to Claude Code
+  - Type / and command name to invoke commands
+  - Use /define command to define new commands
+    - Syntax: /define <command-name> "Prompt", e.g. /define branstrom "Help me brainstorm this topic"
+    - Supports recognition of $INPUT variable in Prompt
+- Supports multilingual conversation, provides ~org-supertag-view-chat-lang~ custom option
+  - Can directly set English, Chinese, Japanese, Korean, French, German, Italian, Portuguese, Russian
+
+*** RAG Service: org-supertag now functions as RAG service for smarter tag recommendation and search
+- RAG service automatically checks database changes and incrementally updates to SQLite-vss database
+- Users can M-x org-supertag-background-run-now to manually run RAG synchronization
+- RAG provides accurate information retrieval for LLM in background
+
+*** Tags: New auto-tag recommendation feature
+- LLM will automatically generate tag suggestions for nodes without tags in the backend
+- Provides unified interface for applying tag recommendations
+
+*** Smart Partner: New smart partner functionality
+- Smart Partner automatically generates tag suggestions for nodes without tags
+- Provides unified interface for applying tag recommendations
+
+*** Scheduled Tasks: Used to manage background services
+
+** Refactors
+*** EPC: Completely refactored EPC server backend
+- Less code with cleaner structure
+
+*** Relationships: "Co-occurrence relationships" of tags no longer stored in separate files, but unified with other relationship types in LINK data objects
+
+*** Relationships: Redesigned *Org Supertag Relation Management* interface
+- No longer supports Find by Groups, Isolate Tag, etc. to focus functions
+
+*** Completion: Removed direct support for Company, now uses Emacs' built-in completion-at-point function
+- Works seamlessly regardless of whether user uses Company or Corfu
+
+*** Tags: Removed original "preset tag" mechanism
+
+*** Tags: No longer supports org-mode's traditional TAGS, only supports custom #inline-tag
+- Not restricted by org-mode's character limitations for TAGS input
+- Can use #inline-tag anywhere
+
+*** Properties: Removed direct modification of org-mode PROPERTIES
+- Users can now open node management interface with M-x org-supertag-view-node to modify Fields, data will be directly saved to database
+- org-supertag-tag-set-field-and-value is no longer available
+
+*** Behavior System: Extracted scheduling functionality into separate timer task component (org-supertag-scheduler.el) to support other org-supertag services
+
+** Removed
+*** Removed org-supertag-backlink.el
+- Related functionality has been integrated into org-supertag-view-node
+- Its provided commands are no longer available
+
 * [3.0.5] - 2025-06-25
 ** Features
 *** Decouple metadata and adopt a database-first architecture
