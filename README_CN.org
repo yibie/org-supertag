@@ -106,27 +106,95 @@ org-supertag 提供了 2 种方式来查找笔记：
 
 ~org-supertag-node-move~ 可以批量移动多个笔记，只需要高亮多个笔记，然后执行该命令即可。
 
+** 第七步 与知识库对话
+~M-x org-supertag-view-chat-open~
+
+- 启动对话界面之后，直接输入关键字，LLM 将根据 RAG 返回的信息进行回复
+- 默认对话，相当于一个 RAG 检索结果
+  - 展开 Context 里面是 RAG 所返回的结果
+- 输入 /commands 看当前有什么命令
+  - 直接输入命令，将进入对应的对话模式
+- 输入 /define 可以自定义对话模式
+  - 语法：~/define <command-name> "prompt"~
+
 * org-supertag 的高级用法
-** 使用多种视图
-*** 探索视图
+** 多种视图，多种用法
+*** Discovery View 
 ~M-x org-supertag-view-discover~
 
+- 提供基于标签的发现机制，在浏览知识库的时候，提供探索感
 - 可添加多个标签作为过滤条件
 - 可动态添加、删除过滤条件
 
 [[./picture/figure13.gif]]
 
-我的用法，比如 #prject 这个标签，会与很多设置为    
-** 2. 添加行为
+*** Kanaban View
+~M-x org-supertag-view-kanban~
 
-** 第八步 启动聊天窗口
+- 按照一个标签的 Field 和 Field Value 自动生成一个多列视图，与 Trello 类似
+- 笔记以卡片的方式呈现
+- 移动卡片：可以直接在卡片上按下 h/l 左右移动卡片，或 RET 修改对应的 Field Value
+
+⚠️暂时还只能按照一个标签中的一个 Field 生成列
+⚠️由于是通过字符生成边框，因此如果列太多，超过了当前 Emacs 窗体的宽度，会破坏样式。我不知道如何解决这个问题，如果有人有经验，可以教教我吗？谢谢🙏。
+
+*** Table View
+上文已经提到，这里不再赘述。
+*** Column View
+~M-x org-supertag-view-column~
+
+- 同时比较不同标签组合下的节点，直观分析差异
+- 动态添加或删除比较列，满足多样化需求
+- 支持向列中添加额外标签，深化比较维度
+- 全键盘支持
+
+[[./picture/figure15.gif]]
+
+** 使用 Behavior 系统，形成自动化的工作流
+
+通过将多个操作整合到一个标签中，*实现一键完成复杂操作*，提高工作效率。
+
+[[./picture/figure6.gif]]
+
+~M-x org-supertag-behavior-attach~ 为当前标签添加行为
+
+~M-x org-supertag-behavior-detach~ 为当前标签解除行为
+
+- 标签触发预设动作，实现自动化
+行为系统使标签变得"智能"，*在添加/删除标签时自动触发预设的动作*（如改变样式、设置状态等）。
+
+- 行为可定时、组合、带参数
+行为可以定时执行、组合使用、带参数，*使 Org-mode 的工作流程更自动化、更高效*。
+
+- 内置行为库与自定义支持
+内置行为库，用户既可以使用预定义的常用行为，也可以创建自定义行为。*模块化设计使行为在不同的 Org 文件之间或用户之间轻松共享、重用和扩展*。
+
+*** 行为系统的高级用法
+
+创建自定义行为，编辑 ~/.emacs.d/org-supertag/org-supertag-custom-behavior.el 文件：
+
+以下是一个示例
+
+#+begin_src emacs-lisp
+;; 注册一个名为 "@urgent" 的行为
+;; 参数说明:
+;;   - @urgent: 行为的名称，用于标识和引用这个行为
+;;   - :trigger: 触发条件，:on-add 表示添加标签时触发
+;;   - :list: 要执行的动作列表，每个动作都是一个命令字符串
+;;   - :style: 标签的显示样式，包含字体和前缀图标设置
+(org-supertag-behavior-register "@urgent"                 ;; 注册一个名为 "@urgent" 的行为
+  :trigger :on-add                                        ;; 添加标签时触发
+  :list '("@todo=TODO"                                    ;; 设置 TODO 状态
+         "@priority=A"                                    ;; 设置优先级为 A
+         "@deadline=today")                               ;; 设置截止日期为今天
+  :style '(:face (:foreground "red" :weight bold)         ;; 设置标签显示为红色加粗
+          :prefix "🔥"))                                  ;; 在标签前显示火焰图标
+#+end_src
+
+更多用法请参考 [[https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide][Org‐supertag Advance Usage]]
 
 * 深入了解 org-supertag
-** 行为系统
-** 视图系统
-** Chat View 的命令系统
-** 智能伙伴机制
-** 智能
+
 * FAQ
 ** 数据库恢复 - 当出现问题时该怎么办？
 
@@ -213,7 +281,6 @@ M-x org-supertag-recovery-full-suite
 
 我觉得「共同出现」是世界上最美妙的一种现象。这让我们在添加标签的时候，自动获得有意义的联系。
 
-** 在 org-supertag 中标签的「共现关系」是如何体现的？
 以下是 org-supertag 当中的「标签共现机制」：
 
 - 在同一个节点当中，同时添加了 A, B 标签，那么这两个标签之间具备「共现关系」
@@ -227,21 +294,13 @@ M-x org-supertag-recovery-full-suite
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
-- 2025-07-21 4.0.0 released
+- 2025-07-21 4.0.0 released 
 - 2025-05-24 3.0.2 released
 - 2025-04-05 3.0.0 released
 - 2025-01-13 2.0.0 released
 - 2024-12-31 1.0.0 released
 - 2024-12-20 0.0.2 released
 - 2024-12-19 0.0.1 released
-
-* 未来计划
-
-- ✅能够提供更多查询的范围，比如针对一个文件或多个文件的查询
-- ✅初步实现一个命令系统，让标签自动触发命令，比如节点添加了名为 Task 的标签时，它会自动设置为 TODO，并自动设置优先级为 A，以及自动将节点的背景色改为黄色
-- ✅实现一个任务调度系统，让多个节点组合起来，完成一系列的任务，比如自动设置晚上 9 点进行每日回顾，并自动将回顾结果插入到回顾节点中（实验性功能，未必会实现）
-- ✅与 AI 结合，不同的标签关联不同的 Prompt，比如当节点被标记为 "任务" 时，自动触发 AI 命令，令该节点自动生成一个任务列表
-- ✅像 Tana 那样，提供更多视图（实验性功能，未必会实现）
 
 * Acknowledgments
 
