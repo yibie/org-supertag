@@ -11,7 +11,6 @@
 
 (defun org-supertag-view--show-tag-columns (&optional initial-tag)
   "Show multi-column tag comparison view, optionally starting with INITIAL-TAG."
-  (interactive)
   (let ((starting-tag (or initial-tag
                          (completing-read "Start multi-column view with tag: "
                                           (org-supertag-view--get-all-tags)
@@ -33,7 +32,6 @@ This function is kept for backward compatibility."
     (let* ((available-tags (org-supertag-view--get-all-tags))
            (tag (completing-read "Add tag for new column: " available-tags nil t)))
       (when (and tag (not (string-empty-p tag)))
-        ;; 添加新标签作为独立的一列
         (push (list tag) org-supertag-view--current-columns)
         (org-supertag-view--refresh-column-view)))))
 
@@ -52,7 +50,7 @@ This function is kept for backward compatibility."
         (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
 
                (nodes (org-supertag-view--get-nodes-with-tags current-tags))
-               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
+               (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags)))
 
                (available-tags 
                 (seq-filter (lambda (tag-pair)
@@ -72,7 +70,7 @@ This function is kept for backward compatibility."
                   ;; 添加新的列
                   (push (list selected-tag) org-supertag-view--current-columns)
                   (org-supertag-view--refresh-column-view)))
-            (message "No co-occurring tags found for the selected column")))))))
+            (message "No co-occurring tags found for the selected column"))))))
 
 (defun org-supertag-view-add-tag-to-column ()
   "Add a tag to an existing column in multi-column view."
@@ -107,35 +105,23 @@ This function is kept for backward compatibility."
            (col-idx (cl-position selected-col column-names :test 'string=)))
       (when col-idx
         (let* ((current-tags (nth col-idx org-supertag-view--current-columns))
-               (tag-id (org-supertag-tag-get-id-by-name (car current-tags)))
-               ;; Get manually defined relations
-               (related-by-similar (org-supertag-relation-find-tags-by-group tag-id 'similar))
-               (related-by-parent (org-supertag-relation-find-tags-by-group tag-id 'parent))
-               (related-by-child (org-supertag-relation-find-tags-by-group tag-id 'child))
-               (manual-related-names 
-                (mapcar (lambda (id) 
-                         (format "%s (defined relation)" 
-                                (org-supertag-tag-get-name-by-id id)))
-                       (append related-by-similar related-by-parent related-by-child)))
-               ;; Get co-occurring tags
+               ;; 只依赖共现关系
                (cooccurring-tags (org-supertag-view--get-cooccurring-tags current-tags))
-               (cooccur-names
+               (all-related
                 (mapcar (lambda (tag-pair)
-                         (format "%s (co-occurs %d times)" 
+                         (format "%s (co-occurs %d times)"
                                 (car tag-pair) (cdr tag-pair)))
-                       cooccurring-tags))
-               ;; Combine both types of relations
-               (all-related (append manual-related-names cooccur-names)))
+                       cooccurring-tags)))
           (if all-related
               (let* ((selected (completing-read "Choose related tag for new column: " 
                                              all-related nil t))
                      ;; Extract actual tag name from the formatted string
-                     (selected-tag (replace-regexp-in-string " (.*)" "" selected)))
+                     (selected-tag (replace-regexp-in-string " \(.*\)" "" selected)))
                 (when (and selected-tag (not (string-empty-p selected-tag)))
                   ;; Add new column
                   (push (list selected-tag) org-supertag-view--current-columns)
                   (org-supertag-view--refresh-column-view)))
-            (message "No related tags found for the selected column")))))))
+            (message "No related tags found for the selected column")))))))  
 
 (defun org-supertag-view-remove-column ()
   "Remove a column from the multi-column view."
@@ -172,186 +158,95 @@ This function is kept for backward compatibility."
         (setq org-supertag-view--current-columns (list (list tag)))
         (org-supertag-view--refresh-column-view)))))
 
-(defun org-supertag-view--wrap-text (text available-width)
-  "Wrap TEXT to fit within AVAILABLE-WIDTH.
-Returns a list of wrapped lines."
-  (if (<= (string-width text) available-width)
-      (list text)
-    (let ((words (split-string text " "))
-          (lines '())
-          (current-line ""))
-      (dolist (word words)
-        (let ((new-line (if (string-empty-p current-line)
-                           word
-                         (concat current-line " " word))))
-          (if (<= (string-width new-line) available-width)
-              (setq current-line new-line)
-            (push current-line lines)
-            (setq current-line word))))
-      (when (not (string-empty-p current-line))
-        (push current-line lines))
-      (nreverse lines))))
 
-
-(defun org-supertag-view-column-node ()
-  "View the node at point in either single or multi-column view."
+(defun org-supertag-view-node-at-point ()
+  "Jump to the source of the node under the cursor."
   (interactive)
-  ;; 确保数据库已初始化
-  (if (not (and (boundp 'org-supertag-db--object)
-                org-supertag-db--object
-                (> (hash-table-count org-supertag-db--object) 0)))
-      ;; 数据库未初始化
-      (if (yes-or-no-p "SuperTag database is empty or not initialized. Update it now? ")
-          (progn
-            (call-interactively 'org-supertag-db-update)
-            ;; 更新后再次确认数据库状态
-            (if (and (boundp 'org-supertag-db--object)
-                     (> (hash-table-count org-supertag-db--object) 0))
-                ;; 数据库已更新，继续执行
-                (org-supertag-view--view-node-internal)
-              (message "Database still empty after update. Cannot view nodes.")))
-        (message "SuperTag database not initialized. Please run org-supertag-db-update first."))
-    
-    ;; 数据库已初始化，继续执行
-    (org-supertag-view--view-node-internal)))
+  (when-let ((node-id (get-text-property (point) 'node-id)))
+    (org-supertag-view--goto-node node-id)))
 
+(defun org-supertag-view-column--move-horizontally (direction)
+  "Move cursor horizontally by one column in the column view.
+DIRECTION should be 1 for right, -1 for left."
+  (org-supertag-view-util-move-horizontally-in-columns
+   direction
+   40 ; column-width
+   2  ; separator-width
+   (length org-supertag-view--current-columns)))
+
+(defun org-supertag-view-column-next-column ()
+  "Move to the next column to the right."
+  (interactive)
+  (org-supertag-view-column--move-horizontally 1))
+
+(defun org-supertag-view-column-previous-column ()
+  "Move to the previous column to the left."
+  (interactive)
+  (org-supertag-view-column--move-horizontally -1))
 
 (defun org-supertag-view--refresh-column-view ()
-  "Update the multi-column tag comparison view with strict column alignment.
-Each row shows corresponding entries from different tags, with proper vertical alignment."
-  (interactive)
+  "Update the multi-column tag comparison view with a clean, aligned layout."
   (let ((buffer (get-buffer-create "*Org SuperTag Columns*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
-            (column-width 45)  
-            (padding 1)        
-            (separator "│"))   
+            (column-width 40)
+            (separator "  "))
         (erase-buffer)
         (org-supertag-column-mode)
-        (insert (propertize "Multi-Column Tag View\n\n" 
-                           'face '(:height 1.5 :weight bold)))
-        (insert (propertize "Operations:\n" 'face '(:weight bold)))
-        (insert " [a] - Add Column    [A] - Add Related Column    [d] - Remove Column    [R] - Reset\n")
-        (insert " [t] - Add Tag to Column    [v] - View Node      [m] - Manage Relations\n\n")
+        ;; Simplified header
+        (insert (propertize "Multi-Column Tag View\n\n" 'face '(:height 1.5 :weight bold)))
+        (insert " [a/A] Add Column (A: related)  [d] Remove  [t] Add Tag to Column\n")
+        (insert " [n/p] Cursor Up/Down [TAB/S-TAB] Column Jump [v] View Node    [g] Refresh     [q] Quit\n\n")
+
+        ;; Data Fetching
         (let* ((all-nodes-lists (mapcar (lambda (tags)
                                          (org-supertag-view--get-nodes-with-tags tags))
                                        org-supertag-view--current-columns))
-               (col-count (length all-nodes-lists))
-               (max-nodes 0))
-          (dolist (nodes all-nodes-lists)
-            (setq max-nodes (max max-nodes (length nodes))))
-          
-          (cl-flet ((insert-in-column 
-                     (col-idx content &optional face fill-char first-line-prefix other-lines-prefix)
-                     (let* ((current-pos (current-column))
-                            (target-pos (* col-idx (1+ column-width)))
-                            (padding-needed (- target-pos current-pos))
-                            (separator-space (if (> col-idx 0) 2 0))
-                            (avail-width (- column-width separator-space))
-                            (prefix-width (if first-line-prefix 
-                                            (string-width first-line-prefix) 0))
-                            (wrapped-lines (org-supertag-view--wrap-text content 
-                                                                        (- avail-width prefix-width)))
-                            (first-line t))
-                       
-                       (when (> padding-needed 0)
-                         (insert (make-string padding-needed ?\s)))
-                       
-                       (when (> col-idx 0)
-                         (insert (propertize separator 'face '(:foreground "gray50")))
-                         (insert " "))
-                       
-                       (dolist (line wrapped-lines)
-                         (when (not first-line)
-                           (insert "\n")
-                           (insert (make-string target-pos ?\s))
-                           (when (> col-idx 0)
-                             (insert (propertize separator 'face '(:foreground "gray50")))
-                             (insert " ")))
-                         
-                         (when (and first-line first-line-prefix)
-                           (insert first-line-prefix))
-                         (when (and (not first-line) other-lines-prefix)
-                           (insert other-lines-prefix))
-                         
-                         (let ((text (if face
-                                        (propertize line 'face face)
-                                      line)))
-                           (insert text))
-                         
-                         (when (and first-line (= (length wrapped-lines) 1))
-                           (let* ((content-width (+ (string-width line) 
-                                                  (if first-line-prefix 
-                                                      (string-width first-line-prefix) 
-                                                    0)))
-                                  (fill-needed (- avail-width content-width)))
-                             (when (and (> fill-needed 0) fill-char)
-                               (insert (make-string fill-needed fill-char)))))
-                         
-                         (setq first-line nil)))))
-            
-            ;; Insert column headers
-            (dotimes (col-idx col-count)
-              (let* ((tags (nth col-idx org-supertag-view--current-columns))
-                     (tag-text (string-join tags ", "))
-                     (header-text (format "Column %d: %s" (1+ col-idx) tag-text)))
-                (insert-in-column col-idx header-text '(:weight bold) ?\s)))
-            
-            (insert "\n")
-            
-            ;; Insert separator line
-            (dotimes (col-idx col-count)
-              (insert-in-column col-idx "" nil ?─))
-            (insert "\n\n")
-            
-            (if (= max-nodes 0)
-                (insert "  No nodes found for any combination of tags.\n\n")
-              
-              ;; Insert node content
-              (dotimes (row-idx max-nodes)
+               (col-count (length all-nodes-lists)))
+
+          ;; 1. Insert column headers
+          (dotimes (i col-count)
+            (let* ((tags (nth i org-supertag-view--current-columns))
+                   (tag-text (string-join tags ", "))
+                   (node-count (length (nth i all-nodes-lists)))
+                   (header-text (format "%s (%d)" tag-text node-count))
+                   (padded-header (org-supertag-view-util-pad-string header-text column-width 'center)))
+              (insert (propertize padded-header 'face '(:weight bold)))
+              (when (< i (1- col-count)) (insert separator))))
+          (insert "\n")
+          (dotimes (i col-count)
+            (insert (make-string column-width ?─))
+            (when (< i (1- col-count)) (insert separator)))
+          (insert "\n")
+
+          ;; 2. Pre-render each column into a list of its lines.
+          (let* ((rendered-columns
+                  (mapcar
+                   (lambda (nodes-list)
+                     (let ((lines '()))
+                       (dolist (node-id nodes-list)
+                         (let* ((title (or (plist-get (gethash node-id org-supertag-db--object) :title) "No Title"))
+                                (wrapped-title (org-supertag-view-util-wrap-text title column-width)))
+                           (dolist (line wrapped-title)
+                             (push (propertize line 'node-id node-id) lines)))
+                         (push "" lines))) ; Blank line separator
+                       (if (not lines) '() (butlast (nreverse lines)))))
+                   all-nodes-lists))
+                 (max-height (apply #'max 0 (mapcar #'length rendered-columns))))
+
+            (if (zerop max-height)
+                (insert "\n  No nodes found for any combination of tags.\n")
+              ;; 3. Print the board row by row, ensuring alignment.
+              (dotimes (line-idx max-height)
                 (dotimes (col-idx col-count)
-                  (let* ((nodes (nth col-idx all-nodes-lists))
-                         (node-id (and (< row-idx (length nodes)) 
-                                     (nth row-idx nodes)))
-                         (view-button-text (propertize "[view]" 'face 'link)))
-                    (when node-id
-                      (let* ((props (gethash node-id org-supertag-db--object))
-                             (title (or (plist-get props :title) "No title"))
-                             (node-number (format "%d. " (1+ row-idx))))
-                        (insert-in-column col-idx title nil nil 
-                                        (concat node-number view-button-text " ")
-                                        "    ")))))
-                (insert "\n")
-                
-                ;; Insert status if exists
-                (let ((has-status nil))
-                  (dotimes (col-idx col-count)
-                    (let* ((nodes (nth col-idx all-nodes-lists))
-                           (node-id (and (< row-idx (length nodes)) 
-                                       (nth row-idx nodes))))
-                      (when (and node-id 
-                               (let ((props (gethash node-id org-supertag-db--object)))
-                                 (not (string-empty-p (or (plist-get props :todo-state) 
-                                                        "")))))
-                        (let* ((props (gethash node-id org-supertag-db--object))
-                               (type (or (plist-get props :todo-state) ""))
-                               (status-text (format "   [%s]" type)))
-                          (setq has-status t)
-                          (insert-in-column col-idx status-text 
-                                          '(:foreground "purple") ?\s)))))
-                  
-                  (when has-status
-                    (insert "\n")))
-                
-                (insert "\n")))
-            
-            (goto-char (point-max))
-            (insert (propertize "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" 
-                               'face '(:foreground "white")))
-            (insert "Press 'a'/'A' to add a column (A: by relation), 'd' to remove, 'v' to view a node\n")
-            (insert "Press 't'/'T' to add tag to column (T: by relation), 'm' to manage tag relations\n")
-            (insert "Each column displays nodes matching all tags in that column's filter.\n"))))
-        (pop-to-buffer buffer))))
+                  (let* ((col-lines (nth col-idx rendered-columns))
+                         (line-to-insert (or (nth line-idx col-lines) "")))
+                    (insert (org-supertag-view-util-pad-string line-to-insert column-width :left)))
+                  (when (< col-idx (1- col-count)) (insert separator)))
+                (insert "\n"))))))
+        (goto-char (point-min))
+        (switch-to-buffer buffer)
+        (delete-other-windows)))
 
 (defun org-supertag-view-find-in-all-nodes ()
   "Find the current tag in all nodes."
@@ -388,7 +283,7 @@ If database is empty, offers to update it."
                        (when button
                          (setq found t)
                          (button-activate button)))
-                   (forward-char 1)))
+                   (forward-char 1))))
           (unless found
             (org-supertag-view--view-node-from-columns))))
       (unless found
@@ -396,7 +291,7 @@ If database is empty, offers to update it."
    ((eq major-mode 'org-supertag-discover-mode)
     (org-supertag-view--view-node))
    (t
-    (message "Please move cursor to a node to view it."))))
+    (message "Please move cursor to a node to view it.")))
 
 ;;----------------------------------------------------------------------
 ;; Save and load column view configurations
@@ -509,7 +404,7 @@ If database is empty, offers to update it."
      ;; Switch from table view
      ((and (eq major-mode 'org-mode) 
            (bound-and-true-p org-supertag-view-mode)
-           (string-match-p "\\*Org SuperTag Table View: \\(.*\\)\\*" (buffer-name)))
+           (string-match-p "\\le *Org SuperTag TabView: \\(.*\\)\\*" (buffer-name)))
       (string-match "\\*Org SuperTag Table View: \\(.*\\)\\*" (buffer-name))
       (setq current-tag (match-string 1 (buffer-name))))
      
@@ -531,18 +426,19 @@ If database is empty, offers to update it."
 (defvar org-supertag-view-column-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") 'quit-window)
-    (define-key map (kbd "g") 'org-supertag-view--update-column-view)
+    (define-key map (kbd "g") 'org-supertag-view--refresh-column-view)
     (define-key map (kbd "a") 'org-supertag-view-add-column)
     (define-key map (kbd "A") 'org-supertag-view-add-related-column)
     (define-key map (kbd "t") 'org-supertag-view-add-tag-to-column)
     (define-key map (kbd "d") 'org-supertag-view-remove-column)
     (define-key map (kbd "R") 'org-supertag-view-reset-columns)
     (define-key map (kbd "v") 'org-supertag-view-node-at-point)
-    (define-key map (kbd "m") 'org-supertag-view-manage-relations)
     (define-key map (kbd "S") 'org-supertag-view-save-current-columns)
     (define-key map (kbd "L") 'org-supertag-view-load-saved-columns)
     (define-key map (kbd "1") 'org-supertag-view-switch-to-tag-only)
     (define-key map (kbd "2") 'org-supertag-view-switch-to-discover)
+    (define-key map (kbd "TAB") 'org-supertag-view-column-next-column)
+    (define-key map (kbd "<backtab>") 'org-supertag-view-column-previous-column)
     (define-key map (kbd "n") 'next-line)  
     (define-key map (kbd "p") 'previous-line)  
     map)

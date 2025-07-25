@@ -239,8 +239,8 @@ Tries current position first"
                      (options-input (read-string "Options (comma separated): " current-options-str))
                      (new-options (split-string options-input "," t "[ \t\n\r]+")))
                 (setq new-field-def (plist-put new-field-def :options new-options))))
-            (org-supertag-view-node--update-field-definition tag-id field-name new-field-def)
-            (org-supertag-view-node-refresh))))))))
+            (when (org-supertag-tag--update-field-definition tag-id field-name new-field-def)
+              (org-supertag-view-node-refresh)))))))))
 
 (defun org-supertag-view-node-add-field ()
   "Add a new field to a tag associated with the current node."
@@ -249,17 +249,7 @@ Tries current position first"
          (tags (org-supertag-node-get-tags node-id))
          (tag-id (completing-read "Add field to which tag: " tags nil t)))
     (when tag-id
-      (let* ((field-name (read-string "Field name: "))
-             (field-type-choices (org-supertag-get-field-types))
-             (field-type-str (completing-read "Field type: "
-                                              (mapcar #'car field-type-choices)))
-             (field-type (cdr (assoc field-type-str field-type-choices)))
-             (field-def (list :name field-name :type field-type)))
-        ;; For options type, ask for the options
-        (when (eq field-type 'options)
-          (let* ((options-input (read-string "Options (comma separated): "))
-                 (options-list (split-string options-input "," t "[ \t\n\r]+")))
-            (setq field-def (plist-put field-def :options options-list))))
+      (when-let ((field-def (org-supertag-tag--create-field-definition)))
         (org-supertag-tag-add-field tag-id field-def)
         (org-supertag-view-node-refresh)))))
 
@@ -271,14 +261,7 @@ Tries current position first"
           (field-name (plist-get field-info :field-name)))
       (when (and field-name (yes-or-no-p (format "Really remove field '%s' from tag '%s'?"
                                                  field-name tag-id)))
-        (let* ((tag (org-supertag-db-get tag-id))
-               (fields (plist-get tag :fields))
-               (new-fields (cl-remove-if (lambda (f)
-                                           (string= (plist-get f :name) field-name))
-                                         fields))
-               (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
-          (org-supertag-db-add tag-id new-tag)
-          (message "Field '%s' removed from tag '%s'." field-name tag-id)
+        (when (org-supertag-tag--remove-field tag-id field-name)
           (org-supertag-view-node-refresh))))))
 
 (defun org-supertag-view-node--find-tag-for-field (node-id field-name)
@@ -290,20 +273,6 @@ Tries current position first"
           (when (string= (plist-get field-def :name) field-name)
             (setq found-tag-id tag-id)))))
     found-tag-id))
-
-(defun org-supertag-view-node--update-field-definition (tag-id field-name new-field-def)
-  "Update the complete definition of a field in a tag."
-  (when-let* ((tag (org-supertag-db-get tag-id))
-              (fields (plist-get tag :fields)))
-    (let* ((new-fields (mapcar (lambda (f)
-                                 (if (string= (plist-get f :name) field-name)
-                                     new-field-def
-                                   f))
-                               fields))
-           (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
-      (org-supertag-db-add tag-id new-tag)
-      (message "Field '%s' definition updated in tag '%s'." field-name tag-id))))
-
 
     
 (defun org-supertag-view-node-refresh ()
