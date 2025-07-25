@@ -186,7 +186,6 @@ DIRECTION should be 1 for right, -1 for left."
 
 (defun org-supertag-view--refresh-column-view ()
   "Update the multi-column tag comparison view with a clean, aligned layout."
-  (interactive)
   (let ((buffer (get-buffer-create "*Org SuperTag Columns*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
@@ -246,7 +245,8 @@ DIRECTION should be 1 for right, -1 for left."
                   (when (< col-idx (1- col-count)) (insert separator)))
                 (insert "\n"))))))
         (goto-char (point-min))
-        (pop-to-buffer buffer)))
+        (switch-to-buffer buffer)
+        (delete-other-windows)))
 
 (defun org-supertag-view-find-in-all-nodes ()
   "Find the current tag in all nodes."
