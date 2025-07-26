@@ -2,21 +2,13 @@
 
 (require 'org)
 (require 'org-element)
+(require 'org-supertag-view-utils)
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
 (require 'cl-lib)
 
 ;; Data structure for query items
-(cl-defstruct (org-supertag-query-item
-               (:constructor org-supertag-query-item-create)
-               (:copier nil))
-  "Structure for holding query result items."
-  id          ; Node ID
-  title       ; Title
-  tags        ; Tags list
-  fields      ; Field values
-  file        ; File name
-  marked)     ; Marked status
+;; 删除 org-supertag-query-item 结构体定义
 
 (defcustom org-supertag-query-history-max-items 100
   "Maximum number of keywords to keep in history.
@@ -256,158 +248,173 @@ TAG-NAME is the tag to search for."
   :group 'org-supertag-query)
 
 ;; Buffer-local 
-(defvar-local org-supertag-query-ewoc nil
-  "Ewoc object for displaying query results.")
+;; 删除 org-supertag-query-ewoc 相关定义
 
 
 ;; Formatting display function
-(defun org-supertag-query-pp-item (item)
-  "Format display for a single query item."
-  (let* ((title (org-supertag-query-item-title item))
-         (tags (org-supertag-query-item-tags item))
-         (file (org-supertag-query-item-file item))
-         (marked (org-supertag-query-item-marked item))
-         (id (org-supertag-query-item-id item)))   
-    ;; Title line with checkbox and tags
-    (insert (propertize (if marked "☑ " "☐ ")
-                       'face (if marked 'org-checkbox-statistics-done
-                              'org-checkbox))
-            (propertize title 'face 'bold)
-            " "
-            (format "[[id:%s][🔗]]" id))  ; Add ID link  
-    (when tags
-      (insert " ")
-      (dolist (tag tags)
-        (insert (propertize (concat "[" tag "]")
-                           'face 'org-supertag-query-tag)
-                " ")))
-    (when file
-      (insert " " (propertize (file-name-nondirectory file)
-                             'face 'org-supertag-query-file)))
-    (insert "\n")))
+;; 删除 org-supertag-query-pp-item 函数定义
 
 (defun org-supertag-query-highlight-current ()
-  "Highlight current item."
-  (let* ((node (ewoc-locate org-supertag-query-ewoc))
-         (inhibit-read-only t)
-         (beg (ewoc-location node))
-         (next (ewoc-next org-supertag-query-ewoc node))
-         (end (if next
-                  (ewoc-location next)
-                (point-max))))
-    (remove-overlays (point-min) (point-max) 'org-supertag-query t)
-    (let ((ov (make-overlay beg end)))
-      (overlay-put ov 'face 'org-supertag-query-current)
-      (overlay-put ov 'org-supertag-query t))))
+  "Highlight the current result card."
+  (remove-overlays (point-min) (point-max) 'org-supertag-query t)
+  (save-excursion
+    (beginning-of-line)
+    (when (looking-at "┌")
+      (let ((beg (point))
+            (end (save-excursion
+                   (re-search-forward "^└" nil t)
+                   (line-end-position))))
+        (when end
+          (let ((ov (make-overlay beg end)))
+            (overlay-put ov 'face 'org-supertag-query-current)
+            (overlay-put ov 'org-supertag-query t)))))))
 
 (defun org-supertag-query-next ()
-  "Move to next result."
+  "Jump to the next result card."
   (interactive)
-  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
-             (next (ewoc-next org-supertag-query-ewoc current)))
-    (goto-char (ewoc-location next))
-    (beginning-of-line)
-    (org-supertag-query-highlight-current)))
+  (let ((p (point)))
+    ;; First, find the end of the current card to start our search from there.
+    (let ((search-start-point
+           (save-excursion
+             (beginning-of-line)
+             ;; Find the start of the current card.
+             (unless (looking-at "┌")
+               (re-search-backward "^┌" nil t))
+             ;; Now, find the end of this card.
+             (when (re-search-forward "^└" nil t)
+               (point))))) ;; The search for the next card will start *after* this point.
+      (if (and search-start-point
+               (save-excursion (goto-char search-start-point)
+                               (re-search-forward "^┌" nil t)))
+          ;; If a next card is found...
+          (progn
+            (goto-char (match-beginning 0))
+            (org-supertag-query-highlight-current))
+        ;; Otherwise, stay put.
+        (goto-char p)))))
 
 (defun org-supertag-query-prev ()
-  "Move to previous result."
+  "Jump to the previous result card."
   (interactive)
-  (when-let* ((current (ewoc-locate org-supertag-query-ewoc))
-             (prev (ewoc-prev org-supertag-query-ewoc current)))
-    (goto-char (ewoc-location prev))
-    (beginning-of-line)
-    (org-supertag-query-highlight-current)))
+  (let ((p (point)))
+    ;; Find the start of the current card. This will be our search boundary.
+    (let ((current-card-start
+           (save-excursion
+             (beginning-of-line)
+             (if (looking-at "┌")
+                 (point)
+               (re-search-backward "^┌" nil t)))))
+      (message "DEBUG: Current point: %d, Card start: %s, Point-min: %d" p current-card-start (point-min))
+      ;; If we found the start of the current card, and it's not the first thing...
+      (if (and current-card-start (> current-card-start (point-min)))
+          ;; ...then try to search backward from just before it.
+          (if (save-excursion
+                (goto-char (1- current-card-start))
+                (re-search-backward "^┌" nil t))
+              ;; If successful, move to the matched position
+              (progn
+                (message "DEBUG: Found previous card at: %d" (match-beginning 0))
+                (goto-char (match-beginning 0))
+                (org-supertag-query-highlight-current))
+            ;; If search fails, go back to original point.
+            (message "DEBUG: No previous card found")
+            (goto-char p))
+        ;; If we couldn't find the current card start, go back to original point.
+        (message "DEBUG: Could not find current card start or at beginning")
+        (goto-char p)))))
 
 (defun org-supertag-query-toggle-mark ()
-  "Toggle mark for current item."
+  "Toggle the marked state of the current card and redraw it."
   (interactive)
-  (when-let* ((node (ewoc-locate org-supertag-query-ewoc))
-              (data (ewoc-data node)))
-    (setf (org-supertag-query-item-marked data)
-          (not (org-supertag-query-item-marked data)))
-    (ewoc-invalidate org-supertag-query-ewoc node)
-    (org-supertag-query-next)))
-    
+  (when-let* ((node-id (get-text-property (point) 'node-id))
+              (result-pair (get-text-property (point) 'result-pair)))
+    (if (member node-id org-supertag-query--marked-nodes)
+        (setq org-supertag-query--marked-nodes (remove node-id org-supertag-query--marked-nodes))
+      (push node-id org-supertag-query--marked-nodes))
+    ;; Redraw the card to show the new checkbox state
+    (let ((inhibit-read-only t)
+          (p (point))
+          (card-width 80)) ; Ensure this matches the width in show-results
+      (save-excursion
+        (let ((beg (save-excursion
+                     (beginning-of-line)
+                     (if (looking-at "┌")
+                         (point)
+                       (re-search-backward "^┌" nil t))))
+              (end nil))
+          (when beg
+            (goto-char beg)
+            ;; Find the end of the card's region to delete it entirely.
+            (setq end (save-excursion
+                        (when (re-search-forward "^└" nil t)
+                          (end-of-line)
+                          (forward-char 1) ; Include the final newline
+                          (point))))
+            (when end
+              (delete-region beg end)
+              (goto-char beg)
+              (let* ((node (car result-pair))
+                     (context (cdr result-pair))
+                     (card-lines (org-supertag-query--format-card
+                                  node context card-width
+                                  (member node-id org-supertag-query--marked-nodes))))
+                (dolist (line card-lines)
+                  (insert line "\n"))
+                ;; Restore the text property for the whole card
+                (add-text-properties beg (- (point) 1) `(result-pair ,result-pair)))))))
+      (goto-char p)
+      (org-supertag-query-highlight-current))))
+
 (defun org-supertag-query-find-nodes (keywords)
-  "Find nodes matching KEYWORDS."
+  "Find nodes matching KEYWORDS.
+Returns a list of cons cells (NODE-PROPS . CONTEXT-SNIPPET),
+where CONTEXT-SNIPPET is a string of content around the first
+matching keyword, or nil if the match was not in the content."
   (let (results)
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
          (let* ((title (plist-get props :title))
                 (content (plist-get props :content))
-                ;; Get tags and tag fields
                 (tag-fields
                  (let ((fields-map (make-hash-table :test 'equal)))
-                   (maphash 
+                   (maphash
                     (lambda (link-id link-props)
-                      (when (and (string-prefix-p ":node-tag:" link-id)
-                               (equal (plist-get link-props :from) id))
-                        (when-let* ((tag-id (plist-get link-props :to))
-                                  (tag (org-supertag-db-get tag-id))
-                                  (fields (plist-get tag :fields)))
-                          (dolist (field fields)
-                            (puthash (plist-get field :name) field fields-map)))))
+                      (when (and (string-prefix-p ":node-tag:" link-id) (equal (plist-get link-props :from) id))
+                        (when-let* ((tag-id (plist-get link-props :to)) (tag (org-supertag-db-get tag-id)) (fields (plist-get tag :fields)))
+                          (dolist (field fields) (puthash (plist-get field :name) field fields-map)))))
                     org-supertag-db--link)
                    fields-map))
-                ;; Get tags
-                (tags (let (node-tags)
-                       (maphash 
-                        (lambda (link-id link-props)
-                          (when (and (string-prefix-p ":node-tag:" link-id)
-                                   (equal (plist-get link-props :from) id))
-                            (push (plist-get link-props :to) node-tags)))
-                        org-supertag-db--link)
-                       node-tags))
-                ;;  Get field values
-                (fields (let (node-fields)
-                         (maphash
-                          (lambda (link-id link-props)
-                            (when (and (string-prefix-p ":node-field:" link-id)
-                                     (equal (plist-get link-props :from) id))
-                              (let* ((field-name (plist-get link-props :field-name))
-                                    (field-def (gethash field-name tag-fields))
-                                    (value (plist-get link-props :value)))
-                                (push (list :name field-name
-                                          :type (plist-get field-def :type)
-                                          :value value)
-                                      node-fields))))
-                          org-supertag-db--link)
-                         node-fields))
-                ;; Build searchable text
-                (searchable-text (concat 
-                                ;; Title
-                                (or title "")
-                                " "
-                                ;; Tags
-                                (mapconcat #'identity tags " ")
-                                " "
-                                ;; Field values
-                                (mapconcat
-                                 (lambda (field)
-                                   (format "%s:%s"
-                                          (plist-get field :name)
-                                          (plist-get field :value)))
-                                 fields " ")
-                                " "
-                                ;; Content
-                                (or content ""))))
-           
+                (tags (org-supertag-query--get-node-tags id)))
            ;; Check if all keywords match
-           (when (cl-every 
-                  (lambda (keyword)
-                    (string-match-p 
-                     (regexp-quote keyword) 
-                     searchable-text))
-                  keywords)
-             (push props results)))))
+           (let ((match-context nil)
+                 (all-match t))
+             (dolist (keyword keywords)
+               (let* ((keyword-re (regexp-quote keyword))
+                      (title-match (and title (string-match-p keyword-re title)))
+                      (tag-match (cl-some (lambda (t) (string-match-p keyword-re t)) tags))
+                      (content-match (and content (string-match keyword-re content))))
+                 (unless (or title-match tag-match content-match)
+                   (setq all-match nil))
+                 ;; Capture context from the first keyword that matches in content
+                 (when (and content-match (not match-context))
+                   (let* ((match-start (match-beginning 0))
+                          (context-start (max 0 (- match-start 40)))
+                          (context-end (min (length content) (+ (match-end 0) 40)))
+                          (prefix (if (> context-start 0) "..." ""))
+                          (suffix (if (< context-end (length content)) "..." "")))
+                     (setq match-context (concat prefix (substring content context-start context-end) suffix))))))
+             (when all-match
+               (push (cons props match-context) results))))))
      org-supertag-db--object)
-    
     (nreverse results)))
 
 
 (defvar-local org-supertag-query-mode-map nil
   "Keymap for `org-supertag-query-mode'.")
+
+(defvar-local org-supertag-query--marked-nodes nil
+  "List of marked node IDs in the query buffer.")
 
 (defun org-supertag-query-mode-init-map ()
   "Initialize the keymap for org-supertag-query-mode."
@@ -415,7 +422,7 @@ TAG-NAME is the tag to search for."
     ;; Navigation and Marking
     (define-key map (kbd "n") #'org-supertag-query-next)
     (define-key map (kbd "p") #'org-supertag-query-prev)
-    (define-key map (kbd "m") #'org-supertag-query-toggle-mark)
+    (define-key map (kbd "SPC") #'org-supertag-query-toggle-mark)
     (define-key map (kbd "RET") #'org-supertag-query-visit-node)
     (define-key map (kbd "q") #'org-supertag-query-quit)
     
@@ -441,147 +448,117 @@ TAG-NAME is the tag to search for."
 
 (defun org-supertag-query-insert-header (keyword-list nodes)
   "Insert query results header information."
-  (insert "#+TITLE: SuperTag Query Results\n")
-    ;; Search scope
-  (insert "* Query Rules:\n")
-  (insert "- Search scope: titles, tags, properties and field values\n")
-  (insert "- Multiple keywords use AND logic (all must match)\n")
-  ;; Search information
-  (insert "* Search Terms: "
-          (propertize (string-join keyword-list " ")
-                     'face 'bold)
-                     "\n")
-  (insert (format "Found %d matching nodes\n" (length nodes)))
+  (insert (propertize (format "SuperTag Query Results: ‘%s’" (string-join keyword-list " "))
+                      'face '(:height 1.5 :weight bold)))
+  (insert (format "\nFound %d matching nodes.\n\n" (length nodes)))
+  (insert (propertize "Operations:\n" 'face '(:weight bold)))
+  (insert " [n/p] Navigate [SPC] Toggle Mark [RET] Visit Node [i] Insert Links\n")
+  (insert " [e f] Export to File [e n] Export to New File [q] Quit\n\n"))
 
-  ;; Shortcuts explanation
-  (insert "* Shortcuts:\n")
-  (insert "- n/p         : Navigate results\n")
-  (insert "- m           : Toggle mark\n")
-  (insert "- RET         : Visit node\n")
-  (insert "- e f         : Export to file\n")
-  (insert "- e n         : Export to new file\n")
-  (insert "- i           : Insert selected nodes at current cursor positon\n")
-  (insert "- q           : Quit query results\n")
-  (insert (make-string 18 ?━))
-  (insert "\n")
-  )
+(defun org-supertag-query--strict-pad-line (line target-width)
+  "Strictly pad LINE to exactly TARGET-WIDTH characters.
+This ensures consistent line lengths for card borders."
+  (let* ((current-width (string-width line))
+         (padding-needed (- target-width current-width)))
+    (if (<= padding-needed 0)
+        (truncate-string-to-width line target-width)
+      (concat line (make-string padding-needed ?\s)))))
 
-(defun org-supertag-query-create-item (node)
-  "Create display item from node properties."
-  (let* ((id (plist-get node :id))
-         ;; Get tags
-         (tags (let (node-tags)
-                (maphash 
-                 (lambda (link-id link-props)
-                   (when (and (string-prefix-p ":node-tag:" link-id)
-                            (equal (plist-get link-props :from) id))
-                     (push (plist-get link-props :to) node-tags)))
-                org-supertag-db--link)
-                node-tags))
-         ;; Get field values
-         (fields (let (node-fields)
-                  (maphash
-                   (lambda (link-id link-props)
-                     (when (and (string-prefix-p ":node-field:" link-id)
-                              (equal (plist-get link-props :from) id))
-                       (push (cons (plist-get link-props :field-name)
-                                 (plist-get link-props :value))
-                             node-fields)))
-                   org-supertag-db--link)
-                  node-fields)))
-    (org-supertag-query-item-create
-     :id id
-     :title (plist-get node :title)
-     :tags tags
-     :fields fields
-     :file (plist-get node :file-path)
-     :marked nil)))
+(defun org-supertag-query--format-card (node-props context-snippet width marked-p)
+  "Format a node into a bordered card of fixed WIDTH.
+Returns the card as a list of strings, each correctly padded."
+  (let* ((title (or (plist-get node-props :title) "No Title"))
+         (node-id (plist-get node-props :id))
+         (file-path (plist-get node-props :file-path))
+         (tags (org-supertag-query--get-node-tags node-id))
+         (inner-width (- width 4)) ; Width for content inside borders
+         (checkbox (if marked-p "[X]" "[ ]"))
+         (title-with-checkbox (format "%s %s" checkbox title))
+         (card-lines '()))
+    ;; Top border
+    (push (format "┌%s┐" (make-string (- width 2) ?─)) card-lines)
+    ;; Title
+    (dolist (line (org-supertag-view-util-wrap-text title-with-checkbox inner-width))
+      (push (format "│ %s │" (org-supertag-query--strict-pad-line line inner-width)) card-lines))
+    ;; Separator
+    (push (format "├%s┤" (make-string (- width 2) ?─)) card-lines)
+    ;; File Path
+    (when file-path
+      (let ((file-str (format "File: %s" (file-name-nondirectory file-path))))
+        (dolist (line (org-supertag-view-util-wrap-text file-str inner-width))
+          (push (format "│ %s │" (org-supertag-query--strict-pad-line line inner-width)) card-lines))))
+    ;; Tags
+    (when tags
+      (let ((tag-str (format "Tags: %s" (string-join tags " "))))
+        (dolist (line (org-supertag-view-util-wrap-text tag-str inner-width))
+          (push (format "│ %s │" (org-supertag-query--strict-pad-line line inner-width)) card-lines))))
+    ;; Context Snippet - display as separate section
+    (when context-snippet
+      ;; Add a subtle separator for context
+      (push (format "├%s┤" (make-string (- width 2) ?─)) card-lines)
+      ;; Context header
+      (push (format "│ %s │" (org-supertag-query--strict-pad-line "Context:" inner-width)) card-lines)
+      ;; Context content - preserve original formatting
+      (let ((context-lines (split-string context-snippet "\n" t)))
+        (dolist (line context-lines)
+          (let ((clean-line (string-trim line)))
+            (when (not (string-empty-p clean-line))
+              (dolist (wrapped-line (org-supertag-view-util-wrap-text clean-line inner-width))
+                (push (format "│ %s │" (org-supertag-query--strict-pad-line wrapped-line inner-width)) card-lines)))))))
+    ;; Bottom border
+    (push (format "└%s┘" (make-string (- width 2) ?─)) card-lines)
+    ;; Propertize and return
+    (mapcar (lambda (line) (propertize line 'node-id node-id))
+            (nreverse card-lines))))
 
 (defun org-supertag-query-show-results (keyword-list nodes)
-  "Display search results.
-KEYWORD-LIST is the list of keywords to search for.
-NODES is the list of matched nodes to display."
-  (let ((buf (get-buffer-create "*Org SuperTag Query*")))
+  "Display search results in a card-based layout."
+  (let ((buf (get-buffer-create "*Org SuperTag Query*"))
+        (card-width 80))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (org-mode)
-        ;; Ensure our minor mode is enabled
         (org-supertag-query-mode 1)
-        ;; Insert header information
+        ;; Initialize marked nodes list for this view
+        (setq-local org-supertag-query--marked-nodes nil)
         (org-supertag-query-insert-header keyword-list nodes)
-        ;; Create ewoc and add results
-        (setq-local org-supertag-query-ewoc 
-                    (ewoc-create #'org-supertag-query-pp-item))
-        ;; Add all results
-        (dolist (node nodes)
-          (ewoc-enter-last org-supertag-query-ewoc
-                          (org-supertag-query-create-item node)))
-        ;; Highlight first item if there are results
-        (when nodes
-          (goto-char (point-min))
-          (re-search-forward "^\\[" nil t)
-          (beginning-of-line)
-          (org-supertag-query-highlight-current))))
-    
+        (if (not nodes)
+            (insert "  No matching nodes found.\n")
+          (dolist (result-pair nodes)
+            (let* ((node (car result-pair))
+                   (context (cdr result-pair))
+                   (node-id (plist-get node :id))
+                   ;; Pass marked status to card formatter
+                   (card-lines (org-supertag-query--format-card
+                                node context card-width
+                                (member node-id org-supertag-query--marked-nodes))))
+              (let ((start (point)))
+                (dolist (line card-lines)
+                  (insert line "\n"))
+                ;; Add result-pair property for the toggle function
+                (add-text-properties start (point) `(result-pair ,result-pair)))
+              (insert "\n")))))
+      ;; Highlight first result
+      (when nodes
+        (goto-char (point-min))
+        (re-search-forward "^┌" nil t)
+        (beginning-of-line)
+        (org-supertag-query-highlight-current)))
     (switch-to-buffer buf)))
 
 (defun org-supertag-query--find-node (node-id)
   "Visit node with specified ID.
 NODE-ID is the identifier of the node to find.
 
-Returns t if node was found and visited successfully, nil otherwise."
-  (when-let* ((props (org-supertag-db-get node-id))
-              (file-path (plist-get props :file-path))
-              ((file-exists-p file-path))
-              (buffer (find-file-noselect file-path)))
-    (message "Finding node %s in file %s" node-id file-path)
-    (with-current-buffer buffer
-      ;; make sure in org-mode buffer, avoid conflict with org-supertag-view.el
-      (when (derived-mode-p 'org-mode)
-        (message "Buffer is in org-mode")
-        (widen)
-        (let ((marker (org-id-find-id-in-file node-id file-path)))
-          (if marker
-              (progn
-                (message "Found node at position %s" (cdr marker))
-                (goto-char (cdr marker))
-                (org-show-entry)
-                (org-show-children)
-                ;; Switch to buffer before recentering
-                (switch-to-buffer buffer)
-                (recenter)
-                t)
-            (message "org-id-find-id-in-file returned nil for node %s in file %s" 
-                     node-id file-path)
-            ;; Try alternative method using org-map-entries
-            (message "Trying alternative method...")
-            (save-excursion
-              (goto-char (point-min))
-              (let ((found nil))
-                (org-map-entries
-                 (lambda ()
-                   (when (equal (org-entry-get nil "ID") node-id)
-                     (setq found (point))))
-                 t nil)
-                (if found
-                    (progn
-                      (message "Found node using alternative method at position %s" found)
-                      (goto-char found)
-                      (org-show-entry)
-                      (org-show-children)
-                      (switch-to-buffer buffer)
-                      (recenter)
-                      t)
-                  (message "Node not found using alternative method either")
-                  nil)))))))))
+Returns t if node was found and visited successfully, nil otherwise.
+This function now uses the robust `org-supertag-goto-node` which
+does not depend on potentially stale caches."
+  (org-supertag-goto-node node-id))
 
 (defun org-supertag-query-visit-node ()
-  "Visit current selected node."
+  "访问当前选中节点。"
   (interactive)
-  (when-let* ((node (ewoc-locate org-supertag-query-ewoc))
-              (data (ewoc-data node))
-              (id (org-supertag-query-item-id data)))
+  (when-let ((id (get-text-property (point) 'node-id)))
     (org-supertag-query--find-node id)))
     
 
@@ -659,25 +636,11 @@ START and END define the region boundaries."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-get-selected-nodes ()
-  "Get IDs of all selected nodes from query results."
-  (let (selected-nodes)
-    (save-excursion
-      (goto-char (point-min))
-      ;; Skip header section
-      (when (re-search-forward "^\\* Shortcuts:" nil t)
-        (forward-line))
-      ;; Search for all checked items
-      (while (re-search-forward 
-              "^☑.*\\[\\[id:\\([^]]+\\)\\]"
-              nil t)
-        (when-let* ((node-id (match-string-no-properties 1)))
-          ;; Verify node exists
-          (when (org-supertag-node-db-exists-p node-id)
-            (push node-id selected-nodes)))))
-    ;; Return results
-    (when selected-nodes
-      (message "Found %d selected nodes" (length selected-nodes))
-      (nreverse selected-nodes))))
+  "Get all marked node IDs from the query buffer."
+  (let ((selected-ids (copy-list org-supertag-query--marked-nodes)))
+    (when selected-ids
+      (message "Found %d selected nodes" (length selected-ids)))
+    (nreverse selected-ids)))
   
 
 (defun org-supertag-find-node-location (node-id file)
