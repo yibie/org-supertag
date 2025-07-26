@@ -1,4 +1,9 @@
 * Changelog
+* [4.1.0] - 2025-07-26
+** Improvements
+*** Implement card-based layout with structured three-line format
+** Fix
+*** Fix node navigation by implementing robust real-time location lookup
 * [4.0.0] - 2025-07-21
 ** New Features
 *** AI Chat Service

@@ -899,48 +899,27 @@ filename / outline-path / title"
 ;;------------------------------------------------------------------------------
 
 (defun org-supertag-find-node-location (node-id &optional file-path)
-  "Find the location of a node by ID using database information and file search.
+  "Find the location of a node by ID.
 NODE-ID: The node identifier to find
-FILE-PATH: Optional file path, if nil will get from database
+FILE-PATH: Optional file path to search in (if nil, searches in all files)
 
 Returns:
-- (POSITION . FILE-PATH) if found
-- nil if not found
-
-This function does NOT use org-id-find, instead it:
-1. Gets file path from database
-2. Searches for the ID in the file
-3. Returns the position of the headline"
-  (let* ((node-data (org-supertag-db-get node-id))
-         (target-file (or file-path (plist-get node-data :file-path))))
-    
+- (point . file-path) if node found
+- nil if node not found"
+  (let* ((node (org-supertag-db-get node-id))
+         (target-file (or file-path (plist-get node :file-path))))
     (when (and target-file (file-exists-p target-file))
-      (with-temp-buffer
-        (org-mode)
-        (insert-file-contents target-file)
-        (save-excursion
-          (save-restriction
-            (widen)
-            (goto-char (point-min))
-            ;; Search for the ID property in the file
-            (when (re-search-forward
-                   (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
-                   nil t)
-              ;; Found the ID property, now find the corresponding headline
-              (let ((id-pos (point)))
-                ;; Move backward to find the headline that contains this property
-                (when (re-search-backward "^\\*+ " nil t)
-                  (beginning-of-line)
-                  (when (org-at-heading-p)
-                    ;; Verify this is the correct headline by checking if the ID property
-                    ;; is within this headline's property drawer
-                    (let ((headline-start (point))
-                          (headline-end (save-excursion
-                                          (org-end-of-subtree t t)
-                                          (point))))
-                      (when (and (>= id-pos headline-start)
-                                 (<= id-pos headline-end))
-                        (cons (point) target-file)))))))))))))
+      (with-current-buffer (find-file-noselect target-file)
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (let ((found nil))
+           (org-map-entries
+            (lambda ()
+              (when (equal (org-id-get) node-id)
+                (setq found (point))))
+            t nil)
+           (when found
+             (cons found target-file))))))))
 
 (defun org-supertag-goto-node (node-id)
   "Go to a node by ID using database information.
@@ -949,19 +928,17 @@ NODE-ID: The node identifier to navigate to
 Returns:
 - t if successfully navigated
 - nil if node not found"
-  (when-let* ((location (org-supertag-find-node-location node-id)))
-    (let ((pos (car location))
-          (file (cdr location)))
-      ;; Switch to the file and position
-      (find-file file)
-      (widen)
-      (goto-char pos)
-      ;; Ensure we're at the beginning of the headline
-      (org-back-to-heading t)
-      ;; Show the context
-      (org-show-context)
-      (org-show-subtree)
-      t)))
+  (if-let ((location (org-supertag-find-node-location node-id)))
+      (let ((pos (car location))
+            (file (cdr location)))
+        (switch-to-buffer (find-file-noselect file))
+        (widen)
+        (goto-char pos)
+        (org-show-context)
+        (recenter)
+        t)
+    (message "Node with ID %s not found in any file." node-id)
+    nil))
 
 ;;------------------------------------------------------------------------------
 ;; Node Relations 
