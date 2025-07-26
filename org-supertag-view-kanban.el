@@ -54,8 +54,6 @@
     (define-key map (kbd "v") 'org-supertag-kanban-view-node-at-point)
     (define-key map (kbd "TAB") 'org-supertag-kanban-next-column)
     (define-key map (kbd "<backtab>") 'org-supertag-kanban-previous-column)
-    (define-key map (kbd "n") 'next-line)
-    (define-key map (kbd "p") 'previous-line)
     map)
   "Keymap for `org-supertag-kanban-mode'.")
 
@@ -115,7 +113,7 @@ Returns the card as a list of strings, each correctly padded."
 ;; Core Rendering Function
 ;;----------------------------------------------------------------------
 
-(defun org-supertag-kanban--refresh-display ()
+(defun org-supertag-kanban--refresh-display (&optional node-to-focus)
   "Render the Kanban board based on the current state variables."
   (let ((buffer (get-buffer-create "Org SuperTag Kanban")))
     (with-current-buffer buffer
@@ -124,7 +122,6 @@ Returns the card as a list of strings, each correctly padded."
             (separator "  "))
         (erase-buffer)
         (org-supertag-kanban-mode)
-
         ;; Header
         (insert (propertize (format "Kanban Board: %s / %s\n\n"
                                     org-supertag-kanban--current-base-tag
@@ -132,8 +129,7 @@ Returns the card as a list of strings, each correctly padded."
                             'face '(:height 1.5 :weight bold)))
         (insert (propertize "Operations:\n" 'face '(:weight bold)))
         (insert " [h/l] Move Card  [RET] Edit Value  [E] Edit Field Def  [a/d] Add/Del Field\n")
-        (insert " [n/p] Cursor Up/Down [TAB/S-TAB] Column Jump [v] View Node    [g] Refresh     [q] Quit\n\n")
-
+        (insert " [TAB/S-TAB] Column Jump [v] View Node    [g] Refresh     [q] Quit\n\n")
         ;; Data Fetching and Preparation
         (let* ((grouped-nodes (org-supertag-kanban--group-nodes-by-field
                                org-supertag-kanban--current-base-tag
@@ -142,14 +138,12 @@ Returns the card as a list of strings, each correctly padded."
                (field-def (cl-find org-supertag-kanban--current-group-field
                                    (plist-get tag-def :fields)
                                    :key (lambda (f) (plist-get f :name)) :test #'string=))
-               ;; Set the global headers var and use it as a local var. This is the fix.
                (column-headers (setq org-supertag-kanban--column-headers
                                      (if (eq (plist-get field-def :type) 'options)
                                          (plist-get field-def :options)
                                        (sort (hash-table-keys grouped-nodes) #'string<))))
                (all-nodes-lists (mapcar (lambda (key) (gethash key grouped-nodes)) column-headers))
                (col-count (length column-headers)))
-
           ;; 1. Insert column headers
           (dotimes (i col-count)
             (let* ((header-text (format "%s (%d)" (nth i column-headers) (length (nth i all-nodes-lists))))
@@ -161,7 +155,6 @@ Returns the card as a list of strings, each correctly padded."
             (insert (make-string column-width ?─))
             (when (< i (1- col-count)) (insert separator)))
           (insert "\n\n") ; Extra space after header
-
           ;; 2. Pre-render each column into a list of its lines.
           (let* ((rendered-columns
                   (mapcar
@@ -172,7 +165,6 @@ Returns the card as a list of strings, each correctly padded."
                        lines))
                    all-nodes-lists))
                  (max-height (apply #'max 0 (mapcar #'length rendered-columns))))
-
             (if (zerop max-height)
                 (insert "\n  No nodes found for this tag.\n")
               ;; 3. Print the board row by row, ensuring alignment.
@@ -185,9 +177,21 @@ Returns the card as a list of strings, each correctly padded."
                       (add-text-properties 0 (length final-line) `(group-value ,group-value) final-line)
                       (insert final-line)))
                   (when (< col-idx (1- col-count)) (insert separator)))
-                (insert "\n")))))))
-      (switch-to-buffer buffer)
-      (delete-other-windows)))
+                (insert "\n")))))
+        ;; After rendering, position the cursor.
+        (if node-to-focus
+            (let ((found-pos nil))
+              (goto-char (point-min))
+              (while (and (not found-pos) (re-search-forward "┌" nil t))
+                (when (equal (get-text-property (point) 'node-id) node-to-focus)
+                  (setq found-pos (point))))
+              (when found-pos (goto-char found-pos)))
+          ;; If no specific node, go to the first card if any exist.
+          (goto-char (point-min))
+          (when (re-search-forward "┌" nil t)
+            (goto-char (match-beginning 0))))))
+    (switch-to-buffer buffer)
+    (delete-other-windows)))
 
 ;;---------------------------------------------------------------------
 ;; Interactive Commands
@@ -240,8 +244,11 @@ DIRECTION should be 1 for right, -1 for left."
         (if (and current-idx (>= target-idx 0) (< target-idx (length columns)))
             (let ((new-value (nth target-idx columns)))
               (org-supertag-field-set-value node-id group-field new-value base-tag)
-              (org-supertag-kanban-refresh)
-              (message "Moved '%s' to '%s'" (or (plist-get (gethash node-id org-supertag-db--object) :title) node-id) new-value))
+              ;; Refresh and focus on the moved card
+              (org-supertag-kanban-refresh node-id)
+              (message "Moved '%s' to '%s'"
+                       (or (plist-get (gethash node-id org-supertag-db--object) :title) node-id)
+                       new-value))
           (message "Cannot move further in that direction."))))))
 
 (defun org-supertag-kanban-move-card-left ()
@@ -328,10 +335,10 @@ DIRECTION should be 1 for right, -1 for left."
               (node-id (plist-get info :node-id)))
     (org-supertag-view--goto-node node-id))) ; Reuses the goto helper
 
-(defun org-supertag-kanban-refresh ()
-  "Refresh the Kanban board view."
+(defun org-supertag-kanban-refresh (&optional node-to-focus)
+  "Refresh the Kanban board view, optionally focusing on NODE-TO-FOCUS."
   (interactive)
-  (org-supertag-kanban--refresh-display))
+  (org-supertag-kanban--refresh-display node-to-focus))
 
 ;;----------------------------------------------------------------------
 ;; Entry Point
