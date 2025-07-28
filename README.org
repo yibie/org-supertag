@@ -100,6 +100,50 @@ org-supertag provides two ways to find notes:
 - The search scope of ~org-supertag-query~:
   - org-headlines, tags, and field values
 
+*** S-expression Query Engine
+org-supertag now supports powerful S-expression queries through Org Babel blocks, providing advanced filtering and dynamic table output.
+
+**** Basic Usage
+Create a source block with the language `org-supertag-query`:
+
+#+begin_src org-supertag-query :results raw
+(tag "project")
+#+end_src
+
+**** Query Operators
+- **Tag queries**: `(tag "TAG_NAME")` - Find nodes with specific tags
+- **Field queries**: `(field "FIELD_NAME" "VALUE")` - Find nodes with specific field values
+- **Logical operators**: 
+  - `(and QUERY1 QUERY2)` - Both conditions must be true
+  - `(or QUERY1 QUERY2)` - Either condition can be true  
+  - `(not QUERY)` - Exclude nodes matching the query
+- **Time-based queries**:
+  - `(after "DATE")` - Nodes created after the specified date
+  - `(before "DATE")` - Nodes created before the specified date
+  - `(between "START_DATE" "END_DATE")` - Nodes created between two dates
+  - Date formats support absolute dates ("2024-01-01") and relative dates ("-7d", "+1m", "now")
+
+**** Dynamic Table Output
+Query results are displayed as dynamic Org tables:
+- First column: Clickable node links (Node Title)
+- Second column: Associated tags
+- Additional columns: Dynamically added for fields specified in the query
+
+**** Interactive Query Block Insertion
+Use `M-x org-supertag-insert-query-block` to quickly insert a pre-formatted query block at point.
+
+**** Example Queries
+#+begin_src org-supertag-query :results raw
+;; Find all project nodes with "On-going" status
+(and (tag "project") (field "Status" "On-going"))
+
+;; Find nodes created in the last 7 days
+(after "-7d")
+
+;; Find nodes with "project" tag but not "Canceled" status
+(and (tag "project") (not (field "Status" "Canceled")))
+#+end_src
+
 ** Step 6: Move Your Notes
 ~M-x org-supertag-node-move~
 - First, select the target file in the minibuffer
@@ -151,6 +195,41 @@ As mentioned above, not repeated here.
 - Full keyboard support
 
 [[./picture/figure15.gif]]
+
+** Advanced Query Capabilities
+
+org-supertag provides powerful query capabilities that go beyond simple keyword search, enabling complex data filtering and analysis.
+
+*** S-expression Query Engine
+The S-expression query engine allows you to create complex queries using a Lisp-like syntax:
+
+**** Complex Query Examples
+#+begin_src org-supertag-query :results raw
+;; Find all urgent projects that are not completed
+(and (tag "project") 
+     (field "Priority" "High") 
+     (not (field "Status" "Completed")))
+
+;; Find nodes created in the last month with specific tags
+(and (after "-1m") 
+     (or (tag "research") (tag "development")))
+
+;; Find nodes with multiple field conditions
+(and (field "Department" "Engineering")
+     (field "Status" "Active")
+     (before "2024-12-31"))
+#+end_src
+
+**** Enhanced Interactive Query Context
+The interactive query interface now provides more intelligent context snippets:
+- When keywords match field names or values, the context displays `Field [FIELD_NAME]: FIELD_VALUE`
+- This prioritizes relevant field information over general content snippets
+- Makes it easier to understand why a node matched your search criteria
+
+*** Query History and Reusability
+- Query history is automatically saved and can be reused
+- Frequently used queries are prioritized in the history
+- Supports both keyword-based and S-expression queries in the same interface
 
 ** Use the Behavior System to Form Automated Workflows
 
@@ -296,6 +375,8 @@ In org-supertag, the co-occurrence relationship of tags is reflected in the "vie
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-07-29 4.3.0 released
+- 2025-07-27 4.2.0 released
 - 2025-07-21 4.0.0 released
 - 2025-05-24 3.0.2 released
 - 2025-04-05 3.0.0 released

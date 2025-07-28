@@ -23,7 +23,7 @@ Returns a property list containing the following information:
            (row-data (org-supertag-view-table-get-line))
            (tag (org-supertag-view--get-current-tag))
            (tag-def (org-supertag-tag-get tag))
-           (fields (plist-get tag-def :fields))
+           (fields (org-supertag-get-all-fields-for-tag tag))
            (field-idx (- col 4))  ;; Adjust column index calculation, now there are three fixed columns: Node, Type, and Date
            (field (when (and (>= field-idx 0) (< field-idx (length fields)))
                     (nth field-idx fields)))
@@ -183,7 +183,7 @@ Add a [v] button before each node in each row, clicking it will directly view th
   (insert "Related Nodes:\n\n")
   (let* ((content (org-supertag-view--get-related-nodes tag))
          (tag-def (org-supertag-tag-get tag))
-         (fields (plist-get tag-def :fields)))
+         (fields (org-supertag-get-all-fields-for-tag tag)))
     
     (if (not content)
         (insert (format "No content found related to tag #%s" tag))
@@ -328,7 +328,7 @@ Returns t if update successful, nil if failed."
 Returns a list of plists with properties :node, :type, :date and field values."
   (let* ((nodes '())
          (tag-def (org-supertag-tag-get tag))
-         (fields (plist-get tag-def :fields)))
+         (fields (org-supertag-get-all-fields-for-tag tag)))
     (maphash
      (lambda (link-id link-props)
        ;; First find all nodes related to this tag
@@ -395,15 +395,20 @@ Immediately saves the field value to the database after editing."
 ;;----------------------------------------------------------------------
 
 (defun org-supertag-view-table-delete-field ()
-  "Delete the field at the current column from the tag definition and refresh."
+  "Delete the field at the current column from the tag definition and refresh.
+Only allows deletion of fields that belong to the current tag, not inherited fields."
   (interactive)
   (let* ((field-info (org-supertag-view-table-get-field-info))
          (tag-id (plist-get field-info :tag))
          (field-def (plist-get field-info :field)))
     (if-let ((field-name (plist-get field-def :name)))
-        (when (yes-or-no-p (format "Are you sure you want to delete the field '%s'?" field-name))
-          (when (org-supertag-tag--remove-field tag-id field-name)
-            (org-supertag-view-table-refresh)))
+        ;; Check if this is an inherited field
+        (if (plist-get field-def :projected-from)
+            (message "Cannot delete inherited field '%s'. It belongs to parent tag '%s'." 
+                     field-name (plist-get field-def :projected-from))
+          (when (yes-or-no-p (format "Are you sure you want to delete the field '%s'?" field-name))
+            (when (org-supertag-tag--remove-field tag-id field-name)
+              (org-supertag-view-table-refresh))))
       (message "Cannot delete. Please place the cursor on a valid field column."))))
 
 (defun org-supertag-view-table-add-field ()

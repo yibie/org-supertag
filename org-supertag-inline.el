@@ -93,16 +93,7 @@ such as with the auto-tagging system."
 (defun org-supertag-inline--read-tag-name ()
   "Read tag name from user input with completion.
 Returns the selected or entered tag name."
-  (let* ((all-tags (org-supertag-get-all-tags))
-         (preset-names (mapcar #'car org-supertag-preset-tags))
-         ;; Use seq-remove instead of remove-if for compatibility
-         (user-tags (seq-remove (lambda (tag) (member tag preset-names)) all-tags))
-         (candidates (delete-dups
-                     (append 
-                      ;; Use [P] prefix to mark preset tags
-                      (mapcar (lambda (name) (format "[P] %s" name)) preset-names)
-                      ;; Regular tags are kept as is
-                      user-tags)))
+  (let* ((candidates (org-supertag-get-all-tags))
          ;; Get region content if actually active and non-empty
          (region-text (when (and (use-region-p) 
                                 (region-active-p)

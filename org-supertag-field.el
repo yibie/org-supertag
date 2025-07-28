@@ -602,8 +602,8 @@ This will clear all existing values of this field across all nodes."
    (let* ((node-id (org-id-get))
           (tags (org-supertag-node-get-tags node-id))
           (tag-id (completing-read "Select tag: " tags nil t))
-          (tag (org-supertag-tag-get tag-id))
-          (fields (plist-get tag :fields))
+          ;; Use the new function to get all fields, including inherited ones
+          (fields (org-supertag-get-all-fields-for-tag tag-id))
           (field-name (completing-read 
                       "Select field to modify: "
                       (mapcar (lambda (field)
@@ -613,7 +613,7 @@ This will clear all existing values of this field across all nodes."
      (list tag-id field-name)))
   
   (let* ((tag (org-supertag-tag-get tag-id))
-         (fields (plist-get tag :fields))
+         (fields (org-supertag-get-all-fields-for-tag tag-id)) ;; Get all fields for modification context
          (field (cl-find field-name fields
                         :key (lambda (f) (plist-get f :name))
                         :test #'equal))

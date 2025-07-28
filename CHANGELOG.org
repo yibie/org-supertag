@@ -1,4 +1,38 @@
 * Changelog
+* [4.3.0] - 2025-07-28
+** Features
+*** Enhanced S-expression Query Engine with Dynamic Table Output
+- **Dynamic Table Output for S-expression Queries**: The `org-babel-execute:org-supertag-query` function now generates dynamic Org tables with clickable node links, associated tags, and dynamically added columns for fields specified in the query.
+- **New Time-based Query Operators**: Introduced `(before "DATE")`, `(after "DATE")`, and `(between "START_DATE" "END_DATE")` operators for filtering nodes based on creation timestamps.
+- **Relative Date Support**: Date arguments now support both absolute dates ("YYYY-MM-DD") and relative dates ("-7d", "+1m", "now") for flexible time-based queries.
+- **Improved Field Querying**: The `field` operator (`(field "FIELD_NAME" "VALUE")`) has been thoroughly debugged and refactored to correctly retrieve nodes based on field name and value, with deep integration into `org-supertag-db.el`'s link storage mechanism.
+- **Enhanced Interactive Query Context**: The `org-supertag-query-find-nodes` function now provides more intelligent context snippets. When keywords match field names or values, the context displays `Field [FIELD_NAME]: FIELD_VALUE`, prioritizing relevant field information over general content snippets.
+- **New Interactive Command**: Added `M-x org-supertag-insert-query-block` to quickly insert a pre-formatted `org-supertag-query` babel block at point, prompting the user for the S-expression.
+- **Query History and Reusability**: Query history is automatically saved and can be reused, with frequently used queries prioritized in the history. Supports both keyword-based and S-expression queries in the same interface.
+
+**** Query Operators Supported
+- **Tag queries**: `(tag "TAG_NAME")` - Find nodes with specific tags
+- **Field queries**: `(field "FIELD_NAME" "VALUE")` - Find nodes with specific field values  
+- **Logical operators**: 
+  - `(and QUERY1 QUERY2)` - Both conditions must be true
+  - `(or QUERY1 QUERY2)` - Either condition can be true
+  - `(not QUERY)` - Exclude nodes matching the query
+- **Time-based queries**:
+  - `(after "DATE")` - Nodes created after the specified date
+  - `(before "DATE")` - Nodes created before the specified date
+  - `(between "START_DATE" "END_DATE")` - Nodes created between two dates
+  - Date formats support absolute dates ("2024-01-01") and relative dates ("-7d", "+1m", "now")
+
+* [4.2.0] - 2025-07-27
+** Features
+*** Implement tag field extension (inheritance)
+- This introduces the ability for Org Supertag tags to **Extend** field definitions from other parent tags.
+  - **Tag Extension**: Tags can now extend other tags, automatically inheriting their field definitions. Child tag fields override parent fields.
+  - **Dynamic Resolution**: Implemented a "soft link" model where extension is resolved dynamically at runtime, ensuring data consistency and flexibility.
+  - **Database Update**: Added an `:extends` property to tag definitions.
+  - **User Interface**: New command `org-supertag-tag-set-extends` to manage extension relationships, including circular dependency checks.
+  - **System Integration**: Updated all relevant parts of the codebase (e.g., completion, field editing, views) to recognize and utilize extended fields.
+
 * [4.1.0] - 2025-07-26
 ** Improvements
 *** Implement card-based layout with structured three-line format
