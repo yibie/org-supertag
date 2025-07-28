@@ -36,6 +36,7 @@ test_*.*.*.*.*.*.*.*.*.*.*
 *.el.bak
 
 # directory
+.GEMINI
 dist/
 .venv/
 developing/

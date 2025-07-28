@@ -140,7 +140,9 @@ This is a simple implementation to avoid compatibility issues with
                 :id          ; Tag identifier (using tag name)
                 ;; Field Definitions
                 :fields)     ; ((:name "field-name" :type field-type) ...)
-     :optional (;; Meta Information
+     :optional (;; NEW: Add the extends property
+                :extends    ; The ID of the parent tag
+                ;; Meta Information
                 :type       ; Tag type (:node, :field, :relation)
                 :relation-type ; Relation type (:cooccurrence, :parent-child, :causal, etc.)
                 :from-tag   ; Tag that this tag references
@@ -506,6 +508,20 @@ Returns:
         (when (and is-update (not (eq (plist-get old-props :type) type)))
           (org-supertag-db--cache-clear-for-type (plist-get old-props :type) id))
 
+        ;; Preserve existing node-field links when updating a node
+        ;; This is a defensive measure to prevent data loss if the resync
+        ;; process does not explicitly re-add node-field links.
+        (when (and is-update (eq type :node))
+          (let ((existing-node-fields (org-supertag-db-get-node-fields id)))
+            (dolist (link existing-node-fields)
+              (let* ((link-props (cdr link))
+                     (field-name (plist-get link-props :to))
+                     (tag-id (plist-get link-props :tag-id))
+                     (value (plist-get link-props :value)))
+                (when (and field-name tag-id value)
+                  (org-supertag-db-link :node-field id field-name 
+                                       (list :tag-id tag-id :value value))))))
+
         ;; 3. Store the canonical entity
         (ht-set! org-supertag-db--object id new-props)
         ;; 4. Cache management
@@ -542,7 +558,7 @@ Returns:
     ;; Error handling
     (error
      (message "[org-supertag-db-add] Error in entity add/update: %s" (error-message-string err))
-     (signal (car err) (cdr err)))))
+     (signal (car err) (cdr err))))))
 
 (defun org-supertag-db-exists-p (id)
   "Check if entity exists.

@@ -802,9 +802,13 @@ Ensure the link contains the required fields: source, target, and optional type 
                     (plist-get link-props 'target)
                     (plist-get link-props :to)
                     (plist-get link-props 'to)))
-         (link-type (or (plist-get link-props :type)
-                       (plist-get link-props 'type)
-                       "REF_TO")))
+         (link-type-raw (or (plist-get link-props :type)
+                           (plist-get link-props 'type)
+                           "REF_TO"))
+         (link-type (cond ((eq link-type-raw :node-tag) "HAS_TAG") ; Convert :node-tag to "HAS_TAG" for Python
+                         ((symbolp link-type-raw) (symbol-name link-type-raw))
+                         ((stringp link-type-raw) link-type-raw)
+                         (t "REF_TO"))))
 
     ;; Clean and normalize source and target fields
     (setq source (org-supertag-background-sync--normalize-link-field source "source"))
@@ -819,13 +823,6 @@ Ensure the link contains the required fields: source, target, and optional type 
       (error "Link 'source' must be a string, got %s: %S" (type-of source) link-props))
     (unless (stringp target)
       (error "Link 'target' must be a string, got %s: %S" (type-of target) link-props))
-
-    ;; Normalize type field
-    (setq link-type
-          (cond
-           ((symbolp link-type) (symbol-name link-type))
-           ((stringp link-type) link-type)
-           (t "REF_TO")))
 
     ;; Build link data according to the data contract
     `((source . ,source)

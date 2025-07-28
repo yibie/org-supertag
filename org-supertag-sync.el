@@ -713,7 +713,8 @@ Returns the number of cleaned nodes."
 This is the main sync function called periodically."
   ;; Clean up non-existent files and files out of sync scope from sync state
   (let ((files-to-remove nil)
-        (state-changed nil)) ; Flag to track if state was modified
+        (state-changed nil) ; Flag to track if state was modified
+        (modified-files (org-supertag-get-modified-files)))
     (maphash (lambda (file _state)
                (when (or (not (file-exists-p file))
                         (not (org-supertag-sync--in-sync-scope-p file)))
@@ -957,7 +958,7 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
                  (unless (org-supertag-tag-get sanitized-tag)
                    (org-supertag-tag--create sanitized-tag))
                  ;; Ensure link exists
-                 (org-supertag-db-link "HAS_TAG" id sanitized-tag))))))
+                 (org-supertag-db-link :node-tag id sanitized-tag))))))
        all-nodes-props)
 
       ;; Phase 4: Reconcile all node-to-node references.
@@ -1066,7 +1067,7 @@ handling additions, removals, and updating co-occurrence relations."
             (when node-id
               (dolist (tag-name tags-to-add)
                 ;; Add link with source tracking
-                (org-supertag-db-link "HAS_TAG" node-id tag-name '(:source :filetags))
+                (org-supertag-db-link :node-tag node-id tag-name '(:source :filetags))
                 ;; Update co-occurrence
                 (org-supertag-relation-record-cooccurrence node-id tag-name)))))
         
