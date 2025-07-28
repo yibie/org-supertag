@@ -5,10 +5,16 @@
 (require 'org-supertag-view-utils)
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
+(require 'org-supertag-tag)
 (require 'cl-lib)
 
-;; Data structure for query items
-;; 删除 org-supertag-query-item 结构体定义
+;;---------------------------------------------------------------
+;; Base Setting
+;;---------------------------------------------------------------
+
+;; Declare the global database variable to make it known to this file.
+(defvar org-supertag-db--object) ; Stores entities (nodes, tags)
+(defvar org-supertag-db--link)   ; Stores relationships (node-tag, node-field, etc.)
 
 (defcustom org-supertag-query-history-max-items 100
   "Maximum number of keywords to keep in history.
@@ -102,6 +108,352 @@ If not, add it as a new entry."
 
 ;; Hook to load history on startup
 (add-hook 'after-init-hook #'org-supertag-query--load-history)
+
+;;---------------------------------------------------------------
+;; Table Formatting Functions
+;;---------------------------------------------------------------
+
+(defun org-supertag-query--format-table (headers data)
+  "Format DATA into an Org table string with HEADERS and basic alignment."
+  ;;(message "DEBUG: org-supertag-query--format-table received headers: %S and data: %S" headers data)
+  (let* ((table-data (cons headers data)))
+    (require 'org-table)
+    (let* ((table-string (with-temp-buffer
+                           (org-mode)
+                           (insert "| " (mapconcat #'identity headers " | ") " |\n")
+                           (insert "|-" (mapconcat (lambda (h) (make-string (length h) ?-)) headers "-|-")
+                           "-|\n")
+                           (dolist (row data)
+                             (insert "| " (mapconcat #'identity row " | ") " |\n"))
+                           (buffer-string))))
+      (with-temp-buffer
+        (org-mode)
+        (insert table-string)
+        (org-table-align)
+        (buffer-string)))))
+
+;;---------------------------------------------------------------
+;; S-expression Query Engine
+;;---------------------------------------------------------------
+
+(defun org-supertag-query--get-nodes-by-tag-flexible (tag-name)
+  "Get all nodes that have TAG-NAME, handling both :node-tag and \"HAS_TAG\" link types.
+This function is used by the S-expression query engine."
+  (let ((nodes nil))
+    ;;(message "DEBUG: org-supertag-db--link size in get-nodes-by-tag-flexible: %d" (hash-table-count org-supertag-db--link))
+    ;; First, find the tag ID by name
+    (let ((tag-obj (org-supertag-tag-get tag-name)))
+      (when tag-obj
+        (let ((tag-id (plist-get tag-obj :id)))
+          ;; Find all links where TAG-ID is the target
+          (let ((links (org-supertag-query--find-links-safe nil nil tag-id))) ; Use safe wrapper
+            ;;(message "DEBUG: org-supertag-query--get-nodes-by-tag-flexible - Links before dolist: %S" links) ; Add this line
+            (dolist (link links)
+              (let ((link-type (plist-get link :type))
+                    (from-id (plist-get link :from)))
+                ;; Check for both keyword :node-tag and string "HAS_TAG"
+                ;;(message "DEBUG: Processing link: %S, type: %S, from-id: %S" link link-type from-id)
+                (when (and from-id
+                           (or (eq link-type :node-tag)
+                               (equal link-type "HAS_TAG")))
+                  (push from-id nodes)))))))
+    ;;(message "DEBUG: Nodes collected before deduplication: %S" nodes)
+    (cl-delete-duplicates nodes :test #'equal))))
+
+(defun org-supertag-query--find-nodes-by-property (key value)
+  "Find nodes that have a property KEY with VALUE in their :properties drawer."
+  (let ((results (org-supertag-db-find-by-props
+                  '(:type :node)
+                  (lambda (props)
+                    (when-let ((properties (plist-get props :properties)))
+                      (equal (plist-get properties (intern (concat ":" key))) value))))))
+    (if results
+        (mapcar #'car results)
+      '())))
+
+(defun org-supertag-query--find-nodes-by-field (field-name value)
+  "Find nodes that have a field FIELD-NAME with VALUE using database field relationships."
+  (let ((matching-nodes '()))
+    ;; Directly iterate over the entire link database to ensure we see all links,
+    ;; as `org-supertag-db-find-links` proved unreliable for this use case.
+    (maphash
+     (lambda (_key props)
+       (when (and (eq (plist-get props :type) :node-field)
+                  (equal (plist-get props :to) field-name)
+                  (equal (plist-get props :value) value))
+         (push (plist-get props :from) matching-nodes)))
+     org-supertag-db--link)
+    (cl-delete-duplicates matching-nodes :test #'equal)))
+
+(defun org-supertag-query--find-nodes-by-term (term)
+  "Find nodes where TERM matches in title or content."
+  (let ((results (org-supertag-db-find-by-props
+                  '(:type :node)
+                  (lambda (props)
+                    (let ((title (plist-get props :title))
+                          (content (plist-get props :content)))
+                      (or (and title (string-match-p (regexp-quote term) title))
+                          (and content (string-match-p (regexp-quote term) content))))))))
+    (if results
+        (mapcar #'car results)
+      '())))
+
+(defun org-supertag-query--find-links-safe (type from to)
+  "A safe wrapper around `org-supertag-db-find-links` that always returns a list."
+  (let ((result (org-supertag-db-find-links type from to)))
+    (if (listp result)
+        result
+      (progn
+    `    (message "WARNING: org-supertag-db-find-links returned non-list: %S. Returning empty list." result)
+        '()))))
+
+(defun org-supertag-query--parse-datestring (date-str)
+  "Parse DATE-STR into a comparable time value.
+Returns nil if the string is invalid."
+  (condition-case nil
+      (let ((time (parse-time-string date-str)))
+        ;; For "YYYY-MM-DD", parse-time-string sets time to 00:00:00.
+        ;; For `before`, we want to include the entire day, so we set
+        ;; the time to the end of that day.
+        (if (string-match-p "^[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}$" date-str)
+            (let* ((decoded (decode-time time))
+                   (day (plist-get decoded :day))
+                   (month (plist-get decoded :month))
+                   (year (plist-get decoded :year)))
+              (encode-time 0 0 0 day month year))
+          time))
+    (error nil)))
+
+(defun org-supertag-query--resolve-date-string (date-str)
+  "Resolve a date string into an absolute time value.
+Handles absolute dates ('YYYY-MM-DD'), 'now', and relative
+dates ('-7d', '+1m', etc.)."
+  (let ((now (current-time)))
+    (cond
+     ;; Case 1: "now"
+     ((string= date-str "now") now)
+
+     ;; Case 2: Relative date like "-7d", "+2w", "-1y"
+     ((string-match "^\\([+-]\\)?\\([0-9]+\\)\\([dwmy]\\)$" date-str)
+      (let* ((sign (if (match-string 1 date-str) (match-string 1 date-str) "+"))
+             (num (string-to-number (match-string 2 date-str)))
+             (unit (match-string 3 date-str))
+             (seconds-per-day 86400)
+             (delta-seconds
+              (* num
+                 (pcase unit
+                   ("d" seconds-per-day)
+                   ("w" (* 7 seconds-per-day))
+                   ;; Approximation: 30 days for a month
+                   ("m" (* 30 seconds-per-day))
+                   ;; Approximation: 365.25 days for a year
+                   ("y" (* 365.25 seconds-per-day))))))
+        (if (string= sign "-")
+            (time-subtract now (seconds-to-time delta-seconds))
+          (time-add now (seconds-to-time delta-seconds)))))
+
+     ;; Case 3: Absolute date "YYYY-MM-DD"
+     ((string-match "^[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}$" date-str)
+      (condition-case nil (parse-time-string date-str) (error nil)))
+
+     ;; Default: Invalid format
+     (t nil))))
+
+(defun org-supertag-query--parse-sexp (query-sexp)
+  "Parse a query S-expression into an AST."
+  (let ((op (car query-sexp))
+        (args (cdr query-sexp)))
+    (cond
+     ((eq op 'and) `(:type 'and :children ,(mapcar #'org-supertag-query--parse-sexp args)))
+     ((eq op 'or) `(:type 'or :children ,(mapcar #'org-supertag-query--parse-sexp args)))
+     ((eq op 'not)
+      (unless (= (length args) 1) (error "'not' operator expects exactly one argument, but got %S" args))
+      `(:type 'not :child ,(org-supertag-query--parse-sexp (car args))))
+     ((eq op 'tag)
+      (unless (= (length args) 1) (error "'tag' operator expects exactly one argument, but got %S" args))
+      `(:type 'tag :value ,(if (stringp (car args)) (car args) (symbol-name (car args)))))
+     ((eq op 'field)
+      (unless (= (length args) 2) (error "'field' operator expects exactly two arguments, but got %S" args))
+      `(:type 'field :key ,(if (stringp (car args)) (car args) (symbol-name (car args)))
+              :value ,(if (stringp (cadr args)) (cadr args) (symbol-name (cadr args)))))
+     ((eq op 'after)
+      (unless (= (length args) 1) (error "'after' operator expects one date string argument, but got %S" args))
+      `(:type 'after :date ,(car args)))
+     ((eq op 'before)
+      (unless (= (length args) 1) (error "'before' operator expects one date string argument, but got %S" args))
+      `(:type 'before :date ,(car args)))
+     ((eq op 'between)
+      (unless (= (length args) 2) (error "'between' operator expects two date string arguments, but got %S" args))
+      `(:type 'between :start-date ,(car args) :end-date ,(cadr args)))
+     ((eq op 'term)
+      (unless (= (length args) 1) (error "'term' operator expects exactly one argument, but got %S" args))
+      `(:type 'term :value ,(if (stringp (car args)) (car args) (symbol-name (car args)))))
+     (t (error "Invalid query operator: %S" op)))))
+
+(defun org-supertag-query--execute-ast (ast)
+  "Execute a query AST and return a list of matching node IDs."
+  (let ((ast-type (plist-get ast :type)))
+    (cond
+     ((equal ast-type '(quote and))
+      (let ((child-results (mapcar #'org-supertag-query--execute-ast (plist-get ast :children))))
+        (if (not child-results)
+            '()
+          (cl-reduce (lambda (result next-list)
+                       (cl-intersection result next-list :test #'equal))
+                     child-results))))
+     ((equal ast-type '(quote or))
+      (let ((child-results (mapcar #'org-supertag-query--execute-ast (plist-get ast :children))))
+        (cl-reduce #'cl-union child-results)))
+     ((equal ast-type '(quote not))
+      (let ((all-node-ids (org-supertag-db-find-by-type :node))
+            (nodes-to-exclude (org-supertag-query--execute-ast (plist-get ast :child))))
+        (cl-set-difference (or all-node-ids '()) nodes-to-exclude :test #'equal)))
+     ((equal ast-type '(quote tag))
+      ;;(message "DEBUG: Calling org-supertag-query--get-nodes-by-tag-flexible with value: %S" (plist-get ast :value))
+      (let ((result-nodes (org-supertag-query--get-nodes-by-tag-flexible (plist-get ast :value)))) ; Capture the result
+        ;;(message "DEBUG: org-supertag-query--get-nodes-by-tag-flexible returned: %S" result-nodes) ; Log the result
+        result-nodes)) ; Return the result
+     ((equal ast-type '(quote field))
+      (org-supertag-query--find-nodes-by-field (plist-get ast :key) (plist-get ast :value)))
+     ((equal ast-type '(quote after))
+      (let ((query-time (org-supertag-query--resolve-date-string (plist-get ast :date))))
+        (unless query-time (error "Invalid date format for 'after': %s" (plist-get ast :date)))
+        (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
+                               (when-let ((created-at (plist-get props :created-at)))
+                                 (time-less-p query-time created-at))))))
+     ((equal ast-type '(quote before))
+      (let ((query-time (org-supertag-query--resolve-date-string (plist-get ast :date))))
+        (unless query-time (error "Invalid date format for 'before': %s" (plist-get ast :date)))
+        (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
+                               (when-let ((created-at (plist-get props :created-at)))
+                                 (time-less-p created-at query-time))))))
+     ((equal ast-type '(quote between))
+      (let ((start-time (org-supertag-query--resolve-date-string (plist-get ast :start-date)))
+            (end-time (org-supertag-query--resolve-date-string (plist-get ast :end-date))))
+        (unless start-time (error "Invalid start date for 'between': %s" (plist-get ast :start-date)))
+        (unless end-time (error "Invalid end date for 'between': %s" (plist-get ast :end-date)))
+        (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
+                               (when-let* ((created-at (plist-get props :created-at)))
+                                 (and (not (time-less-p created-at start-time))
+                                      (not (time-less-p end-time created-at))))))))
+     ((equal ast-type '(quote term))
+      (org-supertag-query--find-nodes-by-term (plist-get ast :value)))
+     (t
+      '())))))))
+
+(defun org-supertag-query--ensure-db-initialized ()
+  "Ensure the database is properly initialized and loaded.
+If not, attempt to initialize it."
+  (unless (and (boundp 'org-supertag-db--object) ; Check if variable is bound
+               (hash-table-p org-supertag-db--object) ; Ensure it's a hash table
+               org-supertag-db--object) ; Ensure it's not nil
+    (message "Org-supertag database not initialized. Attempting to load...")
+    (org-supertag-db-init) ; Call the DB initialization function
+    (unless (and (boundp 'org-supertag-db--object)
+                 (hash-table-p org-supertag-db--object)
+                 org-supertag-db--object)
+      (error "Failed to initialize Org-supertag database.")))
+  
+  ;; Check if database has any data
+  (when (= (hash-table-count org-supertag-db--object) 0)
+    (message "Database is empty. Consider running org-supertag-sync to index your files.")
+    (unless (y-or-n-p "Database is empty. Continue anyway?")
+      (error "Database initialization cancelled"))))
+
+(defun org-supertag-query--debug-node (node-id)
+  "Debug function to inspect a node's properties.
+NODE-ID is the node identifier to debug."
+  (let ((node (org-supertag-db-get node-id)))
+    (if node
+        (let ((debug-info (format "Node ID: %s\nType: %S\nTitle: %S\nTags: %S (type: %S)\nFile: %S\nPosition: %S"
+                                  node-id
+                                  (plist-get node :type)
+                                  (plist-get node :title)
+                                  (plist-get node :tags)
+                                  (type-of (plist-get node :tags))
+                                  (plist-get node :file-path)
+                                  (plist-get node :pos))))
+          (message debug-info)
+          debug-info)
+      (format "Node %s not found in database" node-id))))
+
+;;------------------------------------------------------
+;; Org Babel Integration
+;;------------------------------------------------------
+
+(defun org-supertag-query--get-fields-from-ast (ast)
+  "Extract field keys from the query AST."
+  (let ((fields '()))
+    ;; Use a local recursive helper function 'walk' to traverse the AST.
+    (cl-labels ((walk (sub-ast)
+                  ;; The :type property is a list like '(quote and), so we get the actual symbol with cadr.
+                  (let ((type (cadr (plist-get sub-ast :type))))
+                    (cond
+                     ;; For AND/OR, we must walk each child expression.
+                     ((member type '(and or))
+                      (dolist (child (plist-get sub-ast :children)) (walk child)))
+                     ;; For NOT, we must walk the single child expression.
+                     ((eq type 'not)
+                      (walk (plist-get sub-ast :child)))
+                     ;; Base case: if it's a field, add its key to our list.
+                     ((eq type 'field)
+                      (push (plist-get sub-ast :key) fields))))))
+      (walk ast))
+    (cl-delete-duplicates fields :test #'string=)))
+
+(defun org-supertag-query--get-node-field-value (node-id field-name)
+  "Get the value of FIELD-NAME for NODE-ID from database field relationships."
+  (cl-loop for link in (org-supertag-db-find-links :node-field node-id nil)
+           when (equal (plist-get link :to) field-name)
+           return (plist-get link :value)))
+
+(defun org-babel-execute:org-supertag-query (body params)
+  "Execute a org-supertag-query query and return the results as an Org table.
+BODY is the S-expression query string.
+PARAMS are the babel parameters, not used in this case."
+  (let* ((query-str (string-trim body))
+         ;; Ensure DB is loaded before proceeding with query logic
+         (_ (org-supertag-query--ensure-db-initialized))
+         (query-sexp (progn ;;(message "1. Raw Query: %s" query-str) 
+                      (car (read-from-string query-str))))
+         (ast (progn ;;(message "2. Parsed S-exp: %S" query-sexp) 
+                (org-supertag-query--parse-sexp query-sexp)))
+         (node-ids (progn ;;(message "3. Parsed AST: %S" ast) 
+                     (org-supertag-query--execute-ast ast)))
+         (field-keys (org-supertag-query--get-fields-from-ast ast))
+         (headers (append '("Node" "Tags") field-keys))
+         ;;(message "DEBUG: Extracted field keys: %S" field-keys)
+         ;;(message "DEBUG: Final headers: %S" headers)
+         ;;(message "4. Found Node IDs: %S" node-ids) ; Log the node IDs received
+         (nodes (delq nil (mapcar (lambda (id)
+                                    (let ((node-props (org-supertag-db-get id)))
+                                      ;;(message "DEBUG: org-supertag-db-get for ID %S returned: %S" id node-props)
+                                      node-props))
+                                  node-ids))) ; Filter out nil results
+         (table-data (mapcar (lambda (node)
+                               (let* ((id (plist-get node :id))
+                                      (title (plist-get node :title))
+                                      (tags (plist-get node :tags)))
+                                 (append (list (format "[[id:%s][%s]]" id title)
+                                               (if (and tags (listp tags)) (mapconcat #'identity tags ", ") ""))
+                                         (mapcar (lambda (key)
+                                                   (let ((val (org-supertag-query--get-node-field-value id key)))
+                                                     (if val (format "%s" val) "")))
+                                                 field-keys))))
+                             nodes))
+         ;;(message "5. Retrieved Nodes (titles): %S" (mapcar (lambda (n) (plist-get n :title)) nodes))
+         ;;(message "--- Query End ---")
+         )
+    (if (not nodes)
+        "No results found."
+      (org-supertag-query--format-table headers table-data))))
+
+;; Add org-supertag-query to the list of supported languages
+(add-to-list 'org-babel-load-languages '(org-supertag-query . t))
+
+;; Set default header arguments to use raw results, making links clickable.
+(add-to-list 'org-babel-default-header-args '(org-supertag-query . ((:results . "raw"))))
+
 
 ;;---------------------------------------------------------------
 ;; Org-supertag-query ineral function
@@ -247,13 +599,6 @@ TAG-NAME is the tag to search for."
   "Face for file names in query results."
   :group 'org-supertag-query)
 
-;; Buffer-local 
-;; 删除 org-supertag-query-ewoc 相关定义
-
-
-;; Formatting display function
-;; 删除 org-supertag-query-pp-item 函数定义
-
 (defun org-supertag-query-highlight-current ()
   "Highlight the current result card."
   (remove-overlays (point-min) (point-max) 'org-supertag-query t)
@@ -368,35 +713,46 @@ TAG-NAME is the tag to search for."
 (defun org-supertag-query-find-nodes (keywords)
   "Find nodes matching KEYWORDS.
 Returns a list of cons cells (NODE-PROPS . CONTEXT-SNIPPET),
-where CONTEXT-SNIPPET is a string of content around the first
-matching keyword, or nil if the match was not in the content."
+where CONTEXT-SNIPPET shows a matching field or content snippet."
   (let (results)
     (maphash
      (lambda (id props)
        (when (eq (plist-get props :type) :node)
          (let* ((title (plist-get props :title))
                 (content (plist-get props :content))
-                (tag-fields
-                 (let ((fields-map (make-hash-table :test 'equal)))
-                   (maphash
-                    (lambda (link-id link-props)
-                      (when (and (string-prefix-p ":node-tag:" link-id) (equal (plist-get link-props :from) id))
-                        (when-let* ((tag-id (plist-get link-props :to)) (tag (org-supertag-db-get tag-id)) (fields (plist-get tag :fields)))
-                          (dolist (field fields) (puthash (plist-get field :name) field fields-map)))))
-                    org-supertag-db--link)
-                   fields-map))
-                (tags (org-supertag-query--get-node-tags id)))
+                (tags (org-supertag-query--get-node-tags id))
+                ;; Step 1: Gather all fields and their values for the current node.
+                (node-fields
+                 (let (fields-alist)
+                   (dolist (tag-id tags)
+                     (dolist (field-def (org-supertag-get-all-fields-for-tag tag-id))
+                       (let* ((field-name (plist-get field-def :name))
+                              (value (org-supertag-field-get-value id field-name tag-id)))
+                         (when value
+                           (push (cons field-name (format "%s" value))
+                                 fields-alist)))))
+                   fields-alist)))
            ;; Check if all keywords match
            (let ((match-context nil)
                  (all-match t))
              (dolist (keyword keywords)
                (let* ((keyword-re (regexp-quote keyword))
                       (title-match (and title (string-match-p keyword-re title)))
-                      (tag-match (cl-some (lambda (t) (string-match-p keyword-re t)) tags))
-                      (content-match (and content (string-match keyword-re content))))
-                 (unless (or title-match tag-match content-match)
+                      (tag-match (and tags (cl-some (lambda (t) (string-match-p keyword-re t)) tags)))
+                      (content-match (and content (string-match keyword-re content)))
+                      ;; Step 2: Check for matches in field names or values.
+                      (field-match-pair
+                       (cl-find-if (lambda (pair)
+                                     (or (string-match-p keyword-re (car pair))
+                                         (string-match-p keyword-re (cdr pair))))
+                                   node-fields)))
+                 (unless (or title-match tag-match content-match field-match-pair)
                    (setq all-match nil))
-                 ;; Capture context from the first keyword that matches in content
+                 ;; Step 3: Generate context, prioritizing field matches.
+                 (when (and field-match-pair (not match-context))
+                   (setq match-context (format "Field [%s]: %s"
+                                               (car field-match-pair)
+                                               (cdr field-match-pair))))
                  (when (and content-match (not match-context))
                    (let* ((match-start (match-beginning 0))
                           (context-start (max 0 (- match-start 40)))
@@ -996,7 +1352,14 @@ Shows results in a dedicated buffer with selection and export options."
          (nodes (org-supertag-query--find-nodes-in-buffer keywords)))
     (org-supertag-query-show-results keywords nodes)))
 
-
+(defun org-supertag-insert-query-block ()
+  "Prompt for an S-expression and insert a corresponding org-babel source block.
+The block is created with ':results raw' to ensure links are clickable."
+  (interactive)
+  (let* ((query (read-string "Query S-expression: "))
+         (block-template "#+BEGIN_SRC org-supertag-query :results raw\n%s\n#+END_SRC"))
+    (unless (string-empty-p query)
+      (insert (format block-template query)))))
 
 
 (provide 'org-supertag-query)

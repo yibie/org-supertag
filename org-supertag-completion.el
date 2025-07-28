@@ -9,12 +9,23 @@
 ;; selected string to decide on the action. This is the "lowest common
 ;; denominator" approach that all completion frameworks understand.
 
-(require 'org-supertag-tag)
+(require 'org-supertag-tag) ; Ensure org-supertag-get-all-fields-for-tag is available
+(require 'org-supertag-db)
+(require 'org-supertag-util)
 (require 'org-supertag-inline)
 
 ;;;----------------------------------------------------------------------
 ;;; Shared Logic
 ;;;----------------------------------------------------------------------
+
+(defun org-supertag-completion-get-field-candidates (tag-id)
+  "Get field candidates for completion based on TAG-ID.
+Returns a list of field names."
+  (let ((candidates '()))
+    ;; Use org-supertag-get-all-fields-for-tag to get all fields, including inherited ones
+    (dolist (field (org-supertag-get-all-fields-for-tag tag-id))
+      (push (plist-get field :name) candidates))
+    (nreverse candidates)))
 
 (defun org-supertag--get-prefix-bounds ()
   "Find the bounds of a tag prefix at point, if any.

@@ -98,6 +98,50 @@ org-supertag 提供了 2 种方式来查找笔记：
 - ~org-supertag-query~ 的检索范围：
   - org-headlines, tags, 以及 field values
 
+*** S-expression 查询引擎
+org-supertag 现在支持通过 Org Babel 块进行强大的 S-expression 查询，提供高级过滤和动态表格输出功能。
+
+**** 基本用法
+创建一个语言为 `org-supertag-query` 的源代码块：
+
+#+begin_src org-supertag-query :results raw
+(tag "project")
+#+end_src
+
+**** 查询操作符
+- **标签查询**: `(tag "TAG_NAME")` - 查找具有特定标签的节点
+- **字段查询**: `(field "FIELD_NAME" "VALUE")` - 查找具有特定字段值的节点
+- **逻辑操作符**: 
+  - `(and QUERY1 QUERY2)` - 两个条件都必须为真
+  - `(or QUERY1 QUERY2)` - 任一条件为真即可
+  - `(not QUERY)` - 排除匹配查询的节点
+- **基于时间的查询**:
+  - `(after "DATE")` - 在指定日期之后创建的节点
+  - `(before "DATE")` - 在指定日期之前创建的节点
+  - `(between "START_DATE" "END_DATE")` - 在两个日期之间创建的节点
+  - 日期格式支持绝对日期 ("2024-01-01") 和相对日期 ("-7d", "+1m", "now")
+
+**** 动态表格输出
+查询结果以动态 Org 表格形式显示：
+- 第一列：可点击的节点链接（节点标题）
+- 第二列：关联的标签
+- 附加列：为查询中指定的字段动态添加
+
+**** 交互式查询块插入
+使用 `M-x org-supertag-insert-query-block` 在当前位置快速插入预格式化的查询块。
+
+**** 查询示例
+#+begin_src org-supertag-query :results raw
+;; 查找所有状态为 "On-going" 的项目节点
+(and (tag "project") (field "Status" "On-going"))
+
+;; 查找最近 7 天创建的节点
+(after "-7d")
+
+;; 查找具有 "project" 标签但状态不是 "Canceled" 的节点
+(and (tag "project") (not (field "Status" "Canceled")))
+#+end_src
+
 ** 第六步 移动你的笔记
 ~M-x org-supertag-node-move~
 - 首先在 minibuffer 里选择目标文件
@@ -117,7 +161,26 @@ org-supertag 提供了 2 种方式来查找笔记：
 - 输入 /define 可以自定义对话模式
   - 语法：~/define <command-name> "prompt"~
 
-* org-supertag 的高级用法
+* org-supertag 的重要工作机制
+** 标签的 Extend 机制
+~M-x org-supertag-tag-set-extends~
+
+我们总能碰上很多标签，它们之间存在一些共性，典型例子如形式不同的人际关系：同事、朋友、合作伙伴、供应商等等。他们应当用不同的标签标记，然而，Field 里面的信息则存在很强的共性。
+
+它们可能都需要设置如下属性：
+
+```
+- 联系方式
+- 公司
+- 职位
+- 生日
+- 备注
+```
+
+然而，如果每次都要手动设置这些 Field，那将是一件非常麻烦的事情。所以，在 org-supertag 4.2.0 版本中，我们引入了标签的 Extend 机制。让一个标签，可以从另外一个标签中继承 Field。
+
+举个例子：定义 #person 标签拥有 Name 和 Email 字段。当 #student 标签 Extend #person 时，#student 自动获得 Name 和 Email 字段，同时可以定义自己特有的 StudentID 字段。这样，一个 #student 节点就同时拥有 Name, Email, 和 StudentID。
+
 ** 多种视图，多种用法
 *** Discovery View 
 ~M-x org-supertag-view-discover~
@@ -149,6 +212,41 @@ org-supertag 提供了 2 种方式来查找笔记：
 - 全键盘支持
 
 [[./picture/figure15.gif]]
+
+** 高级查询功能
+
+org-supertag 提供强大的查询功能，超越简单的关键词搜索，支持复杂的数据过滤和分析。
+
+*** S-expression 查询引擎
+S-expression 查询引擎允许您使用类似 Lisp 的语法创建复杂查询：
+
+**** 复杂查询示例
+#+begin_src org-supertag-query :results raw
+;; 查找所有未完成的高优先级项目
+(and (tag "project") 
+     (field "Priority" "High") 
+     (not (field "Status" "Completed")))
+
+;; 查找最近一个月创建的具有特定标签的节点
+(and (after "-1m") 
+     (or (tag "research") (tag "development")))
+
+;; 查找具有多个字段条件的节点
+(and (field "Department" "Engineering")
+     (field "Status" "Active")
+     (before "2024-12-31"))
+#+end_src
+
+**** 增强的交互查询上下文
+交互查询界面现在提供更智能的上下文片段：
+- 当关键词匹配字段名称或值时，上下文显示 `Field [FIELD_NAME]: FIELD_VALUE`
+- 这优先显示相关字段信息而不是一般内容片段
+- 使您更容易理解为什么节点匹配您的搜索条件
+
+*** 查询历史和可重用性
+- 查询历史自动保存并可重用
+- 常用查询在历史中优先显示
+- 在同一界面中支持基于关键词和 S-expression 的查询
 
 ** 使用 Behavior 系统，形成自动化的工作流
 
@@ -291,6 +389,8 @@ M-x org-supertag-recovery-full-suite
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-07-29 4.3.0 released
+- 2025-07-27 4.2.0 released
 - 2025-07-21 4.0.0 released 
 - 2025-05-24 3.0.2 released
 - 2025-04-05 3.0.0 released

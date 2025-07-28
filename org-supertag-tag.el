@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'cl-lib) ; For cl-loop, cl-find, etc.
+(require 'ht)     ; For hash-table operations
 (require 'org-supertag-db)
 (require 'org-supertag-node)
 (require 'org-supertag-field)
@@ -68,7 +70,7 @@ PROPS: Additional properties including:
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     ;; If the tag already exists, do NOT overwrite it. Simply return its ID.
     (when (org-supertag-tag-get sanitized-name)
-      (cl-return-from org-supertag-tag--create sanitized-name))
+      (return sanitized-name))
 
     ;; Tag does not exist yet – proceed with normal creation logic.
     (let* ((parsed-name (org-supertag-tag--parse-name sanitized-name))
@@ -234,7 +236,7 @@ database relations, behavior execution, and finally text insertion."
     (unless org-supertag-skip-text-insertion
       (org-supertag-inline-insert-tag tag-id))
 
-    (when-let* ((fields (plist-get tag :fields)))
+    (when-let* ((fields (org-supertag-get-all-fields-for-tag tag-id)))
       (dolist (field fields)
         (let* ((field-name (plist-get field :name))
                (field-type (plist-get field :type))
@@ -265,7 +267,7 @@ TAG-ID: The tag identifier
 NODE-ID: The node identifier"
   (org-supertag-db-remove-link :node-tag node-id tag-id)
   (let ((tag (org-supertag-tag-get tag-id)))
-    (dolist (field-def (plist-get tag :fields))
+    (dolist (field-def (org-supertag-get-all-fields-for-tag tag-id))
       (org-supertag-field--remove-value field-def node-id tag-id)))
   ;; Clean up cooccurrence relations when removing a tag
   (when (featurep 'org-supertag-relation)
@@ -291,7 +293,7 @@ TAG-ID: The tag identifier to delete."
       (dolist (node-id nodes)
         (when-let* ((pos (condition-case nil (org-id-find node-id t) (error nil))))
           (org-with-point-at pos
-            (dolist (field (plist-get tag :fields))
+            (dolist (field (org-supertag-get-all-fields-for-tag tag-id))
               (let ((field-name (plist-get field :name)))
                 (org-delete-property field-name))))))
       
@@ -333,7 +335,7 @@ The hook functions are called with one argument:
 (defun org-supertag-tag--set-field-value (tag-id node-id field-name value)
   "Helper function to set a field value in the database."
   (let* ((tag (org-supertag-tag-get tag-id))
-         (field-def (cl-find field-name (plist-get tag :fields)
+         (field-def (cl-find field-name (org-supertag-get-all-fields-for-tag tag-id)
                              :key (lambda (f) (plist-get f :name))
                              :test #'string=)))
     (when field-def
@@ -446,5 +448,157 @@ PREFIX: The prefix to filter tags by."
   (let* ((tags (org-supertag-get-all-tags-with-prefix prefix))
          (selected-tag (completing-read "Select tag: " tags nil t)))
     (message "Selected tag: %s" selected-tag)))
+
+;;----------------------------------------------------------------------
+;; Tag Extension System
+;;----------------------------------------------------------------------
+
+(defvar org-supertag--tag-all-fields-cache (make-hash-table :test 'equal)
+  "Cache for `org-supertag-get-all-fields-for-tag` results.")
+
+(defun org-supertag-get-all-fields-for-tag (tag-id &optional visited-tags)
+  "Recursively get all fields for a TAG-ID, including inherited ones.
+TAG-ID is the ID of the tag (string).
+VISITED-TAGS is an optional list of tags already visited in the current
+inheritance chain to detect circular dependencies.
+
+Returns a list of field definition plists.
+Signals an error if a circular dependency is detected."
+  ;; Use a catch block for early return (e.g., cache hit)
+  (catch 'org-supertag-get-all-fields-for-tag-return
+    (unless (stringp tag-id)
+      (error "Invalid tag-id: %S. Must be a string." tag-id))
+
+    ;; 1. Check cache
+    (let ((cached-fields (gethash tag-id org-supertag--tag-all-fields-cache)))
+      (when cached-fields
+        (message "DEBUG: Cache hit for tag %s" tag-id)
+        (throw 'org-supertag-get-all-fields-for-tag-return cached-fields)))
+
+    ;; 2. Circular dependency detection
+    ;; Use a simple loop to check for circular dependencies
+    (let ((found nil))
+      (dolist (visited-tag visited-tags)
+        (when (equal tag-id visited-tag)
+          (setq found t)))
+      (when found
+        (error "Circular dependency detected in tag inheritance chain for tag: %S. Path: %S"
+               tag-id (nreverse (cons tag-id visited-tags)))))
+
+    (let* ((tag-props (org-supertag-db-get tag-id))
+           (own-fields (plist-get tag-props :fields))
+           (parent-tag-id (plist-get tag-props :extends))
+           (all-fields-ht (make-hash-table :test 'equal)))
+
+      ;; Recursively get parent fields
+      (when parent-tag-id
+        (message "DEBUG: Tag %s extends %s. Recursing..." tag-id parent-tag-id)
+        (let ((parent-fields (org-supertag-get-all-fields-for-tag
+                              parent-tag-id
+                              (cons tag-id visited-tags))))
+          (dolist (field parent-fields)
+            (puthash (plist-get field :name) field all-fields-ht))))
+
+      ;; Add own fields, potentially overriding parent fields
+      (dolist (field own-fields)
+        (puthash (plist-get field :name) field all-fields-ht))
+
+      ;; Convert hash table values back to a list
+      (let ((final-fields '()))
+        (maphash (lambda (_key value)
+                   (push value final-fields))
+                 all-fields-ht)
+        ;; Reverse to maintain original order (or a consistent order)
+        (setq final-fields (nreverse final-fields))
+
+        ;;(message "DEBUG: Calculated fields for %s: %S" tag-id final-fields)
+        ;; 3. Store in cache
+        (puthash tag-id final-fields org-supertag--tag-all-fields-cache)
+        final-fields))))
+
+(defun org-supertag-clear-tag-fields-cache (&rest _args)
+  "Clear the tag fields cache.
+This function should be called when any tag definition changes."
+  (message "DEBUG: Clearing tag fields cache.")
+  (clrhash org-supertag--tag-all-fields-cache))
+
+;; Helper to get all tag IDs for completion
+(defun org-supertag--get-all-tag-ids ()
+  "Get a list of all tag IDs (names) in the database."
+  (org-supertag-db-find-by-type :tag))
+
+(defun org-supertag-tag-set-extends ()
+  "Set or clear the inheritance relationship for a supertag.
+This allows a tag to inherit fields from another parent tag.
+A circular dependency check is performed before saving."
+  (interactive)
+  (let* ((child-tag-id (completing-read "Set extends for tag: "
+                                       (org-supertag--get-all-tag-ids)
+                                       nil t))
+         (parent-tag-id (completing-read "Extend from tag (leave empty to clear): "
+                                        (cons "" (org-supertag--get-all-tag-ids))
+                                        nil t))
+         (child-tag-props (org-supertag-db-get child-tag-id)))
+
+    (unless child-tag-props
+      (error "Tag '%s' not found." child-tag-id))
+
+    ;; Normalize parent-tag-id (empty string means nil)
+    (when (string-empty-p parent-tag-id)
+      (setq parent-tag-id nil))
+
+    ;; Check for self-extension
+    (when (equal child-tag-id parent-tag-id)
+      (error "A tag cannot extend itself: %S" child-tag-id))
+
+    ;; Construct proposed new properties
+    (let ((new-child-tag-props child-tag-props))
+      (if parent-tag-id
+          (setq new-child-tag-props (plist-put new-child-tag-props :extends parent-tag-id))
+        (setq new-child-tag-props (plist-delete new-child-tag-props :extends)))
+
+      ;; Perform circular dependency check using a dry run of field calculation
+      (condition-case err
+          (progn
+            ;; Temporarily update the tag in memory for the check
+            ;; This is a bit hacky, but avoids saving to DB before check
+            ;; and leverages the existing circular dependency detection in
+            ;; org-supertag-get-all-fields-for-tag.
+            (let ((org-supertag-db--object (ht-copy org-supertag-db--object))) ;; Work on a copy
+              (ht-set! org-supertag-db--object child-tag-id new-child-tag-props)
+              ;; Try to get fields for the child tag with the new parent
+              ;; This will trigger the circular dependency check
+              (org-supertag-get-all-fields-for-tag child-tag-id))
+
+            ;; If no error, proceed to save
+            (org-supertag-db-add child-tag-id new-child-tag-props)
+            (message "Tag '%s' now extends '%s'." child-tag-id (or parent-tag-id "nothing")))
+        (error
+         (message "Error setting inheritance: %s" (error-message-string err))
+         (error "Inheritance not set due to error: %s" (error-message-string err)))))))
+
+;; Add a listener to clear the cache when a tag entity is updated
+(org-supertag-db-on 'entity:updated
+                    (lambda (type id old-props new-props)
+                      (when (eq type :tag)
+                        (message "DEBUG: Tag entity '%s' updated. Clearing tag fields cache." id)
+                        (org-supertag-clear-tag-fields-cache))))
+
+;; Add a listener to clear the cache when a tag entity is created
+(org-supertag-db-on 'entity:created
+                    (lambda (type id props)
+                      (when (eq type :tag)
+                        (message "DEBUG: Tag entity '%s' created. Clearing tag fields cache." id)
+                        (org-supertag-clear-tag-fields-cache))))
+
+;; Add a listener to clear the cache when a tag entity is removed
+(org-supertag-db-on 'entity:removed
+                    (lambda (type id entity removed-data)
+                      (when (eq type :tag)
+                        (message "DEBUG: Tag entity '%s' removed. Clearing tag fields cache." id)
+                        (org-supertag-clear-tag-fields-cache))))
+
+;; Ensure cache is cleared on Emacs startup after DB load
+(add-hook 'org-supertag-db-after-load-hook #'org-supertag-clear-tag-fields-cache)
 
 (provide 'org-supertag-tag)
