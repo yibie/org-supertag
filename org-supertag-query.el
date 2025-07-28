@@ -5,7 +5,6 @@
 (require 'org-supertag-view-utils)
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
-(require 'org-supertag-tag)
 (require 'cl-lib)
 
 ;;---------------------------------------------------------------
