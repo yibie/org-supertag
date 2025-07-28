@@ -70,10 +70,10 @@ Otherwise, return VALUE as a string."
     (insert (propertize "🏷️ Tags\n" 'face 'org-level-2))
     (if (not tags)
         (insert (propertize "  No metadata found.\n" 'face 'shadow))
-      (dolist (tag-id tags)
+      (dolist (tag-id (sort tags #'string<)) ;; Sort tags for consistent display
         (insert (propertize (format "    %s\n" tag-id) 'face 'org-tag 'tag-id tag-id 'field-name nil))
         (when-let* ((tag-def (org-supertag-tag-get tag-id))
-                    (fields (plist-get tag-def :fields)))
+                    (fields (org-supertag-get-all-fields-for-tag tag-id)))
           (if (not fields)
               (insert (propertize "    No fields defined.\n" 'face 'shadow))
             (dolist (field-def fields)
@@ -171,7 +171,8 @@ Tries current position first"
          (node-id org-supertag-view-node--current-node-id))
     (when (and tag-id field-name node-id)
       (let* ((tag-def   (org-supertag-tag-get tag-id))
-             (field-def (cl-find field-name (plist-get tag-def :fields)
+             (all-fields (org-supertag-get-all-fields-for-tag tag-id)) ;; Get all fields, including inherited
+             (field-def (cl-find field-name all-fields
                                  :key (lambda (f) (plist-get f :name))
                                  :test #'string=))
              (value (when field-def
@@ -268,7 +269,7 @@ Tries current position first"
   (let ((found-tag-id nil))
     (dolist (tag-id (org-supertag-node-get-tags node-id))
       (when-let* ((tag-def (org-supertag-tag-get tag-id))
-                  (fields (plist-get tag-def :fields)))
+                  (fields (org-supertag-get-all-fields-for-tag tag-id)))
         (dolist (field-def fields)
           (when (string= (plist-get field-def :name) field-name)
             (setq found-tag-id tag-id)))))

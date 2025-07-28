@@ -77,7 +77,7 @@ Returns a hash-table where keys are field values and values are lists of node ID
 Excludes the field used for grouping."
   (let ((field-strings '()))
     (when-let* ((tag-def (org-supertag-tag-get base-tag))
-                (fields (plist-get tag-def :fields)))
+                (fields (org-supertag-get-all-fields-for-tag base-tag)))
       (dolist (field-def fields)
         (let ((field-name (plist-get field-def :name)))
           (unless (string= field-name group-field)
@@ -136,7 +136,7 @@ Returns the card as a list of strings, each correctly padded."
                                org-supertag-kanban--current-group-field))
                (tag-def (org-supertag-tag-get org-supertag-kanban--current-base-tag))
                (field-def (cl-find org-supertag-kanban--current-group-field
-                                   (plist-get tag-def :fields)
+                                   (org-supertag-get-all-fields-for-tag org-supertag-kanban--current-base-tag)
                                    :key (lambda (f) (plist-get f :name)) :test #'string=))
                (column-headers (setq org-supertag-kanban--column-headers
                                      (if (eq (plist-get field-def :type) 'options)
@@ -233,7 +233,7 @@ DIRECTION should be 1 for right, -1 for left."
     (when (and node-id base-tag group-field current-value)
       (let* ((tag-def (org-supertag-tag-get base-tag))
              (field-def (cl-find group-field
-                                 (plist-get tag-def :fields)
+                                 (org-supertag-get-all-fields-for-tag base-tag)
                                  :key (lambda (f) (plist-get f :name)) :test #'string=))
              (columns (if (eq (plist-get field-def :type) 'options)
                           (plist-get field-def :options)
@@ -271,7 +271,7 @@ DIRECTION should be 1 for right, -1 for left."
               (group-field-name org-supertag-kanban--current-group-field))
     ;; Get group field definition
     (let* ((tag-def (org-supertag-tag-get base-tag))
-           (field-def (cl-find group-field-name (plist-get tag-def :fields)
+           (field-def (cl-find group-field-name (org-supertag-get-all-fields-for-tag base-tag)
                                :key (lambda (f) (plist-get f :name))
                                :test #'string=)))
       (unless field-def
@@ -309,19 +309,26 @@ DIRECTION should be 1 for right, -1 for left."
         (org-supertag-kanban-refresh)))))
 
 (defun org-supertag-kanban-delete-field-at-point ()
-  "Delete a field from the Kanban's base tag."
+  "Delete a field from the Kanban's base tag.
+Only allows deletion of fields that belong to the current tag, not inherited fields."
   (interactive)
   (let* ((base-tag org-supertag-kanban--current-base-tag)
          (tag-def (org-supertag-tag-get base-tag))
-         (fields (plist-get tag-def :fields))
-         (field-names (mapcar (lambda (f) (plist-get f :name)) fields))
-         (field-to-delete (completing-read "Delete which field: " field-names nil t)))
-    (when (and field-to-delete (yes-or-no-p (format "Really delete field '%s' from tag '%s'?" field-to-delete base-tag)))
-      (let* ((new-fields (cl-remove-if (lambda (f) (string= (plist-get f :name) field-to-delete)) fields))
-             (new-tag (plist-put (copy-sequence tag-def) :fields new-fields)))
-        (org-supertag-db-add base-tag new-tag)
-        (message "Field '%s' removed from tag '%s'." field-to-delete base-tag)
-        (org-supertag-kanban-refresh)))))
+         (all-fields (org-supertag-get-all-fields-for-tag base-tag))
+         ;; Filter out inherited fields - only show own fields for deletion
+         (own-fields (cl-remove-if (lambda (f) (plist-get f :projected-from)) all-fields))
+         (own-field-names (mapcar (lambda (f) (plist-get f :name)) own-fields)))
+    (if (not own-field-names)
+        (message "No deletable fields found. All fields are inherited from parent tags.")
+      (let ((field-to-delete (completing-read "Delete which field: " own-field-names nil t)))
+        (when (and field-to-delete (yes-or-no-p (format "Really delete field '%s' from tag '%s'?" field-to-delete base-tag)))
+          ;; Find the field in the original tag's fields (not inherited ones)
+          (let* ((original-fields (plist-get tag-def :fields))
+                 (new-fields (cl-remove-if (lambda (f) (string= (plist-get f :name) field-to-delete)) original-fields))
+                 (new-tag (plist-put (copy-sequence tag-def) :fields new-fields)))
+            (org-supertag-db-add base-tag new-tag)
+            (message "Field '%s' removed from tag '%s'." field-to-delete base-tag)
+            (org-supertag-kanban-refresh)))))))
 
 (defun org-supertag-kanban-edit-field-definition-at-point ()
   "Edit a field's definition for the Kanban's base tag."

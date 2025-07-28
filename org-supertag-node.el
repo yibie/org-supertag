@@ -268,7 +268,7 @@ List of field values, each element is (field-id . value)"
           fields))))
 
 ;;------------------------------------------------------------------------------
-;; Operation Functions
+;; Operation Functions (Internal)
 ;;------------------------------------------------------------------------------    
 
 (defun org-supertag-node-sync-at-point ()
@@ -362,7 +362,7 @@ Returns the complete node content as string, or nil if not found."
       (message "[Get Content] File does not exist: %s" file)
       nil)))
 
-(defun org-supertag-node-move (node-id target-file &optional target-level target-point)
+(defun org-supertag-node--move-internal (node-id target-file &optional target-level target-point)
   "Move node to target file.
 NODE-ID is the node identifier
 TARGET-FILE is the target file path
@@ -463,7 +463,7 @@ Returns:
        nil))))  ; 发生错误返回 nil
 
 (defun org-supertag-delete-node-content (node-id)
-  "Delete node content from source file.
+  "Delete node content from source file. (Internal helper)
 NODE-ID is the node identifier
 
 Returns:
@@ -488,8 +488,12 @@ Returns:
                (delete-char 1))
              (save-buffer)
              t)
-         (message "Not at heading after moving to location")
-         nil)))))
+                    (message "Not at heading after moving to location")
+           nil)))))
+
+;;------------------------------------------------------------------------------
+;; Interactive Commands
+;;------------------------------------------------------------------------------
 
 (defun org-supertag-node-move ()
   "Interactive command to move current node to another location.
@@ -517,9 +521,9 @@ The command will:
            (insert-pos (org-supertag-query--get-insert-position target-file))
            (target-pos (car insert-pos))
            (level-adj (cdr insert-pos)))
-      (message "Target file: %s, position: %s, level: %s" 
+            (message "Target file: %s, position: %s, level: %s"
                target-file target-pos level-adj)
-      (if (org-supertag-node-move node-id target-file level-adj target-pos)
+      (if (org-supertag-node--move-internal node-id target-file level-adj target-pos)
           (message "Node moved successfully")
         (message "Failed to move node")))))
 
