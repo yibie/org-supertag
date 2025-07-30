@@ -224,6 +224,51 @@ Returns node ID if successful, nil otherwise."
                  (push id nodes)))
              org-supertag-db--object)
     (nreverse nodes)))
+
+;;------------------------------------------------------------------------------
+;; Hashing Functions
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-node-content-hash (node-id)
+  "Calculate a content-based MD5 hash for a given node-id.
+This hash reflects changes in the node's title, content, tags, and field values.
+It excludes metadata like creation/modification times, file path, and position."
+  (condition-case err
+      (let* ((node-props (org-supertag-db-get node-id))
+             (hash-string-parts '()))
+
+        (unless node-props
+          (message "Warning: Node %s not found for content hash calculation." node-id)
+          (return-from org-supertag-node-content-hash nil))
+
+        ;; 1. Include Title
+        (when-let ((title (plist-get node-props :title)))
+          (push (format "T:%s" title) hash-string-parts))
+
+        ;; 2. Include Content
+        (when-let ((content (plist-get node-props :content)))
+          (push (format "C:%s" content) hash-string-parts))
+
+        ;; 3. Include Tags (sorted for consistent hash)
+        (when-let ((tags (plist-get node-props :tags)))
+          (push (format "G:%s" (mapconcat #'identity (sort tags #'string<) ",")) hash-string-parts))
+
+        ;; 4. Include Field Values (sorted by field-name for consistent hash)
+        ;;    We need to iterate through all node-field links for this node.
+        (let ((node-fields '()))
+          (cl-loop for link in (org-supertag-db-find-links :node-field node-id nil)
+                   do (push (cons (plist-get link :to) (plist-get link :value)) node-fields))
+          ;; Sort fields by name before concatenating
+          (setq node-fields (sort node-fields (lambda (a b) (string< (car a) (car b)))))
+          (dolist (field-pair node-fields)
+            (push (format "F:%s=%s" (car field-pair) (cdr field-pair)) hash-string-parts)))
+
+        ;; Combine all parts into a single string and calculate MD5 hash
+        (md5 (mapconcat #'identity (sort hash-string-parts #'string<) "|")))
+    (error
+     (message "Error calculating content hash for node %s: %s" node-id (error-message-string err))
+     nil)))
+
 ;;------------------------------------------------------------------------------
 ;; Node Field Relations
 ;;------------------------------------------------------------------------------

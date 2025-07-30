@@ -47,6 +47,7 @@
 (require 'org-supertag-field)
 (require 'org-supertag-tag)
 (require 'org-supertag-query)
+(require 'org-supertag-scheduler)
 (require 'org-supertag-behavior)
 (require 'org-supertag-sync)
 (require 'org-supertag-luhmann)
@@ -59,6 +60,7 @@
 (require 'org-supertag-auto-tag)
 (require 'org-supertag-completion)
 (require 'org-supertag-smart-companion)
+(require 'org-supertag-embed)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."
@@ -94,10 +96,6 @@ This is determined dynamically based on the location of this file.")
   :init-value nil
   :lighter " ST"
   :group 'org-supertag
-  :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-c t m") 'org-supertag-relation-manage)
-            (define-key map (kbd "C-c t v") 'org-supertag-view-tag)
-            map)
   (if org-supertag-mode
       (org-supertag--enable)
     (org-supertag--disable)))
@@ -269,6 +267,10 @@ the bridge is confirmed to be ready."
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-scheduler-start)
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-smart-companion-setup)
+  
+  ;; 4. Initialize embed functionality
+  (when (fboundp 'org-supertag-embed-setup)
+    (org-supertag-embed-setup))
   
   ;; 4. Finally, start the Python bridge process.
   ;;    Once ready, it will trigger the hook above.
