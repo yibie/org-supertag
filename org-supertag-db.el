@@ -462,6 +462,9 @@ It converts alists to plists and cleans up keys and values."
 (defvar org-supertag-db--link (ht-create)
   "Link storage - rel-id -> (type from to props).")
 
+(defvar org-supertag-db--embeds (ht-create)
+  "Embed instance storage - embed-id -> (source-node-id, embedded-buffer, embedded-pos, etc.).")
+
 ;; Event System
 (defvar org-supertag-db--events (ht-create)
   "Event system - store event handlers.")
@@ -475,27 +478,36 @@ It converts alists to plists and cleans up keys and values."
 ;;---------------------------------------------------------------------------------
 
 (defun org-supertag-db-add (id props)
-  "Add or update entity.
-ID is entity unique identifier
-PROPS is entity properties. It will be canonicalized before being saved.
+  "Add an object with ID and PROPS to the database.
+If an object with the same ID already exists, it will be updated.
+This function now automatically adds or updates an 'updated-at' timestamp."
+  (org-supertag-db--add-object 
+   id 
+   (plist-put props :updated-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))))
 
-Returns:
-- Success: entity ID
-- Error: throws error"
+(defun org-supertag-db--add-object (id props)
+  "Private function to add object to database."
   (condition-case err
-      (let* ((old-props (org-supertag-db-get id))
+      (let* ((type (plist-get props :type))
+             (old-props (org-supertag-db-get id))
              (is-update (not (null old-props)))
-             ;; The wrapped `normalize` function now performs full canonicalization.
+             ;; Normalize properties
              (clean-props (org-supertag-db--normalize-props props))
-             (type (plist-get clean-props :type))
              (new-props (if is-update
-                            ;; For updates, merge new props over old, preserving created-at.
-                            (append clean-props
-                                    (list :created-at (or (plist-get old-props :created-at) (current-time))
-                                          :modified-at (current-time)))
-                          ;; For new entries, add created-at.
-                          (append clean-props
-                                  (list :created-at (current-time))))))
+                           ;; Update: new props take precedence, but preserve content
+                           (org-supertag-db--normalize-props
+                            (append
+                             clean-props
+                             (when (and (not (plist-get clean-props :content))
+                                      (plist-get old-props :content))
+                               (list :content (plist-get old-props :content)))
+                             (list :created-at (plist-get old-props :created-at)
+                                   :modified-at (current-time))))
+                         ;; New creation
+                         (org-supertag-db--normalize-props
+                          (append
+                           clean-props
+                           (list :created-at (current-time)))))))
         ;; 1. Validation
         ;; 1.1 Validate type
         (unless (org-supertag-db-valid-object-type-p type)
@@ -503,26 +515,14 @@ Returns:
         ;; 1.2 Validate properties
         (unless (org-supertag-db-valid-object-p type new-props)
           (error "Invalid object properties"))
-
-        ;; 2. Pre-storage processing on type change
-        (when (and is-update (not (eq (plist-get old-props :type) type)))
-          (org-supertag-db--cache-clear-for-type (plist-get old-props :type) id))
-
-        ;; Preserve existing node-field links when updating a node
-        ;; This is a defensive measure to prevent data loss if the resync
-        ;; process does not explicitly re-add node-field links.
-        (when (and is-update (eq type :node))
-          (let ((existing-node-fields (org-supertag-db-get-node-fields id)))
-            (dolist (link existing-node-fields)
-              (let* ((link-props (cdr link))
-                     (field-name (plist-get link-props :to))
-                     (tag-id (plist-get link-props :tag-id))
-                     (value (plist-get link-props :value)))
-                (when (and field-name tag-id value)
-                  (org-supertag-db-link :node-field id field-name 
-                                       (list :tag-id tag-id :value value))))))
-
-        ;; 3. Store the canonical entity
+        ;; 2. Pre-storage processing
+        (when is-update
+          ;; 2.1 Handle type changes
+          (let ((old-type (plist-get old-props :type)))
+            (unless (eq old-type type)
+              ;; Clear all related caches on type change
+              (org-supertag-db--cache-clear-for-type old-type id))))
+        ;; 3. Store entity
         (ht-set! org-supertag-db--object id new-props)
         ;; 4. Cache management
         ;; 4.1 Clear entity cache
@@ -558,7 +558,7 @@ Returns:
     ;; Error handling
     (error
      (message "[org-supertag-db-add] Error in entity add/update: %s" (error-message-string err))
-     (signal (car err) (cdr err))))))
+     (signal (car err) (cdr err)))))
 
 (defun org-supertag-db-exists-p (id)
   "Check if entity exists.
@@ -1169,7 +1169,7 @@ Returns:
 - The deleted relationship data if found and removed
 - nil if relationship does not exist
 - Throws error if validation fails"
-  (condition-case err
+  (condition-case caught-error
       (let* ((rel-id (format "%s:%s->%s" type from to))
              (link (ht-get org-supertag-db--link rel-id)))
         (when link
@@ -1210,10 +1210,10 @@ Returns:
           ;; 4. Return removed data
           link))
     ;; Error handling
-    (error
+    (error ; This 'error' is the error symbol being caught
      (message "Error removing link %s:%s->%s: %s"
-              type from to (error-message-string err))
-              (signal (car err) (cdr err)))))
+                    type from to (error-message-string caught-error))
+     (signal (car caught-error) (cdr caught-error)))))
 
 ;;------------------------------------------------------------------------------  
 ;; Property Operation
@@ -1526,9 +1526,17 @@ KEY: Specific key"
   (ht-remove! org-supertag-db--cache 
               (org-supertag-db--cache-key type key)))
 
-(defun org-supertag-db--cache-clear ()
-  "Clear all cache entries."
-  (ht-clear! org-supertag-db--cache))
+(defun org-supertag-db--cache-clear (&optional type)
+  "Clear all cache entries.
+Optional TYPE can be 'embeds to clear only embed-related cache."
+  (if (eq type 'embeds)
+      ;; Clear only embed-related cache entries
+      (ht-map (lambda (k v)
+                (when (string-prefix-p "embeds:" (format "%s" k))
+                  (ht-remove! org-supertag-db--cache k)))
+              org-supertag-db--cache)
+    ;; Clear all cache entries
+    (ht-clear! org-supertag-db--cache)))
 
 (defun org-supertag-db--cache-clear-for-type (type id)
   "Clear all related caches for specific entity type.
@@ -1671,7 +1679,8 @@ Returns t on success, nil on failure."
               (insert ";;; Database file - Do not edit manually\n\n")
               (insert "(require 'ht)\n")
               (insert "(setq org-supertag-db--object (ht-create))\n")
-              (insert "(setq org-supertag-db--link (ht-create))\n\n")
+              (insert "(setq org-supertag-db--link (ht-create))\n")
+              (insert "(setq org-supertag-db--embeds (ht-create))\n\n")
               
               ;; Save data using temp variables
               (let ((db-copy (ht-copy org-supertag-db--object)))
@@ -1679,6 +1688,11 @@ Returns t on success, nil on failure."
                          (insert (format "(ht-set! org-supertag-db--object %S '%S)\n" 
                                        k v)))
                        db-copy))
+              ;; Save embed instances
+              (ht-map (lambda (k v)
+                       (insert (format "(ht-set! org-supertag-db--embeds %S '%S)\n"
+                                     k v)))
+                     org-supertag-db--embeds)
               (ht-map (lambda (k v)
                        (insert (format "(ht-set! org-supertag-db--link %S '%S)\n" 
                                      k v)))
@@ -1710,19 +1724,22 @@ Returns t on success, nil on failure."
             
             ;; Initialize empty database
             (setq org-supertag-db--object (ht-create)
-                  org-supertag-db--link (ht-create))  
+                  org-supertag-db--link (ht-create)
+                  org-supertag-db--embeds (ht-create))
             ;; Load file
             (load org-supertag-db-file nil t)
             
             ;; Clear dirty flag
             (org-supertag-db--clear-dirty)
+            (org-supertag-db-emit 'db:loaded) ; Emit a new event for database loaded
             
             ;; Run post-load hooks
             (run-hooks 'org-supertag-db-after-load-hook)
             
-            (message "Database loaded: %d entities, %d links"
+            (message "Database loaded: %d entities, %d links, %d embeds"
                     (ht-size org-supertag-db--object)
-                    (ht-size org-supertag-db--link))
+                    (ht-size org-supertag-db--link)
+                    (ht-size org-supertag-db--embeds))
             t)
         (message "Database file does not exist")
         nil)
@@ -1836,6 +1853,8 @@ Steps:
                     (lambda (type from to props)
                       (org-supertag-db--mark-dirty)
                       (org-supertag-db--schedule-save)))
+  ;; Add listener for db:loaded to clear embeds cache if needed
+  (org-supertag-db-on 'db:loaded (lambda () (org-supertag-db--cache-clear 'embeds)))
 
   ;; Set up auto-save
   (when (and org-supertag-db-auto-save-interval
