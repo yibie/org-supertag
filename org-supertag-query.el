@@ -2,6 +2,7 @@
 
 (require 'org)
 (require 'org-element)
+(require 'org-id)
 (require 'org-supertag-view-utils)
 (require 'org-supertag-db)  
 (require 'org-supertag-field) 
@@ -449,6 +450,9 @@ PARAMS are the babel parameters, not used in this case."
 
 ;; Add org-supertag-query to the list of supported languages
 (add-to-list 'org-babel-load-languages '(org-supertag-query . t))
+
+;; Add org-supertag-embed-query to the list of supported languages
+(add-to-list 'org-babel-load-languages '(org-supertag-embed-query . t))
 
 ;; Set default header arguments to use raw results, making links clickable.
 (add-to-list 'org-babel-default-header-args '(org-supertag-query . ((:results . "raw"))))

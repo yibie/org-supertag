@@ -1,6 +1,32 @@
 * Changelog
-* [4.3.0] - 2025-07-28
+* [4.4.0] - 2025-07-30
 ** Features
+*** Enhanced Embed Block System with Bidirectional Synchronization
+- **Bidirectional Synchronization**: Implemented complete bidirectional sync between source nodes and embed blocks
+  - **Embed to Source**: Changes in embed blocks automatically sync back to source nodes
+  - **Source to Embed**: Changes in source nodes automatically refresh embed blocks
+  - **Smart Content Merging**: Preserves source node structure (PROPERTIES, ID) while updating content
+- **Automatic Synchronization**: Added `after-save-hook` integration for seamless auto-sync
+  - Automatically detects changes in both embed blocks and source files
+  - Prioritizes embed-to-source sync to prevent conflicts
+  - Provides detailed feedback messages for sync operations
+- **Content Boundary Management**: Enhanced content extraction with stable newline handling
+  - Ensures embed blocks have consistent content boundaries
+  - Prevents next heading from being included in embed content
+  - Normalizes content endings with proper newline handling
+- **ID Conflict Prevention**: Comprehensive filtering system to prevent ID conflicts
+  - Filters out ID properties and empty PROPERTIES drawers from embed content
+  - Temporarily disables auto-sync during embed operations to prevent ID generation
+  - Maintains clean embed content without metadata pollution
+- **Debug and Recovery Tools**: Added comprehensive debugging and recovery functions
+  - `org-supertag-embed-debug-source-context`: Shows context around source nodes
+  - `org-supertag-embed-fix-database-entry`: Manually correct database entries
+  - Enhanced error handling with detailed diagnostic information
+- **Database Management**: Improved embed sync database with better error handling
+  - Safe hash table operations with proper initialization
+  - Automatic cleanup of orphaned entries
+  - Robust entry management with proper file path handling
+
 *** Enhanced S-expression Query Engine with Dynamic Table Output
 - **Dynamic Table Output for S-expression Queries**: The `org-babel-execute:org-supertag-query` function now generates dynamic Org tables with clickable node links, associated tags, and dynamically added columns for fields specified in the query.
 - **New Time-based Query Operators**: Introduced `(before "DATE")`, `(after "DATE")`, and `(between "START_DATE" "END_DATE")` operators for filtering nodes based on creation timestamps.

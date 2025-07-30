@@ -231,6 +231,46 @@ The interactive query interface now provides more intelligent context snippets:
 - Frequently used queries are prioritized in the history
 - Supports both keyword-based and S-expression queries in the same interface
 
+** Embed Blocks
+
+Org SuperTag now supports embed blocks, allowing you to include content from other nodes or query results directly within your Org files. This feature provides automatic refresh capabilities and bidirectional synchronization.
+
+*** Basic Usage
+
+Embed blocks use the following syntax:
+
+#+begin_embed_node: source_id embed_id
+Content will be automatically generated here...
+#+end_embed_node
+
+*** Interactive Commands
+
+When org-supertag-embed-mode is active, you can use:
+
+- =C-c C-e n= :: Embed a node (shows node selection list)
+- =C-c C-e s= :: Sync changes from embed block back to source
+- =C-c C-e r= :: Refresh all embed blocks in current buffer
+- =C-c C-e c= :: Check for source changes and refresh embed blocks
+- =C-c C-e l= :: Clean up orphaned embed entries
+
+*** Automatic Synchronization
+
+Embed blocks now support automatic bidirectional synchronization:
+
+- **Embed to Source**: Changes in embed blocks automatically sync back to source nodes when you save the file
+- **Source to Embed**: Changes in source nodes automatically refresh embed blocks when you save the source file
+- **Smart Content Merging**: Preserves source node structure (PROPERTIES, ID) while updating content
+- **Conflict Prevention**: Temporarily disables auto-sync during embed operations to prevent ID conflicts
+
+*** Advanced Features
+
+- **Content Boundary Management**: Ensures embed blocks have consistent content boundaries and prevents next heading from being included
+- **ID Conflict Prevention**: Comprehensive filtering system to prevent ID conflicts and metadata pollution
+- **Debug and Recovery Tools**: Built-in debugging functions to diagnose and fix embed block issues
+- **Database Management**: Automatic cleanup of orphaned entries and robust error handling
+
+For detailed examples and configuration, see [[./DEMO_EMBED.org][Embed Blocks Demo]].
+
 ** Use the Behavior System to Form Automated Workflows
 
 By integrating multiple operations into one tag, *achieve one-click completion of complex operations* and improve work efficiency.
@@ -375,6 +415,7 @@ In org-supertag, the co-occurrence relationship of tags is reflected in the "vie
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-07-30 4.4.0 released
 - 2025-07-29 4.3.0 released
 - 2025-07-27 4.2.0 released
 - 2025-07-21 4.0.0 released
