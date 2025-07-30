@@ -1,0 +1,206 @@
+#+TITLE: Org SuperTag Embed Blocks Demo
+#+AUTHOR: Your Name
+#+DATE: 2025-01-01
+
+* Introduction
+
+This file demonstrates the new embed blocks functionality in Org SuperTag.
+Embed blocks allow you to include content from other nodes or query results
+directly within your Org files, with automatic refresh capabilities.
+
+* Basic Usage
+
+** Embedding a Single Node
+
+To embed a node, use the following syntax:
+
+#+BEGIN_EMBED: embed_20250101_120000_1234 node node-id-here
+** [[file:path/to/file.org::123][Node Title]]
+   :PROPERTIES:
+   :TAGS: tag1 tag2
+   :END:
+
+Node content goes here...
+
+---
+*Embedded from [[file:path/to/file.org::123][Node Title]]*
+#+END_EMBED
+
+** Embedding Query Results
+
+To embed query results, use:
+
+#+BEGIN_EMBED: embed_20250101_120000_5678 query "tag:project"
+** Query Results: tag:project
+
+** [[file:project1.org::45][Project Alpha]]
+   :PROPERTIES:
+   :TAGS: project active
+   :END:
+
+This is project alpha content...
+
+---
+*Embedded from [[file:project1.org::45][Project Alpha]]*
+
+** [[file:project2.org::67][Project Beta]]
+   :PROPERTIES:
+   :TAGS: project pending
+   :END:
+
+This is project beta content...
+
+---
+*Embedded from [[file:project2.org::67][Project Beta]]*
+
+---
+*Embedded query: tag:project*
+#+END_EMBED
+
+* Interactive Commands
+
+The following commands are available when org-supertag-embed-mode is active:
+
+- =C-c C-e n= :: Embed a node (shows node selection list)
+- =C-c C-e q= :: Embed a query result (prompts for query or shows recent queries)
+- =C-c C-e e= :: Embed with full options (source type, node/query selection, options)
+- =C-c C-e r= :: Refresh all embed blocks in current buffer
+
+* Auto-refresh Functionality
+
+You can enable automatic refresh of embed blocks:
+
+- =M-x org-supertag-embed-start-auto-refresh= :: Start auto-refresh (default: 300 seconds)
+- =M-x org-supertag-embed-stop-auto-refresh= :: Stop auto-refresh
+
+* Advanced Features
+
+** Content-based Change Detection
+
+Embed blocks use content hashing to detect when source nodes have changed.
+The hash includes:
+- Node title
+- Node content
+- Tags (sorted)
+- Field values (sorted by field name)
+
+** Bidirectional Synchronization
+
+When you edit content within an embed block, the changes can be synchronized
+back to the source node (if configured).
+
+** Custom Options
+
+You can specify additional options in the embed block header:
+
+#+BEGIN_EMBED: embed_id node node-id (:refresh-interval 60 :sync-back t)
+Content here...
+#+END_EMBED
+
+Available options:
+- =:refresh-interval= :: Custom refresh interval in seconds
+- =:sync-back= :: Enable bidirectional synchronization
+- =:show-metadata= :: Show/hide metadata section
+
+* Examples
+
+** Example 1: Embed a Project Node
+
+#+BEGIN_EMBED: demo_project_001 node project-abc123
+** [[file:~/Documents/projects.org::15][Website Redesign]]
+   :PROPERTIES:
+   :TAGS: project web-design active
+   :END:
+
+This project involves redesigning the company website with modern UI/UX principles.
+
+** Tasks
+- [ ] Wireframe design
+- [ ] Color scheme selection
+- [ ] Responsive layout implementation
+- [ ] Content migration
+- [ ] Testing and QA
+
+** Timeline
+- Start: 2025-01-15
+- Deadline: 2025-03-15
+- Status: In Progress
+
+---
+*Embedded from [[file:~/Documents/projects.org::15][Website Redesign]]*
+#+END_EMBED
+
+** Example 2: Embed Query Results
+
+#+BEGIN_EMBED: demo_query_001 query "tag:meeting"
+** Query Results: tag:meeting
+
+** [[file:~/Documents/meetings.org::23][Weekly Team Sync]]
+   :PROPERTIES:
+   :TAGS: meeting weekly team
+   :END:
+
+Regular team synchronization meeting to discuss progress and blockers.
+
+** Agenda
+- Project updates
+- Blockers discussion
+- Next week planning
+
+---
+*Embedded from [[file:~/Documents/meetings.org::23][Weekly Team Sync]]*
+
+** [[file:~/Documents/meetings.org::45][Client Review Meeting]]
+   :PROPERTIES:
+   :TAGS: meeting client review
+   :END:
+
+Meeting with client to review project progress and gather feedback.
+
+** Discussion Points
+- Current milestone status
+- Client feedback integration
+- Timeline adjustments
+
+---
+*Embedded from [[file:~/Documents/meetings.org::45][Client Review Meeting]]*
+
+---
+*Embedded query: tag:meeting*
+#+END_EMBED
+
+* Configuration
+
+To enable embed blocks, add the following to your Emacs configuration:
+
+#+begin_src emacs-lisp
+(use-package org-supertag
+  :straight (:host github :repo "yibie/org-supertag")
+  :after org
+  :config
+  (org-supertag-setup))
+#+end_src
+
+The embed functionality will be automatically loaded and available in Org buffers.
+
+* Troubleshooting
+
+** Common Issues
+
+1. **Embed blocks not refreshing**: Ensure the source nodes exist and are accessible
+2. **Query results empty**: Check that the query syntax is correct and nodes match
+3. **Auto-refresh not working**: Verify that the timer is active and not blocked
+
+** Debug Commands
+
+- =M-x org-supertag-embed-refresh-all= :: Force refresh all blocks
+- Check embed metadata: =C-h v org-supertag-db--embeds=
+
+* Future Enhancements
+
+Planned features for embed blocks:
+- Rich text formatting options
+- Conditional embedding based on node properties
+- Export to different formats (HTML, PDF)
+- Integration with external systems
+- Advanced query syntax support 
