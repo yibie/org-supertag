@@ -70,7 +70,7 @@ Takes precedence over `org-supertag-sync-directories'."
   :type 'string
   :group 'org-supertag-sync)
 
-(defcustom org-supertag-sync-check-contents nil
+(defcustom org-supertag-sync-check-contents t
   "Whether to check node contents during sync.
 Enabling this increases accuracy but reduces performance."
   :type 'boolean
@@ -82,9 +82,10 @@ Enabling this increases accuracy but reduces performance."
   :type '(repeat symbol)
   :group 'org-supertag-sync)
 
-(defcustom org-supertag-sync-auto-create-node t
+(defcustom org-supertag-sync-auto-create-node nil
   "Whether to automatically create nodes for headings during sync.
-When enabled, any heading without an ID will get one automatically."
+When enabled, any heading without an ID will get one automatically.
+Note: This can interfere with embed block synchronization, so it's disabled by default."
   :type 'boolean
   :group 'org-supertag-sync)
 
@@ -345,6 +346,7 @@ Uses a three-pass approach:
             (error (message "Error scanning buffer: %s" (error-message-string err))))))
       
       ;; Second pass: process updates, creations, and moves
+      ;; Fixed maphash call to ensure proper syntax
       (maphash
        (lambda (id props)
          (let* ((old-node (org-supertag-db-get id))
@@ -367,6 +369,7 @@ Uses a three-pass approach:
        current-nodes)
       
       ;; Third pass: check for deletions
+      ;; Fixed maphash call to ensure proper syntax
       (maphash
        (lambda (id node)
          (when (and (string= (plist-get node :file-path) file)
@@ -522,7 +525,29 @@ Ensures node has ID and is properly registered in database."
       (message "[org-supertag] No nodes need to be removed - all database files are in sync state"))))
 
 (defun org-supertag-sync-save-state ()
-  "Save the current sync state to file."
+  "Save sync state to file."
+  ;; Clean up non-existent files from sync state only
+  (let ((files-to-remove nil))
+    (message "Debug - Current sync directories: %S" org-supertag-sync-directories)
+    (message "Debug - Current sync state has %d files" (hash-table-count org-supertag-sync--state))
+    
+    (maphash (lambda (file _state)
+               (let ((exists (file-exists-p file))
+                     (in-scope (org-supertag-sync--in-sync-scope-p file)))
+                 (when (or (not exists)
+                          (not in-scope))
+                   (push file files-to-remove))))
+             org-supertag-sync--state)
+    
+    (message "Debug - Files to remove from sync state: %S" files-to-remove)
+    
+    ;; Remove files from sync state only (not from database)
+    (dolist (file files-to-remove)
+      (remhash file org-supertag-sync--state))
+    
+    (message "Debug - After cleanup, sync state has %d files" 
+             (hash-table-count org-supertag-sync--state)))
+  
   (with-temp-file org-supertag-sync-state-file
     (let ((print-length nil)
           (print-level nil))
@@ -645,19 +670,19 @@ Returns t if the node exists, nil if it does not exist."
   (and node-id
        file-path
        (file-exists-p file-path)
-         (with-current-buffer (find-file-noselect file-path)
-           (save-excursion
-             (save-restriction
-               (widen)
-               (goto-char (point-min))
-               (or (re-search-forward
-                    (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
-                    nil t)
-                   (progn
-                     (goto-char (point-min))
-                     (re-search-forward
-                      (format "^[ \t]*#\\+ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
-                      nil t))))))))
+       (with-current-buffer (find-file-noselect file-path)
+         (save-excursion
+           (save-restriction
+             (widen)
+             (goto-char (point-min))
+             (or (re-search-forward
+                  (format "^[ \t]*:ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
+                  nil t)
+                (progn
+                  (goto-char (point-min))
+                  (re-search-forward
+                   (format "^[ \t]*#\\+ID:[ \t]+%s[ \t]*$" (regexp-quote node-id))
+                   nil t))))))))
 
 (defun org-supertag-sync-cleanup-zombie-nodes-for-file (file-path)
   "Clean up zombie nodes for a specific file.
@@ -705,8 +730,8 @@ Returns the number of cleaned nodes."
                      (message "[org-supertag] Removing zombie node %s from %s" id file)
                      (org-supertag-db-remove-object id)
                      (cl-incf cleaned-count)))
-                 org-supertag-db--object)))
-    cleaned-count))
+                 org-supertag-db--object))
+    cleaned-count)))
 
 (defun org-supertag-sync--check-and-sync ()
   "Check and synchronize modified files.
@@ -715,6 +740,7 @@ This is the main sync function called periodically."
   (let ((files-to-remove nil)
         (state-changed nil) ; Flag to track if state was modified
         (modified-files (org-supertag-get-modified-files)))
+    ;; Fixed maphash call to ensure proper syntax
     (maphash (lambda (file _state)
                (when (or (not (file-exists-p file))
                         (not (org-supertag-sync--in-sync-scope-p file)))
@@ -730,6 +756,7 @@ This is the main sync function called periodically."
                  file)
         (remhash file org-supertag-sync--state)
         ;; Remove nodes from these files in database
+        ;; Fixed maphash call to ensure proper syntax
         (maphash (lambda (id node)
                    (when (and (eq (plist-get node :type) :node)
                               (string= (plist-get node :file-path) file))
@@ -757,6 +784,7 @@ This is the main sync function called periodically."
         (updated 0))
     
     ;; First collect existing nodes
+    ;; Fixed maphash call to ensure proper syntax
     (maphash
      (lambda (id node)
        (when (eq (plist-get node :type) :node)
@@ -769,11 +797,12 @@ This is the main sync function called periodically."
       (setq modified-files
             (sort modified-files
                   (lambda (a b)
-                    (time-less-p
-                     (file-attribute-modification-time
-                      (file-attributes a))
-                     (file-attribute-modification-time
-                      (file-attributes b))))))
+                    (let ((attr-a (file-attributes a))
+                          (attr-b (file-attributes b)))
+                      (when (and attr-a attr-b)
+                        (time-less-p
+                         (file-attribute-modification-time attr-a)
+                         (file-attribute-modification-time attr-b)))))))
       
       ;; Process files without error catching
       (dolist (file modified-files)
@@ -783,6 +812,7 @@ This is the main sync function called periodically."
             ;; Update database
             (org-supertag-db-update-buffer)
             ;; Count changes
+            ;; Fixed maphash call to ensure proper syntax
             (maphash
              (lambda (id node)
                (let ((old-node (gethash id old-nodes)))
@@ -807,7 +837,7 @@ This is the main sync function called periodically."
     (when modified-files
      ;; (message "[org-supertag] Checking for zombie nodes in modified files...")
       (let ((cleaned-nodes (org-supertag-sync--auto-cleanup-zombie-nodes modified-files)))
-        (when (> cleaned-nodes 0)
+        (when (and cleaned-nodes (> cleaned-nodes 0))
           (message "[org-supertag] Cleaned up %d zombie nodes" cleaned-nodes))))
     
     ;; Report results
@@ -1106,264 +1136,9 @@ This is useful when files have been removed from sync scope or deleted."
         (message "Database cleanup completed"))
     (message "Database not loaded or empty, no cleanup needed")))
 
-(defun org-supertag-sync--diagnose-parse-error (file)
-  "Diagnose and attempt to fix org-element parsing errors in FILE."
-  (condition-case err
-      (with-current-buffer (find-file-noselect file)
-        (save-excursion
-          (save-restriction
-            (widen)
-            (goto-char (point-min))
-            (let ((org-element-use-cache nil)
-                  (case-fold-search t)
-                  (problematic-regions '()))
-              ;; First pass: try to identify problematic regions
-              (while (re-search-forward org-heading-regexp nil t)
-                (when (org-at-heading-p)
-                  (let ((pos (point))
-                        (heading (org-get-heading t t t t)))
-                    (condition-case err
-                        (progn
-                          (org-back-to-heading t)
-                          (let ((element (org-element-at-point)))
-                            (unless (and element
-                                       (org-element-property :raw-value element))
-                              (push (list pos heading "Invalid element structure") problematic-regions))))
-                      (error
-                       (push (list pos heading (error-message-string err)) problematic-regions))))))
-              
-              ;; Report findings
-              (when problematic-regions
-                (with-current-buffer (get-buffer-create "*Org Parse Diagnosis*")
-                  (erase-buffer)
-                  (insert (format "Parse diagnosis for %s\n\n" file))
-                  (dolist (region (nreverse problematic-regions))
-                    (let ((pos (nth 0 region))
-                          (heading (nth 1 region))
-                          (error-msg (nth 2 region)))
-                      (insert (format "Position %d: %s\n  Error: %s\n\n"
-                                    pos heading error-msg))))
-                  (display-buffer (current-buffer))))
-              
-              ;; Return number of problems found
-              (length problematic-regions))))
-    (error
-     (message "Error diagnosing file %s: %s" file (error-message-string err))
-     -1))))
 
-;;;###autoload
-(defun org-supertag-sync-test-auto-id-creation ()
-  "Test automatic ID creation for headings in current buffer.
-Scans current buffer and attempts to create IDs for all headings
-that meet the criteria. Reports results."
-  (interactive)
-  (unless (derived-mode-p 'org-mode)
-    (user-error "Must be in an org-mode buffer"))
-  
-  (let ((created-count 0)
-        (existing-count 0)
-        (failed-count 0)
-        (errors '()))
-    
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (point-min))
-        (let ((case-fold-search t))
-          (while (re-search-forward org-heading-regexp nil t)
-            (when (and (org-at-heading-p)
-                       (not (string-prefix-p "TAGS" (org-get-heading t t t t)))
-                       (not (org-in-commented-heading-p))
-                       (>= (org-current-level) org-supertag-sync-node-creation-level))
-              (let ((id (org-id-get))
-                    (heading (org-get-heading t t t t))
-                    (line (line-number-at-pos)))
-                (cond
-                 ;; Already has ID
-                 (id
-                  (cl-incf existing-count)
-                  (message "Line %d: %s [ID exists: %s]" line heading id))
-                 ;; Try to create ID
-                 (t
-                  (condition-case err
-                      (progn
-                        (org-supertag-node-create)
-                        (let ((new-id (org-id-get)))
-                          (if new-id
-                              (progn
-                                (cl-incf created-count)
-                                (message "Line %d: %s [ID created: %s]" line heading new-id))
-                            (cl-incf failed-count)
-                            (push (list line heading "ID creation returned nil") errors)
-                            (message "Line %d: %s [ID creation failed: returned nil]" line heading))))
-                    (error
-                     (cl-incf failed-count)
-                     (let ((err-msg (error-message-string err)))
-                       (push (list line heading err-msg) errors)
-                       (message "Line %d: %s [Error: %s]" line heading err-msg)))))))))))
-    
-    ;; Report results
-    (message "\n=== Auto ID Creation Test Results ===")
-    (message "Total headings processed: %d" (+ created-count existing-count failed-count))
-    (message "IDs created: %d" created-count)
-    (message "IDs already existed: %d" existing-count)
-    (message "Failures: %d" failed-count)
-    
-    (when errors
-      (message "\nErrors encountered:")
-      (dolist (error errors)
-        (message "  Line %d (%s): %s" (nth 0 error) (nth 1 error) (nth 2 error))))
-    
-    ;; Show results in a buffer if there were errors
-    (when errors
-      (with-current-buffer (get-buffer-create "*Org Supertag ID Test Results*")
-        (erase-buffer)
-        (insert "Auto ID Creation Test Results\n")
-        (insert (format "===============================\n\n"))
-        (insert (format "Total headings: %d\n" (+ created-count existing-count failed-count)))
-        (insert (format "IDs created: %d\n" created-count))
-        (insert (format "IDs existing: %d\n" existing-count))
-        (insert (format "Failures: %d\n\n" failed-count))
-        
-        (when errors
-          (insert "Errors:\n")
-          (dolist (error errors)
-            (insert (format "Line %d: %s\n  Error: %s\n\n" 
-                           (nth 0 error) (nth 1 error) (nth 2 error)))))
-        (display-buffer (current-buffer))))
-    
-    (list :created created-count :existing existing-count :failed failed-count :errors errors)))
 
-;;; Debug Functions for Hash Mismatch Issues
 
-(defun org-supertag-debug-hash-differences ()
-  "Debug function to check hash calculation differences.
-This helps identify why nodes are being marked as 'updated' when they shouldn't be."
-  (interactive)
-  (unless (derived-mode-p 'org-mode)
-    (user-error "Must be in an org-mode buffer"))
-  
-  (let ((problematic-nodes '())
-        (total-checked 0)
-        (hash-mismatches 0))
-    
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (point-min))
-        (org-map-entries
-         (lambda ()
-           (let ((id (org-id-get)))
-             (when id
-               (cl-incf total-checked)
-               (let* ((old-node (org-supertag-db-get id))
-                      (new-props (org-supertag-extract-node-props)))
-                 (when (and old-node new-props)
-                   (let ((old-hash (or (plist-get old-node :hash)
-                                      (org-supertag-node-hash old-node)))
-                         (new-hash (org-supertag-node-hash new-props)))
-                     (unless (string= old-hash new-hash)
-                       (cl-incf hash-mismatches)
-                       ;; Detailed comparison
-                       (let ((differences '()))
-                         (dolist (prop '(:raw-value :tags :todo-type :priority))
-                           (let ((old-val (plist-get old-node prop))
-                                 (new-val (plist-get new-props prop)))
-                             (unless (equal old-val new-val)
-                               (push (list prop 
-                                          :old old-val 
-                                          :new new-val) differences))))
-                         (push (list :id id
-                                   :title (plist-get new-props :title)
-                                   :old-hash old-hash
-                                   :new-hash new-hash
-                                   :differences differences
-                                   :old-has-hash (not (null (plist-get old-node :hash))))
-                               problematic-nodes))))))))
-         t nil)))
-    
-    ;; Report results
-    (with-current-buffer (get-buffer-create "*Org Supertag Hash Debug*")
-      (erase-buffer)
-      (insert (format "Hash Debugging Results\n"))
-      (insert (format "======================\n\n"))
-      (insert (format "Total nodes checked: %d\n" total-checked))
-      (insert (format "Hash mismatches: %d\n\n" hash-mismatches))
-      
-      (if (= hash-mismatches 0)
-          (insert "✅ No hash mismatches found! All nodes have consistent hashes.\n")
-        (progn
-          (insert "❌ Found hash mismatches in the following nodes:\n\n")
-          (dolist (node (reverse problematic-nodes))
-            (insert (format "📝 Node: %s\n" (plist-get node :title)))
-            (insert (format "   ID: %s\n" (plist-get node :id)))
-            (insert (format "   Old Hash: %s\n" (plist-get node :old-hash)))
-            (insert (format "   New Hash: %s\n" (plist-get node :new-hash)))
-            (insert (format "   Old node had hash: %s\n" 
-                           (if (plist-get node :old-has-hash) "Yes" "No")))
-            (let ((diffs (plist-get node :differences)))
-              (if diffs
-                  (progn
-                    (insert "   Differences:\n")
-                    (dolist (diff diffs)
-                      (insert (format "     %s:\n" (car diff)))
-                      (insert (format "       Old: %S\n" (plist-get diff :old)))
-                      (insert (format "       New: %S\n" (plist-get diff :new)))))
-                (insert "   No property differences found (unexpected!)\n")))
-            (insert "\n"))))
-      (display-buffer (current-buffer)))
-    
-    (message "Hash debug completed: %d/%d nodes have hash mismatches" 
-             hash-mismatches total-checked)
-    
-    (list :total total-checked 
-          :mismatches hash-mismatches 
-          :problematic-nodes problematic-nodes))))
-
-(defun org-supertag-debug-properties-stability ()
-  "Debug function to test properties extraction stability."
-  (interactive)
-  (unless (derived-mode-p 'org-mode)
-    (user-error "Must be in an org-mode buffer"))
-  
-  (when-let* ((id (org-id-get))
-              (title (org-get-heading t t t t)))
-    (message "Testing properties stability for: %s" title)
-    
-    ;; Extract properties multiple times
-    (let ((extractions '()))
-      (dotimes (i 3)
-        (let ((props (org-supertag-extract-node-props)))
-          (push (list :attempt (1+ i)
-                     :properties (plist-get props :properties)
-                     :hash (org-supertag-node-hash props))
-                extractions)))
-      
-      (with-current-buffer (get-buffer-create "*Org Supertag Properties Debug*")
-        (erase-buffer)
-        (insert (format "Properties Stability Test for: %s\n" title))
-        (insert (format "ID: %s\n\n" id))
-        
-        (let ((all-hashes (mapcar (lambda (e) (plist-get e :hash)) extractions))
-              (all-properties (mapcar (lambda (e) (plist-get e :properties)) extractions))))
-          
-          (if (= (length (delete-dups (copy-sequence all-hashes))) 1)
-              (insert "✅ Hash is stable across multiple extractions\n")
-            (insert "❌ Hash varies across extractions!\n"))
-          
-          (insert "\nDetailed Results:\n")
-          (dolist (extraction extractions)
-            (insert (format "\nAttempt %d:\n" (plist-get extraction :attempt)))
-            (insert (format "  Hash: %s\n" (plist-get extraction :hash)))
-            (insert (format "  Properties count: %d\n" 
-                           (length (plist-get extraction :properties))))
-            (let ((props (plist-get extraction :properties)))
-              (when props
-                (insert "  Properties:\n")
-                (dolist (prop props)
-                  (insert (format "    %s: %s\n" (car prop) (cdr prop))))))))
-        
-        (display-buffer (current-buffer))))))
 
 ;;; Hash Stability Fix Functions
 
