@@ -679,37 +679,21 @@ TAG-NAME is the tag to search for."
     (if (member node-id org-supertag-query--marked-nodes)
         (setq org-supertag-query--marked-nodes (remove node-id org-supertag-query--marked-nodes))
       (push node-id org-supertag-query--marked-nodes))
-    ;; Redraw the card to show the new checkbox state
-    (let ((inhibit-read-only t)
-          (p (point))
-          (card-width 80)) ; Ensure this matches the width in show-results
+    (let ((inhibit-read-only t) (p (point)) (card-width 80))
       (save-excursion
-        (let ((beg (save-excursion
-                     (beginning-of-line)
-                     (if (looking-at "┌")
-                         (point)
-                       (re-search-backward "^┌" nil t))))
-              (end nil))
-          (when beg
+        (let* ((beg (save-excursion (beginning-of-line) (if (looking-at "┌")
+                                                             (point) (re-search-backward "^┌" nil t))))
+               (end (when beg (save-excursion (goto-char beg) (when
+                                                                 (re-search-forward "^└" nil t) (end-of-line) (forward-char 1) (point))))))
+          (when (and beg end)
+            (delete-region beg end)
             (goto-char beg)
-            ;; Find the end of the card's region to delete it entirely.
-            (setq end (save-excursion
-                        (when (re-search-forward "^└" nil t)
-                          (end-of-line)
-                          (forward-char 1) ; Include the final newline
-                          (point))))
-            (when end
-              (delete-region beg end)
-              (goto-char beg)
-              (let* ((node (car result-pair))
-                     (context (cdr result-pair))
-                     (card-lines (org-supertag-query--format-card
-                                  node context card-width
-                                  (member node-id org-supertag-query--marked-nodes))))
-                (dolist (line card-lines)
-                  (insert line "\n"))
-                ;; Restore the text property for the whole card
-                (add-text-properties beg (- (point) 1) `(result-pair ,result-pair)))))))
+            (let* ((node (car result-pair)) (context (cdr result-pair))
+                   (card-lines (org-supertag-query--format-card node context
+                                                                card-width (member node-id org-supertag-query--marked-nodes))))
+              (dolist (line card-lines) (insert line "\n"))
+              (add-text-properties beg (- (point) 1) `(result-pair ,result-pair
+                                                                    node-id ,node-id))))))
       (goto-char p)
       (org-supertag-query-highlight-current))))
 
@@ -895,7 +879,8 @@ Returns the card as a list of strings, each correctly padded."
                 (dolist (line card-lines)
                   (insert line "\n"))
                 ;; Add result-pair property for the toggle function
-                (add-text-properties start (point) `(result-pair ,result-pair)))
+                (add-text-properties start (point) `(result-pair ,result-pair
+                                                               node-id ,node-id)))
               (insert "\n")))))
       ;; Highlight first result
       (when nodes
@@ -996,115 +981,35 @@ START and END define the region boundaries."
 
 (defun org-supertag-get-selected-nodes ()
   "Get all marked node IDs from the query buffer."
-  (let ((selected-ids (copy-list org-supertag-query--marked-nodes)))
-    (when selected-ids
-      (message "Found %d selected nodes" (length selected-ids)))
-    (nreverse selected-ids)))
+  (with-current-buffer (get-buffer "*Org SuperTag Query*")
+    (let ((selected-ids (cl-copy-list org-supertag-query--marked-nodes)))
+      (when selected-ids
+        (message "Found %d selected nodes" (length selected-ids)))
+      (nreverse selected-ids))))
   
 
-(defun org-supertag-find-node-location (node-id file)
-  "Locate node position in file by ID.
-NODE-ID is the node identifier
-FILE is the file path
-
-Returns:
-- (point level olp) if node found
-- nil if not found"
-  (when (and file (file-exists-p file))
-    (with-current-buffer (find-file-noselect file)
-      (org-with-wide-buffer
-       (goto-char (point-min))
-       (let ((found nil))
-         (org-map-entries
-          (lambda ()
-            (when (equal (org-id-get) node-id)
-              (setq found (list (point)
-                              (org-current-level)
-                              (org-get-outline-path)))))
-          t nil)
-         found)))))
-
-(defun org-supertag-update-node-db (node-id file)
-  "Update node information in database.
-NODE-ID is the node identifier
-FILE is the target file path"
-  (unless (org-supertag-ensure-org-file file)
-    (error "Invalid org file: %s" file))
-  (with-current-buffer (find-file-noselect file)
-    (save-excursion
-      ;; Ensure at correct position
-      (unless (org-at-heading-p)
-        (org-back-to-heading t))
-      ;; Verify correct node found
-      (let ((current-id (org-id-get)))
-        (unless (equal current-id node-id)
-          (error "Current heading ID (%s) doesn't match expected ID (%s)"
-                 current-id node-id)))
-      ;; Collect node info
-      (let* ((pos (point))
-             (level (org-current-level))
-             (title (org-get-heading t t t t))
-             (olp (org-get-outline-path))
-             ;; Get existing node info to preserve properties
-             (existing-node (org-supertag-db-get node-id))
-             (created-at (and existing-node 
-                             (plist-get existing-node :created-at))))
-        ;; Build new property list
-        (let ((new-props
-               (list :type :node
-                     :title title
-                     :file-path file
-                     :pos pos
-                     :level level
-                     :olp olp)))
-          ;; Preserve creation time if exists
-          (when created-at
-            (setq new-props (plist-put new-props :created-at created-at)))
-          ;; Update database
-          (condition-case err
-              (progn
-                (org-supertag-node-db-update node-id new-props)
-                (message "Updated node %s in database" node-id))
-            (error
-             (message "Failed to update node %s: %s" 
-                      node-id 
-                      (error-message-string err))
-             (signal (car err) (cdr err)))))))))
-
-(defun org-supertag-move-node (node-id target-file &optional target-level)
-  "Move node to target file.
-NODE-ID is the node identifier
-TARGET-FILE is the target file path
-TARGET-LEVEL is the target heading level
-
-Returns:
-- t if move successful
-- nil if move failed"
-  (org-supertag-node-move node-id target-file target-level))
-
 (defun org-supertag-insert-nodes (node-ids target-pos-level)
-  "Insert nodes at specified position.
-NODE-IDS is list of node identifiers
-TARGET-POS-LEVEL is cons of (target-point . target-level)"
-  (let ((target-file (buffer-file-name))
-        (target-point (car target-pos-level))
-        (target-level (cdr target-pos-level))
+  "Insert node links at specified position."
+  (let ((target-point (car target-pos-level))
         (success-count 0))
-    
-    (unless target-file
-      (error "Current buffer is not visiting a file"))
-    
-    (dolist (node-id node-ids)
-      (message "Processing node: %s" node-id)
-      (condition-case err
-          (when (org-supertag-node-move node-id target-file target-level target-point)
-            (cl-incf success-count))
-        (error
-         (message "Failed processing node %s: %s" 
-                  node-id 
-                  (error-message-string err)))))
-    
-    (message "Processing complete: %d/%d nodes moved successfully" 
+    ;; Generate links for all nodes
+    (let ((links-content 
+           (with-temp-buffer
+             (dolist (node-id node-ids)
+               (when-let* ((node (org-supertag-db-get node-id))
+                          (title (plist-get node :title))
+                          (clean-title (if (stringp title)
+                                         (substring-no-properties title)
+                                       (prin1-to-string title))))
+                 (insert (format "- [[id:%s][%s]]\n" node-id clean-title))
+                 (cl-incf success-count)))
+             (buffer-string))))
+      ;; Insert all links at target position
+      (when (and links-content (> success-count 0))
+        (goto-char (or target-point (point-max)))
+        (unless (bolp) (insert "\n"))
+        (insert links-content)))
+    (message "Export complete: %d/%d node links inserted" 
              success-count 
              (length node-ids))))
 
@@ -1123,8 +1028,7 @@ Returns:
                 (string-match-p "\\.org$" file)))))
 
 (defun org-supertag-query-export-results-to-new-file ()
-  "Export selected search results to new file.
-Export selected nodes to a standalone org file."
+  "Export selected search results as links to new file."
   (interactive)
   (let ((selected-nodes (org-supertag-get-selected-nodes)))
     (message "Selected nodes: %S" selected-nodes)
@@ -1154,15 +1058,17 @@ Export selected nodes to a standalone org file."
                 (let ((title (file-name-base file)))
                   (insert (format "#+TITLE: %s\n" title)
                           "#+OPTIONS: ^:nil\n"  ; Disable superscript
-                          "#+STARTUP: showeverything\n\n"))  ; Show all content
-                (message "Inserting nodes...")
+                          "#+STARTUP: showeverything\n\n"  ; Show all content
+                          "* Search Results\n\n"))
+                (message "Inserting node links...")
                 (org-supertag-insert-nodes selected-nodes nil)
                 (save-buffer)
                 ;; Display new file
                 (find-file file)
                 (other-window 1)
                 (balance-windows)
-                (message "Export completed successfully to %s" file)))
+                (message "Export of %d links completed successfully to %s" 
+                        (length selected-nodes) file)))
           ;; Error handling
           (error
            (message "Export failed: %s" (error-message-string err))
@@ -1176,40 +1082,31 @@ Available insertion positions:
 2. Under Heading - Insert as child of selected heading 
 3. Same Level - Insert as sibling of selected heading"
   (interactive)
-  (let* ((selected-nodes (org-supertag-get-selected-nodes))
-         (target-file (read-file-name "Export to file: "))
-         (target-pos-level (org-supertag-query--get-insert-position target-file)))
-    
+  (let ((selected-nodes (org-supertag-get-selected-nodes)))
     (if (not selected-nodes)
         (message "No nodes selected")
-      ;; Select target file
-      (condition-case err
-          (let* ((target-file (read-file-name "Export to file: "))
-                 (target-pos-level (org-supertag-query--get-insert-position target-file)))
-            
-            ;; Validate file type
-            (unless (org-supertag-ensure-org-file target-file)
-              (error "Export target must be an org file: %s" target-file))
-            
-            ;; Process target file
-            (with-current-buffer (find-file-noselect target-file)
-              (org-mode)
-              ;; Insert content at specified position with level
-              (org-supertag-insert-nodes selected-nodes target-pos-level)
-              (save-buffer)
-              
-              ;; Display target file
-              (find-file target-file)
-              (message "Export completed successfully")))
-        ;; Error handling
-        (error
-         (message "Export failed: %s" (error-message-string err))
-         (signal (car err) (cdr err)))))))
+      (let* ((target-file (read-file-name "Export to file: "))
+             (target-pos-level (when target-file
+                                (org-supertag-query--get-insert-position target-file))))
+        (when (and target-file target-pos-level)
+          (condition-case err
+              (progn
+                (unless (org-supertag-ensure-org-file target-file)
+                  (error "Export target must be an org file: %s" target-file))
+                (with-current-buffer (find-file-noselect target-file)
+                  (org-mode)
+                  (org-supertag-insert-nodes selected-nodes target-pos-level)
+                  (save-buffer))
+                (find-file target-file)
+                (message "Export completed successfully"))
+            (error
+             (message "Export failed: %s" (error-message-string err))
+             (signal (car err) (cdr err)))))))))
 
 (defun org-supertag-query--get-insert-position (target-file)
-  "Get insertion position and level adjustment for target file.
+  "Get insertion position for target file.
 Shows outline structure in format: filename / outline-path / title
-Returns cons cell (point . level-adjust)."
+Returns cons cell (point . nil) since we only insert links."
   (let* ((headlines (with-current-buffer (find-file-noselect target-file)
                      (org-with-wide-buffer
                       (org-map-entries
@@ -1226,7 +1123,7 @@ Returns cons cell (point . level-adjust)."
                       (append
                        '("File Start" "File End")
                        (when headlines
-                         '("Under Heading" "Same Level"))))))
+                         '("Under Heading" "After Heading"))))))
     
     (with-current-buffer (find-file-noselect target-file)
       (org-with-wide-buffer
@@ -1243,31 +1140,34 @@ Returns cons cell (point . level-adjust)."
                            (mapcar #'car headlines)
                            nil t))
                  (pos (cdr (assoc selected headlines))))
-            ;; Move to selected heading
+            ;; Move to selected heading and go to end of subtree
             (goto-char pos)
-            ;; Get current level
-            (let ((parent-level (org-current-level)))
-              ;; Move to end of subtree to insert
-              (org-end-of-subtree)
-              (forward-line)
-              ;; Return position and target level
-              (cons (point) (1+ parent-level)))))
+            (org-end-of-subtree)
+            (forward-line)
+            (cons (point) nil)))
          
-         ("Same Level"
+         ("After Heading"
           (let* ((selected (completing-read 
-                           "Select sibling heading: "
+                           "Insert after heading: "
                            (mapcar #'car headlines)
                            nil t))
                  (pos (cdr (assoc selected headlines))))
-            ;; Move to selected heading
             (goto-char pos)
-            ;; Get current level
-            (let ((sibling-level (org-current-level)))
-              ;; Move to end of subtree to insert after
-              (org-end-of-subtree)
-              (forward-line)
-              ;; Return position and target level
-              (cons (point) sibling-level)))))))))
+            (org-end-of-subtree)
+            (forward-line)
+            (cons (point) nil))))))))
+
+(defun org-supertag-find-file-content-start ()
+  "Find the position where content should start in an org file.
+Skips file-level keywords and returns position after them."
+  (save-excursion
+    (goto-char (point-min))
+    ;; Skip file-level keywords like #+TITLE:, #+OPTIONS:, etc.
+    (while (and (not (eobp))
+                (or (looking-at "^[ \t]*#\\+")
+                    (looking-at "^[ \t]*$")))
+      (forward-line 1))
+    (point)))
 
 ;;; Save org-supertag-query result at cursor place
 (defvar org-supertag-query--original-buffer nil
