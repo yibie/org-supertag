@@ -27,6 +27,8 @@
   - Automatic cleanup of orphaned entries
   - Robust entry management with proper file path handling
 
+* [4.3.0] - 2025-07-28
+** Features 
 *** Enhanced S-expression Query Engine with Dynamic Table Output
 - **Dynamic Table Output for S-expression Queries**: The `org-babel-execute:org-supertag-query` function now generates dynamic Org tables with clickable node links, associated tags, and dynamically added columns for fields specified in the query.
 - **New Time-based Query Operators**: Introduced `(before "DATE")`, `(after "DATE")`, and `(between "START_DATE" "END_DATE")` operators for filtering nodes based on creation timestamps.

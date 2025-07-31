@@ -129,7 +129,7 @@
       (unless (bolp) (insert "\n"))
       (let ((headline
              (if org-supertag-view-chat--current-command
-                 (format "* User [%s]: " org-supertag-view-chat--current-command)
+                 (format "* User [%s mode]: " org-supertag-view-chat--current-command)
                "* User: ")))
         (insert (propertize headline 'face 'org-supertag-chat-prompt-face))
         (setq org-supertag-view-chat--prompt-start (point-marker))))))
@@ -310,7 +310,8 @@ the prompt marker is unexpectedly nil or misplaced."
     ;; Add user-defined commands
     (maphash (lambda (k _v) (push k cmds))
              org-supertag-view-chat--user-commands)
-    (delete-dups cmds)))
+    ;; Sort commands for better user experience
+    (sort (delete-dups cmds) 'string<)))
 
 
 (defun org-supertag-view-chat--show-available-commands ()
@@ -457,30 +458,45 @@ Handles both regular chat queries and special /commands."
         (setq org-supertag-view-chat--prompt-start nil)
         (cl-return-from org-supertag-view-chat-send-input))
         
-      ;; /command 切换
+      ;; 命令处理：切换模式 + 立即执行
       (let ((cmd-pair (org-supertag-view-chat--parse-command input)))
         (when cmd-pair
-          (let ((cmd (car cmd-pair)))
-            ;; Skip processing /define as command switch
-            (unless (string= cmd "define")
-              (let ((inhibit-read-only t))
-                (goto-char (point-max))
-                (unless (bolp) (insert "\n"))
-                (insert (propertize "[System] " 'face 'font-lock-comment-face))
-                (cond
-                 ((member cmd '("default" "reset"))
-                  (setq org-supertag-view-chat--current-command nil)
-                  (insert "Switched back to default chat mode\n"))
-                 ((or (assoc cmd org-supertag-view-chat--builtin-commands)
-                      (gethash cmd org-supertag-view-chat--user-commands))
-                  (setq org-supertag-view-chat--current-command cmd)
-                  (insert (format "Switched to command: %s\n" cmd))
-                  (org-supertag-view-chat--show-current-command-prompt))
-                 (t
-                  (insert (format "Unknown command: %s\n" cmd)))))
-              (org-supertag-view-chat--insert-prompt)
-              (setq org-supertag-view-chat--prompt-start nil)
-              (cl-return-from org-supertag-view-chat-send-input))))
+          (let ((cmd (car cmd-pair))
+                (args (cdr cmd-pair)))
+            ;; 跳过已处理的特殊命令
+            (unless (member cmd '("define" "commands"))
+              ;; 检查是否为有效命令
+              (let ((is-builtin (assoc cmd org-supertag-view-chat--builtin-commands))
+                    (is-user-defined (gethash cmd org-supertag-view-chat--user-commands))
+                    (is-meta (member cmd '("default" "reset"))))
+                (let ((inhibit-read-only t))
+                  (goto-char (point-max))
+                  (unless (bolp) (insert "\n"))
+                  (insert (propertize "[System] " 'face 'font-lock-comment-face))
+                  (cond
+                   (is-meta
+                    (setq org-supertag-view-chat--current-command nil)
+                    (insert "Switched back to default chat mode\n"))
+                   ((or is-builtin is-user-defined)
+                    (setq org-supertag-view-chat--current-command cmd)
+                    (if (and args (not (string-empty-p args)))
+                        (insert (format "Switched to command: %s and executing with input: %s\n" cmd args))
+                      (insert (format "Switched to command: %s\n" cmd)))
+                    (org-supertag-view-chat--show-current-command-prompt))
+                   (t
+                    (insert (format "Unknown command: %s\n" cmd)))))
+                
+                ;; 如果有参数且是有效命令，立即执行
+                (when (and (or is-builtin is-user-defined)
+                          args 
+                          (not (string-empty-p args)))
+                  ;; 使用参数作为输入立即执行命令
+                  (org-supertag-view-chat--execute-command-with-input cmd args lang)
+                  (cl-return-from org-supertag-view-chat-send-input))
+                
+                (org-supertag-view-chat--insert-prompt)
+                (setq org-supertag-view-chat--prompt-start nil)
+                (cl-return-from org-supertag-view-chat-send-input))))
       ;; 正常输入流程
       (when (and input (not (string-empty-p input)))
         (let ((inhibit-read-only t))
@@ -530,7 +546,7 @@ Handles both regular chat queries and special /commands."
           (push (list :role "user" :content input) org-supertag-view-chat--conversation-history))
         (setq org-supertag-view-chat--prompt-start nil)
         (unless (and input (not (string-empty-p input)))
-          (message "[SuperTag Chat] No input detected on current prompt line.")))))))
+          (message "[SuperTag Chat] No input detected on current prompt line."))))))))
 
 ;; Invisibility spec for context blocks
 (add-to-invisibility-spec 'org-st-chat-context)
@@ -639,7 +655,7 @@ Handles both regular chat queries and special /commands."
 ;;             :filepath filepath))))
 
 ;; (defun org-supertag-chat--use-current-node-p ()
-;;   "Determine if current node context should be used."
+  ;;   "Determine if current node context should be used."
 ;;   (let ((result (and org-supertag-chat--current-node-context
 ;;                       (equal (plist-get org-supertag-chat--current-node-context :filepath)
 ;;                              (buffer-file-name)))))
@@ -650,10 +666,72 @@ Handles both regular chat queries and special /commands."
 (defun org-supertag-view-chat--parse-command (input)
   "Parse command input, return (command . args) or nil."
   (when (and input (stringp input)) 
-    (if (string-match "^/\\([a-z-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
+    (if (string-match "^/\\([a-zA-Z0-9_-]+\\)\\(?:\\s-+\\(.*\\)\\)?" input)
         (let ((cmd (match-string 1 input))
               (args (string-trim (or (match-string 2 input) ""))))
           (cons (or cmd "") args)))))
+
+(defun org-supertag-view-chat--execute-command-with-input (cmd input lang)
+  "Execute command CMD with INPUT, similar to normal chat flow."
+  (let ((inhibit-read-only t))
+    ;; 显示执行状态
+    (goto-char (point-max))
+    (unless (bolp) (insert "\n"))
+    (setq org-supertag-view-chat--response-start-marker (point-marker))
+    (insert (propertize "Assistant is thinking..." 'face 'italic))
+    
+    ;; 获取命令提示词
+    (let* ((prompt (cond
+                    ((assoc cmd org-supertag-view-chat--builtin-commands)
+                     (cdr (assoc cmd org-supertag-view-chat--builtin-commands)))
+                    ((gethash cmd org-supertag-view-chat--user-commands)
+                     (gethash cmd org-supertag-view-chat--user-commands))
+                    (t nil)))
+           (final-input (if (and prompt (string-match-p "\\$input\\|\\$lang" prompt))
+                           (let ((temp-input (if (string-match-p "\\$input" prompt)
+                                               (replace-regexp-in-string "\\$input" input prompt)
+                                             prompt)))
+                             (if (string-match-p "\\$lang" temp-input)
+                                 (replace-regexp-in-string "\\$lang" lang temp-input)
+                               temp-input))
+                         input))
+           (payload `(("query" . ,final-input)
+                     ("query_text" . ,final-input)
+                     ("lang" . ,lang)
+                     ("command" . ,cmd)
+                     ("history" . ,org-supertag-view-chat--conversation-history))))
+      
+      ;; 发送请求
+      (org-supertag-bridge-call-async
+       "rag/query"
+       (list payload)
+       #'org-supertag-view-chat--handle-response)
+      
+      ;; 添加到对话历史
+      (push (list :role "user" :content input) org-supertag-view-chat--conversation-history))))
+
+;; Only a built-in command /create-question
+(defconst org-supertag-view-chat--builtin-commands
+  '(("create-question" . "Please list all important questions related to $input in $lang.")))
+
+;; When switch prompt, display content
+(defun org-supertag-view-chat--show-current-command-prompt ()
+  "Display current command prompt in chat buffer"
+  (when org-supertag-view-chat--current-command
+    (let ((prompt (cond
+                    ((and org-supertag-view-chat--current-command
+                          (assoc org-supertag-view-chat--current-command org-supertag-view-chat--builtin-commands))
+                     (cdr (assoc org-supertag-view-chat--current-command org-supertag-view-chat--builtin-commands)))
+                    ((and org-supertag-view-chat--current-command
+                          (gethash org-supertag-view-chat--current-command org-supertag-view-chat--user-commands))
+                     (gethash org-supertag-view-chat--current-command org-supertag-view-chat--user-commands))
+                    (t nil))))
+      (when prompt
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (insert (propertize (format "[Prompt for /%s]:\n%s\n" org-supertag-view-chat--current-command prompt)
+                              'face 'font-lock-comment-face)))))))
 
 ;; --- Enhanced Send Logic ---
 (defun org-supertag-view-chat--handle-command-response (response)
