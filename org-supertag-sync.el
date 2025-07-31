@@ -1058,7 +1058,7 @@ If FORCE-P is non-nil, sync even if no modifications are detected."
 (defun org-supertag-sync-force-rescan ()
   "Force a full rescan and synchronization of all files."
   (interactive)
-  (org-supertag-sync-all t))
+  (org-supertag-sync-force-all))
 
 ;; Add a function to sync all nodes in the current buffer
 (defun org-supertag-sync-buffer ()
