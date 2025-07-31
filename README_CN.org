@@ -431,7 +431,7 @@ M-x org-supertag-recovery-full-suite
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
-- 2025-07-30 4.3.1 released
+- 2025-07-30 4.4.0 released
 - 2025-07-29 4.3.0 released
 - 2025-07-27 4.2.0 released
 - 2025-07-21 4.0.0 released 
