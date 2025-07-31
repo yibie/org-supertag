@@ -301,14 +301,86 @@ the prompt marker is unexpectedly nil or misplaced."
                (buffer-string))))
     (message "%s" msg)))
 
+(defun org-supertag-view-chat--get-all-command-names ()
+  "Return a list of all available command names, without the leading slash."
+  (let ((cmds '("define" "commands" "default" "reset"))) ; Meta commands
+    ;; Add built-in commands
+    (dolist (cmd org-supertag-view-chat--builtin-commands)
+      (push (car cmd) cmds))
+    ;; Add user-defined commands
+    (maphash (lambda (k _v) (push k cmds))
+             org-supertag-view-chat--user-commands)
+    (delete-dups cmds)))
+
+
+(defun org-supertag-view-chat--show-available-commands ()
+  "Show a brief list of available commands in the minibuffer."
+  (interactive)
+  (let* ((commands (org-supertag-view-chat--get-all-command-names))
+         (command-list (mapconcat (lambda (cmd) (concat "/" cmd)) commands " ")))
+    (message "Available commands: %s" command-list)))
+
+(defun org-supertag-view-chat--select-command-simple ()
+  "Simple command selection using completing-read."
+  (interactive)
+  (let* ((p (point))
+         (prompt-start-pos (and org-supertag-view-chat--prompt-start
+                               (marker-position org-supertag-view-chat--prompt-start))))
+    (if (and prompt-start-pos (>= p prompt-start-pos))
+        (let* ((commands (org-supertag-view-chat--get-all-command-names))
+               (selected (completing-read "Select command: " commands nil t)))
+          (when (and selected (not (string-empty-p selected)))
+            (insert "/" selected " ")
+            (message "Command '/%s' inserted." selected)))
+      (message "Not in prompt area"))))
+
+(defun org-supertag-view-chat--smart-slash ()
+  "Smart slash: insert slash and optionally show command menu."
+  (interactive)
+  (let* ((p (point))
+         (prompt-start-pos (and org-supertag-view-chat--prompt-start
+                               (marker-position org-supertag-view-chat--prompt-start))))
+    (if (and prompt-start-pos (>= p prompt-start-pos))
+        (progn
+          (insert "/")
+          ;; Ask if user wants to see commands
+          (when (y-or-n-p "Show available commands? ")
+            (delete-char -1) ; Remove the slash we just inserted
+            (org-supertag-view-chat--select-command-simple)))
+      ;; Not in prompt area, just insert slash
+      (insert "/"))))
+
 ;; Parse /define command, return (name . prompt) or nil
 (defun org-supertag-view-chat--parse-define (input)
   "Parse /define command input."
   (when (and input (stringp input))  
-    (if (string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"(.*)\"$" input)
-        (let ((name (match-string 1 input))
-              (prompt (match-string 2 input)))
-          (cons name (or prompt ""))))))
+    (cond
+     ;; Pattern 1: /define name "prompt content"
+     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\\)\\s-+\"\\(.*\\)\"$" input)
+      (let ((name (match-string 1 input))
+            (prompt (match-string 2 input)))
+        (cons name (or prompt ""))))
+     ;; Pattern 2: /define name (without quotes, empty prompt)
+     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\\)\\s-*$" input)
+      (let ((name (match-string 1 input)))
+        (cons name "")))
+     ;; Pattern 3: /define "name" "prompt" (both quoted)
+     ((string-match "^/define\\s-+\"\\([a-zA-Z0-9_-]+\\\)\"\\s-+\"\\(.*\\)\"$" input)
+      (let ((name (match-string 1 input))
+            (prompt (match-string 2 input)))
+        (cons name (or prompt ""))))
+     (t nil))))
+
+(defun org-supertag-view-chat--validate-define-syntax (input)
+  "Validate /define command syntax and provide helpful error messages."
+  (cond
+   ((string-match "^/define\\s-*$" input)
+    "Error: /define requires a command name. Usage: /define <name> \"<prompt>\"")
+   ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\\)\\s-+[^\"]*$" input)
+    "Error: Prompt must be quoted. Usage: /define <name> \"<prompt>\"")
+   ((string-match "^/define\\s-+\\([^a-zA-Z0-9_-]\\\)" input)
+    "Error: Command name must contain only letters, numbers, underscores, and hyphens.")
+   (t nil)))
 
 ;; Only a built-in command /create-question
 (defconst org-supertag-view-chat--builtin-commands
@@ -342,9 +414,25 @@ Handles both regular chat queries and special /commands."
     (let* ((raw (org-supertag-view-chat--current-input))
            (lang (symbol-value 'org-supertag-view-chat-lang))
            (input (when raw (string-trim (substring-no-properties raw)))))
+      
+      ;; Debug: show what input we're processing
+      (message "Processing input: %S" input)
+      
       ;; /define
+      (when (string-match "^/define" input)
+        (let ((error-msg (org-supertag-view-chat--validate-define-syntax input)))
+          (when error-msg
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))
+              (insert (propertize (format "[System] %s\n" error-msg) 'face 'font-lock-warning-face)))
+            (org-supertag-view-chat--insert-prompt)
+            (setq org-supertag-view-chat--prompt-start nil)
+            (cl-return-from org-supertag-view-chat-send-input))))
+        
       (let ((define-pair (org-supertag-view-chat--parse-define input)))
         (when define-pair
+          (message "Define command detected: %S" define-pair)
           (org-supertag-view-chat--define-command (car define-pair) (cdr define-pair))
           (let ((inhibit-read-only t))
             (goto-char (point-max))
@@ -353,6 +441,7 @@ Handles both regular chat queries and special /commands."
           (org-supertag-view-chat--insert-prompt)
           (setq org-supertag-view-chat--prompt-start nil)
           (cl-return-from org-supertag-view-chat-send-input)))
+        
       ;; /commands
       (when (string= input "/commands")
         (let ((inhibit-read-only t))
@@ -360,34 +449,38 @@ Handles both regular chat queries and special /commands."
           (unless (bolp) (insert "\n"))
           (insert (propertize "[System] Available commands:\n" 'face 'font-lock-comment-face))
           (insert "/create-question\n")
+          (insert "/define <name> \"<prompt>\"\n")
           (maphash (lambda (k v)
                      (insert (format "/%s\n%s\n---\n" k v)))
                    org-supertag-view-chat--user-commands))
         (org-supertag-view-chat--insert-prompt)
         (setq org-supertag-view-chat--prompt-start nil)
         (cl-return-from org-supertag-view-chat-send-input))
+        
       ;; /command 切换
       (let ((cmd-pair (org-supertag-view-chat--parse-command input)))
         (when cmd-pair
           (let ((cmd (car cmd-pair)))
-            (let ((inhibit-read-only t))
-              (goto-char (point-max))
-              (unless (bolp) (insert "\n"))
-              (insert (propertize "[System] " 'face 'font-lock-comment-face))
-              (cond
-               ((member cmd '("default" "reset"))
-                (setq org-supertag-view-chat--current-command nil)
-                (insert "Switched back to default chat mode\n"))
-               ((or (assoc cmd org-supertag-view-chat--builtin-commands)
-                    (gethash cmd org-supertag-view-chat--user-commands))
-                (setq org-supertag-view-chat--current-command cmd)
-                (insert (format "Switched to command: %s\n" cmd))
-                (org-supertag-view-chat--show-current-command-prompt))
-               (t
-                (insert (format "Unknown command: %s\n" cmd)))))
-          (org-supertag-view-chat--insert-prompt)
-          (setq org-supertag-view-chat--prompt-start nil)
-          (cl-return-from org-supertag-view-chat-send-input)))
+            ;; Skip processing /define as command switch
+            (unless (string= cmd "define")
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (unless (bolp) (insert "\n"))
+                (insert (propertize "[System] " 'face 'font-lock-comment-face))
+                (cond
+                 ((member cmd '("default" "reset"))
+                  (setq org-supertag-view-chat--current-command nil)
+                  (insert "Switched back to default chat mode\n"))
+                 ((or (assoc cmd org-supertag-view-chat--builtin-commands)
+                      (gethash cmd org-supertag-view-chat--user-commands))
+                  (setq org-supertag-view-chat--current-command cmd)
+                  (insert (format "Switched to command: %s\n" cmd))
+                  (org-supertag-view-chat--show-current-command-prompt))
+                 (t
+                  (insert (format "Unknown command: %s\n" cmd)))))
+              (org-supertag-view-chat--insert-prompt)
+              (setq org-supertag-view-chat--prompt-start nil)
+              (cl-return-from org-supertag-view-chat-send-input))))
       ;; 正常输入流程
       (when (and input (not (string-empty-p input)))
         (let ((inhibit-read-only t))
@@ -498,6 +591,11 @@ Handles both regular chat queries and special /commands."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'org-supertag-view-chat-send-input)
     (define-key map (kbd "RET") #'org-supertag-view-chat-send-input)
+    ;; Use C-c / for command selection
+    (define-key map (kbd "C-c /") #'org-supertag-view-chat--select-command-simple)
+    ;; Or use / with a different approach
+    (define-key map (kbd "/") #'org-supertag-view-chat--smart-slash)
+    (define-key map (kbd "C-c C-h") #'org-supertag-view-chat--show-available-commands)
     map)
   "Keymap for org-supertag-view-chat-mode.")
 
@@ -509,7 +607,12 @@ Handles both regular chat queries and special /commands."
   (setq-local org-hide-leading-stars t)
   ;; Make buffer read-only by default, we toggle it when editing prompt
   (read-only-mode -1)
-  (use-local-map org-supertag-view-chat-mode-map))
+  (use-local-map org-supertag-view-chat-mode-map)
+  ;; Disable company mode in chat buffer to avoid conflicts
+  (when (featurep 'company)
+    (company-mode -1))
+  ;; Also disable any global company mode
+  (setq-local company-backends nil))
 
 ;; ;; --- Context Management ---
 ;; (defvar-local org-supertag-chat--current-node-context nil
@@ -520,7 +623,7 @@ Handles both regular chat queries and special /commands."
 ;;   "Silently collect current org node context and return it as a plist.
 ;; This should be called from the original Org buffer."
 ;;   (message "[Chat Debug] collect-node-context called.")
-;;   (when (and (derived-mode-p 'org-mode) (org-at-heading-p))
+;;     (when (and (derived-mode-p 'org-mode) (org-at-heading-p))
 ;;     (message "[Chat Debug] At heading: t")
 ;;     (let* ((title (org-get-heading t t))
 ;;            (content (org-get-entry))
