@@ -301,7 +301,7 @@
 
           ;; Resync all files
           (message "Starting database rebuild...")
-          (org-supertag-sync-all)
+          (org-supertag-sync-force-all)
 
           ;; Save database
           (org-supertag-db-save)
