@@ -591,59 +591,48 @@ OPTIONS: Optional plist of additional options"
 (defun org-supertag-embed-refresh-block (embed-id &optional buffer)
   "Refresh the content of the embed block with the given ID.
 EMBED-ID: The embed block identifier
-BUFFER: Optional buffer to operate on (defaults to current buffer)"
-  (let* ((entry (org-supertag-embed-sync-get-entry embed-id)))
-    
-    (unless entry
-      (error "Embed block %s not found" embed-id))
-    
-    (with-current-buffer (or buffer (current-buffer))
-      ;; Find the embed block in the current buffer
-      (let ((inner-block-region (org-supertag-embed--get-inner-block-region embed-id)))
-        (unless inner-block-region
-          (error "Embed block %s not found in current buffer" embed-id))
-        
-        (let* ((inner-start (car inner-block-region))
-               (inner-end (cdr inner-block-region))
-               (current-inner-content (buffer-substring-no-properties inner-start inner-end))
-               (new-inner-content (org-supertag-embed-generate-content embed-id)))
-          
-          ;; Add detailed debugging information
-          ;; (message "DEBUG: Current content length: %d" (length current-inner-content))
-          ;; (message "DEBUG: New content length: %d" (length new-inner-content))
-          ;; (message "DEBUG: Current content (first 100 chars): %s" 
-          ;;          (substring current-inner-content 0 (min 100 (length current-inner-content))))
-          ;; (message "DEBUG: New content (first 100 chars): %s" 
-          ;;          (substring new-inner-content 0 (min 100 (length new-inner-content))))
-          ;; (message "DEBUG: Content equal? %s" (equal current-inner-content new-inner-content))
-          
-          ;; Only refresh if content has actually changed
-          (if (equal current-inner-content new-inner-content)
-              (message "No changes detected for embed block %s" embed-id)
-            ;; Content has changed, update it
-            (delete-region inner-start inner-end)
-            (goto-char inner-start)
-            (insert new-inner-content)
+BUFFER: Optional buffer to operate on (defaults to current buffer)
+
+Returns t if the block was refreshed, nil otherwise."
+  (let ((entry (org-supertag-embed-sync-get-entry embed-id))
+        (refreshed nil))
+    (when entry
+      (with-current-buffer (or buffer (current-buffer))
+        (when-let ((inner-block-region
+                   (org-supertag-embed--get-inner-block-region embed-id)))
+          (let* ((inner-start (car inner-block-region))
+                 (inner-end (cdr inner-block-region))
+                 (current-inner-content (buffer-substring-no-properties
+                                       inner-start inner-end))
+                 (new-inner-content (org-supertag-embed-generate-content
+                                   embed-id)))
             
-            ;; Ensure there's exactly one newline before the end marker
-            (unless (looking-at-p "\n")
-              (insert "\n"))
-            
-            ;; Update hashes
-            (let* ((source-hash (org-supertag-embed-sync-calculate-source-hash entry))
-                   (content-hash (org-supertag-embed-sync-calculate-content-hash new-inner-content)))
-              (org-supertag-embed-sync-update-hashes embed-id content-hash source-hash))
-            
-            (org-supertag-embed-sync-db-save)
-            
-            (message "Refreshed embed block %s" embed-id)))))))
+            (unless (equal (string-trim current-inner-content) (string-trim
+                                                               new-inner-content))
+              (delete-region inner-start inner-end)
+              (goto-char inner-start)
+              (insert new-inner-content)
+              
+              ;; Ensure there's exactly one newline before the end marker
+              (unless (looking-at-p "\n")
+                (insert "\n"))
+              
+              (let* ((source-hash (org-supertag-embed-sync-calculate-source-hash
+                                  entry))
+                     (content-hash
+                      (org-supertag-embed-sync-calculate-content-hash new-inner-content)))
+                (org-supertag-embed-sync-update-hashes embed-id content-hash
+                                                      source-hash))
+              
+              (org-supertag-embed-sync-db-save)
+              (setq refreshed t)
+              (message "Refreshed embed block %s" embed-id))))))
+    refreshed))
 
 (defun org-supertag-embed-refresh-all ()
   "Refresh all embed blocks in the current buffer."
   (interactive)
-  (let ((refreshed-count 0)
-        (current-file (buffer-file-name)))
-    
+  (let ((refreshed-count 0))
     ;; Find all embed blocks in current buffer by scanning the buffer directly
     (save-excursion
       (goto-char (point-min))
@@ -651,9 +640,13 @@ BUFFER: Optional buffer to operate on (defaults to current buffer)"
         (let ((embed-id (match-string 1)))
           (condition-case err
               (progn
-                (org-supertag-embed-refresh-block embed-id)
-                (setq refreshed-count (1+ refreshed-count)))
+                (when (org-supertag-embed-refresh-block embed-id)
+                  (setq refreshed-count (1+ refreshed-count))))
             (error (message "ERROR refreshing embed %s: %s" embed-id (error-message-string err)))))))
+    
+    ;; If any blocks were refreshed, run the hook
+    (when (> refreshed-count 0)
+      (run-hooks 'org-supertag-embed-after-refresh-hook))
     
     (when (called-interactively-p 'interactive)
       (message "Refreshed %d embed blocks in current buffer" refreshed-count))
@@ -678,6 +671,10 @@ Prompts user to select a node from a list of all available nodes."
 ;;------------------------------------------------------------------------------
 ;; Auto-refresh functionality
 ;;------------------------------------------------------------------------------
+
+(defvar org-supertag-embed-after-refresh-hook nil
+  "Hook run after one or more embed blocks in the current buffer have been
+refreshed.")
 
 (defun org-supertag-embed-sync-on-save ()
   "Hook function to sync embed blocks when a file is saved.
@@ -728,7 +725,11 @@ This function handles bidirectional synchronization:
        ((> cleaned-count 0)
         (message "Org SuperTag Embed: Cleaned up %d orphaned embed entries" cleaned-count))
        ((> refreshed-count 0)
-        (message "Org SuperTag Embed: Auto-refreshed %d embed blocks from source" refreshed-count))))))
+        (message "Org SuperTag Embed: Auto-refreshed %d embed blocks from source" refreshed-count))
+       (t
+        (message "Org SuperTag Embed: No embed blocks needed refreshing on save."))))))
+
+(add-hook 'org-supertag-embed-after-refresh-hook 'save-buffer)
 
 (defun org-supertag-embed-auto-refresh-from-source (source-file)
   "Automatically refresh all embed blocks that reference the given source file.
@@ -963,15 +964,6 @@ Returns a plist with conflict information."
             :source-changed source-changed
             :current-source-hash current-source-hash
             :last-synced-hash last-synced-hash))))
-
-;;------------------------------------------------------------------------------
-;; Edit Mode and Visual Cues
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-edit-embed-block ()
-  "This function is now a no-op as we don't use read-only properties anymore."
-  (interactive)
-  (message "Edit mode is always on. Just edit the block and sync."))
 
 ;;------------------------------------------------------------------------------
 ;; Debug and Status Functions
