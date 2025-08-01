@@ -304,7 +304,8 @@ ENTRY: The embed entry"
   (unless entry
     (cl-return-from org-supertag-embed-sync-calculate-source-hash nil))
   (let ((source-id (org-supertag-embed-entry-source-id entry)))
-    (org-supertag-node-content-hash source-id)))
+    (when-let ((source-node (org-supertag-db-get source-id)))
+      (org-supertag-node-content-hash source-node))))
 
 (defun org-supertag-embed-sync-update-hashes (embed-id content-hash source-hash)
   "Update hash values for embed entry.
