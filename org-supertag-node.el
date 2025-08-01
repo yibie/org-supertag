@@ -918,6 +918,60 @@ filename / outline-path / title"
             (message "Jumped to node: %s" choice)
           (message "Error: Could not find node location"))
       (message "No matching node found"))))
+
+;;;###autoload
+(defun org-supertag-node-back-to-heading ()
+  "Remove current node from database but keep it as a regular Org heading.
+This function will:
+1. Remove the node from the database
+2. Clean up all tag associations
+3. Clean up all field associations  
+4. Clean up all reference relationships
+5. Keep the Org heading and ID property intact
+
+The heading will remain as a regular Org heading with its ID property,
+allowing you to recreate the node later if needed."
+  (interactive)
+  (if-let* ((node-id (org-supertag-node--ensure-sync)))
+      (when (yes-or-no-p "Remove this node from database but keep as regular heading? ")
+        ;; 1. Get node info before removal
+        (let* ((node (org-supertag-db-get node-id))
+               (tags (org-supertag-node-get-tags node-id))
+               (fields (org-supertag-node-db-get-fields node-id))
+               (refs-to (org-supertag-node-db-get-reference node-id 'to))
+               (refs-from (org-supertag-node-db-get-reference node-id 'from)))
+          
+          ;; 2. Remove all tag associations
+          (dolist (tag-id tags)
+            (org-supertag-node-db-remove-tag node-id tag-id))
+          
+          ;; 3. Remove all field associations
+          (dolist (field-pair fields)
+            (let ((field-id (car field-pair)))
+              (org-supertag-db-unlink :node-field node-id field-id)))
+          
+          ;; 4. Remove all reference relationships
+          (dolist (ref-id refs-to)
+            (org-supertag-db-unlink :node-ref node-id ref-id))
+          (dolist (ref-id refs-from)
+            (org-supertag-db-unlink :node-ref ref-id node-id))
+          
+          ;; 5. Remove node from database
+          (org-supertag-db-remove-object node-id)
+          
+          ;; 6. Clear related caches
+          (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
+          (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
+          (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
+          
+          ;; 7. Run removal hook
+          (run-hook-with-args 'org-supertag-node-removed-hook node-id)
+          
+          ;; 8. Save database
+          (org-supertag-db-save)
+          
+          (message "Node removed from database: %s (heading preserved)" node-id)))
+    (user-error "No node found at current position")))
 ;;;###autoload
 (defun org-supertag-node-find-other-window ()
   "Like `org-supertag-node-find' but display node in other window."
@@ -1282,6 +1336,14 @@ Arguments: (from-id to-id)")
 (defvar org-supertag-node-reference-removed-hook nil
   "Hook run after node reference is removed.
 Arguments: (from-id to-id)")
+
+(defvar org-supertag-node-removed-hook nil
+  "Hook run after node is removed from database.
+Arguments: (node-id)
+
+Note: This hook is called when a node is removed from the database
+but the Org heading is preserved. Use this for cleanup operations
+that should happen when a node is no longer tracked by org-supertag.")
 
 (defun org-supertag-check-and-fix-ids ()
   "Check and fix ID-related issues in org-supertag.

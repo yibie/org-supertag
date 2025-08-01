@@ -131,10 +131,6 @@ for module in optional_modules:
 echo
 echo "🎉 Installation complete!"
 echo
-echo "Usage:"
-echo "1. In Emacs, run: M-x org-supertag-sim-init"
-echo "2. Or run quick test: M-x org-supertag-sim-epc-quick-test"
-echo
 echo "Virtual environment location: $VENV_DIR"
 echo "To manually activate: source $VENV_DIR/bin/activate"
 echo
