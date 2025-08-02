@@ -268,7 +268,8 @@ NODE-ID: The node identifier"
   (org-supertag-db-remove-link :node-tag node-id tag-id)
   (let ((tag (org-supertag-tag-get tag-id)))
     (dolist (field-def (org-supertag-get-all-fields-for-tag tag-id))
-      (org-supertag-field--remove-value field-def node-id tag-id)))
+      (let ((field-name (plist-get field-def :name)))
+        (org-supertag-field-delete-value node-id field-name tag-id))))
   ;; Clean up cooccurrence relations when removing a tag
   (when (featurep 'org-supertag-relation)
     (org-supertag-relation-unrecord-cooccurrence node-id tag-id)))
