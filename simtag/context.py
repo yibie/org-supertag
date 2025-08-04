@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Optional
 
 from .config import Config
@@ -42,7 +43,7 @@ class AppContext:
         self.emacs_client: Optional[any] = None # Will be set from SimTagBridge
         self.port: Optional[int] = None # Will be set from SimTagBridge
 
-    def initialize(self, port: int, emacs_client: any):
+    def initialize(self, port: int, emacs_client: any, data_directory: str = None):
         """
         Initializes all services in the correct dependency order.
         """
@@ -52,6 +53,11 @@ class AppContext:
         self.emacs_client = emacs_client
 
         # Level 0: No dependencies
+        if data_directory:
+            # Set environment variable for Config to use
+            os.environ["ORG_SUPERTAG_DATA_DIRECTORY"] = data_directory
+            logger.info(f"Set ORG_SUPERTAG_DATA_DIRECTORY environment variable to: {data_directory}")
+        
         self.config = Config()
         logger.info("Config loaded.")
 
