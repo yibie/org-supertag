@@ -51,21 +51,20 @@ class Config(BaseSettings):
         env_file_encoding='utf-8'
     )
     
-    db_path: str = "/tmp/test_db.sqlite"
+    # --- NEW: Central Data Directory ---
+    data_directory: str = Field(default_factory=lambda: os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY", os.path.expanduser("~/.emacs.d/org-supertag")))
+
+    # --- Dynamically constructed paths ---
+    vector_db_path: str = "" # Will be set in __init__
+    dynamic_config_file_path: str = "" # Will be set in __init__
+    user_roles_file_path: str = "" # Will be set in __init__
+
     rag_graph_depth: int = 2
     
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     
     config_data: Dict[str, Any] = Field(default_factory=dict, repr=False)
-    # --- NEW: Central Data Directory ---
-    data_directory: str = Field(default_factory=lambda: os.environ.get("ORG_SUPERTAG_DATA_DIRECTORY", os.path.expanduser("~/.emacs.d/org-supertag")))
-
-    # Vector database path
-    vector_db_path: str = Field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/supertag_vector.db"))
-    # --- NEW: Path for dynamic config TOML file ---
-    dynamic_config_file_path: str = Field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/runtime_config.toml"))
-    user_roles_file_path: str = Field(default_factory=lambda: os.path.expanduser("~/.emacs.d/org-supertag/roles.toml"))
     
     
 
@@ -181,9 +180,21 @@ class Config(BaseSettings):
             init_data['embedding'] = EmbeddingConfig(**init_data['embedding'])
             
         super().__init__(**init_data)
+
+        # --- Dynamically construct paths based on data_directory ---
+        if not self.vector_db_path:
+            self.vector_db_path = os.path.join(self.data_directory, "supertag_vector.db")
+        if not self.dynamic_config_file_path:
+            self.dynamic_config_file_path = os.path.join(self.data_directory, "runtime_config.toml")
+        if not self.user_roles_file_path:
+            self.user_roles_file_path = os.path.join(self.data_directory, "roles.toml")
         
         # Keep the rest of the logic for dynamic/env var loading
         self._dynamic_config_values: Dict[str, Any] = {}
+        self.llm_client_config: Dict[str, Any] = {}  # Initialize llm_client_config
+        self.multicore_config: Dict[str, Any] = {}  # Initialize multicore_config
+        self.embedding_config: Dict[str, Any] = {}  # Initialize embedding_config
+        self.debug: bool = False  # Initialize debug flag
         self._load_dynamic_config()
         self._load_user_roles()
 
@@ -238,7 +249,7 @@ class Config(BaseSettings):
             logging.getLogger("config").info(f"Entity Extractor LLM model override set from environment: {env_ee_llm_model_override}")
 
         # Set log file path
-        self.log_file = self.get_log_file_path()
+        self.log_file = os.path.join(self.data_directory, "simtag_epc.log")
         # Ensure log directory exists
         log_dir = os.path.dirname(self.log_file)
         if log_dir and not os.path.exists(log_dir):
@@ -258,22 +269,7 @@ class Config(BaseSettings):
             db_dir = osp.dirname(self.vector_db_path)
             if db_dir:  # Only create if directory path is not empty
                 os.makedirs(db_dir, exist_ok=True)
-                logging.getLogger("config").info(f"Created storage directory: {db_dir}")
-    
-    def get_log_file_path(self):
-        """Get log file path consistent with Emacs configuration"""
-        # Get Emacs data directory from environment variable
-        emacs_data_dir = self.data_directory
-        
-        if emacs_data_dir:
-            # Use Emacs configured directory
-            return osp.join(emacs_data_dir, "simtag_epc.log")
-        elif self.vector_db_path:
-            # Fallback to vector file directory
-            return osp.join(osp.dirname(self.vector_db_path), "simtag_epc.log")
-        else:
-            # Finally use current directory
-            return "simtag_epc.log"
+                logging.getLogger("config").info(f"Ensured storage directory exists: {db_dir}")
     
     @property
     def status(self) -> dict:
@@ -298,8 +294,6 @@ class Config(BaseSettings):
             db_dir = osp.dirname(new_path)
             if db_dir:  # Ensure directory path is not empty
                 os.makedirs(db_dir, exist_ok=True)
-        # Update log path
-        self.log_file = self.get_log_file_path()
         return self.status
 
     def to_dict(self) -> Dict[str, Any]:
