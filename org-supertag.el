@@ -5,7 +5,7 @@
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
 ;; Version: 4.4.0
-;; Package-Requires: ((emacs "28.1") (org "9.6"))
+;; Package-Requires: ((emacs "28.1") (org "9.6") (deferred "0.5.1"))
 ;; URL: https://github.com/yibie/org-supertag
 
 ;; This file is NOT part of GNU Emacs.
@@ -50,7 +50,6 @@
 (require 'org-supertag-scheduler)
 (require 'org-supertag-behavior)
 (require 'org-supertag-sync)
-(require 'org-supertag-luhmann)
 (require 'org-supertag-view)
 (require 'org-supertag-inline)
 (require 'org-supertag-bridge)
@@ -61,6 +60,7 @@
 (require 'org-supertag-completion)
 (require 'org-supertag-smart-companion)
 (require 'org-supertag-embed)
+;;(require 'org-supertag-workbench)
 
 (defgroup org-supertag nil
   "Customization options for org-supertag."

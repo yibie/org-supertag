@@ -431,9 +431,10 @@ NODE-ID: The node identifier to embed"
 
     ;; Get original text content directly from source file
     (if file-path
-        (with-current-buffer (find-file-noselect file-path)
-          ;; Force buffer to be up-to-date
-          (revert-buffer t t t)
+        (let ((org-element-use-cache nil)) ; Disable cache for this operation
+          (with-current-buffer (find-file-noselect file-path)
+            ;; Force buffer to be up-to-date
+            (revert-buffer t t t)
           (save-excursion
             (goto-char (point-min))
             ;; Search for the node by ID instead of relying on a stored position
@@ -477,7 +478,7 @@ NODE-ID: The node identifier to embed"
                       ;; (message "DEBUG: Generated content: %s" clean-content)
                       clean-content)))
               (format "** Error: Could not find node with ID %s in file %s **" node-id file-path))))
-      "** Error: Node file path not available in DB **")))
+      "** Error: Node file path not available in DB **"))))
 
 (defun org-supertag-embed-generate-content (embed-id)
   "Generate content for the embed block with the given ID."
@@ -714,26 +715,27 @@ This function handles bidirectional synchronization:
         (let ((current-buffer-refreshed (org-supertag-embed-refresh-all)))
           (setq refreshed-count (+ refreshed-count current-buffer-refreshed))))
       
-      (cond
-       ((and (> cleaned-count 0) (> synced-count 0) (> refreshed-count 0))
-        (message "Org SuperTag Embed: Cleaned %d orphaned, synced %d to source, refreshed %d from source" 
-                 cleaned-count synced-count refreshed-count))
-       ((and (> synced-count 0) (> refreshed-count 0))
-        (message "Org SuperTag Embed: Synced %d to source, refreshed %d from source" 
-                 synced-count refreshed-count))
-       ((> synced-count 0)
-        (message "Org SuperTag Embed: Synced %d embed blocks to source" synced-count))
-       ((> cleaned-count 0)
-        (message "Org SuperTag Embed: Cleaned up %d orphaned embed entries" cleaned-count))
-       ((> refreshed-count 0)
-        (message "Org SuperTag Embed: Auto-refreshed %d embed blocks from source" refreshed-count))
-       (t
-        (message "Org SuperTag Embed: No embed blocks needed refreshing on save."))))))
+      ;; (cond
+      ;;  ((and (> cleaned-count 0) (> synced-count 0) (> refreshed-count 0))
+      ;;   (message "Org SuperTag Embed: Cleaned %d orphaned, synced %d to source, refreshed %d from source" 
+      ;;            cleaned-count synced-count refreshed-count))
+      ;;  ((and (> synced-count 0) (> refreshed-count 0))
+      ;;   (message "Org SuperTag Embed: Synced %d to source, refreshed %d from source" 
+      ;;            synced-count refreshed-count))
+      ;;  ((> synced-count 0)
+      ;;   (message "Org SuperTag Embed: Synced %d embed blocks to source" synced-count))
+      ;;  ((> cleaned-count 0)
+      ;;   (message "Org SuperTag Embed: Cleaned up %d orphaned embed entries" cleaned-count))
+      ;;  ((> refreshed-count 0)
+      ;;   (message "Org SuperTag Embed: Auto-refreshed %d embed blocks from source" refreshed-count))
+      ;;  (t
+      ;;   (message "Org SuperTag Embed: No embed blocks needed refreshing on save.")))
+        )))
 
 (add-hook 'org-supertag-embed-after-refresh-hook 'save-buffer)
 
 (defun org-supertag-embed-auto-refresh-from-source (source-file)
-  "Automatically refresh all embed blocks that reference the given source file.
+  "Automatically refresh all embed blocks that reference the given source file.       
 SOURCE-FILE: The path to the source file that has changed"
   (let ((refreshed-count 0))
     ;; Ensure database is initialized
@@ -790,12 +792,13 @@ no longer exist in their respective files."
        (setq total-entries (1+ total-entries))
        (let ((embedded-file (org-supertag-embed-entry-embedded-file entry)))
          (when (and embedded-file (file-exists-p embedded-file))
-           (with-current-buffer (find-file-noselect embedded-file)
-             (let ((block-region (org-supertag-embed--find-block-by-id embed-id)))
-               (unless block-region
-                 ;; Embed block no longer exists, remove from database
-                 (org-supertag-embed-sync-remove-entry embed-id)
-                 (setq cleaned-count (1+ cleaned-count)))))))))
+           (let ((org-element-use-cache nil)) ; Disable cache for this operation
+             (with-current-buffer (find-file-noselect embedded-file)
+               (let ((block-region (org-supertag-embed--find-block-by-id embed-id)))
+                 (unless block-region
+                   ;; Embed block no longer exists, remove from database
+                   (org-supertag-embed-sync-remove-entry embed-id)
+                   (setq cleaned-count (1+ cleaned-count))))))))))
     ;; 确保返回 cleaned-count，而不是 safe-map-embeds 的返回值
     (when (> cleaned-count 0)
       (org-supertag-embed-sync-db-save)
@@ -818,12 +821,13 @@ no longer exist in their respective files."
                     (not (member embedded-file processed-files)))
            (push embedded-file processed-files)
            (when (file-exists-p embedded-file)
-             (with-current-buffer (find-file-noselect embedded-file)
-               (let ((block-region (org-supertag-embed--find-block-by-id embed-id)))
-                 (unless block-region
-                   ;; Embed block no longer exists, remove from database
-                   (org-supertag-embed-sync-remove-entry embed-id)
-                   (setq cleaned-count (1+ cleaned-count))))))))))
+             (let ((org-element-use-cache nil)) ; Disable cache for this operation
+               (with-current-buffer (find-file-noselect embedded-file)
+                 (let ((block-region (org-supertag-embed--find-block-by-id embed-id)))
+                   (unless block-region
+                     ;; Embed block no longer exists, remove from database
+                     (org-supertag-embed-sync-remove-entry embed-id)
+                     (setq cleaned-count (1+ cleaned-count)))))))))))
     ;; 确保返回 cleaned-count，而不是 safe-map-embeds 的返回值
     (when (> cleaned-count 0)
       (org-supertag-embed-sync-db-save)
@@ -882,8 +886,9 @@ back to the original source node using the independent sync database."
           (cl-return-from org-supertag-sync-embed-block-by-id nil))
     
         ;; Smart synchronization: preserve source node structure, update content only
-        (with-current-buffer (find-file-noselect source-file)
-          (save-excursion
+        (let ((org-element-use-cache nil)) ; Disable cache for this operation
+          (with-current-buffer (find-file-noselect source-file)
+            (save-excursion
             ;; Find the source node by ID instead of relying on stale position
             (goto-char (point-min))
             (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
@@ -937,7 +942,7 @@ back to the original source node using the independent sync database."
            (org-supertag-embed-sync-db-save)
            
            ;; Save the source file
-           (save-buffer)))))))
+           (save-buffer))))))))
 
 (cl-defun org-supertag-embed-detect-conflicts (embed-id)
   "Detect potential conflicts for the given embed block.
@@ -1178,8 +1183,9 @@ EMBED-ID: The embed block identifier"
   (let* ((node-props (org-supertag-db-get node-id))
          (file-path (plist-get node-props :file-path)))
     (if file-path
-        (with-current-buffer (find-file-noselect file-path)
-          (save-excursion
+        (let ((org-element-use-cache nil)) ; Disable cache for this operation
+          (with-current-buffer (find-file-noselect file-path)
+            (save-excursion
             (goto-char (point-min))
             (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote node-id)) nil t)
                 (let* ((found-pos (point))
@@ -1190,7 +1196,7 @@ EMBED-ID: The embed block identifier"
                     (princ (format "Context around node %s in file %s:\n\n" node-id file-path))
                     (princ context)))
               (message "Node %s not found in file %s" node-id))))
-             (message "No file path for node %s" node-id))))
+             (message "No file path for node %s" node-id)))))
 
 (defun org-supertag-embed-fix-database-entry (embed-id)
   "Fix the database entry with correct source file information.

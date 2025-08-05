@@ -1,31 +1,45 @@
 * Changelog
+* [4.6.0] - 2025-08-06
+** Features
+*** Enhanced Table View with display multi-line text and display images in cell
+- *Display multi-line text*
+- *Display images in cells*
+- *Easy navigation shortcuts*
+* [4.5.0] - 2025-07-31
+** Features
+*** Enhanced Chat Command System with Intelligent Mode Switching
+- *Intelligent Command Mode with Immediate Execution*: Implemented a new command system that allows commands to be executed immediately with parameters while maintaining persistent mode
+  - **Parameterized Command Execution**: `/bs 微软` → switches to bs mode and immediately executes with "微软" as input
+  - **Persistent Command Mode**: Subsequent conversations remain in the selected command mode until user switches back with `/default`
+  - **Flexible Command Usage**: Support both parameterized execution and mode-only switching
+- *Improved Command Parsing*: Enhanced command parsing to support alphanumeric, underscore, and hyphen characters in command names
+- *Enhanced User Interface*: Updated prompt display to show current mode as "User [bs mode]:" for better clarity
+- *Better Command Management*: Sorted command list alphabetically for improved user experience
+- *Simplified Command Selection*: Removed complex completion-at-point mechanism in favor of direct `completing-read` approach
+  - Multiple command selection methods: `C-c /` for direct selection, `/` for smart slash, `C-c C-h` for command help
+  - Disabled company-mode in chat buffer to prevent conflicts
+  - Reduced code complexity by removing ~150 lines of complex completion code
+
+*** Enhanced /define Command with Multiple Format Support
+- *Multiple Format Support*: `/define` command now supports three different formats:
+  - Standard format: `/define name "prompt content"`
+  - Empty prompt format: `/define name`
+  - Double-quoted format: `/define "name" "prompt"`
+- *Syntax Validation*: Added comprehensive validation with helpful error messages
+- *Improved Error Handling*: Clear feedback for syntax errors and usage instructions
+- *Enhanced Debugging*: Added debug information and better command processing logic
+
 * [4.4.0] - 2025-07-30
 ** Features
 *** Enhanced Embed Block System with Bidirectional Synchronization
-- **Bidirectional Synchronization**: Implemented complete bidirectional sync between source nodes and embed blocks
+- *Bidirectional Synchronization*: Implemented complete bidirectional sync between source nodes and embed blocks
   - **Embed to Source**: Changes in embed blocks automatically sync back to source nodes
   - **Source to Embed**: Changes in source nodes automatically refresh embed blocks
   - **Smart Content Merging**: Preserves source node structure (PROPERTIES, ID) while updating content
-- **Automatic Synchronization**: Added `after-save-hook` integration for seamless auto-sync
+- *Automatic Synchronization*: Added `after-save-hook` integration for seamless auto-sync
   - Automatically detects changes in both embed blocks and source files
   - Prioritizes embed-to-source sync to prevent conflicts
   - Provides detailed feedback messages for sync operations
-- **Content Boundary Management**: Enhanced content extraction with stable newline handling
-  - Ensures embed blocks have consistent content boundaries
-  - Prevents next heading from being included in embed content
-  - Normalizes content endings with proper newline handling
-- **ID Conflict Prevention**: Comprehensive filtering system to prevent ID conflicts
-  - Filters out ID properties and empty PROPERTIES drawers from embed content
-  - Temporarily disables auto-sync during embed operations to prevent ID generation
-  - Maintains clean embed content without metadata pollution
-- **Debug and Recovery Tools**: Added comprehensive debugging and recovery functions
-  - `org-supertag-embed-debug-source-context`: Shows context around source nodes
-  - `org-supertag-embed-fix-database-entry`: Manually correct database entries
-  - Enhanced error handling with detailed diagnostic information
-- **Database Management**: Improved embed sync database with better error handling
-  - Safe hash table operations with proper initialization
-  - Automatic cleanup of orphaned entries
-  - Robust entry management with proper file path handling
 
 * [4.3.0] - 2025-07-28
 ** Features 
@@ -54,12 +68,7 @@
 * [4.2.0] - 2025-07-27
 ** Features
 *** Implement tag field extension (inheritance)
-- This introduces the ability for Org Supertag tags to **Extend** field definitions from other parent tags.
-  - **Tag Extension**: Tags can now extend other tags, automatically inheriting their field definitions. Child tag fields override parent fields.
-  - **Dynamic Resolution**: Implemented a "soft link" model where extension is resolved dynamically at runtime, ensuring data consistency and flexibility.
-  - **Database Update**: Added an `:extends` property to tag definitions.
-  - **User Interface**: New command `org-supertag-tag-set-extends` to manage extension relationships, including circular dependency checks.
-  - **System Integration**: Updated all relevant parts of the codebase (e.g., completion, field editing, views) to recognize and utilize extended fields.
+  - *Tag Extension*: Tags can now extend other tags, automatically inheriting their field definitions. Child tag fields override parent fields.
 
 * [4.1.0] - 2025-07-26
 ** Improvements

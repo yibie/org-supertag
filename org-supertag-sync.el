@@ -1,25 +1,32 @@
-;;; org-supertag-sync.el --- Synchronization layer for org-supertag -*- lexical-binding: t; -*-
+;;; org-supertag-sync.el --- File synchronization for org-supertag -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Provides synchronization functionality for org-supertag
+;; Provides file synchronization functionality for org-supertag:
+;; - File state tracking using modification time
+;; - Node change detection using hash values
+;; - Automatic synchronization
+;; - Conflict detection
+;; - State persistence
+;; - Error recovery
+
+;; Configuration auto sync directories in init.el
+;; (setq org-supertag-sync-auto-interval 300)
+
+;; Configuration sync files scope in init.el
+;; (setq org-supertag-sync-directories
+;;       '("~/org/work"
+;;         "~/org/projects"))
 ;;
-;; Core Features:
-;; - File monitoring and change detection
-;; - Automatic synchronization of modified files
-;; - State management for sync operations
-;; - Background sync with configurable intervals
-;; - Zombie node cleanup
-;;
-;; Usage:
-;; 1. Initialize: (org-supertag-sync-init)
-;; 2. Start auto-sync: (org-supertag-sync-start-auto-sync)
-;; 3. Stop auto-sync: (org-supertag-sync-stop-auto-sync)
-;; 4. Manual sync: (org-supertag-sync-file file-path)
-;;
-;; Configuration:
-;; - org-supertag-sync-auto-interval: Auto-sync interval in seconds
-;; - org-supertag-sync-directories: Directories to monitor
-;; - org-supertag-sync-node-creation-level: Minimum heading level for node creation
+;; If you want to exclude some directories in sync, you can set it like this:
+;; (setq org-supertag-sync-exclude-directories
+;;       '("~/org/work/archive"
+;;         "~/org/projects/temp"))
+
+;; Or use command to add
+;; (org-supertag-sync-add-directory "~/org/personal")
+
+;; View current configuration
+;; (org-supertag-sync-list-directories)
 
 ;;; Code:
 
@@ -27,63 +34,8 @@
 (require 'org-element)
 (require 'org-supertag-db)
 (require 'cl-lib)
-(require 'ht)
-(require 'f)
 
-;;------------------------------------------------------------------------------
-;; Cache Management
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-sync--clear-org-element-cache ()
-  "Clear org-element cache to prevent emergency exit errors.
-This function safely clears various org-element cache mechanisms."
-  (let ((org-element-use-cache nil)
-        (org-startup-folded nil)
-        (org-startup-with-inline-images nil)
-        (org-startup-with-latex-preview nil)
-        (org-hide-emphasis-markers nil))
-    ;; Clear org-element cache if available
-    (when (fboundp 'org-element-cache-reset)
-      (condition-case err
-          (org-element-cache-reset)
-        (error (message "[org-supertag] Error clearing org-element cache: %s" (error-message-string err)))))
-    
-    ;; Clear buffer-specific cache if available
-    (when (fboundp 'org-element-cache-clear)
-      (condition-case err
-          (org-element-cache-clear)
-        (error (message "[org-supertag] Error clearing buffer cache: %s" (error-message-string err)))))
-    
-    ;; Clear any other cache mechanisms that might exist
-    (when (fboundp 'org-element-cache-reset)
-      (condition-case err
-          (org-element-cache-reset)
-        (error (message "[org-supertag] Error in secondary cache reset: %s" (error-message-string err)))))))
-
-(defun org-supertag-sync--safe-org-operation (operation &optional retry-count)
-  "Safely execute an org operation with cache protection.
-OPERATION is a function to execute.
-RETRY-COUNT is the number of retries (default 1)."
-  (let ((retry-count (or retry-count 1))
-        (attempt 0))
-    (while (<= attempt retry-count)
-      (condition-case err
-          (progn
-            (org-supertag-sync--clear-org-element-cache)
-            (funcall operation)
-            (cl-return t)) ; Success, exit loop
-        (error 
-         (cl-incf attempt)
-         (if (<= attempt retry-count)
-             (message "[org-supertag] Operation failed (attempt %d/%d): %s" 
-                      attempt (1+ retry-count) (error-message-string err))
-           (message "[org-supertag] Operation failed after %d attempts: %s" 
-                    (1+ retry-count) (error-message-string err))
-           (cl-return nil)))))))
-
-;;------------------------------------------------------------------------------
-;; Configuration
-;;------------------------------------------------------------------------------
+;;; Customization
 
 (defgroup org-supertag-sync nil
   "Synchronization settings for org-supertag."
@@ -188,45 +140,34 @@ If no directories are configured, returns t for all org files."
   "Scan sync directories for org files.
 If ALL-FILES-P is non-nil, return all files in scope.
 Otherwise, returns a list of new files that are not yet in sync state."
-  (let ((files nil)
-        (total-scanned 0))
+  (let ((files nil))
     (dolist (dir org-supertag-sync-directories)
       (when (file-exists-p dir)
         (let ((dir-files (directory-files-recursively
                          dir org-supertag-sync-file-pattern t)))
-          (message "[org-supertag] Scanning directory: %s (found %d files)" 
-                   dir (length dir-files))
           (dolist (file dir-files)
-            (cl-incf total-scanned)
-            (let ((normalized-file (expand-file-name file)))
-              (when (and (file-regular-p normalized-file)
-                         (org-supertag-sync--in-sync-scope-p normalized-file)
-                         (or all-files-p
-                             (not (gethash normalized-file org-supertag-sync--state))))
-                (push normalized-file files))))))
-    (message "[org-supertag] Scan complete: %d total files scanned, %d files added to sync" 
-             total-scanned (length files))
-    files)))
+            (when (and (file-regular-p file)
+                       (org-supertag-sync--in-sync-scope-p file)
+                       (or all-files-p
+                           (not (gethash file org-supertag-sync--state))))
+              (push file files))))))
+    files))
 
 (defun org-supertag-sync-update-state (file)
-  "Update sync state for FILE.
-Ensures file path is normalized to prevent duplicates."
-  (when (and file (file-exists-p file))
-    (let ((expanded-file (expand-file-name file)))
-      (puthash expanded-file
-               (file-attribute-modification-time 
-                (file-attributes expanded-file))
-               org-supertag-sync--state)
-      (message "[org-supertag] Updated sync state for: %s" expanded-file))))
+  "Update sync state for FILE."
+  (when (file-exists-p file)
+    (puthash file
+             (file-attribute-modification-time 
+              (file-attributes file))
+             org-supertag-sync--state)))
 
 (defun org-supertag-sync-check-state (file)
   "Check if FILE needs synchronization.
 Returns t if file has been modified since last sync."
-  (when-let* ((expanded-file (expand-file-name file))
-              (state (gethash expanded-file org-supertag-sync--state))
+  (when-let* ((state (gethash file org-supertag-sync--state))
               (last-sync state)
               (mtime (file-attribute-modification-time
-                     (file-attributes expanded-file))))
+                     (file-attributes file))))
     (time-less-p last-sync mtime)))
 
 (defun org-supertag-get-modified-files ()
@@ -245,12 +186,9 @@ Returns files that have been modified since last sync."
 ;;; Core Functions - Node Hash Support
 
 (defun org-supertag-node-hash (node)
-  "Calculate unified hash value for NODE.
-Includes all important node information: title, content, tags, fields, and properties.
-This hash detects any change in the node's content or structure."
-  (let* ((title (or (plist-get node :title) ""))
-         (content (or (plist-get node :content) ""))
-         (raw-value (or (plist-get node :raw-value) ""))
+  "Calculate hash value for NODE.
+Only includes stable properties, excludes position information."
+  (let* ((raw-value (or (plist-get node :raw-value) ""))
          (tags (let ((tag-list (plist-get node :tags)))
                  (if (listp tag-list)
                      (mapconcat 'identity (sort (copy-sequence tag-list) 'string<) "|")
@@ -279,14 +217,23 @@ This hash detects any change in the node's content or structure."
                                         "|"))
                          ""))))
     (secure-hash 'sha1
-                 (format "%s|%s|%s|%s|%s|%s|%s"
-                        title content raw-value tags todo-type priority properties))))
+                 (format "%s|%s|%s|%s|%s"
+                        raw-value tags todo-type priority properties))))
 
-;; 使用 org-supertag-node.el 中的统一哈希计算函数
+(defun org-supertag-node-content-hash (node)
+  "Calculate hash value for NODE's content.
+This is optional and only used when content checking is enabled."
+  (when org-supertag-sync-check-contents
+    (when-let* ((beg (plist-get node :contents-begin))
+                (end (plist-get node :contents-end))
+                (content (buffer-substring-no-properties beg end)))
+      (secure-hash 'sha1 content))))
 
 (defun org-supertag-db-add-with-hash (id props)
-  "Add node with ID and PROPS to database, including unified hash value."
+  "Add node with ID and PROPS to database, including hash value."
   (let ((node-hash (org-supertag-node-hash props)))
+    (when-let ((content-hash (org-supertag-node-content-hash props)))
+      (setq props (plist-put props :content-hash content-hash)))
     (org-supertag-db-add id 
                          (plist-put (plist-put props :type :node)
                                   :hash node-hash))))
@@ -298,7 +245,13 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
                       (org-supertag-node-hash old-node)))
         (new-hash (or (plist-get new-node :hash)
                       (org-supertag-node-hash new-node))))
-    (not (string= old-hash new-hash))))
+    (or (not (string= old-hash new-hash))
+        (when org-supertag-sync-check-contents
+          (let ((old-content-hash (or (plist-get old-node :content-hash)
+                                     (org-supertag-node-content-hash old-node)))
+                (new-content-hash (org-supertag-node-content-hash new-node)))
+            (and old-content-hash new-content-hash
+                 (not (string= old-content-hash new-content-hash))))))))
 
 (defun org-supertag-sync--normalize-properties (props)
   "Normalize property list PROPS for consistent comparison.
@@ -371,27 +324,26 @@ Uses a three-pass approach:
            (deleted 0)
            (moved 0))
       
-      ;; First pass: scan buffer and collect nodes using safe operation
+      ;; First pass: scan buffer and collect nodes
       (save-restriction
         (widen)
         (goto-char (point-min))
-        (org-supertag-sync--safe-org-operation
-         (lambda ()
-           (let ((org-element-use-cache nil)
-                 (org-startup-folded nil)
-                 (org-startup-with-inline-images nil)
-                 (org-startup-with-latex-preview nil)
-                 (org-hide-emphasis-markers nil))
-             (org-map-entries
-              (lambda ()
-                (let ((id (org-id-get)))
-                  (when (and id (>= (org-current-level) org-supertag-sync-node-creation-level))
-                    (condition-case err
-                        (when-let* ((props (org-supertag-db-parse-node-properties)))
-                          (puthash id props current-nodes))
-                      (error (message "Error extracting properties for node %s: %s" id (error-message-string err)))))))
-              t nil)))
-         2)) ; Retry up to 2 times
+        (let ((org-element-use-cache nil)
+              (org-startup-folded nil)
+              (org-startup-with-inline-images nil)
+              (org-startup-with-latex-preview nil)
+              (org-hide-emphasis-markers nil))
+          (condition-case err
+              (org-map-entries
+               (lambda ()
+                 (let ((id (org-id-get)))
+                   (when (and id (>= (org-current-level) org-supertag-sync-node-creation-level))
+                     (condition-case err2
+                         (when-let* ((props (org-supertag-db-parse-node-properties)))
+                           (puthash id props current-nodes))
+                       (error (message "Error extracting properties for node %s: %s" id (error-message-string err2)))))))
+               t nil)
+            (error (message "Error scanning buffer: %s" (error-message-string err))))))
       
       ;; Second pass: process updates, creations, and moves
       ;; Fixed maphash call to ensure proper syntax
@@ -413,7 +365,9 @@ Uses a three-pass approach:
                    ;; Increment counters
                    (cond (is-moved (cl-incf moved))
                          (t (cl-incf updated))))
-               (error (message "Error processing node %s: %s" id (error-message-string err)))))))
+               (error (message "Error processing node %s: %s" id (error-message-string err)))))
+           ;; Add delay between node processing
+           (sit-for 0.01)))
        current-nodes)
       
       ;; Third pass: check for deletions
@@ -426,7 +380,9 @@ Uses a three-pass approach:
                (progn
                  (org-supertag-db-remove-object id)
                  (cl-incf deleted))
-             (error (message "Error removing node %s: %s" id (error-message-string err))))))
+             (error (message "Error removing node %s: %s" id (error-message-string err))))
+           ;; Add delay between deletion processing
+           (sit-for 0.01)))
        org-supertag-db--object)
       
       ;; Report changes
@@ -693,7 +649,9 @@ If the node ID does not exist in the corresponding file, automatically delete th
                          file-path (length nodes))
                  (dolist (node-entry nodes)
                    (let ((node-id (car node-entry)))
-                     (push (cons node-id file-path) zombie-nodes)))))
+                     (push (cons node-id file-path) zombie-nodes))))
+               ;; Add delay between file checking
+               (sit-for 0.01))
              all-files)
     
     ;; Directly delete zombie nodes
@@ -704,7 +662,9 @@ If the node ID does not exist in the corresponding file, automatically delete th
               (file-path (cdr zombie)))
           (message "Removing zombie node %s from %s" node-id file-path)
           (org-supertag-db-remove-object node-id)
-          (cl-incf cleaned-count))))
+          (cl-incf cleaned-count))
+        ;; Add delay between zombie node deletion
+        (sit-for 0.01)))
     
     (message "Zombie node cleanup completed: checked %d files, %d total nodes, cleaned %d zombie nodes" 
              checked-files total-nodes cleaned-count)
@@ -755,11 +715,11 @@ Returns number of cleaned nodes."
       (dolist (node-id zombie-nodes)
         (message "Removing zombie node: %s" node-id)
         (org-supertag-db-remove-object node-id)
-        (cl-incf count))
-      
+        (cl-incf count)
+        ;; Add delay between zombie node deletion
+        (sit-for 0.01))
       (when (> count 0)
         (message "Cleaned up %d zombie nodes from file: %s" count file-path))))
-    
     count)
 
 ;;-------------------------------------------------------------------
@@ -777,7 +737,9 @@ Returns the number of cleaned nodes."
                               (not (org-supertag-sync--check-node-exists-in-file id file)))
                      (message "[org-supertag] Removing zombie node %s from %s" id file)
                      (org-supertag-db-remove-object id)
-                     (cl-incf cleaned-count)))
+                     (cl-incf cleaned-count)
+                     ;; Add delay between zombie node removal
+                     (sit-for 0.01)))
                  org-supertag-db--object))
     cleaned-count)))
 
@@ -852,73 +814,46 @@ This is the main sync function called periodically."
                          (file-attribute-modification-time attr-a)
                          (file-attribute-modification-time attr-b)))))))
       
-      ;; Process files with enhanced error handling
+      ;; Process files without error catching
       (dolist (file modified-files)
         (message "Syncing file: %s" file)
-        (condition-case err
-            ;; Use safe org operation for file processing
-            (org-supertag-sync--safe-org-operation
-             (lambda ()
-               (let ((org-element-use-cache nil)
-                     (org-startup-folded nil)
-                     (org-startup-with-inline-images nil)
-                     (org-startup-with-latex-preview nil)
-                     (org-hide-emphasis-markers nil))
-                 
-                 (with-current-buffer (find-file-noselect file)
-                   (let ((before-nodes (hash-table-count old-nodes)))
-                     ;; Update database with additional error handling
-                     (condition-case db-err
-                         (org-supertag-db-update-buffer)
-                       (error 
-                        (message "[org-supertag] Error updating database for %s: %s" 
-                                 file (error-message-string db-err))
-                        ;; Try to recover by clearing cache and retrying once
-                        (org-supertag-sync--clear-org-element-cache)
-                        (condition-case retry-err
-                            (org-supertag-db-update-buffer)
-                          (error 
-                           (message "[org-supertag] Retry failed for %s: %s" 
-                                    file (error-message-string retry-err))))))
-                     
-                     ;; Count changes
-                     ;; Fixed maphash call to ensure proper syntax
-                     (maphash
-                      (lambda (id node)
-                        (let ((old-node (gethash id old-nodes)))
-                          (cond
-                           ;; Node moved
-                           ((and old-node
-                                 (not (string= (plist-get old-node :file-path)
-                                             (plist-get node :file-path))))
-                            (cl-incf nodes-moved))
-                           ;; New node
-                           ((null old-node)
-                            (cl-incf nodes-created)))))
-                      org-supertag-db--object)
-                     
-                     ;; Count deleted nodes
-                     (let ((deleted-in-file (- before-nodes
-                                             (hash-table-count old-nodes))))
-                       (setq nodes-deleted (+ nodes-deleted deleted-in-file)))
-                     
-                     (org-supertag-sync-update-state file)
-                     (cl-incf updated)))))
-             2) ; Retry up to 2 times
-            (error 
-             (message "[org-supertag] Error processing file %s: %s" 
-                      file (error-message-string err))
-             ;; Continue with next file instead of stopping
-             nil))))
+        (with-current-buffer (find-file-noselect file)
+          (let ((before-nodes (hash-table-count old-nodes)))
+            ;; Update database
+            (org-supertag-db-update-buffer)
+            ;; Count changes
+            ;; Fixed maphash call to ensure proper syntax
+            (maphash
+             (lambda (id node)
+               (let ((old-node (gethash id old-nodes)))
+                 (cond
+                  ;; Node moved
+                  ((and old-node
+                        (not (string= (plist-get old-node :file-path)
+                                    (plist-get node :file-path))))
+                   (cl-incf nodes-moved))
+                  ;; New node
+                  ((null old-node)
+                   (cl-incf nodes-created)))))
+             org-supertag-db--object)
+            ;; Count deleted nodes
+            (let ((deleted-in-file (- before-nodes
+                                    (hash-table-count old-nodes))))
+              (setq nodes-deleted (+ nodes-deleted deleted-in-file)))
+            (org-supertag-sync-update-state file)
+            (cl-incf updated))
+          ;; Add delay between file processing
+          (sit-for 0.01))
     
-    ;; Clean up zombie nodes if any files were processed
-    (if modified-files
-        (progn
-          (let ((cleaned-nodes (org-supertag-sync--auto-cleanup-zombie-nodes modified-files)))
-            (if (and cleaned-nodes (> cleaned-nodes 0))
-                (progn
-                  (message "[org-supertag] Cleaned up %d zombie nodes" cleaned-nodes))))))
-    (message "[org-supertag] Node Sync Completed")))
+    ;; Cleanup zombie nodes after processing modified files
+    (when modified-files
+     ;; (message "[org-supertag] Checking for zombie nodes in modified files...")
+      (let ((cleaned-nodes (org-supertag-sync--auto-cleanup-zombie-nodes modified-files)))
+        (when (and cleaned-nodes (> cleaned-nodes 0))
+          (message "[org-supertag] Cleaned up %d zombie nodes" cleaned-nodes))))
+    
+    ;; Report results
+    (message "[org-supertag] Node Sync Completed")))))
 
 (defun org-supertag-sync-start-auto-sync (&optional interval)
   "Start automatic synchronization with INTERVAL seconds.
@@ -1050,48 +985,23 @@ If INTERVAL is nil, use `org-supertag-sync-auto-interval'."
 
       ;; Phase 3: Add all nodes, create tags and node-tag links.
       (message "Phase 3/4: Rebuilding nodes and node-tag links...")
-      (let ((nodes-processed 0)
-            (tags-created 0)
-            (links-created 0)
-            (errors '()))
-        (maphash
-         (lambda (id props)
-           (cl-incf nodes-processed)
-           ;; 1. Add the node object itself with its hash.
-           (condition-case err
-               (org-supertag-db-add-with-hash id props)
-             (error
-              (push (format "Failed to add node %s: %s" id (error-message-string err)) errors)))
-           
-           ;; 2. Process and register all tags found in the headline.
-           (when-let ((headline-tags (plist-get props :tags)))
-             (dolist (tag-name headline-tags)
-               ;; Defensively skip empty tag names that may result from parsing errors.
-               (unless (or (null tag-name) (string-empty-p tag-name))
-                 (let ((sanitized-tag (org-supertag-sanitize-tag-name tag-name)))
-                   ;; Ensure tag object exists (non-destructive)
-                   ;; Only create tag if it does not exist.
-                   (unless (org-supertag-tag-get sanitized-tag)
-                     (condition-case err
-                         (progn
-                           (org-supertag-tag--create sanitized-tag)
-                           (cl-incf tags-created))
-                       (error
-                        (push (format "Failed to create tag %s: %s" sanitized-tag (error-message-string err)) errors))))
-                   
-                   ;; Ensure link exists
-                   (condition-case err
-                       (progn
-                         (org-supertag-db-link :node-tag id sanitized-tag)
-                         (cl-incf links-created))
-                     (error
-                      (push (format "Failed to create link %s->%s: %s" id sanitized-tag (error-message-string err)) errors)))))))
-         all-nodes-props)
-        
-        (message "Phase 3 completed: %d nodes, %d tags created, %d links created"
-                 nodes-processed tags-created links-created)
-        (when errors
-          (message "Errors during Phase 3: %s" (string-join errors "\n")))))
+      (maphash
+       (lambda (id props)
+         ;; 1. Add the node object itself with its hash.
+         (org-supertag-db-add-with-hash id props)
+         ;; 2. Process and register all tags found in the headline.
+         (when-let ((headline-tags (plist-get props :tags)))
+           (dolist (tag-name headline-tags)
+             ;; Defensively skip empty tag names that may result from parsing errors.
+             (unless (or (null tag-name) (string-empty-p tag-name))
+               (let ((sanitized-tag (org-supertag-sanitize-tag-name tag-name)))
+                 ;; Ensure tag object exists (non-destructive)
+                 ;; Only create tag if it does not exist.
+                 (unless (org-supertag-tag-get sanitized-tag)
+                   (org-supertag-tag--create sanitized-tag))
+                 ;; Ensure link exists
+                 (org-supertag-db-link :node-tag id sanitized-tag))))))
+       all-nodes-props)
 
       ;; Phase 4: Reconcile all node-to-node references.
       (message "Phase 4/4: Reconciling node-to-node references...")
@@ -1226,7 +1136,7 @@ handling additions, removals, and updating co-occurrence relations."
                    (length level-one-nodes)))))))
 
 ;;;###autoload
-(defun org-supertag-sync-cleanup-database-by-files-not-in-sync` ()
+(defun org-supertag-sync-cleanup-database ()
   "Manually clean up database by removing nodes from files not in sync state.
 This is useful when files have been removed from sync scope or deleted."
   (interactive)
@@ -1238,254 +1148,55 @@ This is useful when files have been removed from sync scope or deleted."
         (message "Database cleanup completed"))
     (message "Database not loaded or empty, no cleanup needed")))
 
-(defun org-supertag-sync-safe-update-hashes ()
-  "Update all node hashes safely, ensuring no data is lost.
-This function is specifically designed to fix hash value issues by only updating the hash values without modifying any other data.
-这个函数专门用于修复哈希值问题，只更新哈希值，不修改任何其他数据。"
+
+
+
+
+;;; Hash Stability Fix Functions
+
+(defun org-supertag-fix-missing-hashes ()
+  "Fix all nodes in database that don't have hash values.
+This should resolve the 'false positive updates' issue."
   (interactive)
-  
-  ;; Check if database is loaded
-  (unless (and (featurep 'org-supertag-db) 
-               (hash-table-p org-supertag-db--object))
-    (user-error "Database not loaded, please load org-supertag-db first"))
-  
-  (let ((total-nodes 0)
-        (updated-hash 0)
-        (errors 0)
-        (backup-data (make-hash-table :test 'equal)))
+  (let ((fixed-count 0)
+        (total-nodes 0))
     
-    (message "Starting safe update of all node hashes...")
-    (message "Note: This operation only updates hash values, no other data is modified")
-    
-    ;; First backup all node data
-    (message "Backing up node data...")
-    (maphash
-     (lambda (id node)
-       (when (eq (plist-get node :type) :node)
-         (puthash id (copy-sequence node) backup-data)))
-     org-supertag-db--object)
-    
-    (message "Backup completed, %d nodes backed up" (hash-table-count backup-data))
-    
-    ;; Iterate through all nodes in the database, only updating hash values
     (maphash
      (lambda (id node)
        (when (eq (plist-get node :type) :node)
          (cl-incf total-nodes)
-         (condition-case err
-             (let ((new-hash (org-supertag-node-hash node)))
-               ;; Only update hash values, preserving all other data
-               (let ((updated-node (plist-put (copy-sequence node) :hash new-hash)))
-                 ;; Use org-supertag-db-add to ensure proper update process
-                 (org-supertag-db-add id updated-node)
-                 (cl-incf updated-hash)))
-           (error
-            (message "Error updating node hash %s: %s" id (error-message-string err))
-            (cl-incf errors))))))
+         (unless (plist-get node :hash)
+           ;; Node doesn't have a hash, calculate and save it
+           (let ((node-hash (org-supertag-node-hash node)))
+             (org-supertag-db-add id 
+                                  (plist-put node :hash node-hash))
+             (cl-incf fixed-count)))))
      org-supertag-db--object)
     
-    ;; Verify data integrity
-    (message "Verifying data integrity...")
-    (let ((verification-errors 0))
+    (message "Fixed %d/%d nodes missing hash values" fixed-count total-nodes)
+    fixed-count))
+
+(defun org-supertag-normalize-all-hashes ()
+  "Recalculate all node hashes using the improved hash function.
+This ensures all nodes use the same hash calculation method."
+  (interactive)
+  (when (yes-or-no-p "This will recalculate all node hashes. Continue? ")
+    (let ((updated-count 0)
+          (total-nodes 0))
+      
       (maphash
        (lambda (id node)
          (when (eq (plist-get node :type) :node)
-           (let ((backup-node (gethash id backup-data)))
-             (when backup-node
-               ;; 检查关键字段是否保持不变
-               (let ((original-title (plist-get backup-node :title))
-                     (current-title (plist-get node :title))
-                     (original-content (plist-get backup-node :content))
-                     (current-content (plist-get node :content)))
-                 (when (or (not (equal original-title current-title))
-                           (not (equal original-content current-content)))
-                   (message "Warning: Data for node %s may have changed" id)
-                   (cl-incf verification-errors)))))))
+           (cl-incf total-nodes)
+           (let ((new-hash (org-supertag-node-hash node)))
+             ;; Always update with new hash to ensure consistency
+             (org-supertag-db-add id 
+                                  (plist-put node :hash new-hash))
+             (cl-incf updated-count)))))
        org-supertag-db--object)
-      
-      (when (> verification-errors 0)
-        (message "Warning: %d data integrity issues found" verification-errors)))
     
-    ;; Save database
-    (when (> updated-hash 0)
-      (message "Saving database changes...")
-      (org-supertag-db-save))
-    
-    (message "Hash update completed:")
-    (message "  Total nodes: %d" total-nodes)
-    (message "  Updated hash: %d" updated-hash)
-    (message "  Errors: %d" errors)
-    (message "  Note: All field and link data is preserved")
-    (message "  Backup data saved, can be restored if needed")
-    
-    updated-hash)
-
-(defun org-supertag-sync-check-hash-status ()
-  "Check the hash status of nodes in the database."
-  (interactive)
-  
-  ;; Check if database is loaded
-  (unless (and (featurep 'org-supertag-db) 
-               (hash-table-p org-supertag-db--object))
-    (user-error "Database not loaded, please load org-supertag-db first"))
-  
-  (let ((total-nodes 0)
-        (with-hash 0)
-        (missing-hash 0))
-    
-    (maphash
-     (lambda (id node)
-       (when (eq (plist-get node :type) :node)
-         (cl-incf total-nodes)
-         
-         (if (plist-get node :hash)
-             (cl-incf with-hash)
-           (cl-incf missing-hash))))
-     org-supertag-db--object)
-    
-    (message "=== Hash Status Report ===")
-    (message "Total nodes: %d" total-nodes)
-    (message "Hash: %d present, %d missing (%.1f%%)" 
-             with-hash missing-hash 
-             (* 100.0 (/ (float with-hash) total-nodes)))
-    
-    (when (> missing-hash 0)
-      (message "建议运行: M-x org-supertag-sync-recalculate-missing-hashes"
-               ))
-    
-    (list :total total-nodes
-          :with-hash with-hash
-          :missing-hash missing-hash)))
-
-;;------------------------------------------------------------------------------
-;; User Commands
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-sync-clear-cache ()
-  "Clear org-element cache to resolve emergency exit errors.
-This command can be used when encountering org-element cache issues."
-  (interactive)
-  (org-supertag-sync--clear-org-element-cache)
-  (message "[org-supertag] Cache cleared successfully"))
-
-(defun org-supertag-sync-reset-and-sync ()
-  "Reset org-element cache and perform a full sync.
-This is useful when experiencing persistent cache-related errors."
-  (interactive)
-  (org-supertag-sync--clear-org-element-cache)
-  (org-supertag-sync-force-rescan)
-  (message "[org-supertag] Cache reset and full sync completed"))
-
-;;------------------------------------------------------------------------------
-;; Debugging and Diagnostics
-;;------------------------------------------------------------------------------
-
-(defun org-supertag-sync-diagnose-state ()
-  "Diagnose sync state issues and provide detailed information."
-  (interactive)
-  (message "=== org-supertag Sync State Diagnosis ===")
-  
-  ;; Check sync directories
-  (message "Sync directories: %S" org-supertag-sync-directories)
-  
-  ;; Check sync state
-  (let ((state-count (hash-table-count org-supertag-sync--state)))
-    (message "Files in sync state: %d" state-count))
-  
-  ;; Scan directories and compare
-  (let ((scanned-files (org-supertag-scan-sync-directories t))
-        (scanned-count (length scanned-files)))
-    (message "Files found by scanning: %d" scanned-count))
-  
-  ;; Check database files
-  (let ((db-files (make-hash-table :test 'equal))
-        (db-count 0))
-    (maphash (lambda (id node)
-               (when (eq (plist-get node :type) :node)
-                 (let ((file (plist-get node :file-path)))
-                   (when file
-                     (let ((normalized (expand-file-name file)))
-                       (puthash normalized t db-files)
-                       (cl-incf db-count))))))
-             org-supertag-db--object)
-    (message "Files in database: %d" db-count))
-  
-  ;; Check for files in sync state but not in scope
-  (let ((out-of-scope 0))
-    (maphash (lambda (file _state)
-               (unless (org-supertag-sync--in-sync-scope-p file)
-                 (cl-incf out-of-scope)))
-             org-supertag-sync--state)
-    (when (> out-of-scope 0)
-      (message "Files in sync state but out of scope: %d" out-of-scope)))
-  
-  ;; Check for non-existent files in sync state
-  (let ((non-existent 0))
-    (maphash (lambda (file _state)
-               (unless (file-exists-p file)
-                 (cl-incf non-existent)))
-             org-supertag-sync--state)
-    (when (> non-existent 0)
-      (message "Non-existent files in sync state: %d" non-existent)))
-  
-  (message "=== Diagnosis Complete ==="))
-
-(defun org-supertag-sync-cleanup-state ()
-  "Clean up sync state by removing invalid entries."
-  (interactive)
-  (message "=== Cleaning up sync state ===")
-  
-  (let ((removed-count 0))
-    (maphash (lambda (file _state)
-               (when (or (not (file-exists-p file))
-                         (not (org-supertag-sync--in-sync-scope-p file)))
-                 (remhash file org-supertag-sync--state)
-                 (cl-incf removed-count)))
-             org-supertag-sync--state)
-    
-    (message "Removed %d invalid entries from sync state" removed-count)
-    (org-supertag-sync-save-state)
-    (message "Sync state cleaned up and saved")))
-
-(defun org-supertag-sync-cleanup-duplicate-paths ()
-  "Clean up duplicate file paths in sync state by normalizing all paths.
-This function consolidates entries that refer to the same file but with different path representations."
-  (interactive)
-  (message "=== Cleaning up duplicate file paths ===")
-  
-  (let ((path-mapping (make-hash-table :test 'equal))
-        (duplicates-removed 0)
-        (total-entries 0))
-    
-    ;; First pass: collect all entries and their normalized paths
-    (maphash (lambda (file state)
-               (cl-incf total-entries)
-               (let ((normalized (expand-file-name file)))
-                 (if (gethash normalized path-mapping)
-                     ;; This is a duplicate
-                     (cl-incf duplicates-removed)
-                   ;; This is the first occurrence of this normalized path
-                   (puthash normalized (cons file state) path-mapping))))
-             org-supertag-sync--state)
-    
-    ;; Second pass: rebuild sync state with normalized paths
-    (setq org-supertag-sync--state (make-hash-table :test 'equal))
-    (maphash (lambda (normalized-path file-state-pair)
-               (puthash normalized-path (cdr file-state-pair) org-supertag-sync--state))
-             path-mapping)
-    
-    (message "Cleaned up %d duplicate entries out of %d total entries" 
-             duplicates-removed total-entries)
-    (message "Sync state now has %d unique files" (hash-table-count org-supertag-sync--state))
-    
-    ;; Save the cleaned state
-    (org-supertag-sync-save-state)
-    (message "Cleaned sync state saved")))
-
-
-;;------------------------------------------------------------------------------
-;; Provide
-;;------------------------------------------------------------------------------
+    (message "Normalized hashes for %d nodes" updated-count)
+    updated-count))
 
 (provide 'org-supertag-sync)
 
