@@ -70,7 +70,7 @@ PROPS: Additional properties including:
   (let ((sanitized-name (org-supertag-sanitize-tag-name tag-name)))
     ;; If the tag already exists, do NOT overwrite it. Simply return its ID.
     (when (org-supertag-tag-get sanitized-name)
-      (return sanitized-name))
+      (cl-return-from org-supertag-tag-create sanitized-name))
 
     ;; Tag does not exist yet – proceed with normal creation logic.
     (let* ((parsed-name (org-supertag-tag--parse-name sanitized-name))

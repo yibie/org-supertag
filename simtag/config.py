@@ -59,6 +59,12 @@ class Config(BaseSettings):
     dynamic_config_file_path: str = "" # Will be set in __init__
     user_roles_file_path: str = "" # Will be set in __init__
 
+    # --- Runtime configuration fields ---
+    llm_client_config: Dict[str, Any] = Field(default_factory=dict)
+    multicore_config: Dict[str, Any] = Field(default_factory=dict)
+    embedding_config: Dict[str, Any] = Field(default_factory=dict)
+    debug: bool = False
+
     rag_graph_depth: int = 2
     
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -191,10 +197,6 @@ class Config(BaseSettings):
         
         # Keep the rest of the logic for dynamic/env var loading
         self._dynamic_config_values: Dict[str, Any] = {}
-        self.llm_client_config: Dict[str, Any] = {}  # Initialize llm_client_config
-        self.multicore_config: Dict[str, Any] = {}  # Initialize multicore_config
-        self.embedding_config: Dict[str, Any] = {}  # Initialize embedding_config
-        self.debug: bool = False  # Initialize debug flag
         self._load_dynamic_config()
         self._load_user_roles()
 

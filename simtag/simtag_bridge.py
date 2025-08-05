@@ -74,7 +74,7 @@ class SimTagBridge:
         
         # 2. Initialize all application services via the global context
         # This must be done *before* registering methods that use these services.
-        context.initialize(port=self.port, emacs_client=None) # emacs_client can be set later if needed
+        context.initialize(port=self.port, emacs_client=None, data_directory=data_directory) # emacs_client can be set later if needed
         
         # 3. Register methods with the server
         self._register_methods()

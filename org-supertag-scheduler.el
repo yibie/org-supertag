@@ -150,7 +150,7 @@ This function should be called once when org-supertag initializes."
 Iterates through all registered tasks and runs them if their conditions are met.
 To prevent a 'thundering herd' on startup, it will only run ONE missed
 daily task per cycle, ensuring a smoother startup experience."
-  (message "[Scheduler-Debug] Master timer running check-tasks at %s" (format-time-string "%H:%M:%S"))
+  ;;(message "[Scheduler-Debug] Master timer running check-tasks at %s" (format-time-string "%H:%M:%S"))
   (let ((now (current-time))
         (daily-task-ran-p nil)) ; Flag to ensure only one daily task runs per cycle
     (maphash

@@ -24,12 +24,12 @@
 This function creates or updates the node-field link.
 If VALUE is a list, it will be serialized into a comma-separated string.
 If VALUE is nil or an empty string, the field is removed."
-  (message "DEBUG: set-value node-id=%S field-name=%S value=%S (type=%S)" node-id field-name value (type-of value))
+  ;;(message "DEBUG: set-value node-id=%S field-name=%S value=%S (type=%S)" node-id field-name value (type-of value))
   (let ((link-id (format ":node-field:%s->%s" node-id field-name))
         (final-value (if (listp value)
                          (mapconcat #'identity value ",")
                        value)))
-    (message "DEBUG: set-value final-value=%S (type=%S)" final-value (type-of final-value))
+    ;;(message "DEBUG: set-value final-value=%S (type=%S)" final-value (type-of final-value))
     (if (and final-value (not (string-empty-p final-value)))
         (let ((props (list :type :node-field
                            :from node-id
@@ -131,9 +131,9 @@ Return a list of ((display-name . type-symbol) ...)."
   "Get field type definition.
 TYPE is the type symbol.
 Return the type definition plist, containing :validator, :formatter, :reader and :description."
-  (message "Debug - Getting field type: %S" type)
+  ;;(message "Debug - Getting field type: %S" type)
   (let ((type-def (alist-get type org-supertag-field-types)))
-    (message "Debug - Field type definition: %S" type-def)
+    ;;(message "Debug - Field type definition: %S" type-def)
     type-def))
 
 
@@ -154,7 +154,7 @@ Return t if VALUE is nil or a non-empty string."
   "Format string VALUE.
 VALUE is the value to format.
 FIELD is the field definition."
-  (message "Debug - Formatting string value: %S" value)
+  ;;(message "Debug - Formatting string value: %S" value)
   (when value
     (string-trim value)))
 
@@ -164,7 +164,7 @@ VALUE can be either:
 - An org timestamp string (e.g. \"[2025-01-14 Tue]\" or \"<2025-01-14 Tue>\")
 - A time value from org-read-date
 - A standard date string (e.g. \"2025-01-14\")"
-  (message "Debug - Validating date value: %S" value)
+  ;;(message "Debug - Validating date value: %S" value)
   (condition-case err
       (cond
        ((and (stringp value)
@@ -186,7 +186,7 @@ VALUE can be either:
 - An org timestamp string (e.g. \"[2025-01-14 Tue]\" or \"<2025-01-14 Tue>\")
 - A time value from org-read-date
 - A standard date string (e.g. \"2025-01-14\")"
-  (message "Debug - Formatting date value: %S" value)
+  ;;(message "Debug - Formatting date value: %S" value)
   (condition-case err
       (cond
        ((and (stringp value)
@@ -299,7 +299,7 @@ VALUE can contain any characters except colons and whitespace."
 VALUE is the value to validate.
 FIELD-DEF is the optional field definition containing :options."
   (let ((options (when field-def (plist-get field-def :options))))
-    (message "Debug - Validating options: value=%S, options=%S" value options)
+    ;;(message "Debug - Validating options: value=%S, options=%S" value options)
     (cond
      ((null options) 
       (stringp value))
@@ -312,7 +312,7 @@ VALUE is the value to format.
 FIELD is the field definition.
 
 Returns a trimmed string if VALUE is a string, otherwise returns nil."
-  (message "Debug - Formatting options value: %S" value)
+  ;;(message "Debug - Formatting options value: %S" value)
   (when (and value (stringp value))  ; Only process if value is a non-nil string
     (string-trim value)))
 
@@ -327,7 +327,7 @@ VALUE can be a number or numeric string."
   "Format numeric value.
 VALUE can be a number or numeric string.
 FIELD is the field definition."
-  (message "Debug - Formatting number value: %S" value)
+  ;;(message "Debug - Formatting number value: %S" value)
   (when value
     (if (numberp value)
         (number-to-string value)
@@ -369,7 +369,7 @@ Only returns a value if explicitly specified in the field definition."
   (let ((field-type (plist-get field :type))
         (field-value (plist-get field :value))
         (field-default (plist-get field :default)))
-    (message "Getting initial value for field: %S" field)
+    ;;(message "Getting initial value for field: %S" field)
     (let ((initial-value
            (cond
             ;; If there's an explicit default value, use it
@@ -437,9 +437,9 @@ FIELD is the field definition."
   "Convert value to specified type.
 TYPE: Target type.
 VALUE: Value to convert."
-  (message "Debug - Converting value: type=%S, value=%S" type value)
+  ;;(message "Debug - Converting value: type=%S, value=%S" type value)
   (let ((type-spec (org-supertag-get-field-type type)))
-    (message "Debug - Type spec: %S" type-spec)
+    ;;(message "Debug - Type spec: %S" type-spec)
     (if (null value)
         (progn
           (message "Debug - Value is nil, returning nil")
@@ -524,11 +524,11 @@ VALUE: Value to convert."
          (tag-id (plist-get field-def :tag-id))
          (field-type (plist-get field-def :type))
          (raw-value (org-supertag-field-get-value node-id field-name tag-id)))
-    (message "DEBUG: get-value node-id=%S field-name=%S field-type=%S raw-value=%S (type=%S)"
+    ;;(message "DEBUG: get-value node-id=%S field-name=%S field-type=%S raw-value=%S (type=%S)"
              node-id field-name field-type raw-value (type-of raw-value))
     (if (and (eq field-type 'tag) raw-value (stringp raw-value))
         (let ((result (split-string raw-value "," t)))
-          (message "DEBUG: get-value split result: %S" result)
+          ;;(message "DEBUG: get-value split result: %S" result)
           result)
       raw-value)))
 
@@ -588,7 +588,7 @@ Handles single values, multiple values (for tags), and dynamic creation of new t
                   (setq valid-input-p t))
               (message "Invalid value. Please try again.")
               (sit-for 1))))))
-    (message "DEBUG: field-read-and-validate-value returning %S (type=%S)" validated-value (type-of validated-value))
+    ;;(message "DEBUG: field-read-and-validate-value returning %S (type=%S)" validated-value (type-of validated-value))
     validated-value))
 
 ;;----------------------------------------------------------------------
