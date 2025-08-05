@@ -2,6 +2,37 @@
 
 * TL;DR
 Org-supertag is a note-taking tool, an alternative to org-roam, based on org-mode but with a database for speed and query capabilities and support for inline #tags, views...and more.
+
+* Troubleshooting
+
+** Org-element Cache Emergency Exit Error
+
+If you encounter the error "org-element--cache: Emergency exit", this is a known issue with org-element cache corruption. org-supertag includes built-in protection against this error, but if you still encounter it, you can use these commands:
+
+#+begin_src emacs-lisp
+;; Clear org-element cache manually
+M-x org-supertag-sync-clear-cache
+
+;; Reset cache and perform full sync
+M-x org-supertag-sync-reset-and-sync
+#+end_src
+
+The package automatically includes:
+- Cache clearing before file operations
+- Retry mechanisms with cache reset
+- Enhanced error handling for org-element operations
+- Safe operation wrappers for critical functions
+
+** Other Common Issues
+
+- If sync operations seem stuck, try running ~M-x org-supertag-sync-reset-and-sync~
+- If you experience performance issues, consider increasing the sync interval: ~(setq org-supertag-sync-auto-interval 600)~
+- For database corruption issues, you can reset the database: ~M-x org-supertag-db-reset~
+- If you notice incorrect file counts in sync state, use the diagnostic commands:
+  - ~M-x org-supertag-sync-diagnose-state~ - Shows detailed sync state information
+  - ~M-x org-supertag-sync-cleanup-state~ - Removes invalid entries from sync state
+  - ~M-x org-supertag-sync-cleanup-duplicate-paths~ - Fixes duplicate file path entries
+
 * Introduction
 
 org-supertag is a package that enhances the tag functionality of org-mode. It allows tags not only to set properties for nodes, but also to directly operate on nodes, and can automatically execute certain behaviors based on time, providing a more flexible way to manage information.
@@ -158,10 +189,21 @@ Use `M-x org-supertag-insert-query-block` to quickly insert a pre-formatted quer
 - After launching the chat interface, directly enter keywords, and the LLM will reply based on the information returned by RAG
 - The default conversation is equivalent to a RAG retrieval result
   - Expanding Context shows the results returned by RAG
+- **Enhanced Command System**: Multiple ways to use commands:
+  - **Direct Command Selection**: `C-c /` to show command menu and select
+  - **Smart Slash**: `/` to insert slash and optionally show command menu
+  - **Command Help**: `C-c C-h` to see all available commands
+- **Intelligent Command Mode**: Commands can be executed immediately with parameters
+  - `/bs 微软` → switches to bs mode and immediately executes with "微软" as input
+  - Subsequent conversations remain in the selected mode until `/default`
 - Enter /commands to see what commands are available
   - Enter a command directly to enter the corresponding chat mode
 - Enter /define to customize chat modes
-  - Syntax: ~/define <command-name> "prompt"~
+  - **Multiple Formats Supported**: 
+    - `/define name "prompt content"`
+    - `/define name` (empty prompt)
+    - `/define "name" "prompt"` (both quoted)
+  - Syntax validation with helpful error messages
 
 * Advanced Usage of org-supertag
 ** Multiple Views, Multiple Usages
@@ -415,6 +457,7 @@ In org-supertag, the co-occurrence relationship of tags is reflected in the "vie
 * Changelog
 For details, see [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-07-31 4.5.0 released
 - 2025-07-30 4.4.0 released
 - 2025-07-29 4.3.0 released
 - 2025-07-27 4.2.0 released

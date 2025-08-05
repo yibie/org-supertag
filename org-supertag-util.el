@@ -115,6 +115,46 @@ Returns a new plist with the property removed."
       (setq plist (cddr plist)))
     (nreverse result)))
 
+;;------------------------------------------------------------------------------
+;; Org-element Error Handling
+;;------------------------------------------------------------------------------
+
+(defun org-supertag-safe-org-element-call (function &rest args)
+  "Safely call an org-element function with error handling.
+FUNCTION is the function to call, ARGS are the arguments.
+Returns the result of the function call, or nil if an error occurs."
+  (condition-case err
+      (apply function args)
+    (error 
+     (message "[org-supertag] Org-element error in %s: %s" 
+              (symbol-name function) (error-message-string err))
+     nil)))
+
+(defun org-supertag-safe-org-in-src-block-p (&optional pos)
+  "Safely check if point is in a source block.
+POS is the position to check (defaults to point).
+Returns t if in source block, nil otherwise."
+  (org-supertag-safe-org-element-call 'org-in-src-block-p pos))
+
+(defun org-supertag-safe-org-at-table-p ()
+  "Safely check if point is at a table.
+Returns t if at table, nil otherwise."
+  (org-supertag-safe-org-element-call 'org-at-table-p))
+
+(defun org-supertag-safe-org-at-commented-p ()
+  "Safely check if point is at a commented line.
+Returns t if at commented line, nil otherwise."
+  (org-supertag-safe-org-element-call 'org-at-commented-p))
+
+(defun org-supertag-safe-org-element-at-point ()
+  "Safely get org-element at point.
+Returns the element or nil if an error occurs."
+  (org-supertag-safe-org-element-call 'org-element-at-point))
+
+;;------------------------------------------------------------------------------
+;; General Utilities
+;;------------------------------------------------------------------------------
+
 (provide 'org-supertag-util)
 
 ;;; org-supertag-util.el ends here 

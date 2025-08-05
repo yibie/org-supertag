@@ -7,6 +7,7 @@
 (require 'org-supertag-node)
 (require 'org-supertag-tag)
 (require 'org-supertag-relation nil t)
+(require 'org-supertag-util)
 (require 'seq)  ; For seq-remove function
 
 ;;;----------------------------------------------------------------------
@@ -57,9 +58,9 @@ such as with the auto-tagging system."
 ;; Compose font-lock keywords for highlighting inline tags
 (defvar org-supertag-inline-font-lock-keywords
   `((,(concat "#[" org-supertag-inline--valid-tag-chars "]+")
-     (0 (if (and (not (org-in-src-block-p))
-                 (not (org-at-table-p))
-                 (not (org-at-commented-p))
+     (0 (if (and (not (org-supertag-safe-org-in-src-block-p))
+                 (not (org-supertag-safe-org-at-table-p))
+                 (not (org-supertag-safe-org-at-commented-p))
                  (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
             'org-supertag-inline-face) t)))
   "Font-lock keywords for highlighting inline tags.")
@@ -545,7 +546,9 @@ This command handles both database relations and text insertion."
 
 (defun org-supertag-inline-delete-all ()
   "Interactively delete a tag definition and all its instances.
-This removes the tag from the database and from all org files."
+This removes the tag from the database and from all org files.
+WARNING: This function may cause org-mode element structure issues.
+Use org-supertag-safe-delete-all for safer deletion."
   (interactive)
   (let* ((all-tags (org-supertag-get-all-tags))
          (raw-input (completing-read "Delete tag permanently: " all-tags nil t))
@@ -557,17 +560,53 @@ This removes the tag from the database and from all org files."
         ;; 1. Delete from database (this is the function from org-supertag-tag.el)
         (org-supertag-tag--delete-at-all clean-tag)
         
-        ;; 2. Remove from all org buffers
-        (message "Removing inline tags from buffers...")
-        (let ((files (delete-dups (mapcar #'org-supertag-db-get-node-file nodes))))
+        ;; 2. Safely remove from all org buffers using the safe method
+        (message "Safely removing inline tags from buffers...")
+        (let ((files (delete-dups (mapcar #'org-supertag-db-get-node-file nodes)))
+              (total-deleted 0))
           (dolist (file files)
             (when (file-exists-p file)
               (with-current-buffer (find-file-noselect file)
                 (save-excursion
                   (goto-char (point-min))
-                  (while (re-search-forward (concat "#" (regexp-quote clean-tag)) nil t)
-                    (replace-match "")))))
-          (message "Completed buffer cleanup for tag '%s'." clean-tag)))))))
+                  (let ((deleted-count 0))
+                    ;; Use safer deletion method
+                    (while (re-search-forward (concat "#" (regexp-quote clean-tag)) nil t)
+                      (let ((start (match-beginning 0))
+                            (end (match-end 0)))
+                        ;; Only delete tags that are not in comments or code blocks
+                        (unless (or (org-supertag-safe-org-in-src-block-p start)
+                                   (save-excursion
+                                     (goto-char start)
+                                     (looking-at-p "^[ \t]*#\\+")))
+                          ;; Analyze context and delete more intelligently
+                          (let* ((prev-char (char-before start))
+                                 (next-char (char-after end))
+                                 (need-space-before (and prev-char
+                                                       (not (eq prev-char ?\s))
+                                                       (not (eq prev-char ?\t))
+                                                       (not (eq prev-char ?\n))))
+                                 (need-space-after (and next-char
+                                                      (not (eq next-char ?\s))
+                                                      (not (eq next-char ?\t))
+                                                      (not (eq next-char ?\n))
+                                                      (not (eq next-char ?\n))))
+                                 (delete-start start)
+                                 (delete-end end))
+                            ;; Extend deletion range to include surrounding spaces if needed
+                            (when need-space-before
+                              (setq delete-start (1- delete-start)))
+                            (when need-space-after
+                              (setq delete-end (1+ delete-end)))
+                            ;; Perform the deletion
+                            (delete-region delete-start delete-end)
+                            (setq deleted-count (1+ deleted-count))))))
+                    (when (> deleted-count 0)
+                      (save-buffer)
+                      (setq total-deleted (+ total-deleted deleted-count))
+                      (message "Deleted %d instances in %s" deleted-count file))))))
+          (message "Completed safe buffer cleanup for tag '%s'. Total deleted: %d" 
+                   clean-tag total-deleted)))))))
 
 (defun org-supertag-inline-rename ()
   "Interactively rename a tag across all files."
@@ -589,11 +628,23 @@ This removes the tag from the database and from all org files."
             (with-current-buffer (find-file-noselect file)
               (save-excursion
                 (goto-char (point-min))
-                (while (re-search-forward (concat "#" (regexp-quote old-name)) nil t)
-                  (replace-match (concat "#" new-name))))
-              (save-buffer))))
+                (let ((renamed-count 0))
+                  (while (re-search-forward (concat "#" (regexp-quote old-name)) nil t)
+                    (let ((start (match-beginning 0))
+                          (end (match-end 0)))
+                      ;; Only rename tags that are not in comments or code blocks
+                      (unless (or (org-supertag-safe-org-in-src-block-p start)
+                                 (save-excursion
+                                   (goto-char start)
+                                   (looking-at-p "^[ \t]*#\\+")))
+                        (replace-match (concat "#" new-name))
+                        (setq renamed-count (1+ renamed-count)))))
+                  (when (> renamed-count 0)
+                    (save-buffer)
+                    (message "Renamed %d instances in %s" renamed-count file))))))
         (message "Finished renaming tag '%s' to '%s' in %d files."
-                 old-name new-name (length files))))))
+                 old-name new-name (length files)))))))
+
 (defalias 'org-supertag-tag-rename 'org-supertag-inline-rename)
 
 (defun org-supertag-inline-change-tag ()
@@ -616,6 +667,7 @@ This removes the tag from the database and from all org files."
         (org-supertag-inline-insert-tag target-tag-id)
         (message "Changed tag '%s' to '%s' on node %s."
                  source-tag target-tag-id node-id)))))
+
 (defalias 'org-supertag-tag-change-tag 'org-supertag-inline-change-tag)
 
 (defun org-supertag-debug-force-refontify ()

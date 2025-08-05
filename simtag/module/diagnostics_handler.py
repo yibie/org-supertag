@@ -49,7 +49,7 @@ class DiagnosticsHandler:
                 "server_running": True,
                 "config": {
                     "data_directory": self.config.data_directory,
-                    "db_path": self.config.db_path,
+                    "vector_db_path": self.config.vector_db_path,
                 }
             }
             return {"status": "success", "result": status}

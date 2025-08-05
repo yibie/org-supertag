@@ -156,10 +156,21 @@ org-supertag 现在支持通过 Org Babel 块进行强大的 S-expression 查询
 - 启动对话界面之后，直接输入关键字，LLM 将根据 RAG 返回的信息进行回复
 - 默认对话，相当于一个 RAG 检索结果
   - 展开 Context 里面是 RAG 所返回的结果
+- **增强的命令系统**：多种使用命令的方式：
+  - **直接命令选择**：`C-c /` 显示命令菜单并选择
+  - **智能斜杠**：`/` 插入斜杠并可选择显示命令菜单
+  - **命令帮助**：`C-c C-h` 查看所有可用命令
+- **智能命令模式**：命令可以带参数立即执行
+  - `/bs 微软` → 切换到 bs 模式并立即执行，将"微软"作为输入
+  - 后续对话保持在选定模式，直到使用 `/default` 切换
 - 输入 /commands 看当前有什么命令
   - 直接输入命令，将进入对应的对话模式
 - 输入 /define 可以自定义对话模式
-  - 语法：~/define <command-name> "prompt"~
+  - **支持多种格式**：
+    - `/define name "prompt content"`
+    - `/define name`（空提示）
+    - `/define "name" "prompt"`（双引号格式）
+  - 语法验证和有用的错误消息
 
 * org-supertag 的重要工作机制
 ** 标签的 Extend 机制
@@ -431,6 +442,7 @@ M-x org-supertag-recovery-full-suite
 * Changelog
 详细见 [[./CHANGELOG.org][CHANGELOG]]
 
+- 2025-07-31 4.5.0 released
 - 2025-07-30 4.4.0 released
 - 2025-07-29 4.3.0 released
 - 2025-07-27 4.2.0 released
