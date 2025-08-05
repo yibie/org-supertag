@@ -229,16 +229,20 @@ Returns node ID if successful, nil otherwise."
 ;; Hashing Functions
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-node-content-hash (node-id)
-  "Calculate a content-based MD5 hash for a given node-id.
+(defun org-supertag-node-content-hash (node-or-id)
+  "Calculate a content-based MD5 hash for a given node or node-id.
 This hash reflects changes in the node's title, content, tags, and field values.
-It excludes metadata like creation/modification times, file path, and position."
+It excludes metadata like creation/modification times, file path, and position.
+
+NODE-OR-ID can be either a node plist or a node-id string."
   (condition-case err
-      (let* ((node-props (org-supertag-db-get node-id))
+      (let* ((node-props (if (stringp node-or-id)
+                             (org-supertag-db-get node-or-id)
+                           node-or-id))
              (hash-string-parts '()))
 
         (unless node-props
-          (message "Warning: Node %s not found for content hash calculation." node-id)
+          (message "Warning: Node not found for content hash calculation.")
           (return-from org-supertag-node-content-hash nil))
 
         ;; 1. Include Title
@@ -255,7 +259,8 @@ It excludes metadata like creation/modification times, file path, and position."
 
         ;; 4. Include Field Values (sorted by field-name for consistent hash)
         ;;    We need to iterate through all node-field links for this node.
-        (let ((node-fields '()))
+        (let ((node-fields '())
+              (node-id (if (stringp node-or-id) node-or-id (plist-get node-props :id))))
           (cl-loop for link in (org-supertag-db-find-links :node-field node-id nil)
                    do (push (cons (plist-get link :to) (plist-get link :value)) node-fields))
           ;; Sort fields by name before concatenating
@@ -266,7 +271,7 @@ It excludes metadata like creation/modification times, file path, and position."
         ;; Combine all parts into a single string and calculate MD5 hash
         (md5 (mapconcat #'identity (sort hash-string-parts #'string<) "|")))
     (error
-     (message "Error calculating content hash for node %s: %s" node-id (error-message-string err))
+     (message "Error calculating content hash: %s" (error-message-string err))
      nil)))
 
 ;;------------------------------------------------------------------------------
@@ -472,10 +477,10 @@ Returns:
                     (unless (looking-at "\n")
                       (insert "\n"))
                     
-                    ;; 立即保存缓冲区，避免搜索未保存内容
+                    ;; Save buffer immediately
                     (save-buffer)
                     
-                    ;; 使用更可靠的方法查找和同步节点 - 避免直接搜索
+                    ;; Use more reliable method to find and sync node - avoid direct search
                     (message "[Move] Syncing inserted node...")
                     (widen)
                     (let ((marker (org-id-find-id-in-file node-id (buffer-file-name))))
@@ -484,15 +489,15 @@ Returns:
                             (goto-char (cdr marker))
                             (when (org-at-heading-p)
                               (message "[Move] Found heading at point %d" (point))
-                              ;; 确保可见
+                              ;; Ensure visibility
                               (org-show-context)
                               (org-show-subtree)
-                              ;; 同步节点
+                              ;; Sync node
                               (org-supertag-node-sync-at-point)
                               (message "[Move] Node move completed successfully")
                               t))
                         (message "[Move] Warning: Could not find ID in target file, but insertion completed")
-                        ;; 尝试返回到插入点并找到标题
+                        ;; Try to return to insert point and find heading
                         (goto-char insert-point)
                         (when (re-search-forward "^\\*+ " nil t)
                           (beginning-of-line)
@@ -501,11 +506,11 @@ Returns:
                             (org-id-get-create)
                             (org-supertag-node-sync-at-point)))
                         t)))))))
-          t)  ; 成功完成返回 t
+          t)  ; Return t if successful
       
       (error
        (message "[Move] Error during move: %s" (error-message-string err))
-       nil))))  ; 发生错误返回 nil
+       nil))))  ; Return nil if error occurs
 
 (defun org-supertag-delete-node-content (node-id)
   "Delete node content from source file. (Internal helper)
@@ -920,58 +925,38 @@ filename / outline-path / title"
       (message "No matching node found"))))
 
 ;;;###autoload
-(defun org-supertag-node-back-to-heading ()
-  "Remove current node from database but keep it as a regular Org heading.
-This function will:
-1. Remove the node from the database
-2. Clean up all tag associations
-3. Clean up all field associations  
-4. Clean up all reference relationships
-5. Keep the Org heading and ID property intact
-
-The heading will remain as a regular Org heading with its ID property,
-allowing you to recreate the node later if needed."
+(defun org-supertag-node-back-to-heading (&optional node-id)
+  "Remove a node from the database but keep it as a regular Org heading.
+If NODE-ID is nil, it defaults to the node at the current point.
+This function cleans up all database associations (tags, fields, refs)
+but leaves the Org heading and its ID property untouched in the file."
   (interactive)
-  (if-let* ((node-id (org-supertag-node--ensure-sync)))
-      (when (yes-or-no-p "Remove this node from database but keep as regular heading? ")
-        ;; 1. Get node info before removal
-        (let* ((node (org-supertag-db-get node-id))
-               (tags (org-supertag-node-get-tags node-id))
-               (fields (org-supertag-node-db-get-fields node-id))
-               (refs-to (org-supertag-node-db-get-reference node-id 'to))
-               (refs-from (org-supertag-node-db-get-reference node-id 'from)))
-          
-          ;; 2. Remove all tag associations
-          (dolist (tag-id tags)
-            (org-supertag-node-db-remove-tag node-id tag-id))
-          
-          ;; 3. Remove all field associations
-          (dolist (field-pair fields)
-            (let ((field-id (car field-pair)))
-              (org-supertag-db-unlink :node-field node-id field-id)))
-          
-          ;; 4. Remove all reference relationships
-          (dolist (ref-id refs-to)
-            (org-supertag-db-unlink :node-ref node-id ref-id))
-          (dolist (ref-id refs-from)
-            (org-supertag-db-unlink :node-ref ref-id node-id))
-          
-          ;; 5. Remove node from database
-          (org-supertag-db-remove-object node-id)
-          
-          ;; 6. Clear related caches
-          (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
-          (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
-          (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
-          
-          ;; 7. Run removal hook
-          (run-hook-with-args 'org-supertag-node-removed-hook node-id)
-          
-          ;; 8. Save database
-          (org-supertag-db-save)
-          
-          (message "Node removed from database: %s (heading preserved)" node-id)))
-    (user-error "No node found at current position")))
+  (let ((id (or node-id (org-supertag-node--ensure-sync))))
+    (unless id
+      (user-error "No valid node found at point"))
+    (when (y-or-n-p (format "Revert node '%s' to a regular heading? " id))
+      ;; 1. Clean up tag links
+      (dolist (tag-id (org-supertag-node-get-tags id))
+        (org-supertag-db-unlink :node-tag id tag-id))
+
+      ;; 2. Clean up field links
+      (dolist (field-pair (org-supertag-node-db-get-fields id))
+        (let ((field-id (car field-pair)))
+          (org-supertag-db-unlink :node-field id field-id)))
+
+      ;; 3. Clean up reference links (both directions)
+      (dolist (ref-id (org-supertag-node-db-get-reference id 'to))
+        (org-supertag-db-unlink :node-ref id ref-id))
+      (dolist (ref-id (org-supertag-node-db-get-reference id 'from))
+        (org-supertag-db-unlink :node-ref ref-id id))
+
+      ;; 4. Remove the node object itself from the database
+      (org-supertag-db-remove-object id)
+
+      ;; 5. Announce completion
+      (run-hook-with-args 'org-supertag-node-removed-hook id)
+      (message "Node %s reverted to a regular heading. (DB associations removed)" id))))
+      
 ;;;###autoload
 (defun org-supertag-node-find-other-window ()
   "Like `org-supertag-node-find' but display node in other window."
@@ -1092,15 +1077,15 @@ List of node IDs"
           (cond                                                                                                                                     
            ((eq direction 'to)                                                                                                                      
             (setq results (mapcar (lambda (link) (plist-get link :to))                                                                              
-                                  (org-supertag-db-find-links :node-node :from node-id))))                                                           
+                                  (org-supertag-db-find-links :node-node node-id nil))))                                                           
            ((eq direction 'from)                                                                                                                    
             (setq results (mapcar (lambda (link) (plist-get link :from))                                                                            
-                                  (org-supertag-db-find-links :node-node :to node-id))))                                                            
+                                  (org-supertag-db-find-links :node-node nil node-id))))                                                            
            (t                                                                                                                                       
             (let ((to-links (mapcar (lambda (link) (plist-get link :to))                                                                            
-                                    (org-supertag-db-find-links :node-node :from node-id)))                                                         
+                                    (org-supertag-db-find-links :node-node node-id nil)))                                                         
                   (from-links (mapcar (lambda (link) (plist-get link :from))                                                                        
-                                      (org-supertag-db-find-links :node-node :to node-id))))                                                        
+                                      (org-supertag-db-find-links :node-node nil node-id))))                                                        
               (setq results (delete-duplicates (append to-links from-links))))))                                                                    
           (org-supertag-db--cache-set 'query cache-key results)                                                                                     
           results)))                                                                                                                                
@@ -1344,6 +1329,10 @@ Arguments: (node-id)
 Note: This hook is called when a node is removed from the database
 but the Org heading is preserved. Use this for cleanup operations
 that should happen when a node is no longer tracked by org-supertag.")
+
+;;------------------------------------------------------------------------------
+;; ID Check and Fix
+;;------------------------------------------------------------------------------
 
 (defun org-supertag-check-and-fix-ids ()
   "Check and fix ID-related issues in org-supertag.

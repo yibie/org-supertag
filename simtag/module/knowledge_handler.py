@@ -107,7 +107,7 @@ class KnowledgeHandler:
 
             # --- Entity Extraction Logic ---
             try:
-                entities_data = await self.rag_service.extract_entities(raw_text)
+                entities_data = await self.extract_entities(raw_text)
                 entities = [e.get("name") for e in entities_data if e.get("name")]
             except Exception as inner_e:
                 logger.error("_extract_structured_data_from_text failed for node %s: %s", node_id, inner_e, exc_info=True)
