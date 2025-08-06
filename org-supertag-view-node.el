@@ -25,8 +25,8 @@
     (define-key map (kbd "E") 'org-supertag-view-node-edit-field-definition-at-point)
     (define-key map (kbd "a") 'org-supertag-view-node-add-field)
     (define-key map (kbd "d") 'org-supertag-view-node-remove-field-at-point)
-    (define-key map (kbd "f") 'org-supertag-feedback-on-relation-at-point)
-
+    (define-key map (kbd "M-<up>") 'org-supertag-view-node-move-field-up)
+    (define-key map (kbd "M-<down>") 'org-supertag-view-node-move-field-down)
     (define-key map (kbd "g") 'org-supertag-view-node-refresh)
     (define-key map (kbd "q") 'quit-window)
     map)
@@ -89,7 +89,7 @@ Otherwise, return VALUE as a string."
                                        tag-id ,tag-id
                                        field-def ,field-def
                                        face (:height 1.0))))))))
-      (insert (propertize "    [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field\n" 'face 'org-meta-line)))
+      (insert (propertize "    [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field [M-<up>/<down>] Reorder\n" 'face 'org-meta-line)))
     (insert "\n")))
 
 (defun org-supertag-view-node--insert-relations-section (node-id)
@@ -229,7 +229,7 @@ Tries current position first"
           (let* ((field-type-choices (org-supertag-get-field-types))
                  (field-type-str (completing-read "Field type: "
                                                   (mapcar #'car field-type-choices)
-                                                  nil t nil nil (symbol-name current-type)))
+                                                  nil t nil nil (format "%s" current-type)))
                  (new-type (cdr (assoc field-type-str field-type-choices)))
                  (new-field-def (list :name field-name :type new-type)))
             ;; If it's options type, ask for options
@@ -265,6 +265,24 @@ Tries current position first"
         (when (org-supertag-tag--remove-field tag-id field-name)
           (org-supertag-view-node-refresh))))))
 
+(defun org-supertag-view-node-move-field-up ()
+  "Move the field at point up in its tag's field list."
+  (interactive)
+  (when-let* ((field-info (org-supertag-view-node--get-field-info-at-point)))
+    (let ((tag-id (plist-get field-info :tag-id))
+          (field-name (plist-get field-info :field-name)))
+      (when (org-supertag-tag-move-field-up tag-id field-name)
+        (org-supertag-view-node-refresh-and-restore-position tag-id field-name)))))
+
+(defun org-supertag-view-node-move-field-down ()
+  "Move the field at point down in its tag's field list."
+  (interactive)
+  (when-let* ((field-info (org-supertag-view-node--get-field-info-at-point)))
+    (let ((tag-id (plist-get field-info :tag-id))
+          (field-name (plist-get field-info :field-name)))
+      (when (org-supertag-tag-move-field-down tag-id field-name)
+        (org-supertag-view-node-refresh-and-restore-position tag-id field-name)))))
+
 (defun org-supertag-view-node--find-tag-for-field (node-id field-name)
   (let ((found-tag-id nil))
     (dolist (tag-id (org-supertag-node-get-tags node-id))
@@ -280,6 +298,44 @@ Tries current position first"
   (interactive)
   (org-supertag-view-node--show-buffer))
 
+(defun org-supertag-view-node-refresh-and-restore-position (tag-id field-name)
+  "Refresh the view and restore cursor position to the specified field."
+  (org-supertag-view-node--show-buffer)
+  ;; Try to find and position cursor at the moved field
+  (when (and tag-id field-name)
+    (let ((found nil))
+      (save-excursion
+        (goto-char (point-min))
+        ;; First find the tag section
+        (while (and (not found) (search-forward tag-id nil t))
+          (let ((tag-pos (match-beginning 0)))
+            (when (and (get-text-property tag-pos 'tag-id)
+                       (string= (get-text-property tag-pos 'tag-id) tag-id))
+              ;; Found the tag, now look for the field within this tag's section
+              (let ((tag-end (save-excursion
+                              (goto-char tag-pos)
+                              (forward-line)
+                              (while (and (not (eobp))
+                                         (or (looking-at "    [^ ]") ; Next field
+                                             (looking-at "    $")))   ; Empty line
+                                (forward-line))
+                              (point))))
+                (save-excursion
+                  (goto-char tag-pos)
+                  (while (and (not found) (< (point) tag-end))
+                    (when (and (search-forward field-name tag-end t)
+                              (get-text-property (match-beginning 0) 'field-name)
+                              (string= (get-text-property (match-beginning 0) 'field-name) field-name)
+                              (string= (get-text-property (match-beginning 0) 'tag-id) tag-id))
+                      (setq found (match-beginning 0)))
+                    (forward-line))))))))
+      (when found
+        (goto-char found)
+        ;; Move to the beginning of the field line for better positioning
+        (beginning-of-line)
+        (search-forward field-name (line-end-position) t)
+        (goto-char (match-beginning 0))))))
+
 (defun org-supertag-view-node--show-buffer ()
   (let ((buffer (get-buffer-create "*Org SuperTag Node View*")))
     (with-current-buffer buffer
@@ -294,7 +350,9 @@ Tries current position first"
           (org-supertag-view-node--insert-backlinks-section org-supertag-view-node--current-node-id)
           (org-supertag-view-node--insert-relations-section org-supertag-view-node--current-node-id)
           ;;(org-supertag-view-node--insert-similar-entities-section org-supertag-view-node--current-node-id)
-          (insert (propertize "\nj/k: move  RET: edit  E: edit field def  a: add field  d: delete field  f: feedback  g: refresh  q: quit\n" 'face 'org-meta-line))
+          (insert (propertize "
+[j/k] Next/Previous Section  [g] Refresh  [q] Quit
+" 'face 'org-meta-line))
           ))
     (org-supertag-view--display-buffer-right buffer)
     (select-window (get-buffer-window buffer))
