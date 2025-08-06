@@ -524,13 +524,13 @@ VALUE: Value to convert."
          (tag-id (plist-get field-def :tag-id))
          (field-type (plist-get field-def :type))
          (raw-value (org-supertag-field-get-value node-id field-name tag-id)))
-    ;;(message "DEBUG: get-value node-id=%S field-name=%S field-type=%S raw-value=%S (type=%S)"
-             node-id field-name field-type raw-value (type-of raw-value))
+    ;; (message "DEBUG: get-value node-id=%S field-name=%S field-type=%S raw-value=%S (type=%S)"
+    ;;          node-id field-name field-type raw-value (type-of raw-value))
     (if (and (eq field-type 'tag) raw-value (stringp raw-value))
         (let ((result (split-string raw-value "," t)))
           ;;(message "DEBUG: get-value split result: %S" result)
           result)
-      raw-value))
+      raw-value)))
 
 
 ;;----------------------------------------------------------------------
