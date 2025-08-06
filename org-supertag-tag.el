@@ -402,6 +402,60 @@ Returns t if successful, nil otherwise."
       (message "Field '%s' definition updated in tag '%s'." field-name tag-id)
       t)))
 
+(defun org-supertag-tag--update-field-definition (tag-id field-name new-field-def)
+  "Update the complete definition of a field in a tag.
+TAG-ID is the ID of the tag.
+FIELD-NAME is the name of the field to update.
+NEW-FIELD-DEF is the new field definition.
+Returns t if successful, nil otherwise."
+  (when-let ((tag (org-supertag-db-get tag-id))
+             (fields (plist-get tag :fields)))
+    (let* ((new-fields (mapcar (lambda (f)
+                                 (if (string= (plist-get f :name) field-name)
+                                     new-field-def
+                                   f))
+                               fields))
+           (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+      (org-supertag-db-add tag-id new-tag)
+      (message "Field '%s' definition updated in tag '%s'." field-name tag-id)
+      t)))
+
+(defun org-supertag-tag-move-field (tag-id field-name direction)
+  "Move a field up or down in the tag's field list.
+TAG-ID is the id of the tag.
+FIELD-NAME is the name of the field to move.
+DIRECTION is either 'up or 'down."
+  (when-let* ((tag (org-supertag-db-get tag-id))
+              (fields (plist-get tag :fields)))
+    (let* ((pos (cl-position-if (lambda (f) (string= (plist-get f :name) field-name)) fields))
+           (new-pos (cond ((eq direction 'up) (1- pos))
+                          ((eq direction 'down) (1+ pos))
+                          (t pos))))
+      (when (and pos (>= new-pos 0) (< new-pos (length fields)))
+        (let* ((field-to-move (nth pos fields))
+               (remaining-fields (cl-remove-if (lambda (f) (eq f field-to-move)) fields))
+               (new-fields (append (cl-subseq remaining-fields 0 new-pos)
+                                   (list field-to-move)
+                                   (cl-subseq remaining-fields new-pos)))
+               (new-tag (plist-put (copy-sequence tag) :fields new-fields)))
+          (org-supertag-db-add tag-id new-tag)
+          (message "Field '%s' moved %s in tag '%s'." field-name direction tag-id)
+          t)))))
+
+(defun org-supertag-tag-move-field-up (tag-id field-name)
+  "Move a field up in the tag's field list.
+TAG-ID is the id of the tag.
+FIELD-NAME is the name of the field to move."
+  (interactive)
+  (org-supertag-tag-move-field tag-id field-name 'up))
+
+(defun org-supertag-tag-move-field-down (tag-id field-name)
+  "Move a field down in the tag's field list.
+TAG-ID is the id of the tag.
+FIELD-NAME is the name of the field to move."
+  (interactive)
+  (org-supertag-tag-move-field tag-id field-name 'down))
+
 (defun org-supertag-tag--create-field-definition ()
   "Interactively create a new field definition.
 Returns a field definition plist, or nil if cancelled."
@@ -459,63 +513,54 @@ PREFIX: The prefix to filter tags by."
 
 (defun org-supertag-get-all-fields-for-tag (tag-id &optional visited-tags)
   "Recursively get all fields for a TAG-ID, including inherited ones.
+The order is preserved: parent fields first, then own fields.
+An own field with the same name as a parent field overrides the parent field,
+maintaining the position defined by the parent.
+
 TAG-ID is the ID of the tag (string).
 VISITED-TAGS is an optional list of tags already visited in the current
 inheritance chain to detect circular dependencies.
 
 Returns a list of field definition plists.
 Signals an error if a circular dependency is detected."
-  ;; Use a catch block for early return (e.g., cache hit)
   (catch 'org-supertag-get-all-fields-for-tag-return
     (unless (stringp tag-id)
       (error "Invalid tag-id: %S. Must be a string." tag-id))
 
     ;; 1. Check cache
-    (let ((cached-fields (gethash tag-id org-supertag--tag-all-fields-cache)))
-      (when cached-fields
-        (message "DEBUG: Cache hit for tag %s" tag-id)
-        (throw 'org-supertag-get-all-fields-for-tag-return cached-fields)))
+    (when-let ((cached-fields (gethash tag-id org-supertag--tag-all-fields-cache)))
+      (throw 'org-supertag-get-all-fields-for-tag-return cached-fields))
 
     ;; 2. Circular dependency detection
-    ;; Use a simple loop to check for circular dependencies
-    (let ((found nil))
-      (dolist (visited-tag visited-tags)
-        (when (equal tag-id visited-tag)
-          (setq found t)))
-      (when found
-        (error "Circular dependency detected in tag inheritance chain for tag: %S. Path: %S"
-               tag-id (nreverse (cons tag-id visited-tags)))))
+    (when (member tag-id visited-tags)
+      (error "Circular dependency detected in tag inheritance chain for tag: %S. Path: %S"
+             tag-id (nreverse (cons tag-id visited-tags))))
 
     (let* ((tag-props (org-supertag-db-get tag-id))
            (own-fields (plist-get tag-props :fields))
            (parent-tag-id (plist-get tag-props :extends))
-           (all-fields-ht (make-hash-table :test 'equal)))
+           (final-fields '()))
 
       ;; Recursively get parent fields
       (when parent-tag-id
-        (message "DEBUG: Tag %s extends %s. Recursing..." tag-id parent-tag-id)
-        (let ((parent-fields (org-supertag-get-all-fields-for-tag
-                              parent-tag-id
-                              (cons tag-id visited-tags))))
-          (dolist (field parent-fields)
-            (puthash (plist-get field :name) field all-fields-ht))))
+        (setq final-fields (org-supertag-get-all-fields-for-tag
+                            parent-tag-id
+                            (cons tag-id visited-tags))))
 
-      ;; Add own fields, potentially overriding parent fields
-      (dolist (field own-fields)
-        (puthash (plist-get field :name) field all-fields-ht))
+      ;; Add/override with own fields
+      (dolist (own-field own-fields)
+        (let* ((own-field-name (plist-get own-field :name))
+               (existing-field-pos (cl-position-if (lambda (f) (string= (plist-get f :name) own-field-name))
+                                                   final-fields)))
+          (if existing-field-pos
+              ;; Override: replace the field at the existing position
+              (setf (nth existing-field-pos final-fields) own-field)
+            ;; Add: append the new field
+            (setq final-fields (append final-fields (list own-field))))))
 
-      ;; Convert hash table values back to a list
-      (let ((final-fields '()))
-        (maphash (lambda (_key value)
-                   (push value final-fields))
-                 all-fields-ht)
-        ;; Reverse to maintain original order (or a consistent order)
-        (setq final-fields (nreverse final-fields))
-
-        ;;(message "DEBUG: Calculated fields for %s: %S" tag-id final-fields)
-        ;; 3. Store in cache
-        (puthash tag-id final-fields org-supertag--tag-all-fields-cache)
-        final-fields))))
+      ;; 3. Store in cache and return
+      (puthash tag-id final-fields org-supertag--tag-all-fields-cache)
+      final-fields)))
 
 (defun org-supertag-clear-tag-fields-cache (&rest _args)
   "Clear the tag fields cache.
