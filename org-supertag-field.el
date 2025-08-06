@@ -530,7 +530,7 @@ VALUE: Value to convert."
         (let ((result (split-string raw-value "," t)))
           ;;(message "DEBUG: get-value split result: %S" result)
           result)
-      raw-value)))
+      raw-value))
 
 
 ;;----------------------------------------------------------------------
