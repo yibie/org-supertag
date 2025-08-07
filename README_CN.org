@@ -11,12 +11,15 @@ org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 * org-supertag 的基本使用方法
 ** 第一步 基本安装
 
+org-supertag 需要如下依赖 epc 和 deferre。
+
 #+begin_src emacs-lisp
 (use-package org-supertag
   :straight (:host github :repo "yibie/org-supertag")
   :after org
   :config
-  (org-supertag-setup))
+  (org-supertag-setup)
+  (org-supertag-bridge-python-command "/path/to/org-supertag/.venv/bin/python3")) ;<= use your .venv path
 
 (setq org-supertag-sync-directories '("~/Documents/notes/")) ;; 配置同步文件夹
 #+end_src
@@ -31,6 +34,7 @@ cd /path/to/org-supertag/simtag
 sh ./setup.sh
 #+end_src
 
+还有一个选择是 ./setup_uv.sh，使用了 uv 来安装虚拟环境。
 
 ** 第二步 简单了解什么是 Node 和 Field
 Node 是 org-supertag 对 org-headline 的转化：
