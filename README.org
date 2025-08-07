@@ -42,28 +42,30 @@ org-supertag brings a more modern note-taking experience to org-mode, such as su
 org-supertag adopts a non-intrusive design, harmoniously coexisting with the original functions of org-mode, while providing more possibilities.
 
 * Basic Usage of org-supertag
-** Step 1: Basic Installation
+Step 1: Basic Installation
+
+org-supertag requires the following dependencies: epc and deferre.
 
 #+begin_src emacs-lisp
 (use-package org-supertag
-  :straight (:host github :repo "yibie/org-supertag")
-  :after org
-  :config
-  (org-supertag-setup))
+ :straight (:host github :repo "yibie/org-supertag")
+ :after org
+ :config
+ (org-supertag-setup)
+ (org-supertag-bridge-python-command "/path/to/org-supertag/.venv/bin/python3")) ;<= Use your .venv path
 
-(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; Configure sync folders
+(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; Configure sync directories
 #+end_src
 
-*org-supertag requires some Python dependencies, including `torch`, `epc`, and `ollama`, to drive the RAG and LLM services:*
+org-supertag requires several Python dependencies, including torch, epc, and ollama, among others, to enable RAG and LLM services:
 
-- Use the automated script to install dependencies
-  
-#+begin_src 
+Use the automated script to install dependencies:
+#+begin_src bash
 cd /path/to/org-supertag/simtag
-
 sh ./setup.sh
 #+end_src
 
+Alternatively, you can use ./setup_uv.sh, which uses uv to set up the virtual environment.
 
 ** Step 2: Briefly Understand What Node and Field Are
 A Node is org-supertag's transformation of an org-headline:
