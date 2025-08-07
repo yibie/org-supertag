@@ -11,30 +11,38 @@ org-supertag 采用非侵入式设计，与 org-mode 原有的功能和谐共存
 * org-supertag 的基本使用方法
 ** 第一步 基本安装
 
-org-supertag 需要如下依赖 epc 和 deferre。
+org-supertag 依赖以下 Emacs 包：epc 和 deferre。
+
+由于 straight.el 的工作方式，org-supertag 的路径可能不容易确定。建议你用 straight.el 安装 org-supertag 后，手动将 org-supertag 添加到 load-path。
 
 #+begin_src emacs-lisp
 (use-package org-supertag
-  :straight (:host github :repo "yibie/org-supertag")
-  :after org
-  :config
-  (org-supertag-setup)
-  (org-supertag-bridge-python-command "/path/to/org-supertag/.venv/bin/python3")) ;<= use your .venv path
+ :load-path "~/path/to/org-supertag"
+ :after org
+ :config
+ (org-supertag-setup)
+ (org-supertag-bridge-python-command "/path/to/org-supertag/.venv/bin/python3")) ;<= 这里填写你的 .venv 路径
 
-(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; 配置同步文件夹
+(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; 配置需要同步的目录
 #+end_src
 
-*org-supertag 需要一些 Python 依赖，包括 `torch`,  `epc` 和 `ollama` 等*，以驱动 RAG 和 LLM 服务:
+org-supertag 还需要一些 Python 依赖（如 torch、epc、ollama 等），以支持 RAG 和 LLM 服务：
 
-- 使用自动化脚本安装依赖
-  
-#+begin_src 
+推荐使用自动化脚本安装依赖：
+#+begin_src bash
 cd /path/to/org-supertag/simtag
-
 sh ./setup.sh
 #+end_src
 
-还有一个选择是 ./setup_uv.sh，使用了 uv 来安装虚拟环境。
+你也可以选择使用 ./setup_uv.sh（基于 uv 的虚拟环境安装脚本）。
+
+💡注意：如果你在使用 org-supertag 时经常遇到 org-element-cache 报错，可以直接设置：
+
+#+begin_src emacs-lisp
+(setq org-element-use-cache nil)
+#+end_src
+
+这样设置后，打开大型 org 文件时速度会变慢，但不会影响 org-mode 的正常使用。
 
 ** 第二步 简单了解什么是 Node 和 Field
 Node 是 org-supertag 对 org-headline 的转化：
