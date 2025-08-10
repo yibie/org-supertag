@@ -1,4 +1,4 @@
-[[./README_CN.org][中文]]
+[[./README_CN.org][Chinese Version]]
 
 * TL;DR
 Org-supertag is a note-taking tool, an alternative to org-roam, based on org-mode but with a database for speed and query capabilities and support for inline #tags, views...and more.
@@ -11,42 +11,173 @@ org-supertag brings a more modern note-taking experience to org-mode, such as su
 
 org-supertag adopts a non-intrusive design, harmoniously coexisting with the original functions of org-mode, while providing more possibilities.
 
-* Basic Usage of org-supertag
-Step 1: Basic Installation
+* 🚀 Installation & Configuration
 
-org-supertag requires the following dependencies: epc and deferre. 
+**⚠️ Important: A Note on `straight.el`**
 
-Due to the way straight.el works, the path to org-supertag may not be easily determined. It is recommended that after installing org-supertag with straight.el, you manually add org-supertag to your load-path.
+Due to `org-supertag`'s reliance on a fixed-path Python virtual environment (`simtag/.venv`), the standard build process of `straight.el` can break the relative paths, preventing the Python backend from being found.
 
-#+begin_src emacs-lisp
+Therefore, we **must install by manually cloning the repository and using `:load-path`** to ensure path stability.
+
+---
+**Step 1: Manually Clone the Repository**
+
+Please clone the `org-supertag` repository to a permanent directory on your local machine.
+
+```shell
+# You can choose any path you like, e.g., ~/Documents/emacs/packages/
+git clone https://github.com/yibie/org-supertag.git ~/Documents/emacs/package/org-supertag
+```
+
+---
+**Step 2: Set Up the Python Backend Service**
+
+1.  In your terminal, navigate to the `simtag` subdirectory within the repository you just cloned.
+    ```shell
+    cd ~/Documents/emacs/package/org-supertag/simtag
+    ```
+
+2.  Run the installation script to create the virtual environment and install all dependencies.
+    ```shell
+    # Recommended method using uv (faster)
+    sh ./setup_uv.sh
+    ```
+
+---
+**Step 3: Emacs Configuration**
+
+The following is a complete, recommended `use-package` configuration example. Please modify the paths to match your own.
+
+```emacs-lisp
 (use-package org-supertag
- :load-path "~/path/to/org-supertag"
- :after org
- :config
- (org-supertag-setup)
- (org-supertag-bridge-python-command "/path/to/org-supertag/.venv/bin/python3")) ;<= Use your .venv path
+  ;; Tell straight.el not to handle this package
+  :straight nil
+  ;; (Required) Manually specify the path to your cloned repository
+  :load-path "~/Documents/emacs/package/org-supertag/"
 
-(setq org-supertag-sync-directories '("~/Documents/notes/")) ;; Configure sync directories
-#+end_src
+  ;; Ensure it loads after org and dash
+  :after (org dash)
+  ;; Load immediately on startup
+  :demand t
 
-org-supertag requires several Python dependencies, including torch, epc, and ollama, among others, to enable RAG and LLM services:
+  ;; Use :custom to set customizable variables
+  :custom
+  (org-supertag-query-history-file "~/.emacs.d/org-supertag/query-history.el")
+  (org-supertag-sync-directories '("~/Documents/notes/")) ; <= Change to your notes directory
 
-Use the automated script to install dependencies:
-#+begin_src bash
-cd /path/to/org-supertag/simtag
-sh ./setup.sh
-#+end_src
+  ;; The :config block is for running code and more complex setup
+  :config
+  ;; Start the core services
+  (org-supertag-setup)
 
-Alternatively, you can use ./setup_uv.sh, which uses uv to set up the virtual environment.
+  ;; --- Customization Example ---
+  ;; (You can adjust the following settings to your needs)
 
-💡Note: If you encounter org-element-cache errors frequently while using org-supertag, you can directly set:
+  ;; Disable auto-tag mode (it's on by default)
+  (org-supertag-auto-tag-mode 0)
+  ;; Enable the batch limit for auto-tagging
+  (setq org-supertag-auto-tag-batch-enable-limit t)
+  ;; Set the daily scan time to noon
+  (setq org-supertag-auto-tag-scan-daily-time "12:00")
+  ;; Process a maximum of 10 nodes per scan
+  (setq org-supertag-auto-tag-batch-max-nodes-per-run 10)
 
-#+begin_src emacs-lisp
-(setq org-element-use-cache nil)
-#+end_src
+  ;; Enable background sync
+  (setq org-supertag-background-sync-auto-start t)
+  ;; Set sync mode to 'scheduled'
+  (setq org-supertag-background-sync-mode 'scheduled)
+  ;; Set the specific times for scheduled sync
+  (setq org-supertag-background-sync-schedule '("09:00" "12:00" "18:00"))
 
-This setting will only make the opening speed slower when opening large org files, but will not affect the normal use of org-mode.
+  ;; Set the chat view language
+  (setq org-supertag-view-chat-lang "English")
+  ;; Disable the smart companion suggestions
+  (setq org-supertag-smart-companion-enabled nil)
 
+  ;; --- Auto-setup for Python Bridge ---
+  ;; (Recommended) The following code automatically finds and sets the Python path
+  (let ((package-path (locate-library "org-supertag.el")))
+    (when package-path
+      (let* ((package-dir (file-name-directory package-path))
+             (python-path (expand-file-name "simtag/.venv/bin/python" package-dir)))
+        (when (file-exists-p python-path)
+          (setq org-supertag-bridge-python-command python-path))))))
+```
+
+---
+**Step 4: Verify Installation**
+
+1.  Restart Emacs.
+2.  Run `M-x org-supertag-sync-reset-and-sync` to perform a full sync.
+3.  Run `M-x org-supertag-diagnose-all` to check the system health. Ensure the Python Bridge and other services report a successful connection.
+
+---
+
+```emacs-lisp
+(use-package org-supertag
+  ;; Tell straight.el not to handle this package
+  :straight nil
+  ;; (Required) Manually specify the path to your cloned repository
+  :load-path "~/Documents/emacs/package/org-supertag/"
+
+  ;; Ensure it loads after org and dash
+  :after (org dash)
+  ;; Load immediately on startup
+  :demand t
+
+  ;; Use :custom to set customizable variables
+  :custom
+  (org-supertag-query-history-file "~/.emacs.d/org-supertag/query-history.el")
+  (org-supertag-sync-directories '("~/Documents/notes/")) ; <= Change to your notes directory
+
+  ;; The :config block is for running code and more complex setup
+  :config
+  ;; Start the core services
+  (org-supertag-setup)
+
+  ;; --- Customization Example ---
+  ;; (You can adjust the following settings to your needs)
+
+  ;; Disable auto-tag mode (it's on by default)
+  (org-supertag-auto-tag-mode 0)
+  ;; Enable the batch limit for auto-tagging
+  (setq org-supertag-auto-tag-batch-enable-limit t)
+  ;; Set the daily scan time to noon
+  (setq org-supertag-auto-tag-scan-daily-time "12:00")
+  ;; Process a maximum of 10 nodes per scan
+  (setq org-supertag-auto-tag-batch-max-nodes-per-run 10)
+
+  ;; Enable background sync
+  (setq org-supertag-background-sync-auto-start t)
+  ;; Set sync mode to 'scheduled'
+  (setq org-supertag-background-sync-mode 'scheduled)
+  ;; Set the specific times for scheduled sync
+  (setq org-supertag-background-sync-schedule '("09:00" "12:00" "18:00"))
+
+  ;; Set the chat view language
+  (setq org-supertag-view-chat-lang "English")
+  ;; Disable the smart companion suggestions
+  (setq org-supertag-smart-companion-enabled nil)
+
+  ;; --- Auto-setup for Python Bridge ---
+  ;; (Recommended) The following code automatically finds and sets the Python path
+  (let ((package-path (locate-library "org-supertag.el")))
+    (when package-path
+      (let* ((package-dir (file-name-directory package-path))
+             (python-path (expand-file-name "simtag/.venv/bin/python" package-dir)))
+        (when (file-exists-p python-path)
+          (setq org-supertag-bridge-python-command python-path))))))
+```
+
+---
+**Step 4: Verify Installation**
+
+1.  Restart Emacs.
+2.  Run `M-x org-supertag-sync-reset-and-sync` to perform a full sync.
+3.  Run `M-x org-supertag-diagnose-all` to check the system health. Ensure the Python Bridge and other services report a successful connection.
+
+---
+* Basic Usage of org-supertag
 ** Step 2: Briefly Understand What Node and Field Are
 A Node is org-supertag's transformation of an org-headline:
 - Adds an ID
