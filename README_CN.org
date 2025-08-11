@@ -99,6 +99,9 @@ git clone https://github.com/yibie/org-supertag.git ~/Documents/emacs/package/or
              (python-path (expand-file-name "simtag/.venv/bin/python" package-dir)))
         (when (file-exists-p python-path)
           (setq org-supertag-bridge-python-command python-path))))))
+
+  ;; --- 自定义 inline-tag 样式 ---
+  (set-face-attribute 'org-supertag-inline-face nil :weight 'bold :foreground "grey60")
 ```
 
 ---
