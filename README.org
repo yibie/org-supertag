@@ -167,6 +167,9 @@ The following is a complete, recommended `use-package` configuration example. Pl
              (python-path (expand-file-name "simtag/.venv/bin/python" package-dir)))
         (when (file-exists-p python-path)
           (setq org-supertag-bridge-python-command python-path))))))
+
+  ;; --- Customization inline-tag sytle ---
+  (set-face-attribute 'org-supertag-inline-face nil :weight 'bold :foreground "grey60")
 ```
 
 ---
