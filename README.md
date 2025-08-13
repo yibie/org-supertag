@@ -187,7 +187,7 @@ When you add the =#urgent= tag, it automatically:
 - Sets due date to today
 - Shows red flame icon
 
-For details, see ![Advance Usage ‐ Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide)
+For details, see ![Advance Usage - Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage---Behavior-System-Guide)
 
 #### 🔄 Embed Block System
 
@@ -298,14 +298,14 @@ Not yet practical.
 | Learning Curve | ⚠️ Moderate | ⚠️ Moderate | ✅ Simple | ✅ Simple |
 
 ### Changelog
-See !(CHANGELOG)[./CHANGELOG.org].
+See [CHANGELOG](./CHANGELOG.org).
 
 ### 🤝 Community and Support
 
-- 📖 [[https://github.com/yibie/org-supertag/wiki][Detailed Documentation]]
-- 🐛 [[https://github.com/yibie/org-supertag/issues][Issue Feedback]]
-- 💬 [[https://github.com/yibie/org-supertag/discussions][Community Discussions]]
-- 🎥 [[https://www.youtube.com/playlist?list=xxx][Video Tutorials]]
+- 📖 [Detailed Documentation](https://github.com/yibie/org-supertag/wiki)
+- 🐛 [Issue Feedback](https://github.com/yibie/org-supertag/issues)
+- 💬 [Community Discussions](https://github.com/yibie/org-supertag/discussions)
+
 
 #### 🆘 Frequently Asked Questions
 
@@ -332,4 +332,4 @@ A: AI features use the default Ollama configuration, no additional setup require
 
 ---
 
-*Made with ❤️ by [[https://github.com/yibie][Yibie]] | Inspired by [[https://tana.inc][Tana]], [[https://github.com/ahyatt/ekg][ekg]], [[https://github.com/meedstrom/org-node][org-node]]*
+*Made with ❤️ by [Yibie](https://github.com/yibie) | Inspired by [Tana](https://tana.inc), [ekg](https://github.com/ahyatt/ekg), [org-node](https://github.com/meedstrom/org-node)*
