@@ -146,9 +146,8 @@ class SimTagBridge:
         self.server.register_function(context.query_handler.get_similar_nodes, 'query/get_similar_nodes')
         self.server.register_function(self.get_similar_entities, 'query/get_similar_entities')
         
-        # Autotag
-        self.server.register_function(self.batch_generate_tags, 'autotag/batch_generate_tags')
-        self.server.register_function(self.generate_single_node_tags, 'autotag/generate_single_node_tags')
+        # Simple tag generation (integrated into API)
+        self.server.register_function(self.generate_tags, 'autotag/generate_tags')
          
         # RAG Assistant
         self.server.register_function(self.query, 'rag/query')
@@ -175,8 +174,7 @@ class SimTagBridge:
         self.server.register_function(self.submit_feedback, 'feedback/submit')
         self.server.register_function(self.debug_payload, 'debug/payload')
         
-        # Smart Companion
-        self.server.register_function(self.analyze_tag_context, 'smart_companion/analyze_tag_context')
+        # Smart features are now integrated into view system
         
         # Task Management
         self.server.register_function(self._get_running_tasks, 'diagnostics/get_running_tasks')
@@ -318,23 +316,16 @@ class SimTagBridge:
         """Expand and elaborate on given content or topic."""
         return self._run_async(context.ai_handler.expand_content(*args), timeout=240, method_name="ai/expand", args=args)
 
-    def batch_generate_tags(self, *args):
+    def generate_tags(self, *args):
+        """Simple tag generation for current node."""
         try:
             payload = normalize_payload(args)
-            coro = context.autotag_handler.batch_generate_tags(payload)
+            # Use the knowledge handler for simple tag generation
+            coro = context.knowledge_handler.generate_simple_tags(payload)
             return self._run_async(coro)
         except Exception as e:
-            logger.error(f"""Error in BATCH_GENERATE_TAGS bridge call: {e}\n{traceback.format_exc()}""")
-            return {"error": "batch_generate_tags_failed", "message": str(e)}
-
-    def generate_single_node_tags(self, *args) -> Dict[str, Any]:
-        try:
-            payload = normalize_payload(args)
-            coro = context.autotag_handler.suggest_tags_for_single_node_elisp(payload)
-            return self._run_async(coro)
-        except Exception as e:
-            logger.error(f"""Error calling async generate_single_node_tags handler: {e}\n{traceback.format_exc()}""")
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Error in generate_tags: {e}", exc_info=True)
+            return {"error": "generate_tags_failed", "message": str(e)}
 
     
 
@@ -375,9 +366,7 @@ class SimTagBridge:
     # Smart Companion Methods
     # ------------------------------------------------------------------
 
-    def analyze_tag_context(self, *args):
-        """Analyze tag context for smart companion suggestions."""
-        return self._run_async(context.smart_companion_handler.analyze_tag_context(*args))
+    # Smart companion functionality has been simplified and integrated into view system
 
     def refresh_stale_tags(self, batch_size: int = 20):
         """RPC: Refresh embeddings for all STALE tags (knowledge_status='STALE')."""
