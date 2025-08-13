@@ -60,6 +60,62 @@ class KnowledgeHandler:
         }
 
     # ------------------------------------------------------------------
+    # Simple Tag Generation (replaces complex autotag functionality)
+    # ------------------------------------------------------------------
+    
+    async def generate_simple_tags(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Simple tag generation for nodes - replaces complex autotag functionality."""
+        try:
+            nodes = payload.get('nodes', [])
+            if not nodes:
+                return []
+            
+            results = []
+            for node_dict in nodes:
+                node_id = node_dict.get('id')
+                content = node_dict.get('content', '')
+                
+                if not content or len(content.strip()) < 20:
+                    continue
+                
+                # Simple prompt for tag generation
+                prompt = f"""Analyze the following text and suggest 3-5 relevant tags.
+Return only a JSON object with a "tags" array containing simple, lowercase tag names.
+
+Text: {content[:1000]}
+
+Example response: {{"tags": ["project", "research", "important"]}}"""
+                
+                try:
+                    llm_result = await self.llm_client.generate(prompt, format_json=False)
+                    if llm_result.success:
+                        import json
+                        import re
+                        
+                        # Clean up the response
+                        response_text = llm_result.content.strip()
+                        response_text = re.sub(r'^```[a-zA-Z]*\s*', '', response_text)
+                        response_text = re.sub(r'```$', '', response_text)
+                        
+                        response_json = json.loads(response_text)
+                        tags = response_json.get('tags', [])
+                        
+                        if tags:
+                            results.append({
+                                'node_id': node_id,
+                                'tags': tags
+                            })
+                except Exception as e:
+                    logger.warning(f"Failed to generate tags for node {node_id}: {e}")
+                    continue
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in generate_simple_tags: {e}")
+            return []
+
+    # ------------------------------------------------------------------
     # Stage A: Entity Extraction
     # ------------------------------------------------------------------
 

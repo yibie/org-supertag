@@ -1,4 +1,22 @@
 * Changelog
+* [4.6.1] - 2025-08-13
+** Improvements
+*** Simplified user experience by removing overly complex features
+- *Removed auto-tag module*: Eliminated automatic tag generation system to reduce complexity and user distraction
+- *Removed smart-companion module*: Discontinued smart companion functionality to streamline the user interface
+- *Improved focus on core functionality*: These changes allow users to focus on the essential features of Org-SuperTag
+- *Enhanced manual tag management*: Integrated tag suggestions into the node view for better user control
+- *Simplified background processing*: Removed background scanning in favor of on-demand processing for better performance
+
+*** Completely rewrote README documentation to enhance readability
+- *Full documentation rewrite*: Reorganized and rewrote the entire README from scratch
+- *Improved structure*: Better logical flow and organization of information
+- *Enhanced clarity*: More concise and understandable explanations of features
+- *Bilingual consistency*: Ensured both English and Chinese versions are properly synchronized
+- *Better user guidance*: Clearer onboarding process and feature exploration path
+- *Comprehensive query system documentation*: Detailed explanation of the dual-query architecture (Query Blocks vs Query Buffer)
+
+
 * [4.6.0] - 2025-08-06
 ** Features
 *** Enhanced Table View with display multi-line text and display images in cell

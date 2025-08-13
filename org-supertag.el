@@ -58,9 +58,9 @@
 (require 'org-supertag-api)
 (require 'org-supertag-recovery)
 (require 'org-supertag-background-sync) 
-(require 'org-supertag-auto-tag)
+;; Complex auto-tag and smart-companion modules removed
+;; Simple tag suggestions now integrated into org-supertag-api.el and view system
 (require 'org-supertag-completion)
-(require 'org-supertag-smart-companion)
 (require 'org-supertag-embed)
 ;;(require 'org-supertag-workbench)
 
@@ -268,7 +268,6 @@ the bridge is confirmed to be ready."
   ;;    once it has successfully connected to the Python backend.
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-background-sync-start)
   (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-scheduler-start)
-  (add-hook 'org-supertag-bridge-ready-hook #'org-supertag-smart-companion-setup)
   
   ;; 4. Initialize embed functionality
   (when (fboundp 'org-supertag-embed-setup)
