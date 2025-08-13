@@ -187,7 +187,7 @@ sh ./setup_uv.sh
 - 截止日期设为今天
 - 显示红色火焰图标
 
-详情请查看 ![Advance Usage ‐ Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage-%E2%80%90-Behavior-System-Guide)
+详情请查看 ![Advance Usage - Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage---Behavior-System-Guide)
 
 #### 🔄 嵌入块系统
 
@@ -299,13 +299,12 @@ sh ./setup_uv.sh
 
 ### 🤝 社区与支持
 
-- 📖 [[https://github.com/yibie/org-supertag/wiki][详细文档]]
-- 🐛 [[https://github.com/yibie/org-supertag/issues][问题反馈]]
-- 💬 [[https://github.com/yibie/org-supertag/discussions][社区讨论]]
-- 🎥 [[https://www.youtube.com/playlist?list=xxx][视频教程]]
+- 📖 [详细文档](https://github.com/yibie/org-supertag/wiki)
+- 🐛 [问题反馈](https://github.com/yibie/org-supertag/issues)
+- 💬 [社区讨论](https://github.com/yibie/org-supertag/discussions)
 
 ### Changelog
-详细见 !(CHANGELOG)[./CHANGELOG.org]
+详细见 [CHANGELOG](./CHANGELOG.org)
 
 #### 🆘 常见问题
 
@@ -332,4 +331,4 @@ A: AI功能使用默认的Ollama配置，无需额外设置。所有AI功能都�
 
 ---
 
-*Made with ❤️ by [[https://github.com/yibie][Yibie]] | 受到 [[https://tana.inc][Tana]]、[[https://github.com/ahyatt/ekg][ekg]]、[[https://github.com/meedstrom/org-node][org-node]] 的启发*
+*Made with ❤️ by [Yibie](https://github.com/yibie) | 受到 [Tana](https://tana.inc)、[ekg](https://github.com/ahyatt/ekg)、[org-node](https://github.com/meedstrom/org-node) 的启发*
