@@ -59,6 +59,7 @@ simtag/nano-graphrag/
 test/
 commands/
 
+
 .ruff_cache/
 IMPROVEMENT_PLAN.md
 

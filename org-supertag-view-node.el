@@ -14,31 +14,100 @@
   "Current node ID being viewed in the node view buffer.")
 
 ;;----------------------------------------------------------------------
+;; Visual Style Variables
+;;----------------------------------------------------------------------
+
+(defvar org-supertag-view-node--section-separator "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  "Separator line for sections.")
+
+(defvar org-supertag-view-node--subsection-separator "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
+  "Separator line for subsections.")
+
+(defun org-supertag-view-node--get-theme-adaptive-color (light-color dark-color)
+  "Get color that adapts to current theme."
+  (if (eq (frame-parameter nil 'background-mode) 'dark)
+      dark-color
+    light-color))
+
+(defun org-supertag-view-node--get-accent-color ()
+  "Get accent color that works well in both light and dark themes."
+  (org-supertag-view-node--get-theme-adaptive-color "blue" "cyan"))
+
+(defun org-supertag-view-node--get-emphasis-color ()
+  "Get emphasis color that works well in both light and dark themes."
+  (org-supertag-view-node--get-theme-adaptive-color "darkblue" "lightblue"))
+
+;;----------------------------------------------------------------------
 ;; Mode Definition
 ;;----------------------------------------------------------------------
 
 (defvar org-supertag-view-node-mode-map
   (let ((map (make-sparse-keymap)))
+    ;; Navigation
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "p") 'previous-line)
-    (define-key map (kbd "RET") 'org-supertag-view-node-edit-field-at-point)
+    (define-key map (kbd "j") 'next-line)
+    (define-key map (kbd "k") 'previous-line)
+    (define-key map (kbd "SPC") 'scroll-up-command)
+    (define-key map (kbd "S-SPC") 'scroll-down-command)
+    (define-key map (kbd "M-v") 'scroll-down-command)
+    (define-key map (kbd "C-v") 'scroll-up-command)
+    (define-key map (kbd "M-<") 'beginning-of-buffer)
+    (define-key map (kbd "M->") 'end-of-buffer)
+    
+    ;; Field editing
+    (define-key map (kbd "RET") 'org-supertag-view-node-action-at-point)
     (define-key map (kbd "E") 'org-supertag-view-node-edit-field-definition-at-point)
     (define-key map (kbd "a") 'org-supertag-view-node-add-field)
     (define-key map (kbd "d") 'org-supertag-view-node-remove-field-at-point)
     (define-key map (kbd "M-<up>") 'org-supertag-view-node-move-field-up)
     (define-key map (kbd "M-<down>") 'org-supertag-view-node-move-field-down)
+    
+    ;; AI features
+    (define-key map (kbd "s") 'org-supertag-view-node-suggest-tags)
+    (define-key map (kbd "c") 'org-supertag-view-node-chat-with-node)
+    
+    ;; Utility
     (define-key map (kbd "g") 'org-supertag-view-node-refresh)
     (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "h") 'describe-mode)
     map)
   "Keymap for `org-supertag-view-node-mode'.")
 
 (define-derived-mode org-supertag-view-node-mode special-mode "Org-Supertag-Node-View"
   "Major mode for the unified node view."
-  :group 'org-supertag)
+  :group 'org-supertag
+  (setq mode-line-format
+        '(" " mode-name " | "
+          (:eval (format "Node: %s" (or org-supertag-view-node--current-node-id "None")))
+          " | "
+          (:eval (format "Fields: %d" (length (org-supertag-node-get-tags org-supertag-view-node--current-node-id))))
+          " | "
+          (:eval (format "Refs: %d" (length (org-supertag-view-node--get-references org-supertag-view-node--current-node-id))))
+          " | "
+          (:eval (format "RefdBy: %d" (length (org-supertag-view-node--get-referenced-by org-supertag-view-node--current-node-id))))
+          " | %[%p%] "))
+  ;; Enable line highlighting
+  (org-supertag-view-node--unhighlight-all-lines)
+  (add-hook 'post-command-hook #'org-supertag-view-node--highlight-current-line nil t))
 
 ;;----------------------------------------------------------------------
 ;; Core Functions
 ;;----------------------------------------------------------------------
+
+(defun org-supertag-view-node--highlight-current-line ()
+  "Highlight the current line for better visibility."
+  (let ((inhibit-read-only t))
+    (remove-overlays (point-min) (point-max) 'category 'current-line)
+    (let ((overlay (make-overlay (line-beginning-position) (line-end-position))))
+      (overlay-put overlay 'category 'current-line)
+      (overlay-put overlay 'face '(:background "lightgray" :foreground "black")))))
+
+(defun org-supertag-view-node--unhighlight-all-lines ()
+  "Remove all line highlighting."
+  (remove-overlays (point-min) (point-max) 'category 'current-line))
+
+(add-hook 'post-command-hook #'org-supertag-view-node--highlight-current-line nil t)
 
 (defun org-supertag-view-node--get-references (node-id)
   (when-let* ((node (org-supertag-db-get node-id)))
@@ -48,52 +117,86 @@
   (when-let* ((node (org-supertag-db-get node-id)))
     (plist-get node :ref-from)))
 
+;;----------------------------------------------------------------------
+;; Enhanced Formatting Functions
+;;----------------------------------------------------------------------
+
+(defun org-supertag-view-node--insert-section-header (title icon)
+  "Insert a section header with icon and title."
+  (insert (propertize (format "%s %s\n" icon title) 'face '(:weight bold :height 1.2 :foreground "default")))
+  (insert (propertize (format "%s\n" org-supertag-view-node--section-separator) 'face '(:foreground "gray50")))
+  (insert "\n"))
+
+(defun org-supertag-view-node--insert-subsection-header (title)
+  "Insert a subsection header."
+  (insert (propertize (format "  %s\n" title) 'face '(:weight bold :foreground "default")))
+  (insert (propertize (format "  %s\n" org-supertag-view-node--subsection-separator) 'face '(:foreground "gray70")))
+  (insert "\n"))
+
 (defun org-supertag-view-node--format-node-content (node-id)
   (when-let* ((node (org-supertag-db-get node-id))
               (title (plist-get node :title))
               (file-path (plist-get node :file-path))
               (content (or (plist-get node :content) "")))
     (let* ((file-name (file-name-nondirectory file-path))
-           (styled-title (propertize title 'face '(:weight bold))))
-      (format "%s (%s)\n%s\n\n" styled-title file-name content))))
+           (styled-title (propertize title 'face '(:weight bold :foreground "default")))
+           (styled-file (propertize (format "(%s)" file-name) 'face '(:foreground "gray60" :slant italic))))
+      (format "    📄 %s %s\n    %s\n\n" styled-title styled-file 
+              (if (string-empty-p content) 
+                  (propertize "[No content]" 'face '(:foreground "gray50" :slant italic))
+                (let ((truncated (substring content 0 (min 60 (length content)))))
+                  (if (> (length content) 60)
+                      (concat truncated "...")
+                    truncated)))))))
 
 (defun org-supertag-view-node--format-display-value (value)
-  "Format VALUE for display.
-If VALUE is a list, join elements with ' / '.
-Otherwise, return VALUE as a string."
-  (if (listp value)
-      (mapconcat #'identity value " / ")
-    (format "%s" (or value ""))))
+  "Format VALUE for display with enhanced styling."
+  (let ((formatted-value (if (listp value)
+                              (mapconcat #'identity value " / ")
+                            (format "%s" (or value "")))))
+    (if (string-empty-p formatted-value)
+        (propertize "[Empty]" 'face '(:foreground "gray50" :slant italic))
+      (propertize formatted-value 'face `(:foreground ,(org-supertag-view-node--get-accent-color))))))
 
 (defun org-supertag-view-node--insert-metadata-section (node-id)
+  (org-supertag-view-node--insert-section-header "Metadata" "🏷️")
   (let ((tags (org-supertag-node-get-tags node-id)))
-    (insert (propertize "🏷️ Tags\n" 'face 'org-level-2))
     (if (not tags)
-        (insert (propertize "  No metadata found.\n" 'face 'shadow))
-      (dolist (tag-id (sort tags #'string<)) ;; Sort tags for consistent display
-        (insert (propertize (format "    %s\n" tag-id) 'face 'org-tag 'tag-id tag-id 'field-name nil))
+        (insert (propertize "  No metadata found.\n" 'face '(:foreground "gray50" :slant italic)))
+              (dolist (tag-id (sort tags #'string<))
+          (insert (propertize (format "  📌 %s\n" tag-id) 'face '(:weight bold :foreground "default") 'tag-id tag-id 'field-name nil))
         (when-let* ((tag-def (org-supertag-tag-get tag-id))
                     (fields (org-supertag-get-all-fields-for-tag tag-id)))
           (if (not fields)
-              (insert (propertize "    No fields defined.\n" 'face 'shadow))
+              (insert (propertize "    No fields defined.\n" 'face '(:foreground "gray50" :slant italic)))
             (dolist (field-def fields)
               (let* ((field-name (plist-get field-def :name))
                      (value (org-supertag-field-get-value node-id field-name tag-id))
                      (display-value (org-supertag-view-node--format-display-value value))
                      (start (point)))
                 (insert (propertize (format "    %s: " field-name)
-                                     'face '(:weight bold :underline t)))
-                (insert (propertize (format "%s\n" display-value) 'face 'font-lock-string-face))
+                                   'face '(:weight bold :foreground "default")))
+                (insert (format "%s\n" display-value))
                 (add-text-properties start (point)
-                                     `(field-name ,field-name
-                                       tag-id ,tag-id
-                                       field-def ,field-def
-                                       face (:height 1.0))))))))
-      (insert (propertize "    [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field [M-<up>/<down>] Reorder\n" 'face 'org-meta-line)))
-    (insert "\n")))
+                                   `(field-name ,field-name
+                                     tag-id ,tag-id
+                                     field-def ,field-def
+                                     face (:height 1.0))))))))
+      (insert "\n")
+      ;; Add tag suggestion button
+      (let ((start (point)))
+        (insert (propertize "    💡 Get AI Tag Suggestions" 'face '(:foreground "blue" :weight bold)))
+        (insert "\n")
+        (add-text-properties start (point)
+                           `(action suggest-tags
+                             mouse-face highlight
+                             help-echo "Click to get AI tag suggestions for this node")))
+      (insert "\n")
+      (insert (propertize "    [RET] Edit Value [E] Edit Field Definition [a] Add Field [d] Delete Field [M-<up>/<down>] Reorder\n" 
+                          'face '(:foreground "gray60" :height 0.9))))))
 
 (defun org-supertag-view-node--insert-relations-section (node-id)
-  (insert (propertize "🔗 Relations\n" 'face 'org-level-2))
+  (org-supertag-view-node--insert-section-header "Relations" "🔗")
   (let ((tags (org-supertag-node-get-tags node-id))
         (relations '()))
     (dolist (tag-id tags)
@@ -103,14 +206,15 @@ Otherwise, return VALUE as a string."
         (dolist (rel relations)
           (let* ((source-name (org-supertag-tag-get-name-by-id (plist-get rel :from)))
                  (target-name (org-supertag-tag-get-name-by-id (plist-get rel :to))))
-            (insert (propertize source-name 'face 'org-tag))
+            (insert "    ")
+            (insert (propertize source-name 'face '(:foreground "default")))
             (insert " ")
-            (insert (propertize "⋈" 'face '(:foreground "green" :weight bold)))
+            (insert (propertize "⋈" 'face '(:foreground "default" :weight bold)))
             (insert " ")
-            (insert (propertize target-name 'face 'org-tag))
+            (insert (propertize target-name 'face '(:foreground "default")))
             (insert "\n")))
-      (insert (propertize "    No relations found.\n" 'face 'shadow))))
-  (insert "\n"))
+      (insert (propertize "    No relations found.\n" 'face '(:foreground "gray50" :slant italic))))
+    (insert "\n")))
 
 ;; FIXME: There is a problem with the data contract. simtag.utils.unified_tag_processor - ERROR - Parsed data is not a dict, but <class 'list'>. Returning empty dict
 ;; (defun org-supertag-view-node--insert-similar-entities-section (node-id)
@@ -132,7 +236,9 @@ Otherwise, return VALUE as a string."
 ;;   (insert "\n"))
 
 (defun org-supertag-view-node--insert-backlinks-section (node-id)
-  (insert (propertize "👉 References\n" 'face 'org-level-2))
+  (org-supertag-view-node--insert-section-header "References" "🔗")
+  
+  (org-supertag-view-node--insert-subsection-header "References To")
   (let ((refs (org-supertag-view-node--get-references node-id)))
     (if (and refs (listp refs) (not (null refs)))
         (let ((any-inserted nil))
@@ -142,10 +248,10 @@ Otherwise, return VALUE as a string."
                 (insert content)
                 (setq any-inserted t))))
           (unless any-inserted
-            (insert (propertize "    No references found\n" 'face 'shadow))))
-      (insert (propertize "    No references found\n" 'face 'shadow))))
-  (insert "\n")
-  (insert (propertize "👈 Referenced By\n" 'face 'org-level-2))
+            (insert (propertize "    No references found\n" 'face '(:foreground "gray50" :slant italic))))
+      (insert (propertize "    No references found\n" 'face '(:foreground "gray50" :slant italic))))
+  
+  (org-supertag-view-node--insert-subsection-header "Referenced By")
   (let ((refd-by (org-supertag-view-node--get-referenced-by node-id)))
     (if (and refd-by (listp refd-by) (not (null refd-by)))
         (let ((any-inserted nil))
@@ -155,9 +261,9 @@ Otherwise, return VALUE as a string."
                 (insert content)
                 (setq any-inserted t))))
           (unless any-inserted
-            (insert (propertize "    Not referenced by any nodes\n" 'face 'shadow))))
-      (insert (propertize "    Not referenced by any nodes\n" 'face 'shadow))))
-  (insert "\n"))
+            (insert (propertize "    Not referenced by any nodes\n" 'face '(:foreground "gray50" :slant italic))))
+      (insert (propertize "    Not referenced by any nodes\n" 'face '(:foreground "gray50" :slant italic))))
+    (insert "\n"))))))
 
 (defun org-supertag-view-node--get-field-info-at-point ()
   "Return plist of field info at point, or nil.
@@ -343,16 +449,26 @@ Tries current position first"
         (erase-buffer)
         (org-supertag-view-node-mode)
         (when-let* ((node (org-supertag-db-get org-supertag-view-node--current-node-id))
-                   (title (plist-get node :title)))
-          (insert (propertize (format "📄 %s\n" title) 'face 'org-level-1))
-          (insert (propertize "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" 'face 'org-meta-line))
+                   (title (plist-get node :title))
+                   (file-path (plist-get node :file-path)))
+          ;; Header section
+          (insert (propertize (format "📄 %s\n" title) 'face '(:weight bold :height 1.4 :foreground "default")))
+          (insert (propertize (format "📁 %s\n" (file-name-nondirectory file-path)) 'face '(:foreground "gray60" :slant italic)))
+          (insert (propertize (format "%s\n" org-supertag-view-node--section-separator) 'face '(:foreground "gray50")))
+          (insert "\n")
+          
+          ;; Content sections
           (org-supertag-view-node--insert-metadata-section org-supertag-view-node--current-node-id)
           (org-supertag-view-node--insert-backlinks-section org-supertag-view-node--current-node-id)
           (org-supertag-view-node--insert-relations-section org-supertag-view-node--current-node-id)
           ;;(org-supertag-view-node--insert-similar-entities-section org-supertag-view-node--current-node-id)
-          (insert (propertize "
-[j/k] Next/Previous Section  [g] Refresh  [q] Quit
-" 'face 'org-meta-line))
+          
+          ;; Footer with enhanced styling
+          (insert (propertize (format "%s\n" org-supertag-view-node--section-separator) 'face '(:foreground "gray50")))
+          (insert (propertize "Navigation:\n" 'face '(:weight bold :foreground "default")))
+          (insert (propertize "  [j/k] Next/Previous Section  [g] Refresh  [q] Quit\n" 'face '(:foreground "gray60" :height 0.9)))
+          (insert (propertize "  [RET] Edit Field Value  [E] Edit Field Definition  [a] Add Field  [d] Delete Field\n" 'face '(:foreground "gray60" :height 0.9)))
+          (insert (propertize "  [M-↑/↓] Move Field Up/Down\n" 'face '(:foreground "gray60" :height 0.9)))
           ))
     (org-supertag-view--display-buffer-right buffer)
     (select-window (get-buffer-window buffer))
@@ -366,5 +482,59 @@ Tries current position first"
   (let ((node-id (org-id-get-create)))
     (setq org-supertag-view-node--current-node-id node-id)
     (org-supertag-view-node--show-buffer)))
+
+;;----------------------------------------------------------------------
+;; AI Integration Functions
+;;----------------------------------------------------------------------
+
+(defun org-supertag-view-node-action-at-point ()
+  "Handle action at point - either edit field or trigger AI suggestion."
+  (interactive)
+  (let ((action (get-text-property (point) 'action)))
+    (cond
+     ((eq action 'suggest-tags)
+      (org-supertag-view-node-suggest-tags))
+     (t
+      (org-supertag-view-node-edit-field-at-point)))))
+
+(defun org-supertag-view-node-suggest-tags ()
+  "Get AI tag suggestions for current node."
+  (interactive)
+  (when org-supertag-view-node--current-node-id
+    (message "Getting AI tag suggestions for current node...")
+    (require 'org-supertag-api)
+    (let ((node-data (org-supertag-db-get org-supertag-view-node--current-node-id))
+          (current-buffer (current-buffer)))
+      (if (and node-data 
+               (plist-get node-data :content)
+               (> (length (string-trim (plist-get node-data :content))) 20))
+          (progn
+            ;; Switch to the org file temporarily to use the suggest function
+            (let ((file-path (plist-get node-data :file-path))
+                  (pos (plist-get node-data :pos)))
+              (when (and file-path pos (file-exists-p file-path))
+                (with-current-buffer (find-file-noselect file-path)
+                  (save-excursion
+                    (goto-char pos)
+                    (org-supertag-suggest-tags-here)))
+                ;; Refresh the view after suggestions are applied
+                (with-current-buffer current-buffer
+                  (org-supertag-view-node-refresh)))))
+        (message "Node content too short for meaningful tag suggestions")))))
+
+(defun org-supertag-view-node-chat-with-node ()
+  "Open chat with current node context."
+  (interactive)
+  (when org-supertag-view-node--current-node-id
+    (require 'org-supertag-api)
+    (let ((node-data (org-supertag-db-get org-supertag-view-node--current-node-id)))
+      (when node-data
+        (let ((file-path (plist-get node-data :file-path))
+              (pos (plist-get node-data :pos)))
+          (when (and file-path pos (file-exists-p file-path))
+            (with-current-buffer (find-file-noselect file-path)
+              (save-excursion
+                (goto-char pos)
+                (org-supertag-chat-with-node)))))))))
     
 (provide 'org-supertag-view-node)

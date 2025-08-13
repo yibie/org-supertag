@@ -9,12 +9,12 @@ from .services.llm_client import LLMClient
 from .services.rag_service import RAGService
 from simtag.module.rag_handler import RAGHandler
 from simtag.module.sync_handler import SyncHandler
-from simtag.module.autotag_handler import AutotagHandler
+# AutotagHandler removed - functionality integrated into knowledge_handler
 from simtag.module.knowledge_handler import KnowledgeHandler
 from simtag.module.diagnostics_handler import DiagnosticsHandler
 from simtag.module.feedback_handler import FeedbackHandler
 from simtag.module.query_handler import QueryHandler
-from simtag.module.smart_companion_handler import SmartCompanionHandler
+# SmartCompanionHandler removed - functionality integrated into view system
 from simtag.module.ai_handler import AIHandler
 
 logger = logging.getLogger(__name__)
@@ -32,13 +32,13 @@ class AppContext:
         self.graph_service: Optional[GraphService] = None
         self.rag_service: Optional[RAGService] = None
         self.sync_handler: Optional[SyncHandler] = None
-        self.autotag_handler: Optional[AutotagHandler] = None
+        # autotag_handler removed - functionality integrated into knowledge_handler
         self.diagnostics_handler: Optional[DiagnosticsHandler] = None
         self.feedback_handler: Optional[FeedbackHandler] = None
         self.query_handler: Optional[QueryHandler] = None
         self.rag_handler: Optional[RAGHandler] = None
         self.knowledge_handler: Optional[KnowledgeHandler] = None
-        self.smart_companion_handler: Optional[SmartCompanionHandler] = None
+        # smart_companion_handler removed - functionality integrated into view system
         self.ai_handler: Optional[AIHandler] = None
         self.emacs_client: Optional[any] = None # Will be set from SimTagBridge
         self.port: Optional[int] = None # Will be set from SimTagBridge
@@ -93,9 +93,7 @@ class AppContext:
             rag_service=self.rag_service,
             config=self.config,
         )
-        self.autotag_handler = AutotagHandler(
-            llm_client=self.llm_client,
-        )
+        # autotag_handler removed - functionality integrated into knowledge_handler
         self.diagnostics_handler = DiagnosticsHandler(
             config=self.config,
             graph_service=self.graph_service,
@@ -118,9 +116,7 @@ class AppContext:
             rag_service=self.rag_service,
             llm_client=self.llm_client
         )
-        self.smart_companion_handler = SmartCompanionHandler(
-            autotag_handler=self.autotag_handler
-        )
+        # smart_companion_handler removed - functionality integrated into view system
         self.ai_handler = AIHandler(
             rag_service=self.rag_service,
             graph_service=self.graph_service

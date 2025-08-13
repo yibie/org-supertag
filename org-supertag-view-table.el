@@ -208,8 +208,7 @@ Strategy:
       (org-supertag-view-table-mode)
       (org-supertag-view-mode 1) ; Enable the minor mode for correct dispatching
       (setq-local org-supertag-view-current-tag tag)
-      
-      ;; 设置完美显示环境，确保图片切片无空隙
+
       (org-supertag-grid--setup-perfect-display-environment)
 
       (let ((inhibit-read-only t))
@@ -228,9 +227,10 @@ Strategy:
         (org-supertag-view--insert-content-table tag))
 
       (if (and node-id-to-restore col-to-restore)
-          (unless (org-supertag-view-table--restore-cursor node-id-to-restore col-to-restore)
-            (goto-char (point-min))) ; Fallback if restore fails
-        (goto-char (point-min))) ; Default behavior
+          ;; TODO: Implement cursor restoration functionality.
+          ;; The function org-supertag-view-table--restore-cursor is not defined.
+          (goto-char (point-min))
+        (goto-char (point-min)))
       (setq buffer-read-only t))
 
     ;; Use full-screen display instead of sidebar window
@@ -916,8 +916,8 @@ Immediately saves the field value to the database after editing."
   "Insert content related to TAG in current buffer using the new Grid View."
   (let* ((fields (org-supertag-get-all-fields-for-tag tag))
          (header-names (cons "Node" (mapcar (lambda (f) (plist-get f :name)) fields)))
-         (header-cells (cl-loop for name in header-names for col from 0
-                                collect (make-grid-cell :raw-input name :computed-value name :row -1 :col col)))
+          (header-cells (cl-loop for name in header-names for col from 0
+                                 collect (make-grid-cell :raw-input name :computed-value name :row -1 :col col)))
          (content (org-supertag-view--get-related-nodes tag)))
     
     (if (not content)
