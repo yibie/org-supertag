@@ -9,7 +9,6 @@
 
 ;;; Code:
 
-(require 'epc)
 (require 'json)
 (require 'org-supertag-bridge)
 (require 'cl-lib)

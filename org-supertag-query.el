@@ -321,7 +321,7 @@ dates ('-7d', '+1m', etc.)."
         (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
                                (when-let ((created-at (plist-get props :created-at)))
                                  (time-less-p query-time created-at))))))
-     ((equal ast-type '(quote before))
+     ((equal ast-type 'before))
       (let ((query-time (org-supertag-query--resolve-date-string (plist-get ast :date))))
         (unless query-time (error "Invalid date format for 'before': %s" (plist-get ast :date)))
         (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
@@ -988,6 +988,97 @@ START and END define the region boundaries."
       (nreverse selected-ids))))
   
 
+(defun org-supertag-find-node-location (node-id file)
+  "Locate node position in file by ID.
+NODE-ID is the node identifier
+FILE is the file path
+
+Returns:
+- (point level olp) if node found
+- nil if not found"
+  (when (and file (file-exists-p file))
+    (with-current-buffer (find-file-noselect file)
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (let ((found nil))
+         (org-map-entries
+          (lambda ()
+            (when (equal (org-id-get) node-id)
+              (setq found (list (point)
+                              (org-current-level)
+                              (org-get-outline-path)))))
+          t nil)
+         found)))))
+
+(defun org-supertag-update-node-db (node-id file)
+  "Update node information in database.
+NODE-ID is the node identifier
+FILE is the target file path"
+  (unless (org-supertag-ensure-org-file file)
+    (error "Invalid org file: %s" file))
+  (with-current-buffer (find-file-noselect file)
+    (save-excursion
+      ;; Ensure at correct position
+      (unless (org-at-heading-p)
+        (org-back-to-heading t))
+      ;; Verify correct node found
+      (let ((current-id (org-id-get)))
+        (unless (equal current-id node-id)
+          (error "Current heading ID (%s) doesn't match expected ID (%s)"
+                 current-id node-id)))
+      ;; Collect node info
+      (let* ((pos (point))
+             (level (org-current-level))
+             (title (org-get-heading t t t t))
+             (olp (org-get-outline-path))
+             ;; Get existing node info to preserve properties
+             (existing-node (org-supertag-db-get node-id))
+             (created-at (and existing-node 
+                             (plist-get existing-node :created-at))))
+        ;; Build new property list
+        (let ((new-props
+               (list :type :node
+                     :title title
+                     :file-path file
+                     :pos pos
+                     :level level
+                     :olp olp)))
+          ;; Preserve creation time if exists
+          (when created-at
+            (setq new-props (plist-put new-props :created-at created-at)))
+          ;; Update database
+          (condition-case err
+              (progn
+                (org-supertag-node-db-update node-id new-props)
+                (message "Updated node %s in database" node-id))
+            (error
+             (message "Failed to update node %s: %s" 
+                      node-id 
+                      (error-message-string err))
+             (signal (car err) (cdr err)))))))))
+
+(defun org-supertag-query--get-clean-node-content (node-id)
+  "Get the content of NODE-ID as a string, excluding the PROPERTIES drawer."
+  (when-let* ((node (org-supertag-db-get node-id))
+              (file (plist-get node :file-path)))
+    (when (file-exists-p file)
+      (with-current-buffer (find-file-noselect file)
+        (org-with-wide-buffer
+         (when (org-find-entry-with-id node-id)
+           (org-back-to-heading t)
+           (let* ((element (org-element-at-point))
+                  (headline-start (org-element-property :begin element))
+                  (contents-start (org-element-property :contents-begin element))
+                  (contents-end (org-element-property :end element))
+                  (headline-str (buffer-substring-no-properties
+                               headline-start
+                               (save-excursion (goto-char headline-start)
+                                              (line-end-position))))
+                  (body-str (if (and contents-start contents-end (> contents-end contents-start))
+                               (buffer-substring-no-properties contents-start contents-end)
+                             "")))
+             (string-trim (concat headline-str "\n" body-str)))))))))
+
 (defun org-supertag-insert-nodes (node-ids target-pos-level)
   "Insert node links at specified position."
   (let ((target-point (car target-pos-level))
@@ -1103,59 +1194,71 @@ Available insertion positions:
              (message "Export failed: %s" (error-message-string err))
              (signal (car err) (cdr err)))))))))
 
-(defun org-supertag-query--get-insert-position (target-file)
-  "Get insertion position for target file.
-Shows outline structure in format: filename / outline-path / title
-Returns cons cell (point . nil) since we only insert links."
-  (let* ((headlines (with-current-buffer (find-file-noselect target-file)
-                     (org-with-wide-buffer
-                      (org-map-entries
-                       (lambda ()
-                         (let* ((title (org-get-heading t t t t))
-                                (olp (org-get-outline-path))
-                                (display (org-supertag-node--format-path
-                                        (file-name-nondirectory target-file)
-                                        olp
-                                        title)))
-                           (cons display (point))))))))
-         (insert-type (completing-read 
-                      "Insert at: "
-                      (append
-                       '("File Start" "File End")
-                       (when headlines
-                         '("Under Heading" "After Heading"))))))
-    
-    (with-current-buffer (find-file-noselect target-file)
-      (org-with-wide-buffer
-       (pcase insert-type
-         ("File Start"
-          (cons (org-supertag-find-file-content-start) nil))
-         
-         ("File End"
-          (cons (point-max) nil))
-         
-         ("Under Heading"
-          (let* ((selected (completing-read 
-                           "Select parent heading: "
-                           (mapcar #'car headlines)
-                           nil t))
-                 (pos (cdr (assoc selected headlines))))
-            ;; Move to selected heading and go to end of subtree
-            (goto-char pos)
-            (org-end-of-subtree)
-            (forward-line)
-            (cons (point) nil)))
-         
-         ("After Heading"
-          (let* ((selected (completing-read 
-                           "Insert after heading: "
-                           (mapcar #'car headlines)
-                           nil t))
-                 (pos (cdr (assoc selected headlines))))
-            (goto-char pos)
-            (org-end-of-subtree)
-            (forward-line)
-            (cons (point) nil))))))))
+  (defun org-supertag-query--get-insert-position (target-file)
+    "Get insertion position and target level for target file.
+  Returns cons cell (point . target-level)."
+    (let* ((headlines (with-current-buffer (find-file-noselect target-file)
+                       (org-with-wide-buffer
+                        (org-map-entries
+                         (lambda ()
+                           (let* ((title (org-get-heading t t t t))
+                                  (olp (org-get-outline-path))
+                                  (display (org-supertag-node--format-path
+                                          (file-name-nondirectory target-file)
+                                          olp
+                                          title)))
+                             ;; Store display string associated with a cons cell of (point . level)
+                             (cons display (cons (point) (org-outline-level)))))
+                         t ; MATCH: all headings
+                         nil)))) ; SCOPE: current buffer (the target file)
+           (insert-type (completing-read
+                        "Insert at: "
+                        (append
+                         '("File Start" "File End")
+                         (when headlines
+                           '("Under Heading" "After Heading"))))))
+
+      (with-current-buffer (find-file-noselect target-file)
+        (org-with-wide-buffer
+         (pcase insert-type
+           ("File Start"
+            ;; When inserting at file start, the new heading should be level 1
+            (cons (org-supertag-find-file-content-start) 1))
+
+           ("File End"
+            ;; When inserting at file end, the new heading should be level 1
+            (cons (point-max) 1))
+
+           ("Under Heading"
+            (let* ((selected-display (completing-read
+                                     "Select parent heading: "
+                                     (mapcar #'car headlines)
+                                     nil t))
+                   ;; Retrieve the stored (point . level) for the selected headline
+                   (selected-headline-data (cdr (assoc selected-display headlines)))
+                   (pos (car selected-headline-data))
+                   (level (cdr selected-headline-data)))
+              ;; Move to selected heading and go to end of subtree
+              (goto-char pos)
+              (org-end-of-subtree)
+              (forward-line)
+              ;; New heading level is parent's level + 1
+              (cons (point) (1+ level))))
+
+           ("After Heading"
+            (let* ((selected-display (completing-read
+                                     "Insert after heading: "
+                                     (mapcar #'car headlines)
+                                     nil t))
+                   ;; Retrieve the stored (point . level) for the selected headline
+                   (selected-headline-data (cdr (assoc selected-display headlines)))
+                   (pos (car selected-headline-data))
+                   (level (cdr selected-headline-data)))
+              (goto-char pos)
+              (org-end-of-subtree)
+              (forward-line)
+              ;; New heading level is the same as the selected heading
+              (cons (point) level))))))))
 
 (defun org-supertag-find-file-content-start ()
   "Find the position where content should start in an org file.
