@@ -58,7 +58,8 @@ simtag/nano-graphrag/
 .pytest_cache/
 test/
 commands/
-
+.continue/
+.kiro/
 
 .ruff_cache/
 IMPROVEMENT_PLAN.md
