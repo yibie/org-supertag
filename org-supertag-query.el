@@ -321,7 +321,7 @@ dates ('-7d', '+1m', etc.)."
         (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
                                (when-let ((created-at (plist-get props :created-at)))
                                  (time-less-p query-time created-at))))))
-     ((equal ast-type 'before))
+     ((equal ast-type '(quote before)))
       (let ((query-time (org-supertag-query--resolve-date-string (plist-get ast :date))))
         (unless query-time (error "Invalid date format for 'before': %s" (plist-get ast :date)))
         (mapcar #'car (org-supertag-db-find-by-props '(:type :node) (lambda (props)
