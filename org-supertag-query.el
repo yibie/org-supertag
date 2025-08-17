@@ -339,7 +339,7 @@ dates ('-7d', '+1m', etc.)."
      ((equal ast-type '(quote term))
       (org-supertag-query--find-nodes-by-term (plist-get ast :value)))
      (t
-      '())))))))
+      '()))))))
 
 (defun org-supertag-query--ensure-db-initialized ()
   "Ensure the database is properly initialized and loaded.
