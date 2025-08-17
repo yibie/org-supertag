@@ -206,15 +206,18 @@
         (dolist (rel relations)
           (let* ((source-name (org-supertag-tag-get-name-by-id (plist-get rel :from)))
                  (target-name (org-supertag-tag-get-name-by-id (plist-get rel :to))))
-            (insert "    ")
-            (insert (propertize source-name 'face '(:foreground "default")))
-            (insert " ")
-            (insert (propertize "⋈" 'face '(:foreground "default" :weight bold)))
-            (insert " ")
-            (insert (propertize target-name 'face '(:foreground "default")))
-            (insert "\n")))
-      (insert (propertize "    No relations found.\n" 'face '(:foreground "gray50" :slant italic))))
-    (insert "\n")))
+            ;; Only display the relation if both tags actually exist.
+            ;; This prevents errors from stale relations pointing to deleted tags.
+            (when (and source-name target-name)
+              (insert "    ")
+              (insert (propertize source-name 'face '(:foreground "default")))
+              (insert " ")
+              (insert (propertize "⋈" 'face '(:foreground "default" :weight 'bold)))
+              (insert " ")
+              (insert (propertize target-name 'face '(:foreground "default")))
+              (insert "\n"))))
+      (insert (propertize "    No relations found.\n" 'face '(:foreground "gray50" :slant 'italic)))))
+    (insert "\n"))
 
 ;; FIXME: There is a problem with the data contract. simtag.utils.unified_tag_processor - ERROR - Parsed data is not a dict, but <class 'list'>. Returning empty dict
 ;; (defun org-supertag-view-node--insert-similar-entities-section (node-id)

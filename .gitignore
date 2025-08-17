@@ -58,7 +58,9 @@ simtag/nano-graphrag/
 .pytest_cache/
 test/
 commands/
-
+.continue/
+.kiro/
+dev-note/
 
 .ruff_cache/
 IMPROVEMENT_PLAN.md
@@ -73,3 +75,5 @@ commands/
 docs/
 hooks/
 logs/
+
+

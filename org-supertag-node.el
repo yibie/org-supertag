@@ -229,49 +229,41 @@ Returns node ID if successful, nil otherwise."
 ;; Hashing Functions
 ;;------------------------------------------------------------------------------
 
-(defun org-supertag-node-content-hash (node-or-id)
-  "Calculate a content-based MD5 hash for a given node or node-id.
+(defun org-supertag-node-content-hash (node-id)
+  "Calculate a content-based MD5 hash for a given node-id.
 This hash reflects changes in the node's title, content, tags, and field values.
-It excludes metadata like creation/modification times, file path, and position.
-
-NODE-OR-ID can be either a node plist or a node-id string."
+It excludes metadata like creation/modification times, file path, and position."
   (condition-case err
-      (let* ((node-props (if (stringp node-or-id)
-                             (org-supertag-db-get node-or-id)
-                           node-or-id))
-             (hash-string-parts '()))
+      (let ((node-props (org-supertag-db-get node-id)))
+      (when node-props
+        (let ((hash-string-parts '()))
 
-        (unless node-props
-          (message "Warning: Node not found for content hash calculation.")
-          (return-from org-supertag-node-content-hash nil))
+          ;; 1. Include Title
+          (when-let ((title (plist-get node-props :title)))
+            (push (format "T:%s" title) hash-string-parts))
 
-        ;; 1. Include Title
-        (when-let ((title (plist-get node-props :title)))
-          (push (format "T:%s" title) hash-string-parts))
+          ;; 2. Include Content
+          (when-let ((content (plist-get node-props :content)))
+            (push (format "C:%s" content) hash-string-parts))
 
-        ;; 2. Include Content
-        (when-let ((content (plist-get node-props :content)))
-          (push (format "C:%s" content) hash-string-parts))
+          ;; 3. Include Tags (sorted for consistent hash)
+          (when-let ((tags (plist-get node-props :tags)))
+            (push (format "G:%s" (mapconcat #'identity (sort tags #'string<) ",")) hash-string-parts))
 
-        ;; 3. Include Tags (sorted for consistent hash)
-        (when-let ((tags (plist-get node-props :tags)))
-          (push (format "G:%s" (mapconcat #'identity (sort tags #'string<) ",")) hash-string-parts))
+          ;; 4. Include Field Values (sorted by field-name for consistent hash)
+          ;;    We need to iterate through all node-field links for this node.
+          (let ((node-fields '()))
+            (cl-loop for link in (org-supertag-db-find-links :node-field node-id nil)
+                     do (push (cons (plist-get link :to) (plist-get link :value)) node-fields))
+            ;; Sort fields by name before concatenating
+            (setq node-fields (sort node-fields (lambda (a b) (string< (car a) (car b)))))
+            (dolist (field-pair node-fields)
+              (push (format "F:%s=%s" (car field-pair) (cdr field-pair)) hash-string-parts)))
 
-        ;; 4. Include Field Values (sorted by field-name for consistent hash)
-        ;;    We need to iterate through all node-field links for this node.
-        (let ((node-fields '())
-              (node-id (if (stringp node-or-id) node-or-id (plist-get node-props :id))))
-          (cl-loop for link in (org-supertag-db-find-links :node-field node-id nil)
-                   do (push (cons (plist-get link :to) (plist-get link :value)) node-fields))
-          ;; Sort fields by name before concatenating
-          (setq node-fields (sort node-fields (lambda (a b) (string< (car a) (car b)))))
-          (dolist (field-pair node-fields)
-            (push (format "F:%s=%s" (car field-pair) (cdr field-pair)) hash-string-parts)))
-
-        ;; Combine all parts into a single string and calculate MD5 hash
-        (md5 (mapconcat #'identity (sort hash-string-parts #'string<) "|")))
+          ;; Combine all parts into a single string and calculate MD5 hash
+          (md5 (mapconcat #'identity (sort hash-string-parts #'string<) "|")))))
     (error
-     (message "Error calculating content hash: %s" (error-message-string err))
+     (message "Error calculating content hash for node %s: %s" node-id (error-message-string err))
      nil)))
 
 ;;------------------------------------------------------------------------------
@@ -406,9 +398,11 @@ Returns the complete node content as string, or nil if not found."
                       (content (buffer-substring-no-properties begin end)))
                  (message "[Get Content] Got content from %d to %d (%d chars)" 
                          begin end (length content))
-                 (if (string-suffix-p "\n" content)
+                 (if (string-suffix-p "
+" content)
                      content
-                   (concat content "\n")))))))
+                   (concat content "
+")))))))
       (message "[Get Content] File does not exist: %s" file)
       nil)))
 
@@ -465,8 +459,11 @@ Returns:
                           (length adjusted-content))
                   
                   ;; Ensure proper spacing before insertion
-                  (unless (or (bobp) (looking-back "\n\n" 2))
-                    (insert "\n"))
+                  (unless (or (bobp) (looking-back "
+
+" 2))
+                    (insert "
+"))
                   
                   ;; Insert content
                   (let ((insert-point (point)))
@@ -474,13 +471,15 @@ Returns:
                     (insert adjusted-content)
                     
                     ;; Ensure proper spacing after insertion
-                    (unless (looking-at "\n")
-                      (insert "\n"))
+                    (unless (looking-at "
+")
+                      (insert "
+"))
                     
-                    ;; Save buffer immediately
+                    ;; 立即保存缓冲区，避免搜索未保存内容
                     (save-buffer)
                     
-                    ;; Use more reliable method to find and sync node - avoid direct search
+                    ;; 使用更可靠的方法查找和同步节点 - 避免直接搜索
                     (message "[Move] Syncing inserted node...")
                     (widen)
                     (let ((marker (org-id-find-id-in-file node-id (buffer-file-name))))
@@ -489,28 +488,28 @@ Returns:
                             (goto-char (cdr marker))
                             (when (org-at-heading-p)
                               (message "[Move] Found heading at point %d" (point))
-                              ;; Ensure visibility
+                              ;; 确保可见
                               (org-show-context)
                               (org-show-subtree)
-                              ;; Sync node
+                              ;; 同步节点
                               (org-supertag-node-sync-at-point)
                               (message "[Move] Node move completed successfully")
                               t))
                         (message "[Move] Warning: Could not find ID in target file, but insertion completed")
-                        ;; Try to return to insert point and find heading
+                        ;; 尝试返回到插入点并找到标题
                         (goto-char insert-point)
-                        (when (re-search-forward "^\\*+ " nil t)
+                        (when (re-search-forward "^\*+ " nil t)
                           (beginning-of-line)
                           (when (org-at-heading-p)
                             (message "[Move] Found heading using fallback method")
                             (org-id-get-create)
                             (org-supertag-node-sync-at-point)))
                         t)))))))
-          t)  ; Return t if successful
+          t)  ; 成功完成返回 t
       
       (error
        (message "[Move] Error during move: %s" (error-message-string err))
-       nil))))  ; Return nil if error occurs
+       nil))))  ; 发生错误返回 nil
 
 (defun org-supertag-delete-node-content (node-id)
   "Delete node content from source file. (Internal helper)
@@ -534,7 +533,8 @@ Returns:
                   (end (org-element-property :end element)))
              (message "Deleting region from %d to %d" begin end)
              (delete-region begin end)
-             (when (looking-at "\n") 
+             (when (looking-at "
+") 
                (delete-char 1))
              (save-buffer)
              t)
@@ -584,7 +584,7 @@ and returns the position where new content should be inserted."
   (save-excursion
     (goto-char (point-min))
     (while (and (not (eobp))
-                (looking-at "^#\\+\\|^$"))
+                (looking-at "^#\+\|^$"))
       (forward-line 1))
     (point)))
 
@@ -600,13 +600,13 @@ Returns adjusted content string with proper heading levels."
     (goto-char (point-min))
     (when (and target-level (> target-level 0))
       ;; Find and get current level
-      (when (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
+      (when (re-search-forward "^\(\*+\)\( .*\)" nil t)
         (let* ((current-level (length (match-string 1)))
           (level-diff (- target-level current-level)))
           (unless (zerop level-diff)
             (goto-char (point-min))
             ;; Adjust all heading levels
-            (while (re-search-forward "^\\(\\*+\\)\\( .*\\)" nil t)
+            (while (re-search-forward "^\(\*+\)\( .*\)" nil t)
               (let* ((stars (match-string 1))
                      (text (match-string 2))
                      (current-stars-len (length stars))
@@ -647,8 +647,10 @@ TARGET-LEVEL is the optional target heading level."
           (goto-char target-pos)
           ;; 插入完整节点内容
           (insert (make-string level ?*)
-                  " " title "\n"
-                  content "\n")
+                  " " title "
+"
+                  content "
+")
           (save-buffer))))
 
     ;; 3. 修改源节点为链接
@@ -660,7 +662,8 @@ TARGET-LEVEL is the optional target heading level."
         (beginning-of-line)  ;; 移动到行头
         (delete-region (point) (line-end-position))  ;; 清理从行头到行末的内容
         (insert (make-string level ?*)
-                " " (org-link-make-string (concat "id:" node-id) title) "\n")
+                " " (org-link-make-string (concat "id:" node-id) title) "
+")
         (widen)
         (save-buffer)))))
 
@@ -696,8 +699,8 @@ The directory is determined by `org-directory' or `default-directory'."
          (files (directory-files-recursively dir "\.org$" t)))  ;; 添加 t 参数以确保返回完整路径
     ;; 过滤掉备份文件和隐藏文件
     (seq-filter (lambda (file)
-                  (and (not (string-match-p "/\\.#" file))  ;; 排除备份文件
-                       (not (string-match-p "/\\.org$" file))  ;; 排除隐藏文件
+                  (and (not (string-match-p "/\.#" file))  ;; 排除备份文件
+                       (not (string-match-p "/\.org$" file))  ;; 排除隐藏文件
                        (file-regular-p file)))  ;; 确保是文件而不是目录
                 files)))
 
@@ -743,7 +746,8 @@ Returns:
                               (org-outline-level)
                             1)))
         ;; Insert new heading
-        (insert (make-string current-level ?*) " " title "\n")
+        (insert (make-string current-level ?*) " " title "
+")
         ;; Move back to heading
         (forward-line -1)
         ;; Create node
@@ -774,7 +778,7 @@ Returns:
               (with-current-buffer (find-file-noselect ref-file)
                 (save-excursion
                   (goto-char (point-min))
-                  (while (re-search-forward (format "\\[\\[id:%s\\]\\[[^]]*\\]\\]" node-id) nil t)
+                  (while (re-search-forward (format "\[\[id:%s\]\[[^]]*\]\]" node-id) nil t)
                     (delete-region (match-beginning 0) (match-end 0)))
                   (save-buffer)))))
           ;; 4. Delete the headline content including properties
@@ -784,7 +788,8 @@ Returns:
                  (end (org-element-property :end element)))
             ;; Delete the entire heading including properties
             (delete-region begin end)
-            (when (looking-at "\n") (delete-char 1)))
+            (when (looking-at "
+") (delete-char 1)))
           ;; 5. Remove from database using proper function
           (org-supertag-db-remove-object node-id)
           ;; 6. Save changes
@@ -820,7 +825,10 @@ Uses org-supertag-node-sync-at-point to perform a complete node synchronization.
         (progn
           (message "Node updated successfully: %s" node-id)
           node-id)
-      (user-error "Failed to sync node. Please ensure:\n1. You're on a valid heading\n2. The heading is not archived or commented\n3. The node ID is valid"))))
+      (user-error "Failed to sync node. Please ensure:
+1. You're on a valid heading
+2. The heading is not archived or commented
+3. The node ID is valid"))))
 
 (defun org-supertag-node-at-valid-heading-p ()
   "Check if point is at a valid heading for tag operations.
@@ -925,38 +933,58 @@ filename / outline-path / title"
       (message "No matching node found"))))
 
 ;;;###autoload
-(defun org-supertag-node-back-to-heading (&optional node-id)
-  "Remove a node from the database but keep it as a regular Org heading.
-If NODE-ID is nil, it defaults to the node at the current point.
-This function cleans up all database associations (tags, fields, refs)
-but leaves the Org heading and its ID property untouched in the file."
+(defun org-supertag-node-back-to-heading ()
+  "Remove current node from database but keep it as a regular Org heading.
+This function will:
+1. Remove the node from the database
+2. Clean up all tag associations
+3. Clean up all field associations  
+4. Clean up all reference relationships
+5. Keep the Org heading and ID property intact
+
+The heading will remain as a regular Org heading with its ID property,
+allowing you to recreate the node later if needed."
   (interactive)
-  (let ((id (or node-id (org-supertag-node--ensure-sync))))
-    (unless id
-      (user-error "No valid node found at point"))
-    (when (y-or-n-p (format "Revert node '%s' to a regular heading? " id))
-      ;; 1. Clean up tag links
-      (dolist (tag-id (org-supertag-node-get-tags id))
-        (org-supertag-db-unlink :node-tag id tag-id))
-
-      ;; 2. Clean up field links
-      (dolist (field-pair (org-supertag-node-db-get-fields id))
-        (let ((field-id (car field-pair)))
-          (org-supertag-db-unlink :node-field id field-id)))
-
-      ;; 3. Clean up reference links (both directions)
-      (dolist (ref-id (org-supertag-node-db-get-reference id 'to))
-        (org-supertag-db-unlink :node-ref id ref-id))
-      (dolist (ref-id (org-supertag-node-db-get-reference id 'from))
-        (org-supertag-db-unlink :node-ref ref-id id))
-
-      ;; 4. Remove the node object itself from the database
-      (org-supertag-db-remove-object id)
-
-      ;; 5. Announce completion
-      (run-hook-with-args 'org-supertag-node-removed-hook id)
-      (message "Node %s reverted to a regular heading. (DB associations removed)" id))))
-      
+  (if-let* ((node-id (org-supertag-node--ensure-sync)))
+      (when (yes-or-no-p "Remove this node from database but keep as regular heading? ")
+        ;; 1. Get node info before removal
+        (let* ((node (org-supertag-db-get node-id))
+               (tags (org-supertag-node-get-tags node-id))
+               (fields (org-supertag-node-db-get-fields node-id))
+               (refs-to (org-supertag-node-db-get-reference node-id 'to))
+               (refs-from (org-supertag-node-db-get-reference node-id 'from)))
+          
+          ;; 2. Remove all tag associations
+          (dolist (tag-id tags)
+            (org-supertag-node-db-remove-tag node-id tag-id))
+          
+          ;; 3. Remove all field associations
+          (dolist (field-pair fields)
+            (let ((field-id (car field-pair)))
+              (org-supertag-db-unlink :node-field node-id field-id)))
+          
+          ;; 4. Remove all reference relationships
+          (dolist (ref-id refs-to)
+            (org-supertag-db-unlink :node-ref node-id ref-id))
+          (dolist (ref-id refs-from)
+            (org-supertag-db-unlink :node-ref ref-id node-id))
+          
+          ;; 5. Remove node from database
+          (org-supertag-db-remove-object node-id)
+          
+          ;; 6. Clear related caches
+          (org-supertag-db--cache-remove 'query (format "node-tags:%s" node-id))
+          (org-supertag-db--cache-remove 'query (format "node-fields:%s" node-id))
+          (org-supertag-db--cache-remove 'query (format "node-refs:%s" node-id))
+          
+          ;; 7. Run removal hook
+          (run-hook-with-args 'org-supertag-node-removed-hook node-id)
+          
+          ;; 8. Save database
+          (org-supertag-db-save)
+          
+          (message "Node removed from database: %s (heading preserved)" node-id)))
+    (user-error "No node found at current position")))
 ;;;###autoload
 (defun org-supertag-node-find-other-window ()
   "Like `org-supertag-node-find' but display node in other window."
@@ -1077,15 +1105,15 @@ List of node IDs"
           (cond                                                                                                                                     
            ((eq direction 'to)                                                                                                                      
             (setq results (mapcar (lambda (link) (plist-get link :to))                                                                              
-                                  (org-supertag-db-find-links :node-node node-id nil))))                                                           
+                                  (org-supertag-db-find-links :type :node-node :from node-id))))                                                           
            ((eq direction 'from)                                                                                                                    
             (setq results (mapcar (lambda (link) (plist-get link :from))                                                                            
-                                  (org-supertag-db-find-links :node-node nil node-id))))                                                            
+                                  (org-supertag-db-find-links :type :node-node :to node-id))))                                                            
            (t                                                                                                                                       
             (let ((to-links (mapcar (lambda (link) (plist-get link :to))                                                                            
-                                    (org-supertag-db-find-links :node-node node-id nil)))                                                         
+                                    (org-supertag-db-find-links :type :node-node :from node-id)))                                                         
                   (from-links (mapcar (lambda (link) (plist-get link :from))                                                                        
-                                      (org-supertag-db-find-links :node-node nil node-id))))                                                        
+                                      (org-supertag-db-find-links :type :node-node :to node-id))))                                                        
               (setq results (delete-duplicates (append to-links from-links))))))                                                                    
           (org-supertag-db--cache-set 'query cache-key results)                                                                                     
           results)))                                                                                                                                
@@ -1200,12 +1228,17 @@ In both cases:
                     (save-excursion
                       (goto-char (point-max))
                       ;; Ensure empty line at end of file
-                      (unless (bolp) (insert "\n"))
-                      (unless (looking-back "\n\n" (- (point) 2))
-                        (insert "\n"))
+                      (unless (bolp) (insert "
+"))
+                      (unless (looking-back "
+
+" (- (point) 2))
+                        (insert "
+"))
                       
                       ;; Insert new node
-                      (insert "* " selected-text "\n")
+                      (insert "* " selected-text "
+")
                       ;; Ensure new node is at the end of file
                       (forward-line -1)
                       ;; Create node and get ID
@@ -1330,10 +1363,6 @@ Note: This hook is called when a node is removed from the database
 but the Org heading is preserved. Use this for cleanup operations
 that should happen when a node is no longer tracked by org-supertag.")
 
-;;------------------------------------------------------------------------------
-;; ID Check and Fix
-;;------------------------------------------------------------------------------
-
 (defun org-supertag-check-and-fix-ids ()
   "Check and fix ID-related issues in org-supertag.
 This function will:
@@ -1363,36 +1392,60 @@ This function will:
     
     ;; 3. Report results
     (with-output-to-temp-buffer "*Org-Supertag ID Check*"
-      (princ "Org-Supertag ID Check Results\n")
-      (princ "===========================\n\n")
+      (princ "Org-Supertag ID Check Results
+")
+      (princ "===========================
+
+")
       
-      (princ (format "Total IDs checked: %d\n" total-ids))
-      (princ (format "Missing IDs: %d\n\n" (length missing-ids)))
+      (princ (format "Total IDs checked: %d
+" total-ids))
+      (princ (format "Missing IDs: %d
+
+" (length missing-ids)))
       
       (when missing-ids
-        (princ "Missing ID Details:\n")
-        (princ "-------------------\n")
+        (princ "Missing ID Details:
+")
+        (princ "-------------------
+")
         (dolist (id missing-ids)
           (when-let* ((props (org-supertag-db-get id)))
-            (princ (format "ID: %s\n" id))
-            (princ (format "  Title: %s\n" (or (plist-get props :title) "[No title]")))
-            (princ (format "  File: %s\n" (or (plist-get props :file-path) "[No file]")))
-            (princ "\n"))))
+            (princ (format "ID: %s
+" id))
+            (princ (format "  Title: %s
+" (or (plist-get props :title) "[No title]")))
+            (princ (format "  File: %s
+" (or (plist-get props :file-path) "[No file]")))
+            (princ "
+"))))
       
       (when problematic-files
-        (princ "\nProblematic Files:\n")
-        (princ "-----------------\n")
+        (princ "
+Problematic Files:
+")
+        (princ "-----------------
+")
         (dolist (file (delete-dups problematic-files))
-          (princ (format "%s\n" file))))
+          (princ (format "%s
+" file))))
       
-      (princ "\nRecommended Actions:\n")
-      (princ "------------------\n"
-      (princ "1. Check if problematic files still exist\n")
-      (princ "2. Run org-id-update-id-locations\n")
-      (princ "3. Consider removing invalid entries from the database\n")
+      (princ "
+Recommended Actions:
+")
+      (princ "------------------
+"
+      (princ "1. Check if problematic files still exist
+")
+      (princ "2. Run org-id-update-id-locations
+")
+      (princ "3. Consider removing invalid entries from the database
+")
       
       (when missing-ids
-        (princ "\nTo remove invalid entries, evaluate:\n")
+        (princ "
+To remove invalid entries, evaluate:
+")
         (princ "(dolist (id '")
         (prin1 missing-ids (current-buffer))
         (princ ") (org-supertag-db-remove id))"))))))

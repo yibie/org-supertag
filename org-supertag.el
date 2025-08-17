@@ -62,6 +62,7 @@
 ;; Simple tag suggestions now integrated into org-supertag-api.el and view system
 (require 'org-supertag-completion)
 (require 'org-supertag-embed)
+(require 'org-supertag-capture)
 ;;(require 'org-supertag-workbench)
 
 (defgroup org-supertag nil
