@@ -3,7 +3,7 @@
 **作者**: Yibie  
 **邮箱**: yibie@outlook.com
 
-[English](./README.org) | [中文](./README_CN.org)
+[English](./README.md) | [中文](./README_CN.md)
 
 ## 🚀 什么是 Org-SuperTag？
 
@@ -269,6 +269,13 @@ sh ./setup_uv.sh
 ```emacs-lisp
 ;; 核心配置
 (setq org-supertag-sync-directories '("~/notes/" "~/projects/"))
+```
+
+#### AI 服务配置
+```emacs-lisp
+;; 控制是否启用 AI 服务
+;; 设置为 nil 可禁用 AI 服务，默认为 t
+(setq org-supertag-bridge-enable-ai nil)
 ```
 
 #### 高级配置
