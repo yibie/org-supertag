@@ -1163,18 +1163,19 @@ This function will only print a message if tasks were actually deregistered."
 (defun org-supertag-background-sync-run-now ()
   "Run background sync immediately."
   (interactive)
-  (cond 
+  (cond
    ((not (eq org-supertag-background-sync--phase :idle))
     (message "[background-sync] Already running, please wait (current phase: %s)..." (symbol-name org-supertag-background-sync--phase)))
-   
+
    ((eq org-supertag-background-sync--phase :waiting-backend)
     (message "[background-sync] Waiting for Python backend to be ready, please wait..."))
-   
-   ((not (org-supertag-background-sync--python-ready-p))
-    (message "[background-sync] Python backend not ready. Please start Python backend: M-x org-supertag-bridge-start-process"))
-   
-   (t 
-    (org-supertag-background-sync--do-sync))))
+
+   ((not (org-supertag-background-sync--python-ready-p)) (message "[background-sync] Python backend not ready. Please start Python backend: M-x org-supertag-bridge-start-process"))
+   ((not (and (boundp 'org-supertag-bridge-enable-ai)
+              org-supertag-bridge-enable-ai))
+    (message "[background-sync] AI services disabled, skipping background sync.")
+    nil)
+   (t (org-supertag-background-sync--do-sync))))
 
 (defun org-supertag-background-sync-status ()
   "Display background sync status."
@@ -1392,14 +1393,17 @@ are considered changed during the next sync."
     (message "[background-sync] Reset and force resync started")))
 
 (defun org-supertag-background-sync-refresh-stale-tags ()
-  "Call backend RPC to refresh embeddings for STALE tags."
+  "Call backend RPC to refresh embeddings for STALE tags if AI services are enabled."
   (interactive)
-  (message "[background-sync] Triggering backend refresh of STALE tag embeddings...")
-  (org-supertag-bridge-call-async
-   "embedding/refresh_stale_tags"
-   nil
-   (lambda (result)
-     (message "[background-sync] refresh_stale_tags result: %S" result))))
+  (if (and (boundp 'org-supertag-bridge-enable-ai) org-supertag-bridge-enable-ai)
+      (progn
+        (message "[background-sync] Triggering backend refresh of STALE tag embeddings...")
+        (org-supertag-bridge-call-async
+         "embedding/refresh_stale_tags"
+         nil
+         (lambda (result)
+           (message "[background-sync] refresh_stale_tags result: %S" result))))
+    (message "[background-sync] AI services disabled, skipping stale tag refresh.")))
 
 
 (provide 'org-supertag-background-sync)
