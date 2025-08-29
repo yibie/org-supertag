@@ -72,6 +72,11 @@ Assumed that `org-supertag-bridge.el` is in the project root, and the script is 
   :type 'boolean
   :group 'org-supertag-bridge)
 
+(defcustom org-supertag-bridge-enable-ai t
+  "Enable AI services. When nil, AI functionality will be disabled."
+  :type 'boolean
+  :group 'org-supertag-bridge)
+
 ;; =============================================================================
 ;; Internal State Variables
 ;; =============================================================================
@@ -336,6 +341,12 @@ CALLBACK: A function to handle the async result. It will be called
           list like '(:error \"description\")' on failure."
 
   ;; 确保 EPC 连接已就绪
+  (unless org-supertag-bridge-enable-ai
+    (org-supertag-bridge--log "AI services are disabled. Cannot call '%s' asynchronously." method-name)
+    (when callback
+      (funcall callback (list :error "AI services are disabled. Set `org-supertag-bridge-enable-ai' to t to enable.")))
+    (cl-return-from org-supertag-bridge-call-async nil))
+  
   (unless (org-supertag-bridge--ensure-server-running)
     (when callback
       (funcall callback (list :error "Python server is not running.")))
@@ -358,6 +369,10 @@ CALLBACK: A function to handle the async result. It will be called
 (defun org-supertag-bridge--ensure-server-running ()
   "Check if the bridge is ready, and try to start it if not.
 Returns t if ready, nil otherwise."
+  (unless org-supertag-bridge-enable-ai
+    (org-supertag-bridge--log "AI services are disabled. Skipping server startup.")
+    (cl-return-from org-supertag-bridge--ensure-server-running nil))
+  
   (or org-supertag-bridge--ready-p
       (progn
         (org-supertag-bridge--log "Server not ready. Attempting to start...")
@@ -380,6 +395,10 @@ See `simtag/utils/unified_tag_processor.py` for the definitive data contract.
 METHOD-NAME: A symbol or string for the Python method name.
 PARAMS: A list containing all positional arguments for the Python method.
 TIMEOUT: Timeout in seconds (default 60)."
+
+  (unless org-supertag-bridge-enable-ai
+    (org-supertag-bridge--log "AI services are disabled. Cannot call '%s'." method-name)
+    (error "AI services are disabled. Set `org-supertag-bridge-enable-ai' to t to enable."))
 
   (org-supertag-bridge--log "Sync Call to '%s' with params: %S (timeout %s)" method-name params timeout)
   (unless (org-supertag-bridge-ready-p)
@@ -516,6 +535,14 @@ Returns the AI response string on success, or signals an error."
           (org-supertag-bridge--log "LLM call successful.")
           result)
       (error "LLM call failed: %S" response))))
+
+(defun org-supertag-bridge-toggle-ai () 
+  "Toggle AI services on/off."
+  (interactive)
+  (setq org-supertag-bridge-enable-ai (not org-supertag-bridge-enable-ai))
+  (if org-supertag-bridge-enable-ai
+      (message "AI services enabled")
+    (message "AI services disabled")))
 
 (provide 'org-supertag-bridge)
 

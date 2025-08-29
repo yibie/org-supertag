@@ -3,7 +3,7 @@
 **Author**: Yibie  
 **Email**: yibie@outlook.com
 
-[English](./README.org) | [中文](./README_CN.org)
+[English](./README.md) | [中文](./README_CN.md)
 
 ## 🚀 What is Org-SuperTag?
 
@@ -269,6 +269,13 @@ Not yet practical.
 ```emacs-lisp
 ;; Core configuration
 (setq org-supertag-sync-directories '("~/notes/" "~/projects/"))
+```
+
+#### AI Service Configuration
+```emacs-lisp
+;; Control whether to enable AI services
+;; Set to nil to disable AI services, t by default
+(setq org-supertag-bridge-enable-ai nil)
 ```
 
 #### Advanced Configuration
