@@ -1,4 +1,10 @@
 * Changelog
+* [4.6.2] - 2025-08-29
+** Improvements
+*** Added custom setting to enable AI services
+- *Usage*: (setq org-supertag-bridge-enable-ai nil) to disable AI services
+- *Default behavior*: AI services are enabled by default
+
 * [4.6.1] - 2025-08-13
 ** Improvements
 *** Simplified user experience by removing overly complex features
