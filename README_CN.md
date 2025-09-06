@@ -1,9 +1,34 @@
 # Org-SuperTag: 让 Org-mode 拥有现代笔记工具的超能力
 
-**作者**: Yibie  
-**邮箱**: yibie@outlook.com
-
 [English](./README.md) | [中文](./README_CN.md)
+
+## ⚠️ Org-SuperTag 5.0 升级说明
+
+Org-SuperTag 5.0 版本进行了重大的架构重构，带来了显著的改进，但同时也有一些破坏性变更需要您注意：
+
+### 🏗️ 核心架构变化
+
+新版本采用了完全重新设计的架构，主要改进包括：
+
+- **纯 Emacs Lisp 实现**：完全移除了 Python 依赖，代码库更轻量、更易维护（代码量减少了约 47%）
+- **数据中心化架构**：引入了单一真相源 `supertag--store` 哈希表
+- **单向数据流**：实现了严格的 Action -> Ops -> Transform -> Store -> Notify 流程，提高可预测性
+
+详细的架构对比请查看 [新旧版本架构对比](doc/COMPARE-NEW-OLD-ARCHITECHTURE_cn.md)
+
+### 🔄 数据库迁移要求
+
+**在使用 Org-SuperTag 5.0 之前，您必须将现有数据库迁移到新格式：**
+
+1. **迁移步骤**：
+   - 加载迁移脚本：`M-x load-file RET supertag-migration.el RET`
+   - 运行迁移命令：`M-x supertag-migrate-database-to-new-arch RET`
+   - 当提示时选择您的旧版 `org-supertag-db.el` 文件
+   - 系统将自动创建旧数据库的备份文件
+
+2. **重要提醒**：迁移完成后，您**必须立即重启 Emacs**，以确保新架构能正常工作。
+
+如果不执行此迁移，将导致与新版本不兼容，并可能导致数据丢失。
 
 ## 🚀 什么是 Org-SuperTag？
 
@@ -41,16 +66,17 @@
 ### 🎬 功能演示
 
 #### 📝 智能标签输入
+**注意**：补全功能暂时不可用，因此我修改了例子。
 ```org
-* 学习机器学习 #
-              ↑ 输入#后自动补全
+* 学习机器学习 （此时 M-x org-supertag-inline-add）
               
 候选标签：
-- #project (12个节点)
-- #learning (8个节点) 
-- #research (5个节点)
-- #创建新标签...
+project 
+learning 
+research
 ```
+- 选择一个标签后，会自动添加标签并添加到节点中。
+- 输入一个新的标签，直接回车则在数据库中自动记录新标签，并将该标签添加到节点中。
 
 #### 🗂️ 结构化字段管理
 使用 `M-x org-supertag-view-node` 打开节点视图，将光标移动到 `#project` 标签下方的 `Fields` 字段，然后按照说明来编辑。
@@ -69,10 +95,9 @@
 
 ![看板视图](./picture/figure19.gif)
 
-#### 🔍 发现视图
-使用 `M-x org-supertag-view-discover` 打开发现视图，然后按照说明来操作。
+#### ~~发现视图~~
 
-![发现视图](./picture/figure20.gif)
+该视图在 5.0 新版中暂时移除。
 
 #### 💬 AI对话视图
 使用 `M-x org-supertag-view-chat-open` 打开AI对话视图，然后按照说明来操作。
@@ -108,33 +133,16 @@ AI: 根据你的知识库，目前有3个进行中的项目：
 ```shell
 # 克隆仓库
 git clone https://github.com/yibie/org-supertag.git ~/org-supertag
-
-# 设置Python后端
-cd ~/org-supertag/simtag
-sh ./setup_uv.sh
 ```
 
 ```emacs-lisp
-;; please add ht and epc to the header of the package docstring so users do not need to manually install those dependencies
 (straight-use-package 'ht)
-(straight-use-package 'epc)
+(straight-use-package 'gptel)
 
-(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"
-                                     :files (:defaults "simtag" ".venv")
-                                     :pre-build ("bash" "simtag/setup_uv.sh")))
-
-;; in README it is "org-supertag.el", but actually we should use "org-supertag" here.
-;; Beside, the double quote symbol is also not the canonical one resulting in lisp evaluation error.
-(let ((package-path (locate-library "org-supertag")))
-  (when package-path
-    (let* ((package-dir (file-name-directory package-path))
-            ;; the venv should be located at the project root, not under `simtag/`
-           (python-path (expand-file-name ".venv/bin/python" package-dir)))
-      (when (file-exists-p python-path)
-        (setq org-supertag-bridge-python-command python-path)))))
-
-;; load this package
-(require 'org-supertag)
+(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
+(setq org-supertag-sync-directories '("Your/Path/To/Org-Files/"))
+(eval-after-load 'gptel
+  '(require 'org-supertag))
 ```
 
 #### 第二步：创建你的第一个智能笔记
@@ -169,100 +177,76 @@ sh ./setup_uv.sh
 
 ### 🚀 高级功能
 
-#### 🤖 智能行为系统
+#### 🤖 智能自动化系统 (Automation 2.0)
 
-让标签自动执行任务：
+5.0 版本带来了全新的自动化系统，采用纯 Emacs Lisp 实现，性能更优，功能更强大：
 
-```emacs-lisp
-;; 定义"紧急"行为
-(org-supertag-behavior-register "urgent"
-  :trigger :on-add
-  :actions '("设置TODO状态" "标记高优先级" "设置今日截止")
-  :style '(:color "red" :icon "🔥"))
-```
+- ✅ **统一的标签系统**：每个标签都是功能完备的"数据库"，拥有自定义字段和自动化能力
+- ✅ **真正的事件驱动**：基于精确的数据变化实时响应，而非轮询扫描
+- ✅ **自动规则索引**：在后台自动为规则建立高性能索引，无需用户关心性能优化细节
+- ✅ **多重动作执行**：一条规则可以触发一系列按顺序执行的动作
+- ✅ **计划任务**：支持基于时间和周期的自动化，由集成的调度器驱动
+- ✅ **关系与计算**：支持双向关系、属性同步、Rollup 计算等高级功能
+- ✅ **公式字段**：在表格视图中实时计算和显示数据，无需持久化存储
 
-当你添加 =#urgent= 标签时，自动：
-- 设置 TODO 状态
-- 优先级改为 High  
-- 截止日期设为今天
-- 显示红色火焰图标
+| 特性 | 旧版本 (Behavior) | 新版本 (Automation 2.0) |
+|------|-------------|-------------|
+| **模块结构** | 分散的多个模块，存在循环依赖 | 统一的单一模块，消除依赖问题 |
+| **规则管理** | 手动附加到标签，需要用户管理 | 自动索引，系统智能管理 |
+| **性能** | O(n) 遍历所有规则 | O(1) 索引查找，高性能 |
+| **API一致性** | 多套不同的API接口 | 统一的API接口，学习成本低 |
+| **维护性** | 复杂的模块间关系 | 简单的内聚设计，易于维护 |
 
-详情请查看 ![Advance Usage - Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage---Behavior-System-Guide)
+详情请查看 [Automation System Guide](doc/AUTOMATION-SYSTEM-GUIDE_cn.md)
 
-#### 🔄 嵌入块系统
+#### 📸 捕获系统 (Capture System)
 
-使用 `M-x org-supertag-embed-insert-block` 输入嵌入块。
+5.0 版本引入了全新的捕获系统，支持动态模板和内容生成器：
 
-在任意文件中嵌入其他节点的内容：
+- ✅ **模板驱动** - 使用预定义模板快速创建结构化节点
+- ✅ **智能填充** - 自动从剪贴板、选区或函数获取内容
+- ✅ **标签智能** - 交互式标签选择和自动完成
+- ✅ **字段丰富** - 自动设置标签字段值
 
-```org
-,#+begin_embed_node: project-abc123 embed-001
-这里会自动显示项目节点的内容，并保持同步更新
-,#+end_embed_node
-```
+详情请查看 [Capture Guide](doc/CAPTURE-GUIDE_cn.md)
 
-#### 🧠 AI智能助手
+### ⌨️ 键盘快捷键
 
-- *对话式查询*：=M-x org-supertag-view-chat-open= 用自然语言查询知识库
-- *标签建议*：在节点视图中点击"💡 Get AI Tag Suggestions"或按 =s= 键
-- *节点对话*：在节点视图中按 =c= 键与当前节点对话
+Org-SuperTag 提供了一套全面的键盘快捷键，可通过 `C-c s` 前缀键访问。按下 `C-c s` 后，您可以使用以下快捷键：
 
-#### 📊 查询块（嵌入式查询）
+| 按键 | 命令 | 描述 |
+|------|------|------|
+| `C-c s a` | org-supertag-inline-add | 为当前节点添加标签 |
+| `C-c s r` | org-supertag-inline-remove | 从当前节点删除标签 |
+| `C-c s n` | org-supertag-inline-rename | 重命名标签 |
+| `C-c s d` | org-supertag-inline-delete-all | 在所有地方删除标签 |
+| `C-c s c` | org-supertag-inline-change-tag | 更改光标处的标签 |
+| `C-c s C` | org-supertag-capture-direct | 直接捕获 |
+| `C-c s t` | org-supertag-capture-template | 使用模板捕获 |
+| `C-c s i` | org-supertag-insert-query-block | 插入查询块 |
+| `C-c s m` | org-supertag-move-node-and-link | 移动节点并链接 |
+| `C-c s A` | org-supertag-node-add-reference | 为节点添加引用 |
+| `C-c s R` | org-supertag-node-remove-reference | 从节点删除引用 |
+| `C-c s h` | org-supertag-node-back-to-heading | 返回标题 |
+| `C-c s N` | org-supertag-node-create | 创建新节点 |
+| `C-c s D` | org-supertag-node-delete | 删除节点 |
+| `C-c s f` | org-supertag-node-find | 查找节点 |
+| `C-c s o` | org-supertag-node-find-other-window | 在其他窗口查找节点 |
+| `C-c s M` | org-supertag-node-move | 移动节点 |
+| `C-c s u` | org-supertag-node-update | 更新光标处的节点 |
+| `C-c s s` | org-supertag-query | 打开查询界面 |
+| `C-c s e` | org-supertag-query-export-results-to-file | 导出查询结果到文件 |
+| `C-c s E` | org-supertag-query-export-results-to-new-file | 导出查询结果到新文件 |
+| `C-c s I` | org-supertag-query-insert-at-point | 在光标处插入查询 |
+| `C-c s x` | org-supertag-tag-set-extends | 设置标签扩展 |
+| `C-c s g` | org-supertag-view-chat-open | 打开聊天视图 |
+| `C-c s v` | org-supertag-view-node | 查看节点详情 |
+| `C-c s T` | org-supertag-view-table | 打开表格视图 |
+| `C-c s k` | org-supertag-view-kanban | 打开看板视图 |
+| `C-c s C-c` | org-supertag-clean-database | 清理数据库 |
 
-使用 `M-x org-supertag-insert-query-block` 在 Org 文档中直接插入查询块，按下 `C-c C-c` 执行，查看输出结果。
+所有快捷键都可通过 `C-c s` 前缀访问，使您能够轻松记住并高效使用 Org-SuperTag 的功能。
 
-查询![语法详情](https://github.com/yibie/org-supertag/wiki/Org-SuperTag-Query-User-Guide)。
-
-```org
-;; 分析项目完成趋势
-#+BEGIN_SRC org-supertag-query :results raw
-(and (tag "project")
-     (field "状态" "Done")
-     (after "-3m"))
-#+END_SRC
-
-;; 找到知识盲区
-#+BEGIN_SRC org-supertag-query :results raw
-(and (tag "concept")
-     (not (field "理解程度" "熟练"))
-     (field "重要性" "高"))
-#+END_SRC
-```
-
-#### 🖥️ 查询缓冲区（交互式界面）
-
-使用 `M-x org-supertag-query` 打开交互式查询缓冲区，进行高级搜索和分析。
-
-**主要功能：**
-- **交互式搜索**：实时在标题、标签、内容和字段中匹配关键词
-- **卡片式结果**：带边框的结果卡片可视化展示
-- **导航浏览**：使用 `n`/`p` 键在结果间导航
-- **选择标记**：按 `SPC` 键切换结果的选择状态
-- **导出功能**：将选中的结果导出到文件，支持多种插入方式
-- **查询历史**：自动查询历史记录和智能排序
-
-**使用示例：**
-1. `M-x org-supertag-query` - 打开查询界面
-2. 输入搜索关键词（如"项目 紧急"）
-3. 使用 `n`/`p` 键浏览结果
-4. 按 `SPC` 键选择感兴趣的结果
-5. 使用 `e f` 或 `e n` 导出选中项目
-
-#### 🧪 已移除的复杂功能
-
-> 为了提供更好的用户体验，我们移除了一些过于复杂和侵入性的功能：
-
-#### 已简化的功能
-- *自动标签建议* → 集成到节点视图中的手动标签建议
-- *智能伴侣* → 简化为上下文分析功能
-- *后台扫描* → 移除，改为按需处理
-
-这些改变让Org-SuperTag更加专注于核心功能，减少干扰。
-
-#### 实验性功能
-- **AI工作流系统** (org-supertag-ai.el) - 基于Org标题的工作流定义
-
-尚未具备实用性。
 ### 🔧 配置指南
 
 #### 基础配置
