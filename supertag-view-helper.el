@@ -671,7 +671,7 @@ This function works in any location within a node - heading or content area."
                    (and (>= prev-char ?A) (<= prev-char ?Z))
                    (and (>= prev-char ?0) (<= prev-char ?9))
                    ;; Include common punctuation that should be separated
-                   (memq prev-char '(?. ?, ?\; ?: ?! ?\? ?\))))
+                   (memq prev-char '(?. ?, ?\; ?: ?! ?\? ?\)))
                    ;; Chinese/Japanese/Korean characters
                    (and (>= prev-char ?\u4e00) (<= prev-char ?\u9fff)))))
          ;; Need space after only if next char exists and is alphanumeric or chinese
@@ -688,12 +688,12 @@ This function works in any location within a node - heading or content area."
     ;; Insert space before tag if needed
     (when need-space-before
       (insert " "))
-        ;; Insert the tag
+    ;; Insert the tag
     (insert (concat "#" tag-name))
     
     ;; Insert space after tag if needed
     (when need-space-after
-      (insert " ")))
+      (insert " "))))
 
 (defun supertag-view-helper-remove-tag-text (tag-name)
   "Remove all occurrences of #TAG-NAME from the current node.
