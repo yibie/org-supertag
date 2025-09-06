@@ -1,9 +1,34 @@
 # Org-SuperTag: Supercharge Org-mode with Modern Note-Taking Capabilities
 
-**Author**: Yibie  
-**Email**: yibie@outlook.com
-
 [English](./README.md) | [中文](./README_CN.md)
+
+## ⚠️ Org-SuperTag 5.0 Upgrade Notice
+
+Org-SuperTag 5.0 represents a major architectural overhaul with significant improvements but also breaking changes that require your attention:
+
+### 🏗️ Key Architecture Changes
+
+The new version features a completely redesigned architecture with these major improvements:
+
+- **Pure Emacs Lisp Implementation**: Eliminated all Python dependencies for a lighter, more maintainable codebase (~47% reduction in code size)
+- **Data-Centric Architecture**: Introduced a single source of truth with `supertag--store` hash table
+- **One-Way Data Flow**: Implemented strict Action -> Ops -> Transform -> Store -> Notify pipeline for better predictability
+
+For detailed architecture comparison, see [Compare New/Old Architecture](doc/COMPARE-NEW-OLD-ARCHITECTURE.md)
+
+### 🔄 Database Migration Required
+
+**Before using Org-SuperTag 5.0, you MUST migrate your existing database to the new format:**
+
+1. **Migration Process**:
+   - Load the migration script: `M-x load-file RET supertag-migration.el RET`
+   - Run the migration: `M-x supertag-migrate-database-to-new-arch RET`
+   - Select your old `org-supertag-db.el` file when prompted
+   - A backup of your old database will be automatically created
+
+2. **Important**: After migration is complete, you **must restart Emacs** immediately to ensure proper operation with the new architecture.
+
+Failure to perform this migration will result in incompatibility with the new version and potential data loss.
 
 ## 🚀 What is Org-SuperTag?
 
@@ -41,16 +66,17 @@ When you type =#project=, Org-SuperTag automatically:
 ### 🎬 Feature Demonstrations
 
 #### 📝 Smart Tag Input
+**Note**: Auto-completion is temporarily unavailable, so I've modified the example.
 ```org
-* Learning Machine Learning #
-              ↑ Auto-completion after typing #
+* Learning Machine Learning (At this point M-x org-supertag-inline-add)
               
 Candidate tags:
-- #project (12 nodes)
-- #learning (8 nodes) 
-- #research (5 nodes)
-- #Create new tag...
+project 
+learning 
+research
 ```
+- After selecting a tag, it will be automatically added and added to the node.
+- Enter a new tag and press Enter to automatically record the new tag in the database and add it to the node.
 
 #### 🗂️ Structured Field Management
 Use `M-x org-supertag-view-node` to open the node view, move the cursor to the `Fields` field below the `#project` tag, and follow the instructions to edit.
@@ -69,10 +95,9 @@ Use `M-x org-supertag-view-kanban` to open the kanban view, then follow the inst
 
 ![Kanban View](./picture/figure19.gif)
 
-#### 🔍 Discover View
-Use `M-x org-supertag-view-discover` to open the discover view, then follow the instructions to operate.
+#### ~~Discover View~~
 
-![Discover View](./picture/figure20.gif)
+This view is temporarily removed in the 5.0 new version.
 
 #### 💬 AI Chat View
 Use `M-x org-supertag-view-chat-open` to open the AI chat view, then follow the instructions to operate.
@@ -108,33 +133,16 @@ You can freely create your own commands, which will be named as .prompt files an
 ```shell
 # Clone the repository
 git clone https://github.com/yibie/org-supertag.git ~/org-supertag
-
-# Set up Python backend
-cd ~/org-supertag/simtag
-sh ./setup_uv.sh
 ```
 
 ```emacs-lisp
-;; please add ht and epc to the header of the package docstring so users do not need to manually install those dependencies
 (straight-use-package 'ht)
-(straight-use-package 'epc)
+(straight-use-package 'gptel)
 
-(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"
-                                     :files (:defaults "simtag" ".venv")
-                                     :pre-build ("bash" "simtag/setup_uv.sh")))
-
-;; in README it is "org-supertag.el", but actually we should use "org-supertag" here.
-;; Beside, the double quote symbol is also not the canonical one resulting in lisp evaluation error.
-(let ((package-path (locate-library "org-supertag")))
-  (when package-path
-    (let* ((package-dir (file-name-directory package-path))
-            ;; the venv should be located at the project root, not under `simtag/`
-           (python-path (expand-file-name ".venv/bin/python" package-dir)))
-      (when (file-exists-p python-path)
-        (setq org-supertag-bridge-python-command python-path)))))
-
-;; load this package
-(require 'org-supertag)
+(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
+(setq org-supertag-sync-directories '("Your/Path/To/Org-Files/"))
+(eval-after-load 'gptel
+  '(require 'org-supertag))
 ```
 
 #### Step 2: Create Your First Smart Note
@@ -169,100 +177,76 @@ sh ./setup_uv.sh
 
 ### 🚀 Advanced Features
 
-#### 🤖 Smart Behavior System
+#### 🤖 Intelligent Automation System (Automation 2.0)
 
-Let tags automatically execute tasks:
+Version 5.0 brings a brand new automation system, implemented in pure Emacs Lisp, with better performance and more powerful features:
 
-```emacs-lisp
-;; Define "urgent" behavior
-(org-supertag-behavior-register "urgent"
-  :trigger :on-add
-  :actions '("Set TODO status" "Mark high priority" "Set today's due date")
-  :style '(:color "red" :icon "🔥"))
-```
+- ✅ **Unified Tag System**: Every tag is a fully-featured "database" with custom fields and automation capabilities
+- ✅ **True Event-Driven**: Responds to precise data changes in real-time, rather than polling scans
+- ✅ **Automatic Rule Indexing**: Automatically builds high-performance indexes for rules in the background, without users needing to worry about performance optimization details
+- ✅ **Multiple Action Execution**: A single rule can trigger a series of sequentially executed actions
+- ✅ **Scheduled Tasks**: Supports time-based and periodic automation, driven by an integrated scheduler
+- ✅ **Relationships and Calculations**: Supports advanced features like bidirectional relationships, property synchronization, and Rollup calculations
+- ✅ **Formula Fields**: Calculates and displays data in real-time in table views without persistent storage
 
-When you add the =#urgent= tag, it automatically:
-- Sets TODO status
-- Changes priority to High  
-- Sets due date to today
-- Shows red flame icon
+| Feature | Old Version (Behavior) | New Version (Automation 2.0) |
+|---------|------------------------|------------------------------|
+| **Module Structure** | Dispersed multiple modules with circular dependencies | Unified single module, eliminating dependency issues |
+| **Rule Management** | Manually attached to tags, requiring user management | Automatic indexing, intelligently managed by the system |
+| **Performance** | O(n) traversal of all rules | O(1) index lookup, high performance |
+| **API Consistency** | Multiple different API interfaces | Unified API interface, low learning cost |
+| **Maintainability** | Complex inter-module relationships | Simple cohesive design, easy to maintain |
 
-For details, see ![Advance Usage - Behavior System Guide](https://github.com/yibie/org-supertag/wiki/Advance-Usage---Behavior-System-Guide)
+For details, see [Automation System Guide](doc/AUTOMATION-SYSTEM-GUIDE.md)
 
-#### 🔄 Embed Block System
+#### 📸 Capture System (Capture System)
 
-Use `M-x org-supertag-embed-insert-block` to insert an embed block.
+Version 5.0 introduces a brand new capture system that supports dynamic templates and content generators:
 
-Embed content from other nodes in any file:
+- ✅ **Template-Driven** - Quickly create structured nodes using predefined templates
+- ✅ **Smart Filling** - Automatically populate node fields from various sources
+- ✅ **Smart Tagging** - Interactive tag selection and auto-completion
+- ✅ **Field Enrichment** - Automatically set tag field values
 
-```org
-,#+begin_embed_node: project-abc123 embed-001
-The content of the project node will be automatically displayed here and kept in sync
-,#+end_embed_node
-```
+For details, see [Capture Guide](doc/CAPTURE-GUIDE.md)
 
-#### 🧠 AI Smart Assistant
+### ⌨️ Keyboard Shortcuts
 
-- *Conversational Query*: =M-x org-supertag-view-chat-open= for natural language queries to the knowledge base
-- *Tag Suggestions*: Click "💡 Get AI Tag Suggestions" or press =s= in the node view
-- *Node Conversation*: Press =c= in the node view to chat with the current node
+Org-SuperTag provides a comprehensive set of keyboard shortcuts accessible through the `C-c s` prefix key. After pressing `C-c s`, you can use the following shortcuts:
 
-#### 📊 Query Blocks (Embedded Queries)
+| Key | Command | Description |
+|-----|---------|-------------|
+| `C-c s a` | org-supertag-inline-add | Add a tag to the current node |
+| `C-c s r` | org-supertag-inline-remove | Remove a tag from the current node |
+| `C-c s n` | org-supertag-inline-rename | Rename a tag |
+| `C-c s d` | org-supertag-inline-delete-all | Delete a tag everywhere |
+| `C-c s c` | org-supertag-inline-change-tag | Change tag at point |
+| `C-c s C` | org-supertag-capture-direct | Direct capture |
+| `C-c s t` | org-supertag-capture-template | Capture with template |
+| `C-c s i` | org-supertag-insert-query-block | Insert query block |
+| `C-c s m` | org-supertag-move-node-and-link | Move node and link |
+| `C-c s A` | org-supertag-node-add-reference | Add reference to node |
+| `C-c s R` | org-supertag-node-remove-reference | Remove reference from node |
+| `C-c s h` | org-supertag-node-back-to-heading | Back to heading |
+| `C-c s N` | org-supertag-node-create | Create new node |
+| `C-c s D` | org-supertag-node-delete | Delete node |
+| `C-c s f` | org-supertag-node-find | Find node |
+| `C-c s o` | org-supertag-node-find-other-window | Find node in other window |
+| `C-c s M` | org-supertag-node-move | Move node |
+| `C-c s u` | org-supertag-node-update | Update node at point |
+| `C-c s s` | org-supertag-query | Open query interface |
+| `C-c s e` | org-supertag-query-export-results-to-file | Export query results to file |
+| `C-c s E` | org-supertag-query-export-results-to-new-file | Export query results to new file |
+| `C-c s I` | org-supertag-query-insert-at-point | Insert query at point |
+| `C-c s x` | org-supertag-tag-set-extends | Set tag extends |
+| `C-c s g` | org-supertag-view-chat-open | Open chat view |
+| `C-c s v` | org-supertag-view-node | View node details |
+| `C-c s T` | org-supertag-view-table | Open table view |
+| `C-c s k` | org-supertag-view-kanban | Open kanban view |
+| `C-c s C-c` | org-supertag-clean-database | Clean database |
 
-Use `M-x org-supertag-insert-query-block` to insert query blocks directly into your Org documents, and type `C-c C-c` output query result. 
+All shortcuts are accessible through the `C-c s` prefix, making it easy to remember and use Org-SuperTag features efficiently.
 
-Query ![syntax details](https://github.com/yibie/org-supertag/wiki/Org-SuperTag-Query-User-Guide).
-
-```org
-;; Analyze project completion trends
-#+BEGIN_SRC org-supertag-query :results raw
-(and (tag "project")
-     (field "status" "Done")
-     (after "-3m"))
-#+END_SRC
-
-;; Find knowledge gaps
-#+BEGIN_SRC org-supertag-query :results raw
-(and (tag "concept")
-     (not (field "understanding level" "proficient"))
-     (field "importance" "high"))
-#+END_SRC
-```
-
-#### 🖥️ Query Buffer (Interactive Interface)
-
-Use `M-x org-supertag-query` to open the interactive query buffer for advanced search and analysis.
-
-**Key Features:**
-- **Interactive Search**: Real-time keyword matching across titles, tags, content, and fields
-- **Card-based Results**: Visual presentation with bordered result cards
-- **Navigation**: Use `n`/`p` to navigate between results
-- **Selection**: Press `SPC` to toggle selection on results
-- **Export**: Export selected results to files with various insertion options
-- **History**: Automatic query history tracking with intelligent ranking
-
-**Example Usage:**
-1. `M-x org-supertag-query` - Open query interface
-2. Enter search keywords (e.g., "project urgent")
-3. Browse results with `n`/`p` keys
-4. Select interesting results with `SPC`
-5. Export selected items with `e f` or `e n`
-
-#### 🧪 Removed Complex Features
-
-> To provide a better user experience, we have removed some overly complex and intrusive features:
-
-#### Simplified Features
-- *Automatic tag suggestions* → Integrated into manual tag suggestions in the node view
-- *Smart companion* → Simplified to context analysis functionality
-- *Background scanning* → Removed, changed to on-demand processing
-
-These changes make Org-SuperTag more focused on core functionality and less distracting.
-
-#### Experimental Features
-- **AI Workflow System** (org-supertag-ai.el) - Workflow definitions based on Org headings
-
-Not yet practical.
 ### 🔧 Configuration Guide
 
 #### Basic Configuration
@@ -304,15 +288,14 @@ Not yet practical.
 | Offline Use | ✅ | ✅ | ✅ | ❌ |
 | Learning Curve | ⚠️ Moderate | ⚠️ Moderate | ✅ Simple | ✅ Simple |
 
-### Changelog
-See [CHANGELOG](./CHANGELOG.org).
-
 ### 🤝 Community and Support
 
 - 📖 [Detailed Documentation](https://github.com/yibie/org-supertag/wiki)
 - 🐛 [Issue Feedback](https://github.com/yibie/org-supertag/issues)
 - 💬 [Community Discussions](https://github.com/yibie/org-supertag/discussions)
 
+### Changelog
+See [CHANGELOG](./CHANGELOG.org).
 
 #### 🆘 Frequently Asked Questions
 

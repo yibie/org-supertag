@@ -1,4 +1,41 @@
 * Changelog
+* [5.0.0] - 2025-09-06
+** Major Refactor
+*** Complete Architecture Overhaul with Pure Emacs Lisp Implementation
+- *Eliminated Python dependency*: Removed all Python backend components (simtag/) for a pure Elisp implementation
+- *Data-Centric Architecture*: Introduced single source of truth with `supertag--store` hash table
+- *One-Way Data Flow*: Implemented strict Action -> Ops -> Transform -> Store -> Notify pipeline
+- *Performance Improvements*: Reduced codebase by ~53% while enhancing core functionality
+- *Simplified Deployment*: No external dependencies required for core functionality
+
+*** Unified Module Structure
+- *Consolidated Components*: Merged multiple modules into cohesive, single-responsibility files
+- *Eliminated Circular Dependencies*: Clean module hierarchy with clear separation of concerns
+- *Improved Maintainability*: Reduced inter-module coupling and increased cohesion
+
+*** Enhanced Automation System 2.0
+- *Rule Indexing*: Automatic rule indexing for O(1) lookup performance
+- *Multi-Action Support*: Single rules can trigger multiple sequential actions
+- *Scheduled Tasks*: Integrated scheduler for time-based automation
+- *Relationship Rollups*: Automatic calculation and synchronization of related node data
+- *Formula Fields*: Real-time calculated fields in table views
+
+*** New Capture System
+- *Template-Driven Creation*: Flexible node creation with dynamic content generators
+- *Smart Field Filling*: Automatic population of node fields from various sources
+- *Interactive Enrichment*: Post-creation field value addition workflow
+
+*** Query System Enhancement
+- *Query Block Renaming*: S-expression query functionality renamed to "Query-Block"
+- *Improved Syntax*: Enhanced query syntax with better logical combinations
+- *Time-Based Queries*: Advanced temporal query operators
+- *Dynamic Table Output*: Clickable results with field value columns
+
+*** Improved User Experience
+- *Streamlined Interface*: Removed experimental and rarely-used features
+- *Consistent Navigation*: Unified keybindings with C-c s prefix
+- *Better Documentation*: Comprehensive English and Chinese documentation
+
 * [4.6.2] - 2025-08-29
 ** Improvements
 *** Added custom setting to enable AI services
