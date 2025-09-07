@@ -31,11 +31,16 @@ Contains multiple sub-indexes:
   "Directly set data in the store using old-style format.
 COLLECTION is the collection name (:nodes, :tags, :relations, :embeds).
 ID is the entity ID. DATA is the plist data."
+  ;; Ensure store is initialized
+  (unless (hash-table-p supertag--store)
+    (setq supertag--store (ht-create)))
+  
   (let ((collection-table (or (gethash collection supertag--store)
                               (let ((new-table (ht-create)))
                                 (puthash collection new-table supertag--store)
                                 new-table)))
-        (old-data (when (gethash collection supertag--store)
+        (old-data (when (and (hash-table-p supertag--store)
+                            (gethash collection supertag--store))
                     (gethash id (gethash collection supertag--store)))))
     (puthash id data collection-table)
     ;; Update indexes for nodes
@@ -48,6 +53,10 @@ ID is the entity ID. DATA is the plist data."
 (defun supertag-store-direct-get (collection id)
   "Directly get data from the store using old-style format.
 COLLECTION is the collection name. ID is the entity ID."
+  ;; Ensure store is initialized
+  (unless (hash-table-p supertag--store)
+    (setq supertag--store (ht-create)))
+  
   (let ((collection-table (gethash collection supertag--store)))
     (when collection-table
       (gethash id collection-table))))
@@ -108,6 +117,10 @@ This function acts as a bridge to the actual notification system in `supertag-co
 
 (defun supertag-get (path &optional default)
   "Get data from the store by PATH."
+  ;; Ensure store is initialized
+  (unless (hash-table-p supertag--store)
+    (setq supertag--store (ht-create)))
+  
   (let ((value supertag--store))
     (catch 'supertag-get-early-exit
       (dolist (key path value) ; `value` is what dolist returns if loop completes
@@ -120,6 +133,10 @@ This function acts as a bridge to the actual notification system in `supertag-co
  PATH is a list of keys. Returns the old value.
  Triggers change notifications unless suppressed.
  Stores plist values directly."
+  ;; Ensure store is initialized
+  (unless (hash-table-p supertag--store)
+    (setq supertag--store (ht-create)))
+  
   (let ((old-value (supertag-get path))
         (full-old-node-data nil))
     ;; If we are updating any part of a node, capture its full state BEFORE the change.
@@ -141,6 +158,10 @@ This function acts as a bridge to the actual notification system in `supertag-co
 
 (defun supertag-delete (path)
   "Atomically delete a value from the central store at PATH."
+  ;; Ensure store is initialized
+  (unless (hash-table-p supertag--store)
+    (setq supertag--store (ht-create)))
+  
   (let ((old-value (supertag-get path)))
     (when old-value ; Only do something if a value actually exists
       (supertag--remove-nested-ht supertag--store path)
