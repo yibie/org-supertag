@@ -493,7 +493,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
 
       ;; (message "DEBUG: Modified files found: %S" modified-files)
       ;; (message "DEBUG: Sync state hash table size: %d" (hash-table-count supertag-sync--state))
-      ;; 1. Cleanup Sync State
+      ;; 1. Cleanup Sync State - Remove files that are no longer in scope
       (let ((state-table (supertag-sync--get-state-table)))
         (maphash (lambda (file _state)
                    (when (or (not (file-exists-p file))
@@ -504,11 +504,13 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (when files-to-remove
         (setq state-changed t)
         (let ((state-table (supertag-sync--get-state-table)))
-          (dolist (file files-to-remove) ; Remove debug message
-            ;; (message "Removing file from sync state (file %s or out of scope): %s"
-            ;;          (if (file-exists-p file) "exists" "doesn't exist")
-            ;;          file)
-            (remhash file state-table))))
+          (dolist (file files-to-remove)
+            (message "Removing file from sync state (file %s or out of scope): %s"
+                     (if (file-exists-p file) "exists but out of scope" "doesn't exist")
+                     file)
+            (remhash file state-table)
+            ;; Also clean up any nodes associated with these files
+            (supertag-sync--verify-file-nodes file counters))))
 
       ;; 2. Scan for New Files
       (let ((new-files (supertag-scan-sync-directories)))
@@ -919,8 +921,8 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
   ;; Start new timer with safety wrapper (fixed interval, not idle)
   (setq supertag-sync--timer
         (run-with-timer
-         (or interval supertag-sync-auto-interval)
-         (or interval supertag-sync-auto-interval)
+         2 ; Start first sync after a short 2-second delay
+         (or interval supertag-sync-auto-interval) ; Then, repeat at the configured interval
          (lambda ()
             "Safe wrapper for sync function with error handling."
             (when (fboundp 'supertag-sync--check-and-sync)
