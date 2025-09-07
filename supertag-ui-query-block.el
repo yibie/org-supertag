@@ -80,16 +80,6 @@ This is the primary function for S-expression query blocks."
         "No results found."
       (supertag-query-block--format-table headers table-data))))
 
-;;; --- Legacy Support Functions ---
-
-(defun supertag-insert-query-legacy ()
-  "Insert an S-expression query block using the old language name for compatibility."
-  (interactive)
-  (let* ((query (read-string "Query S-expression: "))
-         (block-template "#+BEGIN_SRC org-supertag-query :results raw\n%s\n#+END_SRC"))
-    (unless (string-empty-p query)
-      (insert (format block-template query)))))
-
 ;;; --- Initialization and Configuration ---
 
 ;; Org Babel registration - new language name

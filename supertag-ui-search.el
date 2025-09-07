@@ -168,29 +168,6 @@ Handles both time stamps (list) and date strings."
     (setq buffer-read-only t)
     (use-local-map org-supertag-search-mode-map)))
 
-;;; --- Main Search Function ---
-
-(defun supertag-search ()
-  "Interactive search across all indexed nodes using the new search system.
-This is the main entry point for the renamed search functionality."
-  (interactive)
-  ;; Save current position
-  (setq supertag-search--original-buffer (current-buffer)
-        supertag-search--original-point (point))
-  
-  (unless supertag--store
-    (message "Supertag store not initialized. Please run supertag sync first.")
-    (user-error "Supertag store not initialized"))
-  
-  ;; Load history
-  (supertag-search--load-history)
-  
-  (let* ((keywords (supertag-search--get-keywords))
-         (nodes (supertag-search-find-nodes keywords)))
-    (supertag-search-show-results keywords nodes)))
-
-;;; --- Search Functions ---
-
 ;;; --- Search Functions ---
 
 (defun supertag-search-find-nodes (keywords)
@@ -580,6 +557,27 @@ This is the main entry point for the renamed search functionality."
 ;; Ensure the alias is marked as interactive
 (put 'org-supertag-query 'interactive-form
      (interactive-form 'supertag-search))
+
+;;; --- Main Search Function ---
+
+(defun supertag-search ()
+  "Interactive search across all indexed nodes using the new search system.
+This is the main entry point for the renamed search functionality."
+  (interactive)
+  ;; Save current position
+  (setq supertag-search--original-buffer (current-buffer)
+        supertag-search--original-point (point))
+  
+  (unless supertag--store
+    (message "Supertag store not initialized. Please run supertag sync first.")
+    (user-error "Supertag store not initialized"))
+  
+  ;; Load history
+  (supertag-search--load-history)
+  
+  (let* ((keywords (supertag-search--get-keywords))
+         (nodes (supertag-search-find-nodes keywords)))
+    (supertag-search-show-results keywords nodes)))
 
 (provide 'supertag-ui-search)
 

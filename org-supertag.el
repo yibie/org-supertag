@@ -87,6 +87,7 @@
 (require 'supertag-ui-chat)
 (require 'supertag-ui-embed)
 (require 'supertag-ui-query-block)
+(require 'supertag-ui-search)
 
 ;; --- View ---
 (require 'supertag-view-helper)
