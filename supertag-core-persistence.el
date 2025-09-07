@@ -12,11 +12,12 @@
 (require 'supertag-core-store) ; For supertag--store
 
 ;;; --- Persistence Configuration ---
-(defcustom supertag-data-directory
+;; Note: supertag-data-directory is defined in org-supertag.el
+;; This is a fallback definition in case this module is loaded independently
+(defvar supertag-data-directory
   (expand-file-name "org-supertag/" user-emacs-directory)
-  "Directory for storing Org-Supertag data."
-  :type 'directory
-  :group 'org-supertag)
+  "Directory for storing Org-Supertag data.
+This is a fallback definition. The primary definition is in org-supertag.el.")
 
 (defun supertag-data-file (filename)
   "Get full path for data file.
