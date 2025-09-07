@@ -579,7 +579,6 @@ Returns a query builder object that can be chained."
 (defun supertag-query-get-all-data ()
   "Return all nodes and links from the store as a single list of plists.
 This is a low-level function for services like knowledge sync."
-  (interactive)
   (let ((all-items '()))
     (let ((nodes-table (supertag-get '(:nodes)))
           (relations-table (supertag-get '(:relations))))
