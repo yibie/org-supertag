@@ -272,6 +272,10 @@ ARGS is a list containing the function symbol."
   "Execute the capture by writing data to file and syncing.
 TARGET-FILE is the path to the destination file.
 PROCESSED-DATA is the plist from --process-spec."
+  (unless target-file
+    (user-error "TARGET-FILE cannot be nil"))
+  (unless (file-exists-p target-file)
+    (user-error "Target file does not exist: %s" target-file))
   (let* ((title (plist-get processed-data :title))
          (tags (plist-get processed-data :tags))
          (body (plist-get processed-data :body))
@@ -341,6 +345,12 @@ If TEMPLATE-KEY is not provided, prompts for one."
          (node-spec (plist-get template-data :node-spec)))
     (unless template-data
       (user-error "Template doesn't exist: %s" key))
+    (unless target-file
+      (user-error "Template '%s' has no target file specified. Please set :file property." key))
+    ;; Expand the file path to handle ~ and relative paths
+    (setq target-file (expand-file-name target-file))
+    (unless (file-exists-p target-file)
+      (user-error "Target file does not exist: %s" target-file))
 
     ;; 2. Process spec into data (Call Processor)
     (let ((processed-data (supertag-capture--process-spec node-spec)))
