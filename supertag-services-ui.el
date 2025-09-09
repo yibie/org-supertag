@@ -31,11 +31,16 @@ all subheadings proportionally."
                              )))))
       (buffer-string))))
 
-  (defun supertag-ui-select-insert-position (file)
+    (defun supertag-ui-select-insert-position (file)
     "Interactively let user select an insert position in FILE.
   This provides a two-step selection for clarity.
   Returns a plist (:position POS :level LVL)."
-    (with-current-buffer (find-file-noselect file)
+    (unless file
+      (user-error "FILE parameter cannot be nil"))
+    (unless (file-exists-p file)
+      (user-error "File does not exist: %s" file))
+    (with-current-buffer (find-file-noselect file)</search>
+</search_and_replace>
       (let* ((headlines (org-map-entries
                          (lambda ()
                            (list (org-get-heading t t) (point) (org-outline-level)))
