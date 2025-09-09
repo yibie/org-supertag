@@ -50,14 +50,10 @@ Implements immediate error reporting as preferred by the user."
 Combines old architecture performance with new architecture safety.
 Provides strict validation with immediate error reporting."
   (let* ((id (or (plist-get props :id) (org-id-new)))
-         ;; Ensure :file property is always normalized and present
-         (file (plist-get props :file))
-         (normalized-file (when file (expand-file-name file)))
-         (props (if file (plist-put props :file normalized-file) props))
          ;; Build final props with required fields (hybrid approach)
          (final-props (plist-put props :id id))
          (final-props (plist-put final-props :type :node))
-         (final-props (plist-put final-props :created-at 
+         (final-props (plist-put final-props :created-at
                                  (or (plist-get final-props :created-at) (current-time))))
          (final-props (plist-put final-props :modified-at (current-time))))
     

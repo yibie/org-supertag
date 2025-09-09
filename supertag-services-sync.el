@@ -464,7 +464,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
           (when (and db-node
                      (let ((db-node-file (plist-get db-node :file)))
                        (and db-node-file
-                            (string= (expand-file-name db-node-file) (expand-file-name file)))))
+                            (string= db-node-file file))))
             ;;(message "DEBUG: Marking node %s as orphaned because file %s no longer exists" id file)
             (supertag-node-mark-deleted-from-file id)
             (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))
@@ -486,7 +486,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
             (when (and db-node
                        (let ((db-node-file (plist-get db-node :file)))
                          (and db-node-file
-                              (string= (expand-file-name db-node-file) (expand-file-name file)))))
+                              (string= db-node-file file))))
               ;;(message "DEBUG: Node %s deleted from file %s. Marking as orphaned." id file)
               (supertag-node-mark-deleted-from-file id)
               (setf (plist-get counters :nodes-deleted)
