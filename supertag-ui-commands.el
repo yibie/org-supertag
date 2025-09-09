@@ -577,25 +577,29 @@ HEADLINE is optional headline text."
   (let* ((capture-info (supertag-capture-interactive-headline))
          (full-title (plist-get capture-info :headline))
          (selected-tags (plist-get capture-info :tags))
-         (target-file (or target-file (read-file-name "Capture to file: ")))
-         (insert-info (supertag-ui-select-insert-position target-file))
-         (insert-pos (plist-get insert-info :position))
-         (insert-level (plist-get insert-info :level)))
+          (target-file (or target-file (read-file-name "Capture to file: ")))
+         ;; Optional body content below the headline
+         (body (read-string "Body (optional, RET to skip): "))
+          (insert-info (supertag-ui-select-insert-position target-file))
+          (insert-pos (plist-get insert-info :position))
+          (insert-level (plist-get insert-info :level)))
     
     (unless insert-info
       (user-error "No valid insert position selected"))
     
     ;; Phase 2: Create the node in the file
-    (with-current-buffer (find-file-noselect target-file)
-      (save-excursion
-        (goto-char insert-pos)
-        (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-        (insert (make-string insert-level ?*) " " full-title "\n")
-        (insert ":PROPERTIES:\n:ID: " (org-id-new) "\n:END:\n")
-        (save-buffer))
-      
-      ;; Phase 3: Sync and enrich
-      (let ((node-id (org-id-get)))
+      (with-current-buffer (find-file-noselect target-file)
+        (save-excursion
+          (goto-char insert-pos)
+          (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+          (insert (make-string insert-level ?*) " " full-title "\n")
+          (when (and body (> (length body) 0))
+            (insert body "\n"))
+          (insert ":PROPERTIES:\n:ID: " (org-id-new) "\n:END:\n")
+          (save-buffer))
+        
+        ;; Phase 3: Sync and enrich
+        (let ((node-id (org-id-get)))
         (when node-id
           (supertag-services-sync-file target-file)
           (message "Node %s created in %s" node-id (file-name-nondirectory target-file))

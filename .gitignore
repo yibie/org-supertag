@@ -64,6 +64,7 @@ dev-note/
 
 .ruff_cache/
 IMPROVEMENT_PLAN.md
+AGENTS.md
 
 # YoYo AI version control directory
 .yoyo/
