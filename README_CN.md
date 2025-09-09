@@ -16,6 +16,16 @@ Org-SuperTag 5.0 版本进行了重大的架构重构，带来了显著的改进
 
 详细的架构对比请查看 [新旧版本架构对比](doc/COMPARE-NEW-OLD-ARCHITECHTURE_cn.md)
 
+### 😍 新用户第一次使用
+
+**新用户在配置好 org-supertag，并重启了 Emacs 之后，需要第一时间运行如下命令，初始化数据库**：
+
+`M-x supertag-sync-full-initialize`
+
+该命令的作用是，全量扫描同步目录下（org-sueprtag-sync-directories）下的所有文件，完成数据库初始化。
+
+等待该命令执行完成后，org-supertag 已经准备好为你服务。
+
 ### 🔄 数据库迁移要求
 
 **在使用 Org-SuperTag 5.0 之前，您必须将现有数据库迁移到新格式：**
