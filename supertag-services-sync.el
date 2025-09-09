@@ -250,18 +250,33 @@ Returns a string containing the Org content."
 
 (defun supertag-sync-load-state ()
   "Load sync state from file.
-If file doesn't exist, initialize empty state."
-  (if (file-exists-p supertag-sync-state-file)
-      (with-temp-buffer
-        (insert-file-contents supertag-sync-state-file)
-        (setq supertag-sync--state
-              (read (current-buffer)))
-        ;; Ensure the loaded state is in the correct format
-        (supertag-sync--ensure-state-format))
-    ;; Initialize empty state if file doesn't exist
-    (setq supertag-sync--state (make-hash-table :test 'equal))
-    ;; Save the initial state
-    (supertag-sync-save-state)))
+If file doesn't exist, initialize empty state.
+Returns the loaded or initialized sync state."
+  (let ((result
+         (if (file-exists-p supertag-sync-state-file)
+             (with-temp-buffer
+               (message "Loading sync state from file: %s" supertag-sync-state-file)
+               (insert-file-contents supertag-sync-state-file)
+               (setq supertag-sync--state
+                     (read (current-buffer)))
+               (message "Loaded sync state with %d entries" 
+                        (if (hash-table-p supertag-sync--state)
+                            (hash-table-count supertag-sync--state)
+                          0))
+               ;; Ensure the loaded state is in the correct format
+               (supertag-sync--ensure-state-format)
+               ;; Return the loaded state
+               supertag-sync--state)
+           ;; Initialize empty state if file doesn't exist
+           (progn
+             (message "Sync state file does not exist, initializing empty state")
+             (setq supertag-sync--state (make-hash-table :test 'equal))
+             ;; Save the initial state
+             (supertag-sync-save-state)
+             ;; Return the initialized state
+             supertag-sync--state))))
+    ;; Return the result
+    result))
 
 ;; --- Check and sync ---
 

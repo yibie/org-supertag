@@ -18,6 +18,7 @@
 (require 'supertag-services-query) ; For query operations
 (require 'supertag-view-kanban)    ; For Kanban board view
 (require 'supertag-services-capture) ; For capture services
+(require 'supertag-services-sync) ; For sync services
 
 ;;; --- Internal Helper ---
 
@@ -614,6 +615,194 @@ HEADLINE is optional headline text."
             (supertag-capture-enrich-node node-id))
           
           node-id)))))
+
+;;; --- Sync Commands ---
+
+;;;###autoload
+(defun supertag-sync-full-initialize ()
+ "Perform full initialization sync for new users.
+This command will clear all sync state and reimport all files from
+configured directories into the database. Intended for first-time
+setup or when rebuilding the entire database."
+ (interactive)
+ (when (yes-or-no-p "This will clear all sync state and reimport all files. Continue? ")
+   (message "Starting full initialization sync...")
+   
+   ;; Step 1: Clear sync state
+   (message "Step 1: Clearing sync state...")
+   (setq supertag-sync--state (make-hash-table :test 'equal))
+   (supertag-sync-save-state)
+   
+   ;; Step 2: Get all files in sync directories
+   (message "Step 2: Scanning all files in sync directories...")
+   (let ((all-files (supertag-scan-sync-directories t)) ; Force scan all files
+         (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
+                     :references-created 0 :references-deleted 0))
+         (total-files 0)
+         (processed-files 0))
+     
+     (setq total-files (length all-files))
+     (message "Found %d files to process" total-files)
+     
+     (if (= total-files 0)
+         (message "No files found in sync directories: %s" org-supertag-sync-directories)
+       (progn
+         ;; Step 3: Process each file within transaction
+         (message "Step 3: Processing files...")
+         (supertag-with-transaction
+           (dolist (file all-files)
+             (setq processed-files (1+ processed-files))
+             (message "Processing file %d/%d: %s" processed-files total-files
+                      (file-name-nondirectory file))
+             
+             (condition-case err
+                 (progn
+                   ;; Force process the file (ignore existing state)
+                   (supertag-sync--process-single-file file counters)
+                   ;; Update sync state for the file
+                   (supertag-sync-update-state file))
+               (error
+                (message "ERROR processing file %s: %s" file err)))))
+         
+         ;; Step 4: Save state and report results
+         (supertag-sync-save-state)
+         
+         (let ((nodes-created (plist-get counters :nodes-created))
+               (nodes-updated (plist-get counters :nodes-updated))
+               (refs-created (or (plist-get counters :references-created) 0)))
+           (message "Full initialization completed!")
+           (message "Results: %d files processed, %d nodes created, %d nodes updated, %d references created"
+                    processed-files nodes-created nodes-updated refs-created)
+           
+           ;; Show summary
+           (when (> nodes-created 0)
+             (message "Database successfully initialized with %d nodes from %d files."
+                      nodes-created processed-files))
+           
+           (when (= nodes-created 0)
+             (message "WARNING: No nodes were created. Please check:")
+             (message "  - org-supertag-sync-directories: %s" org-supertag-sync-directories)
+             (message "  - supertag-sync-file-pattern: %s" supertag-sync-file-pattern)
+             (message "  - File contents have proper org headings with IDs"))))))))
+
+;;;###autoload
+(defun supertag-sync-force-resync-file (&optional file)
+ "Force resync a specific file, ignoring existing sync state.
+If FILE is not provided, prompt user to select a file."
+ (interactive)
+ (let ((target-file (or file
+                        (read-file-name "Force resync file: " nil nil t))))
+   (unless (file-exists-p target-file)
+     (user-error "File does not exist: %s" target-file))
+   
+   (unless (supertag-sync--in-sync-scope-p target-file)
+     (user-error "File is not in sync scope: %s" target-file))
+   
+   (when (yes-or-no-p (format "Force resync file %s? " (file-name-nondirectory target-file)))
+     (message "Force resyncing file: %s" target-file)
+     
+     ;; Remove from sync state to force processing
+     (let ((state-table (supertag-sync--get-state-table)))
+       (remhash target-file state-table))
+     
+     ;; Process the file
+     (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
+                       :references-created 0 :references-deleted 0)))
+       (supertag-with-transaction
+         (supertag-sync--process-single-file target-file counters))
+       
+       ;; Update state and report
+       (supertag-sync-update-state target-file)
+       (supertag-sync-save-state)
+       
+       (message "Force resync completed: %d created, %d updated, %d deleted"
+                (plist-get counters :nodes-created)
+                (plist-get counters :nodes-updated)
+                (plist-get counters :nodes-deleted))))))
+
+;;;###autoload
+(defun supertag-sync-force-resync-current-file ()
+ "Force resync the current file."
+ (interactive)
+ (unless (buffer-file-name)
+   (user-error "Current buffer is not visiting a file"))
+ (supertag-sync-force-resync-file (buffer-file-name)))
+
+;;;###autoload
+(defun supertag-sync-reset-state ()
+ "Reset all sync state without touching the database.
+This forces all files to be considered 'modified' on next sync."
+ (interactive)
+ (when (yes-or-no-p "This will reset all sync state. Continue? ")
+   (setq supertag-sync--state (make-hash-table :test 'equal))
+   (supertag-sync-save-state)
+   (message "Sync state reset. All files will be reprocessed on next sync.")))
+
+;;;###autoload
+(defun supertag-start-auto-sync (&optional interval)
+  "Start automatic synchronization.
+If INTERVAL is provided, use it as the sync interval in seconds."
+  (interactive "P")
+  (let ((sync-interval (if interval
+                          (prefix-numeric-value interval)
+                        supertag-sync-auto-interval)))
+    (supertag-sync-start-auto-sync sync-interval)
+    (message "Auto-sync started with %d second interval." sync-interval)))
+
+;;;###autoload
+(defun supertag-stop-auto-sync ()
+  "Stop automatic synchronization."
+  (interactive)
+  (supertag-sync-stop-auto-sync)
+  (message "Auto-sync stopped."))
+
+;;;###autoload
+(defun supertag-sync-check-now ()
+ "Immediately check and sync modified files."
+ (interactive)
+ (message "Starting manual sync check...")
+ (supertag-sync--check-and-sync)
+ (message "Manual sync check completed."))
+
+;;;###autoload
+(defun supertag-sync-status ()
+ "Show current sync status and configuration."
+ (interactive)
+ (let* ((state-table (supertag-sync--get-state-table))
+        (num-tracked-files (hash-table-count state-table))
+        (modified-files (supertag-get-modified-files))
+        (num-modified (length modified-files))
+        (timer-active (and supertag-sync--timer (not (null supertag-sync--timer)))))
+   
+   (message "=== Supertag Sync Status ===")
+   (message "Sync directories: %s" org-supertag-sync-directories)
+   (message "Exclude directories: %s" supertag-sync-exclude-directories)
+   (message "File pattern: %s" supertag-sync-file-pattern)
+   (message "Auto-sync: %s" (if timer-active "ACTIVE" "INACTIVE"))
+   (message "Tracked files: %d" num-tracked-files)
+   (message "Modified files: %d" num-modified)
+   
+   (when (> num-modified 0)
+     (message "Modified files:")
+     (dolist (file modified-files)
+       (message "  - %s" file)))))
+
+;;;###autoload
+(defun supertag-sync-cleanup-database ()
+ "Perform database maintenance by validating nodes and cleaning up orphaned data."
+ (interactive)
+ (when (yes-or-no-p "This will validate all nodes and clean up orphaned data. Continue? ")
+   (message "Starting database cleanup...")
+   
+   ;; Step 1: Validate all nodes and mark zombies as orphaned
+   (let ((counters '(:nodes-deleted 0)))
+     (supertag-sync-validate-nodes counters)
+     (message "Node validation complete. %d nodes marked as orphaned."
+              (plist-get counters :nodes-deleted))
+     
+     ;; Step 2: Garbage collect all orphaned nodes
+     (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes)))
+       (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count)))))
 
 
 (provide 'supertag-ui-commands)
