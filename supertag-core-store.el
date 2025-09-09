@@ -377,23 +377,18 @@ Returns a list of (node-id . node-data) pairs."
 
 (defun supertag-find-nodes-by-file (file-path)
   "Find all nodes located in FILE-PATH.
-This version uses a single, robust pass to find nodes, normalizing
-file paths before comparison to ensure correctness.
 Returns a list of (node-id . node-data) pairs."
   (let ((nodes-collection (supertag-get '(:nodes)))
-        (found-nodes '())
-        ;; Normalize the target path once at the beginning for efficiency.
-        (normalized-query-path (expand-file-name file-path)))
+        (found-nodes '()))
     (when (hash-table-p nodes-collection)
       (maphash
        (lambda (id node-data)
          ;; Safely extract :file and ensure it's a string
          (when-let* ((node-file (and node-data (plist-get node-data :file)))
                      ((stringp node-file)))
-           ;; Normalize both paths before comparing
-           (let ((normalized-node-file (expand-file-name node-file)))
-             (when (equal normalized-node-file normalized-query-path)
-               (push (cons id node-data) found-nodes)))))
+           ;; Direct string comparison without path normalization
+           (when (equal node-file file-path)
+             (push (cons id node-data) found-nodes))))
        nodes-collection))
     (nreverse found-nodes)))
 
