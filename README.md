@@ -16,6 +16,16 @@ The new version features a completely redesigned architecture with these major i
 
 For detailed architecture comparison, see [Compare New/Old Architecture](doc/COMPARE-NEW-OLD-ARCHITECTURE.md)
 
+### 😍 First-time Setup for New Users
+
+**After configuring org-supertag and restarting Emacs, new users must run the following command first to initialize the database**:
+
+`M-x supertag-sync-full-initialize`
+
+This command performs a full scan of all files in the synchronized directories (`org-supertag-sync-directories`) to complete the database initialization.
+
+Once this command finishes executing, org-supertag will be ready to serve you.
+
 ### 🔄 Database Migration Required
 
 **Before using Org-SuperTag 5.0, you MUST migrate your existing database to the new format:**
