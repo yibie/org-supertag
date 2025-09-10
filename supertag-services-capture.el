@@ -337,7 +337,9 @@ If TEMPLATE-KEY is not provided, prompts for one."
                   (completing-read "Template: "
                                    (mapcar (lambda (t) (cons (car t) (cadr t))) template-alist)
                                    nil t)))
-         (template-data (cdr (assoc key template-alist)))
+         ;; Each template has shape: (KEY DESCRIPTION PLIST)
+         ;; We need the PLIST only, so drop the first two elements.
+         (template-data (cddr (assoc key template-alist)))
          (target-file (plist-get template-data :file))
          (node-spec (plist-get template-data :node-spec)))
     (unless template-data
