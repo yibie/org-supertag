@@ -244,7 +244,7 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                           (setq changed (1+ changed))))
                     (error (push (format "%s" err) errors))))))
           (unless dry-run (save-buffer)))))
-    (list :file file :changed changed :headlines headlines :backups (mapcar #'cdr backups) :errors errors)))
+    (list :file file :changed changed :headlines headlines :backups (mapcar #'cdr backups) :errors errors))))
 
 (defun supertag-migrate-legacy-tags-directory (dir &optional dry-run)
   "Migrate all .org files in DIR (recursively). Returns report plist."
