@@ -268,7 +268,7 @@ ARGS is a list containing the function symbol."
           (:fields (setq fields (supertag-capture--get-content get-spec))))))
     `(:title ,title :tags ,tags :body ,body :fields ,fields)))
 
-(defun supertag-capture--execute (target-file processed-data)
+  (defun supertag-capture--execute (target-file processed-data)
   "Execute the capture by writing data to file and syncing.
 TARGET-FILE is the path to the destination file.
 PROCESSED-DATA is the plist from --process-spec."
@@ -276,31 +276,28 @@ PROCESSED-DATA is the plist from --process-spec."
     (user-error "TARGET-FILE cannot be nil"))
   (unless (file-exists-p target-file)
     (user-error "Target file does not exist: %s" target-file))
-  (let* ((title (plist-get processed-data :title))
-         (tags (plist-get processed-data :tags))
-         (body (plist-get processed-data :body))
-         (field-settings (plist-get processed-data :fields))
-         ;; Assemble the node string
-         (tags-str (if tags (mapconcat (lambda (tag) (concat "#" tag)) tags " ") ""))
-         (full-title (if (string-empty-p tags-str) title (format "%s %s" title tags-str)))
-         ;; Get location
-         (insert-info (supertag-ui-select-insert-position target-file))
-         (insert-pos (plist-get insert-info :position))
-         (insert-level (plist-get insert-info :level)))
+    (let* ((title (plist-get processed-data :title))
+           (tags (plist-get processed-data :tags))
+           (body (plist-get processed-data :body))
+           (field-settings (plist-get processed-data :fields))
+           ;; Get location
+           (insert-info (supertag-ui-select-insert-position target-file))
+           (insert-pos (plist-get insert-info :position))
+           (insert-level (plist-get insert-info :level)))
     (unless insert-info
       (user-error "No valid insert position selected"))
 
     ;; Side Effect 1: Write to file
-    (let ((new-node-id (org-id-new)))
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (goto-char insert-pos)
-          (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-          (insert (make-string insert-level ?*) " " full-title "\n")
-          (unless (string-empty-p body)
-            (insert body "\n"))
-          (insert "\n:PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
-          (save-buffer)))
+      (let ((new-node-id (org-id-new)))
+        (with-current-buffer (find-file-noselect target-file)
+          (save-excursion
+            (goto-char insert-pos)
+            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+            (insert (supertag--render-org-headline insert-level title tags target-file nil))
+            (unless (string-empty-p body)
+              (insert body "\n"))
+            (insert "\n:PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
+            (save-buffer)))
 
       ;; Side Effect 2: Sync and Enrich
       (let ((node-id new-node-id))

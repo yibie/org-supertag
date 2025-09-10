@@ -11,6 +11,8 @@
 (require 'cl-lib)
 (require 'org-id)    ; For org-id-new
 (require 'sha1)      ; For secure-hash
+(require 'org)
+(require 'org-element)
 
 ;;; --- Helper Functions ---
 
@@ -159,6 +161,103 @@ This function recursively copies nested hash tables."
                                (format-time-string "%Y%m%d-%H%M%S"))))
       (copy-file file-to-backup backup-file t)
       (message "Old database backed up to: %s" backup-file))))
+
+;; ------------------------------------------------------------------
+;; Legacy :tag: migration (optional utility)
+;; ------------------------------------------------------------------
+
+(defun supertag--detect-headline-tag-style (headline)
+  "Detect tag style used on HEADLINE element. Returns 'inline, 'org, 'both or 'none."
+  (let* ((raw (org-element-property :raw-value headline))
+         (org-tags (org-element-property :tags headline))
+         (has-inline (and raw (string-match-p "#\\w[-_[:alnum:]]*" raw)))
+         (has-org (and org-tags (> (length org-tags) 0))))
+    (cond
+     ((and has-inline has-org) 'both)
+     (has-inline 'inline)
+     (has-org 'org)
+     (t 'none))))
+
+(defun supertag--rewrite-headline-tags (headline style)
+  "Rewrite HEADLINE tags to STYLE. Returns plist (:changedp t :begin BEG :end END) or nil."
+  (let* ((beg (org-element-property :begin headline))
+         (end (save-excursion (goto-char beg) (end-of-line) (point)))
+         (level (org-element-property :level headline))
+         (title (org-element-property :raw-value headline))
+         (tags (org-element-property :tags headline))
+         (clean-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" ""
+                                       (replace-regexp-in-string "#\\w[-_[:alnum:]]*" "" title))))
+         (inline-part (when tags (mapconcat (lambda (t) (concat "#" t)) tags " ")))
+         (org-part (when tags (concat ":" (mapconcat #'identity tags ":") ":")))
+         (new-line (pcase style
+                     ('inline (format "%s %s%s"
+                                      (make-string level ?*) clean-title
+                                      (if inline-part (concat " " inline-part) "")))
+                     ('org    (format "%s %s%s"
+                                      (make-string level ?*) clean-title
+                                      (if org-part (concat " " org-part) "")))
+                     ('both   (format "%s %s%s%s"
+                                      (make-string level ?*) clean-title
+                                      (if inline-part (concat " " inline-part) "")
+                                      (if org-part (concat " " org-part) "")))
+                     (_ nil))))
+    (when new-line
+      (save-excursion
+        (goto-char beg)
+        (delete-region beg end)
+        (insert new-line))
+      (list :changedp t :begin beg :end (save-excursion (goto-char beg) (end-of-line) (point))))))
+
+(defun supertag-migration--backup-file (file)
+  "Create a timestamped backup for FILE. Return backup path."
+  (let* ((backup (format "%s.bak-%s" file (format-time-string "%Y%m%d-%H%M%S"))))
+    (copy-file file backup t)
+    backup))
+
+(defun supertag-migration--restore-backup (file backup)
+  "Restore FILE from BACKUP. Return t on success."
+  (when (and (file-exists-p backup))
+    (copy-file backup file t)
+    t))
+
+(defun supertag-migrate-legacy-tags-file (file &optional dry-run)
+  "Migrate org native :tag: in FILE to inline #tags. Returns report plist.
+When DRY-RUN is non-nil, do not modify the file; only report changes."
+  (unless (file-exists-p file)
+    (error "File not found: %s" file))
+  (let ((changed 0) (errors '()) (backups '()) (headlines 0))
+    (with-current-buffer (find-file-noselect file)
+      (save-excursion
+        (goto-char (point-min))
+        (let ((ast (org-element-parse-buffer)))
+          (org-element-map ast 'headline
+            (lambda (hl)
+              (setq headlines (1+ headlines))
+              (let ((style (supertag--detect-headline-tag-style hl)))
+                (when (memq style '(org both))
+                  (condition-case err
+                      (unless dry-run
+                        ;; Ensure single backup per file
+                        (unless (assoc file backups)
+                          (push (cons file (supertag-migration--backup-file file)) backups))
+                        (when (supertag--rewrite-headline-tags hl 'inline)
+                          (setq changed (1+ changed))))
+                    (error (push (format "%s" err) errors))))))
+          (unless dry-run (save-buffer)))))
+    (list :file file :changed changed :headlines headlines :backups (mapcar #'cdr backups) :errors errors)))
+
+(defun supertag-migrate-legacy-tags-directory (dir &optional dry-run)
+  "Migrate all .org files in DIR (recursively). Returns report plist."
+  (let ((files (directory-files-recursively dir "\\.org$" t))
+        (total 0) (changed 0) (errors '()) (reports '()) (backups '()))
+    (dolist (f files)
+      (setq total (1+ total))
+      (let ((r (supertag-migrate-legacy-tags-file f dry-run)))
+        (setq changed (+ changed (plist-get r :changed)))
+        (setq reports (cons r reports))
+        (setq backups (append backups (plist-get r :backups)))
+        (setq errors (append errors (plist-get r :errors)))))
+    (list :files (length files) :changed changed :reports (nreverse reports) :backups backups :errors errors)))
 
 (defun supertag-migrate--process-data (old-objects old-links old-embeds)
   "Process old data and return a new store and indexes."

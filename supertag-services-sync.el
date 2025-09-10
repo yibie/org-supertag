@@ -78,6 +78,32 @@ Only headings at this level or deeper will be considered for node creation."
   :type 'integer
   :group 'supertag-sync)
 
+;; Tag write style for rendering headlines
+(defcustom supertag-tag-style 'inline
+  "Style to write tags when generating or inserting Org headlines.
+Supported values:
+- 'inline  => Title with inline #tags (e.g., "Title #tag1 #tag2").
+- 'org     => Title with org native :tag: syntax (e.g., "Title :tag1:tag2:").
+- 'both    => Combine both inline and org native forms.
+- 'auto    => Heuristic; currently defaults to 'inline."
+  :type '(choice (const :tag "Inline #tags" inline)
+                 (const :tag "Org :tag:" org)
+                 (const :tag "Both" both)
+                 (const :tag "Auto" auto))
+  :group 'supertag-sync)
+
+;; Legacy tag handling policy
+(defcustom supertag-sync-legacy-tags-policy 'read-only
+  "How to handle legacy org native :tag: found in headlines.
+Supported values:
+- 'read-only   => Read and import to DB, do not modify files (default).
+- 'lazy-convert => When touching a headline, convert :tag: to inline #tags.
+- 'preserve    => Always preserve :tag: in files."
+  :type '(choice (const :tag "Read only" read-only)
+                 (const :tag "Lazy convert on edit" lazy-convert)
+                 (const :tag "Preserve in files" preserve))
+  :group 'supertag-sync)
+
 ;;; Variables
 
 (defvar supertag-sync--state (make-hash-table :test 'equal)
@@ -216,29 +242,29 @@ Returns a list of exported node data."
     (with-temp-file file (insert org-content))
     node-data))
 
-(defun supertag--generate-org-content (nodes)
+  (defun supertag--generate-org-content (nodes)
   "Helper function to generate Org content from node plists.
 NODES is a list of node plists.
 Returns a string containing the Org content."
-  (with-temp-buffer
-    (dolist (node nodes)
-      (let* ((title (plist-get node :title))
-             (tags (plist-get node :tags))
-             (level (or (plist-get node :level) 1))
-             (content (or (plist-get node :content) ""))
-             (id (plist-get node :id)))
-        ;; Reconstruct the node with proper formatting.
-        (insert (format "%s %s%s\n"
-                        (make-string level ?*)
-                        title
-                        (if tags (concat " :" (mapconcat #'identity tags ":") ":") "")))
-        (insert (format ":PROPERTIES:\n:ID:       %s\n:END:\n" id))
-        ;; Insert content
-        (when content
-          (insert content))
-        (unless (or (string-empty-p content) (string-suffix-p "\n" content))
-          (insert "\n"))))
-    (buffer-string)))
+    (with-temp-buffer
+      (dolist (node nodes)
+        (let* ((title (plist-get node :title))
+               (tags (plist-get node :tags))
+               (level (or (plist-get node :level) 1))
+               (content (or (plist-get node :content) ""))
+               (id (plist-get node :id)))
+          ;; Reconstruct the node with org native :tag: formatting (no behavior change on export).
+          (insert (format "%s %s%s\n"
+                          (make-string level ?*)
+                          title
+                          (if tags (concat " :" (mapconcat #'identity tags ":") ":") "")))
+          (insert (format ":PROPERTIES:\n:ID:       %s\n:END:\n" id))
+          ;; Insert content
+          (when content
+            (insert content))
+          (unless (or (string-empty-p content) (string-suffix-p "\n" content))
+            (insert "\n"))))
+      (buffer-string)))
 
 (defun supertag-sync-save-state ()
   "Save sync state to file."
@@ -733,7 +759,7 @@ COUNTERS is a plist for tracking changes."
           (push (match-string 1) tags))))
     (nreverse tags)))
 
-(defun supertag--extract-inline-tags (elements)
+  (defun supertag--extract-inline-tags (elements)
   "Extract all #tags from org ELEMENTS.
 ELEMENTS can be a list of org elements or a single element.
 If ELEMENTS is a string, extract tags directly from it."
@@ -747,7 +773,86 @@ If ELEMENTS is a string, extract tags directly from it."
           (let ((content (org-element-property :value element)))
             (when content
               (setq tags (append tags (supertag--extract-inline-tags-from-string content)))))))))
-    (cl-delete-duplicates tags :test #'equal)))
+      (cl-delete-duplicates tags :test #'equal)))
+
+  (defun supertag--extract-org-headline-tags (headline)
+    "Extract org native tags (:tag:) from HEADLINE element.
+Return a list of tag strings, or an empty list if none."
+    (let ((tags (org-element-property :tags headline)))
+      (when tags
+        (cl-remove-if (lambda (s) (or (null s) (string-empty-p s)))
+                      (mapcar #'identity tags)))))
+
+  (defun supertag--merge-and-sanitize-tags (tags-1 tags-2)
+    "Merge two tag lists and sanitize names.
+Returns a de-duplicated list preserving order preference of TAGS-1."
+    (let* ((sanitize (lambda (s) (and s (supertag-sanitize-tag-name s))))
+           (a (delq nil (mapcar sanitize tags-1)))
+           (b (delq nil (mapcar sanitize tags-2)))
+           (seen (make-hash-table :test 'equal))
+           (out '()))
+      (dolist (t a)
+        (unless (gethash t seen)
+          (push t out)
+          (puthash t t seen)))
+        (dolist (t b)
+          (unless (gethash t seen)
+            (push t out)
+            (puthash t t seen)))
+        (nreverse out)))
+
+  (defun supertag--resolve-tag-style (&optional node file)
+    "Resolve write style for tags for NODE/FILE context.
+Currently returns `supertag-tag-style`, using 'inline when value is 'auto."
+    (let ((style supertag-tag-style))
+      (if (eq style 'auto) 'inline style)))
+
+  (defun supertag--format-tags-by-style (tags style)
+    "Return a string representing TAGS according to STYLE.
+Result includes a leading space when non-empty, else an empty string."
+    (let* ((inline-part (when tags (mapconcat (lambda (t) (concat "#" t)) tags " ")))
+           (org-part (when tags (concat ":" (mapconcat #'identity tags ":") ":"))))
+      (pcase style
+        ('inline (if inline-part (concat " " inline-part) ""))
+        ('org    (if org-part    (concat " " org-part)    ""))
+        ('both   (cond
+                  ((and inline-part org-part) (concat " " inline-part " " org-part))
+                  (inline-part (concat " " inline-part))
+                  (org-part (concat " " org-part))
+                  (t "")))
+        (_ (if inline-part (concat " " inline-part) "")))))
+
+  (defun supertag--render-org-headline (level title tags file node &optional style)
+    "Render an Org headline line given LEVEL, TITLE and TAGS.
+Returns a single line string ending with a newline."
+    (let* ((resolved (or style (supertag--resolve-tag-style node file)))
+           (stars (make-string (max 1 (or level 1)) ?*))
+           (tags-part (supertag--format-tags-by-style tags resolved)))
+      (format "%s %s%s\n" stars title tags-part)))
+
+  (defun supertag--apply-legacy-tags-policy (buffer beg end tags)
+    "Apply legacy tags policy within BUFFER on region [BEG, END].
+If `supertag-sync-legacy-tags-policy' is 'lazy-convert, remove trailing
+org native :tag: from headline line and ensure inline #tags exist.
+Returns non-nil when a modification was performed."
+    (when (eq supertag-sync-legacy-tags-policy 'lazy-convert)
+      (with-current-buffer buffer
+        (save-excursion
+          (save-restriction
+            (narrow-to-region beg end)
+            (goto-char (point-min))
+            (when (looking-at "^\*+ .*")
+              (let ((changed nil))
+                ;; Remove trailing :tag: block
+                (when (re-search-forward "\s-+:[^\n:]+:" (line-end-position) t)
+                  (replace-match "")
+                  (setq changed t))
+                ;; Ensure inline #tags present if TAGS provided
+                (when (and tags (> (length tags) 0))
+                  (end-of-line)
+                  (insert (supertag--format-tags-by-style tags 'inline))
+                  (setq changed t))
+                changed))))))
 
 (defun supertag--create-tag-entities (tag-names)
   "Create tag entities for TAG-NAMES and return their IDs.
@@ -834,7 +939,7 @@ COUNTERS is a plist for tracking relation statistics."
           (setf (plist-get counters :references-deleted)
                 (1+ (or (plist-get counters :references-deleted) 0)))))))) 
 
-(defun supertag--convert-element-to-node-plist (headline file)
+  (defun supertag--convert-element-to-node-plist (headline file)
   "Convert a headline ELEMENT from org-element into a node plist.
 This is the core reusable parser for a single headline.
 NOTE: This function only parses data, it does NOT create tag entities or relations."
@@ -846,9 +951,12 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
          ;; Defensively clean title of both #tags and :tags: to prevent duplication.
          (cleaned-raw-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
 "#\\w[-_[:alnum:]]*" "" original-raw-title))))
-         (headline-tags (supertag--extract-inline-tags original-raw-title))
-         (content-tags (supertag--extract-inline-tags section-elements))
-         (all-tags (cl-union headline-tags content-tags :test #'equal))
+           (headline-tags (supertag--extract-inline-tags original-raw-title))
+           (content-tags (supertag--extract-inline-tags section-elements))
+           (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
+           (all-tags (supertag--merge-and-sanitize-tags
+                     (cl-union headline-tags content-tags :test #'equal)
+                     org-native-tags))
          (properties (supertag--parse-properties (org-element-property :properties headline)))
          (refs-to (supertag--extract-refs
                    (when contents-begin
