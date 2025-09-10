@@ -40,6 +40,10 @@ Once this command finishes executing, org-supertag will be ready to serve you.
 
 Failure to perform this migration will result in incompatibility with the new version and potential data loss.
 
+### 🏷️ Compatibility with legacy :tag:
+
+Org-SuperTag now reads both inline `#tag` and Org's native `:tag:` during sync/import. This preserves your existing files without modification and makes historical tags available in the database. Capture continues to create inline `#tag` in new headings; export behavior is unchanged.
+
 ## 🚀 What is Org-SuperTag?
 
 > Org-SuperTag is a revolutionary Org-mode extension that upgrades the traditional tagging system into an intelligent knowledge management engine.  

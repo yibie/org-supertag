@@ -1,5 +1,7 @@
 # Org-Supertag Capture System
 
+Note: Legacy Org `:tag:` remain readable during sync/import. New capture writes inline `#tag` as before.
+
 ## 🚀 What is the Capture System?
 
 The Org-Supertag Capture System provides a powerful and flexible node creation mechanism, supporting dynamic templates, content generators, and automatic field filling. This system follows the data separation principle, storing node content and extended properties separately in Org files and the database.
