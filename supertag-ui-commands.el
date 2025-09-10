@@ -577,12 +577,14 @@ HEADLINE is optional headline text."
   (let* ((capture-info (supertag-capture-interactive-headline))
          (full-title (plist-get capture-info :headline))
          (selected-tags (plist-get capture-info :tags))
-          (target-file (or target-file (read-file-name "Capture to file: ")))
+         (target-file (or target-file (read-file-name "Capture to file: ")))
          ;; Optional body content below the headline
          (body (read-string "Body (optional, RET to skip): "))
-          (insert-info (supertag-ui-select-insert-position target-file))
-          (insert-pos (plist-get insert-info :position))
-          (insert-level (plist-get insert-info :level)))
+         (insert-info (supertag-ui-select-insert-position target-file))
+         (insert-pos (plist-get insert-info :position))
+         (insert-level (plist-get insert-info :level))
+         ;; Derive a title without inline #tags (since renderer adds them)
+         (title-only (string-trim (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" full-title))))
     
     (unless insert-info
       (user-error "No valid insert position selected"))
@@ -592,7 +594,7 @@ HEADLINE is optional headline text."
         (save-excursion
           (goto-char insert-pos)
           (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-          (insert (make-string insert-level ?*) " " full-title "\n")
+          (insert (supertag--render-org-headline insert-level title-only selected-tags target-file nil))
           (when (and body (> (length body) 0))
             (insert body "\n"))
           (insert ":PROPERTIES:\n:ID: " (org-id-new) "\n:END:\n")
