@@ -82,8 +82,8 @@ Only headings at this level or deeper will be considered for node creation."
 (defcustom supertag-tag-style 'inline
   "Style to write tags when generating or inserting Org headlines.
 Supported values:
-- 'inline  => Title with inline #tags (e.g., "Title #tag1 #tag2").
-- 'org     => Title with org native :tag: syntax (e.g., "Title :tag1:tag2:").
+- 'inline  => Title with inline #tags.
+- 'org     => Title with org native :tag: syntax.
 - 'both    => Combine both inline and org native forms.
 - 'auto    => Heuristic; currently defaults to 'inline."
   :type '(choice (const :tag "Inline #tags" inline)
@@ -749,7 +749,7 @@ COUNTERS is a plist for tracking changes."
     (nreverse refs)))
 
 (defun supertag--extract-inline-tags-from-string (content-string)
-  "Extract all #tags from a CONTENT-STRING using a regex."
+  "Extract all tags from a CONTENT-STRING using a regex."
   (let ((tags '()))
     (when content-string
       (with-temp-buffer
@@ -760,7 +760,7 @@ COUNTERS is a plist for tracking changes."
     (nreverse tags)))
 
   (defun supertag--extract-inline-tags (elements)
-  "Extract all #tags from org ELEMENTS.
+  "Extract all tags from org ELEMENTS.
 ELEMENTS can be a list of org elements or a single element.
 If ELEMENTS is a string, extract tags directly from it."
   (let ((tags '()))
@@ -786,20 +786,20 @@ Return a list of tag strings, or an empty list if none."
   (defun supertag--merge-and-sanitize-tags (tags-1 tags-2)
     "Merge two tag lists and sanitize names.
 Returns a de-duplicated list preserving order preference of TAGS-1."
-    (let* ((sanitize (lambda (s) (and s (supertag-sanitize-tag-name s))))
+    (let* ((sanitize #'(lambda (s) (and s (supertag-sanitize-tag-name s))))
            (a (delq nil (mapcar sanitize tags-1)))
            (b (delq nil (mapcar sanitize tags-2)))
            (seen (make-hash-table :test 'equal))
            (out '()))
-      (dolist (t a)
-        (unless (gethash t seen)
-          (push t out)
-          (puthash t t seen)))
-        (dolist (t b)
-          (unless (gethash t seen)
-            (push t out)
-            (puthash t t seen)))
-        (nreverse out)))
+      (dolist (tag a)
+        (unless (gethash tag seen)
+          (push tag out)
+          (puthash tag tag seen)))
+      (dolist (tag b)
+        (unless (gethash tag seen)
+          (push tag out)
+          (puthash tag tag seen)))
+      (nreverse out)))
 
   (defun supertag--resolve-tag-style (&optional node file)
     "Resolve write style for tags for NODE/FILE context.
@@ -833,7 +833,7 @@ Returns a single line string ending with a newline."
   (defun supertag--apply-legacy-tags-policy (buffer beg end tags)
     "Apply legacy tags policy within BUFFER on region [BEG, END].
 If `supertag-sync-legacy-tags-policy' is 'lazy-convert, remove trailing
-org native :tag: from headline line and ensure inline #tags exist.
+org native :tag: from headline line and ensure inline-tags exist.
 Returns non-nil when a modification was performed."
     (when (eq supertag-sync-legacy-tags-policy 'lazy-convert)
       (with-current-buffer buffer
@@ -852,7 +852,7 @@ Returns non-nil when a modification was performed."
                   (end-of-line)
                   (insert (supertag--format-tags-by-style tags 'inline))
                   (setq changed t))
-                changed))))))
+                changed)))))))
 
 (defun supertag--create-tag-entities (tag-names)
   "Create tag entities for TAG-NAMES and return their IDs.
@@ -860,7 +860,7 @@ Ensures tags are created only once and returns existing tag IDs."
   (let ((tag-ids '()))
     (dolist (tag-name tag-names)
       (let* ((sanitized-name (supertag-sanitize-tag-name tag-name))
-             (tag-id sanitized-name)  ; 直接使用清理后的名称作为ID
+             (tag-id sanitized-name) 
              (existing-tag (supertag-tag-get tag-id)))
         (if existing-tag
             (message "DEBUG: Tag '%s' already exists, reusing." tag-id)

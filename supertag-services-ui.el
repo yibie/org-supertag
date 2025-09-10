@@ -39,10 +39,9 @@ all subheadings proportionally."
       (user-error "FILE parameter cannot be nil"))
     (unless (file-exists-p file)
       (user-error "File does not exist: %s" file))
-    (with-current-buffer (find-file-noselect file)</search>
-</search_and_replace>
+    (with-current-buffer (find-file-noselect file)
       (let* ((headlines (org-map-entries
-                         (lambda ()
+                         #'(lambda ()
                            (list (org-get-heading t t) (point) (org-outline-level)))
                          t 'file))
              (options '("File Top" "File End" "Under Heading..." "After Heading..."))
