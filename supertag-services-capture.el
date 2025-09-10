@@ -47,7 +47,7 @@ Returns list of field plists."
   (cl-loop for tag-id in selected-tags
            for fields = (supertag-tag-get-all-fields tag-id)
            when fields append fields into all-fields
-           finally return (delete-dups all-fields :key (lambda (f) (plist-get f :name)) :test #'equal)))
+           finally return (cl-delete-duplicates all-fields :key #'(lambda (f) (plist-get f :name)) :test #'equal)))
 
 (defun supertag-capture--prompt-for-field-values (fields)
   "Prompt user for values for the given fields.
@@ -62,29 +62,40 @@ Returns alist of (field-name . value)."
   "Interactively enrich a node with field values based on its tags.
 NODE-ID is the ID of the node to enrich.
 This function correctly uses the Tag -> Field -> Value data model."
-  (let ((continue t)
-        (node-tags (plist-get (supertag-node-get node-id) :tags)))
-    (unless node-tags
-      (message "Node has no tags to provide fields.")
-      (cl-return-from supertag-capture-enrich-node))
-    
-    (while continue
-      (let* ((tag-id (completing-read "Select a tag to add field from (or empty to finish): "
-                                      (cons "" node-tags) nil nil)))
-        (if (string-empty-p tag-id)
-            (setq continue nil)
+  (cl-block supertag-capture-enrich-node
+    (let ((node-tags (plist-get (supertag-node-get node-id) :tags)))
+      (unless node-tags
+        (message "Node has no tags to provide fields.")
+        (return-from supertag-capture-enrich-node))
+
+      (while t
+        (let ((tag-id (completing-read "Select a tag to add field from (or empty to finish): "
+                                       (cons "" node-tags) nil t)))
+          (when (string-empty-p tag-id)
+            (message "Node enrichment complete for %s" node-id)
+            (return-from supertag-capture-enrich-node))
+
           (let* ((fields (supertag-tag-get-all-fields tag-id))
-                 (field-names (mapcar (lambda (f) (plist-get f :name)) fields)))
-            (unless fields
-              (message "Tag '%s' has no fields defined." tag-id)
-              (cl-return-from supertag-capture-enrich-node))
-            (let* ((field-name (completing-read (format "Select field for tag '%s': " tag-id) field-names nil t)))
-              (when field-name
-                (let ((value (read-string (format "Value for %s/%s: " tag-id field-name))))
-                  (unless (string-empty-p value)
+                 (field-names (mapcar #'(lambda (f) (plist-get f :name)) fields))
+                 (prompt-choices (append field-names '("Create New Field")))
+                 (choice (completing-read (format "Select field for tag '%s': " tag-id)
+                                          prompt-choices nil t)))
+            (cond
+             ((string= choice "Create New Field")
+              (when-let ((new-field-def (supertag-ui-create-field-definition)))
+                (supertag-tag-add-field tag-id new-field-def)
+                (let* ((field-name (plist-get new-field-def :name))
+                       (value (supertag-ui-read-field-value new-field-def nil)))
+                  (unless (or (null value) (string-empty-p value))
                     (supertag-field-set node-id tag-id field-name value)
-                    (message "Set %s/%s -> %s" tag-id field-name value)))))))))
-    (message "Node enrichment complete for %s" node-id)))
+                    (message "Set %s/%s -> %s" tag-id field-name value)))))
+             (choice
+              (let* ((field-def (cl-find-if (lambda (f) (string= (plist-get f :name) choice)) fields))
+                     (current-value (supertag-field-get node-id tag-id choice))
+                     (new-value (supertag-ui-read-field-value field-def current-value)))
+                (unless (or (null new-value) (equal new-value current-value))
+                  (supertag-field-set node-id tag-id choice new-value)
+                  (message "Set %s/%s -> %s" tag-id choice new-value)))))))))))
 
 ;;; --- Dynamic Capture Template System ---
 
@@ -135,7 +146,7 @@ Example:
 ARGS can be (PROMPT-STRING &key :initial-input)."
   (let ((prompt (car args))
         (props (cdr args)))
-    (read-string prompt nil nil (plist-get props :initial-input))))
+    (read-string prompt (plist-get props :initial-input))))
 
 (defun supertag-capture--get-from-clipboard ()
   "Generator: Get content from clipboard."
@@ -228,6 +239,14 @@ Supported placeholders:
     
     template))
 
+(defun supertag-capture--get-from-tags-prompt (args)
+  "Generator: Prompt for tags with completion on existing tags."
+  (let* ((prompt (car args))
+         (props (cdr args))
+         (initial-input (plist-get props :initial-input))
+         (all-tags (mapcar #'car (supertag-query :tags))))
+    (completing-read-multiple prompt all-tags nil nil initial-input)))
+
 (defun supertag-capture--get-from-function (args)
   "Generator: Call a function to get content.
 ARGS is a list containing the function symbol."
@@ -250,6 +269,7 @@ ARGS is a list containing the function symbol."
       (:region-or-clipboard (supertag-capture--get-from-region-or-clipboard))
       (:template-string (supertag-capture--get-from-template-string args))
       (:function (supertag-capture--get-from-function args))
+      (:tags-prompt (supertag-capture--get-from-tags-prompt args))
       (_ (error "Unknown capture generator type: %S" type)))))
 
 ;; --- Processor & Executor ---
@@ -261,17 +281,50 @@ ARGS is a list containing the function symbol."
       (let ((part-type (plist-get spec :part))
             (get-spec (plist-get spec :get)))
         (pcase part-type
-          (:title (setq title (supertag-capture--get-content get-spec)))
-          (:tags (let ((tags-val (supertag-capture--get-content get-spec)))
-                   (setq tags (if (listp tags-val) tags-val (list tags-val)))))
-          (:body (setq body (supertag-capture--get-content get-spec)))
-          (:fields (setq fields (supertag-capture--get-content get-spec))))))
+          (:title
+           (message "DEBUG: Matched :title. Calling get-content...")
+           (setq title (supertag-capture--get-content get-spec))
+           (message "DEBUG: Got title: %S" title))
+          (:tags
+           (message "DEBUG: Matched :tags. Calling get-content...")
+           (setq tags (let ((tags-val (supertag-capture--get-content get-spec)))
+                        (if (listp tags-val)
+                            tags-val
+                          (split-string tags-val "[,;]" t "[ \t\n\r]+"))))
+           (message "DEBUG: Got tags: %S" tags))
+          (:body
+           (message "DEBUG: Matched :body. Calling get-content...")
+           (setq body (supertag-capture--get-content get-spec))
+           (message "DEBUG: Got body: %S" body))
+          (:fields
+           (message "DEBUG: Matched :fields. Calling get-content...")
+           (setq fields (supertag-capture--get-content get-spec))
+           (message "DEBUG: Got fields: %S" fields)))
+        (message "DEBUG: Finished processing one spec item.")))
+    (message "DEBUG: --- Exiting process-spec ---")
     `(:title ,title :tags ,tags :body ,body :fields ,fields)))
 
-  (defun supertag-capture--execute (target-file processed-data)
+(defun supertag-capture--insert-node-into-buffer (buffer position level title tags body new-node-id)
+  "Correctly insert a new Org node into BUFFER at POSITION.
+This function enforces the correct order: headline, properties, body."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char position)
+      (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) ; Ensure blank line before
+      ;; 1. Insert headline
+      (insert (supertag--render-org-headline level title tags (buffer-file-name buffer) nil))
+      ;; 2. Insert properties drawer (must come immediately after headline)
+      (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
+      ;; 3. Insert body content after the properties drawer
+      (unless (string-empty-p body)
+        (insert "\n" body))
+      (save-buffer))))
+
+(defun supertag-capture--execute (target-file processed-data)
   "Execute the capture by writing data to file and syncing.
 TARGET-FILE is the path to the destination file.
 PROCESSED-DATA is the plist from --process-spec."
+  (message "DEBUG: Entering supertag-capture--execute")
   (unless target-file
     (user-error "TARGET-FILE cannot be nil"))
   (unless (file-exists-p target-file)
@@ -289,20 +342,20 @@ PROCESSED-DATA is the plist from --process-spec."
 
     ;; Side Effect 1: Write to file
       (let ((new-node-id (org-id-new)))
-        (with-current-buffer (find-file-noselect target-file)
-          (save-excursion
-            (goto-char insert-pos)
-            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-            (insert (supertag--render-org-headline insert-level title tags target-file nil))
-            (unless (string-empty-p body)
-              (insert body "\n"))
-            (insert "\n:PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
-            (save-buffer)))
+        (supertag-capture--insert-node-into-buffer
+         (find-file-noselect target-file)
+         insert-pos insert-level title tags body new-node-id)
 
-      ;; Side Effect 2: Sync and Enrich
+      ;; Side Effect 2:  Sync and Enrich
       (let ((node-id new-node-id))
       (when node-id
-        (supertag-services-sync-file target-file)
+        ;; Instead of a full, heavy-weight sync, perform a direct,
+        ;; surgical creation of the node in the database. This is much
+        ;; more efficient and avoids confusing logs.
+        (supertag-node-create (list :id node-id
+                                    :title title
+                                    :tags tags
+                                    :file target-file))
         (message "Node %s created in %s" node-id (file-name-nondirectory target-file))
 
         ;; Set field values from template
@@ -314,47 +367,9 @@ PROCESSED-DATA is the plist from --process-spec."
                    (f-value (if f-get
                                 (supertag-capture--get-content f-get)
                               (plist-get f-spec :value))))
-              (when (and f-tag f-field f-value)
-                (supertag-field-set node-id f-tag f-field f-value)
-                (message "Set field: %s/%s -> %s" f-tag f-field f-value)))))
+              (when (and f-tag f-field f-value) (supertag-field-set node-id f-tag f-field f-value) (message "Set field: %s/%s -> %s" f-tag f-field f-value))))))))))
 
-        ;; Interactive enrichment
-        (when (y-or-n-p "Enrich node with more fields? ")
-          (supertag-capture-enrich-node node-id)))))))
 
-;; --- Orchestrator ---
-
-(defun supertag-capture-with-template (&optional template-key)
-  "Capture using a dynamic template.
-If TEMPLATE-KEY is not provided, prompts for one."
-  (interactive)
-  (unless supertag-capture-templates
-    (user-error "No templates defined. Please set `supertag-capture-templates'"))
-
-  ;; 1. Select Template
-  (let* ((template-alist supertag-capture-templates)
-         (key (or template-key
-                  (completing-read "Template: "
-                                   (mapcar (lambda (t) (cons (car t) (cadr t))) template-alist)
-                                   nil t)))
-         ;; Each template has shape: (KEY DESCRIPTION PLIST)
-         ;; We need the PLIST only, so drop the first two elements.
-         (template-data (cddr (assoc key template-alist)))
-         (target-file (plist-get template-data :file))
-         (node-spec (plist-get template-data :node-spec)))
-    (unless template-data
-      (user-error "Template doesn't exist: %s" key))
-    (unless target-file
-      (user-error "Template '%s' has no target file specified. Please set :file property." key))
-    ;; Expand the file path to handle ~ and relative paths
-    (setq target-file (expand-file-name target-file))
-    (unless (file-exists-p target-file)
-      (user-error "Target file does not exist: %s" target-file))
-
-    ;; 2. Process spec into data (Call Processor)
-    (let ((processed-data (supertag-capture--process-spec node-spec)))
-      ;; 3. Execute capture with data (Call Executor)
-      (supertag-capture--execute target-file processed-data))))
 
 (provide 'supertag-services-capture)
 

@@ -17,8 +17,9 @@
 (require 'supertag-ops-relation) ; For relation operations
 (require 'supertag-services-query) ; For query operations
 (require 'supertag-view-kanban)    ; For Kanban board view
-(require 'supertag-services-capture) ; For capture services
 (require 'supertag-services-sync) ; For sync services
+(require 'supertag-services-capture) ; For capture services
+
 
 ;;; --- Internal Helper ---
 
@@ -590,20 +591,18 @@ HEADLINE is optional headline text."
       (user-error "No valid insert position selected"))
     
     ;; Phase 2: Create the node in the file
-      (with-current-buffer (find-file-noselect target-file)
-        (save-excursion
-          (goto-char insert-pos)
-          (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-          (insert (supertag--render-org-headline insert-level title-only selected-tags target-file nil))
-          (when (and body (> (length body) 0))
-            (insert body "\n"))
-          (insert ":PROPERTIES:\n:ID: " (org-id-new) "\n:END:\n")
-          (save-buffer))
-        
-        ;; Phase 3: Sync and enrich
-        (let ((node-id (org-id-get)))
+    (let ((new-node-id (org-id-new)))
+      (supertag-capture--insert-node-into-buffer
+       (find-file-noselect target-file)
+       insert-pos insert-level title-only selected-tags body new-node-id)
+
+      ;; Phase 3: Sync and enrich
+      (let ((node-id new-node-id))
         (when node-id
-          (supertag-services-sync-file target-file)
+          (supertag-node-create (list :id node-id
+                                      :title title-only
+                                      :tags selected-tags
+                                      :file target-file))
           (message "Node %s created in %s" node-id (file-name-nondirectory target-file))
           
           ;; Phase 4: Auto field enrichment for tags with fields
@@ -613,14 +612,50 @@ HEADLINE is optional headline text."
                 (let ((field-values (supertag-capture--prompt-for-field-values fields)))
                   (dolist (fv field-values)
                     ;; Use field operations to set field values properly
-                    (dolist (tag-id selected-tags)
-                      (supertag-field-set node-id tag-id (car fv) (cdr fv))))))))
+                    (dolist (tag-id selected-tags) (supertag-field-set node-id tag-id (car fv) (cdr fv))))))))
           
           ;; Phase 5: Optional manual field enrichment
           (when (y-or-n-p "Add additional properties to this node? ")
             (supertag-capture-enrich-node node-id))
           
           node-id)))))
+
+(defun supertag-capture-with-template (&optional template-key)
+  "Capture using a dynamic template.
+If TEMPLATE-KEY is not provided, prompts for one."
+  (interactive)
+  (unless supertag-capture-templates
+    (user-error "No templates defined. Please set `supertag-capture-templates'"))
+
+  ;; 1. Select Template
+  (let* ((template-alist supertag-capture-templates)
+         ;; Create an alist of ("KEY: DESCRIPTION" . "KEY") for completion.
+         ;; This allows displaying descriptive text while easily retrieving the key.
+         (completion-alist (mapcar (lambda (t)
+                                     (cons (format "%s - %s" (car t) (cadr t))
+                                           (car t)))
+                                   template-alist))
+         (selected-display (completing-read "Template: " completion-alist nil t))
+         ;; Get the actual key (e.g., "l") from the selected display string.
+         (key (or template-key (cdr (assoc selected-display completion-alist))))
+         ;; Each template has shape: (KEY DESCRIPTION PLIST)
+         ;; We need the PLIST only, so drop the first two elements.
+         (template-data (cddr (assoc key template-alist)))
+         (target-file (plist-get template-data :file))
+         (node-spec (plist-get template-data :node-spec)))
+    (unless template-data
+      (user-error "Template doesn't exist: %s" key))
+    (unless target-file
+      (user-error "Template '%s' has no target file specified. Please set :file property." key))
+    ;; Expand the file path to handle ~ and relative paths
+    (setq target-file (expand-file-name target-file))
+    (unless (file-exists-p target-file)
+      (user-error "Target file does not exist: %s" target-file))
+
+    ;; 2. Process spec into data (Call Processor)
+    (let ((processed-data (supertag-capture--process-spec node-spec)))
+      ;; 3. Execute capture with data (Call Executor)
+      (supertag-capture--execute target-file processed-data))))
 
 ;;; --- Sync Commands ---
 
