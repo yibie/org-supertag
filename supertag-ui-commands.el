@@ -19,7 +19,7 @@
 (require 'supertag-view-kanban)    ; For Kanban board view
 (require 'supertag-services-sync) ; For sync services
 (require 'supertag-services-capture) ; For capture services
-
+(require 'supertag-core-store) ; For supertag--rebuild-all-indexes
 
 ;;; --- Internal Helper ---
 
@@ -444,7 +444,7 @@ Can be used both at headings and within node content areas."
             (require 'supertag-view-helper)
             (let ((total-renamed (supertag-view-helper-rename-tag-text-in-files old-name sanitized-new-name files)))
               (message "Tag renamed from '%s' to '%s' (%d total instances)." 
-                       old-name sanitized-new-name total-renamed)))))))
+                       old-name sanitized-new-name total-renamed))))))))
 
 (defun supertag-delete-tag-everywhere ()
   "Interactively delete a tag definition and all its instances.
@@ -459,28 +459,24 @@ WARNING: This removes the tag from the database and from all org files."
              (files (delete-dups (mapcar (lambda (node-pair)
                                            (let ((node (cdr node-pair)))
                                              (plist-get node :file)))
-                                         nodes-with-tag))))
-        
-        ;; 2. Clean up all node-tag relationships first
+                                           nodes-with-tag))))
+
+        ;; 2. Clean up node-tag relationships and node's internal tags list
         (dolist (node-pair nodes-with-tag)
           (let* ((node-id (car node-pair))
                  (relations (supertag-relation-find-between node-id tag-name :node-tag)))
             (dolist (rel relations)
-              (supertag-relation-delete (plist-get rel :id)))))
-        
-        ;; 3. Remove tag from all nodes' tags lists
-        (dolist (node-pair nodes-with-tag)
-          (let ((node-id (car node-pair)))
+              (supertag-relation-delete (plist-get rel :id)))
             (supertag-node-remove-tag node-id tag-name)))
-        
-        ;; 4. Use supertag-tag-delete for proper database cleanup
+
+        ;; 3. Use supertag-tag-delete for proper database cleanup
         (supertag-tag-delete tag-name)
-        
-        ;; 5. Remove tag text from all files using helper component
+
+        ;; 4. Remove tag text from all files using helper component
         (require 'supertag-view-helper)
         (let ((total-deleted (supertag-view-helper-remove-tag-text-from-files tag-name files)))
-          (message "Tag '%s' completely deleted from database and all files (%d total instances removed)." 
-                   tag-name total-deleted)))))))
+          (message "Tag '%s' completely deleted from database and all files (%d total instances removed)."
+                   tag-name (or total-deleted 0)))))))
 
 (defun supertag-change-tag-at-point ()
   "Interactively change a tag at the current point to a different tag.
@@ -845,5 +841,39 @@ If INTERVAL is provided, use it as the sync interval in seconds."
      (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes)))
        (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count)))))
 
+;;;###autoload
+(defun supertag-rebuild-indexes ()
+  "Manually rebuild all search indexes from the main data store.
+This can fix issues where search or queries fail to find items
+that you know exist. This can happen if the index becomes out
+of sync with the main database. The operation may take a few
+moments on large databases."
+  (interactive)
+  (when (yes-or-no-p "Rebuild all search indexes? This may take a moment.")
+    (message "Rebuilding Supertag indexes...")
+    ;; This internal function is defined in supertag-core-store.el
+    (supertag--rebuild-all-indexes)
+    (message "Supertag indexes rebuilt successfully.")))
+
+;;;###autoload
+(defun supertag-cleanup-nil-tags ()
+  "Find and remove any 'ghost' tags from the database.
+A 'ghost' tag is a tag entry that has a nil value, which can
+cause inconsistencies in the system. This command cleans them up."
+  (interactive)
+  (let ((tags-to-remove '())
+        (tags-table (supertag-get '(:tags))))
+    (when (hash-table-p tags-table)
+      (maphash (lambda (key value)
+                 (when (null value)
+                   (push key tags-to-remove)))
+               tags-table))
+    (if tags-to-remove
+        (progn
+          (message "Removing %d ghost tags: %s" (length tags-to-remove) tags-to-remove)
+          (dolist (tag-id tags-to-remove)
+            (supertag-delete (list :tags tag-id)))
+          (message "Ghost tag cleanup complete."))
+      (message "No ghost tags found."))))
 
 (provide 'supertag-ui-commands)

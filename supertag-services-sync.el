@@ -136,9 +136,6 @@ If it's a plist, extract the hash table. If it's already a hash table, keep it."
              (plist-get supertag-sync--state :sync-state))
     (setq supertag-sync--state (plist-get supertag-sync--state :sync-state))))
 
-;;; --- Internal Helper ---
-
-;; ID generation is now handled by supertag-id-utils.el
 
 ;;; --- Sync Mechanism ---
 
@@ -450,10 +447,19 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
         (cond
          ((null new-node-props)
           (supertag-node-mark-deleted-from-file id)
-          (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))
+          (setf (plist-get counters :nodes-deleted) (1+ (or (plist-get counters :nodes-deleted) 0))))
          ((supertag-node-changed-p old-node-props new-node-props)
+          (message "DEBUG-PROCESS: Node %s CHANGED. Old hash: %s, New hash: %s"
+                   id
+                   (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
+                   (supertag-node-hash new-node-props))
           (supertag-db-add-with-hash id new-node-props counters)
-          (setf (plist-get counters :nodes-updated) (1+ (plist-get counters :nodes-updated)))))
+          (setf (plist-get counters :nodes-updated) (1+ (or (plist-get counters :nodes-updated) 0))))
+         (t
+          (message "DEBUG-PROCESS: Node %s NOT changed. Old hash: %s, New hash: %s"
+                   id
+                   (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
+                   (supertag-node-hash new-node-props))))
         (remhash id current-nodes-in-file)))
 
     (message "DEBUG-PROCESS: Found %d new nodes to create." (hash-table-count current-nodes-in-file))
@@ -462,7 +468,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     (maphash (lambda (id new-node-props)
                (message "DEBUG-PROCESS: Creating new node with ID: %s" id)
                (supertag-db-add-with-hash id new-node-props counters)
-               (setf (plist-get counters :nodes-created) (1+ (plist-get counters :nodes-created))))
+               (setf (plist-get counters :nodes-created) (1+ (or (plist-get counters :nodes-created) 0))))
              current-nodes-in-file)
 
     ;; Update sync state for the file

@@ -163,11 +163,10 @@ This function acts as a bridge to the actual notification system in `supertag-co
     (setq supertag--store (ht-create)))
   
   (let ((old-value (supertag-get path)))
-    (when old-value ; Only do something if a value actually exists
-      (supertag--remove-nested-ht supertag--store path)
-      ;; Update indexes for nodes
-      (when (and (= (length path) 2) (eq (car path) :nodes))
-        (supertag--update-indexes-for-node (cadr path) old-value nil))
+    ;; The `when old-value` check was preventing deletion of nil-valued keys.
+    ;; We now attempt removal regardless and check the return value of the
+    ;; removal function, which correctly indicates if a key existed and was removed.
+    (when (supertag--remove-nested-ht supertag--store path)
       (supertag--notify-change path old-value nil)
       (supertag-emit-event :store-changed path old-value nil))
     old-value))
