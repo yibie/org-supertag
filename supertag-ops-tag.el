@@ -106,11 +106,10 @@ Returns the updated tag data."
 ID is the unique identifier of the tag.
 Returns the deleted tag data."
   (let ((tag (supertag-tag-get id)))
-    (when tag
-      (supertag-update (list :tags id) nil)
-      ;; TODO: Clean up related relations (will be implemented in ops/relation.el)
-      ;; TODO: Remove this tag from all nodes (will be implemented in ops/node.el)
-      tag)))
+    ;; Use supertag-delete for a true hard delete (removes the key).
+    ;; supertag-update with nil value leaves a (\"tag\" . nil) entry,
+    ;; which causes inconsistencies.
+    (when tag (supertag-delete (list :tags id)))))
 
 (defun supertag-ops-add-tag-to-node (node-id tag-id &key create-if-needed)
   "High-level operation to add a tag to a node.

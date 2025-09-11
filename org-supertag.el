@@ -90,6 +90,7 @@
 (require 'supertag-ui-search)
 
 ;; --- View ---
+(require 'supertag-view-schema)
 (require 'supertag-view-helper)
 (require 'supertag-view-node)
 (require 'supertag-view-table)
