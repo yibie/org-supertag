@@ -606,7 +606,7 @@ If TEMPLATE-KEY is not provided, prompts for one."
   (let* ((template-alist supertag-capture-templates)
          ;; Create an alist of ("KEY: DESCRIPTION" . "KEY") for completion.
          ;; This allows displaying descriptive text while easily retrieving the key.
-         (completion-alist (mapcar (lambda (t)
+         (completion-alist (mapcar (lambda (tag)
                                      (cons (format "%s - %s" (car t) (cadr t))
                                            (car t)))
                                    template-alist))

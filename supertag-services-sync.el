@@ -816,7 +816,7 @@ Currently returns `supertag-tag-style`, using 'inline when value is 'auto."
   (defun supertag--format-tags-by-style (tags style)
     "Return a string representing TAGS according to STYLE.
 Result includes a leading space when non-empty, else an empty string."
-    (let* ((inline-part (when tags (mapconcat (lambda (t) (concat "#" t)) tags " ")))
+    (let* ((inline-part (when tags (mapconcat (lambda (tag) (concat "#" tag)) tags " ")))
            (org-part (when tags (concat ":" (mapconcat #'identity tags ":") ":"))))
       (pcase style
         ('inline (if inline-part (concat " " inline-part) ""))
