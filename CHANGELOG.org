@@ -1,4 +1,23 @@
 * Changelog
+* [5.1.1] - 2025-09-12
+** Improvements
+*** Enhanced Schema View User Experience
+- Redesigned shortcut system:
+  - Use n/p (and j/k) for up/down navigation
+  - 'a' for "add field"
+  - Capital 'A' for "add new tag"
+  - Added 'q' key for quitting the window
+- Added help documentation:
+  - Added footer at the bottom of the view, clearly listing all available shortcuts and their functions
+  - Implemented using supertag-view-helper-insert-simple-footer function
+- Optimized cursor position:
+  - Modified rendering logic to ensure the cursor automatically positions at the top of the buffer after each view load or refresh
+- Refactored supertag-schema--goto-context function:
+  - Replaced cl-return-from macro with flag-based approach for improved robustness
+  - Eliminated dependency on cl-lib macros
+
+These improvements make the schema view more user-friendly with clear instructions and an Emacs-convention-compliant interface.
+
 * [5.1.0] - 2025-09-11
 ** Features
 *** Implement Interactive Schema View for Tag Management

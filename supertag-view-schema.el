@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'supertag-services-query)
 (require 'supertag-core-schema)
+(require 'supertag-view-helper)
 (require 'supertag-ops-tag)
 
 ;;; --- Data Gathering and Structuring ---
@@ -114,17 +115,39 @@ Returns a list containing two items: the children-by-id map and the list of root
           `(:type :tag :tag-id ,tag-id)))
        (t nil)))))
 
+(defun supertag-schema--rename-field-at-point ()
+  "Interactively rename the field at the current line."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :field))
+        (let* ((tag-id (plist-get context :tag-id))
+               (old-name (plist-get context :field-name))
+               (new-name (read-string (format "Rename field '%s' on tag '%s' to: " old-name tag-id))))
+          (if (and new-name (not (string-empty-p new-name)))
+              (progn
+                (supertag-tag-rename-field tag-id old-name new-name)
+                (message "Field '%s' renamed to '%s'. Refreshing view..." old-name new-name)
+                (supertag-schema-refresh))
+            (message "Field rename cancelled.")))
+      (message "Not on a valid field line."))))
+
 ;;; --- Rendering ---
 
-(defun supertag-schema--format-field (field-def)
-  "Format a single field definition into a display string."
-  (let* ((name (plist-get field-def :name))
-         (type (plist-get field-def :type))
-         (options (plist-get field-def :options))
-         (type-str (if type (format "(type: %s)" (substring (symbol-name type) 1)) "(type: string)")))
-    (if (and (eq type :options) options)
-        (format "- %s %s %s" name type-str options)
-      (format "- %s %s" name type-str))))
+(defun supertag-schema--render ()
+  "Render the entire schema tree into the current buffer."
+  (let ((tag-tree (supertag-schema--build-tree)))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert "Supertag Schema\n")
+      (insert "=================\n\n")
+      (insert "Tags:\n")
+      (dolist (root-tag tag-tree)
+        (supertag-schema--render-tag-node root-tag))
+      (supertag-view-helper-insert-simple-footer
+       "Tag: [a] Add Field | [e] Extends | [d] Delete"
+       "Field: [r] Rename | [d] Delete | [M-↑/↓] Move"
+       "Global: [A] Add Tag | [g] Refresh | [q] Quit")
+      (goto-char (point-min)))))
 
 (defun supertag-schema--render-tag-node (tag-node &optional level)
   "Recursively render a tag node and its children into the buffer."
@@ -148,52 +171,38 @@ Returns a list containing two items: the children-by-id map and the list of root
     (dolist (child children)
       (supertag-schema--render-tag-node child (1+ level)))))
 
-(defun supertag-schema--render ()
-  "Render the entire schema tree into the current buffer."
-  (let ((tag-tree (supertag-schema--build-tree)))
-    (erase-buffer)
-    (insert "Supertag Schema\n")
-    (insert "=================\n\n")
-    (insert "Tags:\n")
-    (dolist (root-tag tag-tree)
-      (supertag-schema--render-tag-node root-tag))))
-
+(defun supertag-schema--format-field (field-def)
+  "Format a single field definition into a display string."
+  (let* ((name (plist-get field-def :name))
+         (type (plist-get field-def :type))
+         (options (plist-get field-def :options))
+         (type-str (if type (format "(type: %s)" (substring (symbol-name type) 1)) "(type: string)")))
+    (if (and (eq type :options) options)
+        (format "- %s %s %s" name type-str options)
+      (format "- %s %s" name type-str))))
 
 ;;; --- Major Mode and User Command ---
-
-(defun supertag-schema--rename-field-at-point ()
-  "Interactively rename the field at the current line."
-  (interactive)
-  (let ((context (supertag-schema--get-context-at-point)))
-    (if (and context (eq (plist-get context :type) :field))
-        (let* ((tag-id (plist-get context :tag-id))
-               (old-name (plist-get context :field-name))
-               (new-name (read-string (format "Rename field '%s' on tag '%s' to: " old-name tag-id))))
-          (if (and new-name (not (string-empty-p new-name)))
-              (progn
-                (supertag-tag-rename-field tag-id old-name new-name)
-                (message "Field '%s' renamed to '%s'. Refreshing view..." old-name new-name)
-                (revert-buffer))
-            (message "Field rename cancelled.")))
-      (message "Not on a valid field line."))))
 
 (define-derived-mode supertag-schema-view-mode special-mode "Schema"
   "A major mode for viewing the Org-Supertag schema."
   (setq-local buffer-read-only t)
-  (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh)))
   (let ((map (make-sparse-keymap)))
     (define-key map "r" #'supertag-schema--rename-field-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
-    (define-key map "n" #'supertag-schema--add-field-at-point)
+    (define-key map "a" #'supertag-schema--add-field-at-point) ; 'a' for add field
+    (define-key map "A" #'supertag-schema--add-new-tag)      ; 'A' for add tag
     (define-key map "e" #'supertag-schema--set-extends-at-point)
-    (define-key map "a" #'supertag-schema--add-new-tag)
     (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
     (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
     (define-key map "g" #'supertag-schema-refresh)
+    (define-key map "q" #'quit-window)
     ;; Navigation
+    (define-key map "n" #'next-line)
+    (define-key map "p" #'previous-line)
     (define-key map "j" #'next-line)
     (define-key map "k" #'previous-line)
-    (use-local-map map)))
+    (use-local-map map))
+  (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh))))
 
 ;;;###autoload
 (defun supertag-schema-view ()
@@ -216,7 +225,7 @@ Returns a list containing two items: the children-by-id map and the list of root
           ;; The create function handles sanitization and ID creation.
           (supertag-tag-create `(:name ,new-name))
           (message "Tag '%s' created. Refreshing view..." new-name)
-          (revert-buffer))
+          (supertag-schema-refresh))
       (message "Tag creation cancelled."))))
 
 (defun supertag-schema--set-extends-at-point ()
@@ -239,13 +248,12 @@ Returns a list containing two items: the children-by-id map and the list of root
               (if (listp current-extends)
                   (dolist (p current-extends) (supertag-tag-remove-extends child-id p))
                 (supertag-tag-remove-extends child-id current-extends))
-              (message "Cleared inheritance for '%s'. Refreshing..." child-id)
-              (revert-buffer))))
+              (message "Cleared inheritance for '%s'. Refreshing..." child-id) (supertag-schema-refresh))))
          ;; Case 2: User selected a parent to add
          (t
           (supertag-tag-add-extends child-id parent-id)
           (message "Set '%s' to extend '%s'. Refreshing..." child-id parent-id)
-          (revert-buffer)))))))
+          (supertag-schema-refresh)))))))
 
 (defun supertag-schema--add-field-at-point ()
   "Interactively add a new field to the tag at the current line."
@@ -267,7 +275,7 @@ Returns a list containing two items: the children-by-id map and the list of root
                     (setq field-def (plist-put field-def :options options-list))))
                 (supertag-tag-add-field tag-id field-def)
                 (message "Field '%s' added to tag '%s'. Refreshing view..." field-name tag-id)
-                (revert-buffer))
+                (supertag-schema-refresh))
             (message "Field creation cancelled.")))
       (message "Not on a valid tag line."))))
 
@@ -283,12 +291,12 @@ Dispatches to the correct deletion logic based on context."
          (when (yes-or-no-p (format "Really delete field '%s' from tag '%s'?" field-name tag-id))
            (supertag-tag-remove-field tag-id field-name)
            (message "Field '%s' deleted. Refreshing view..." field-name)
-           (revert-buffer))))
+           (supertag-schema-refresh))))
       (:tag
        (let ((tag-id (plist-get context :tag-id)))
          (when (yes-or-no-p (format "DELETE tag '%s' and ALL its uses? This is irreversible." tag-id))
            (supertag-ops-delete-tag-everywhere tag-id)
-           (revert-buffer))))
+           (supertag-schema-refresh))))
       (_
        (message "Not on a valid tag or field line.")))))
 
@@ -301,7 +309,7 @@ Dispatches to the correct deletion logic based on context."
               (field-name (plist-get context :field-name)))
           (supertag-tag-move-field-up tag-id field-name)
           (message "Moved field '%s' up. Refreshing..." field-name)
-          (revert-buffer))
+          (supertag-schema-refresh))
       (message "Not on a valid field line."))))
 
 (defun supertag-schema--move-field-down ()
@@ -313,7 +321,7 @@ Dispatches to the correct deletion logic based on context."
               (field-name (plist-get context :field-name)))
           (supertag-tag-move-field-down tag-id field-name)
           (message "Moved field '%s' down. Refreshing..." field-name)
-          (revert-buffer))
+          (supertag-schema-refresh))
       (message "Not on a valid field line."))))
 
 (defun supertag-schema-refresh ()
@@ -327,25 +335,28 @@ Dispatches to the correct deletion logic based on context."
 
 (defun supertag-schema--goto-context (context)
   "Search for CONTEXT from top of buffer and move point there."
-  (goto-char (point-min))
-  (let ((tag-id (plist-get context :tag-id))
-        (field-name (plist-get context :field-name)))
-    (when (and tag-id (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t))
-      ;; If we are only looking for a tag, we are done.
-      (when (eq (plist-get context :type) :tag)
-        (goto-char (line-beginning-position))
-        (cl-return-from supertag-schema--goto-context t))
-
-      ;; If we are looking for a field, search from here downwards.
-      (when (eq (plist-get context :type) :field)
-        (let ((eob (save-excursion (end-of-buffer) (point))))
-          (while (re-search-forward (concat "^\\s-*- " (regexp-quote field-name)) eob t)
-            ;; Found a field with the right name. Check if it has the right parent tag.
-            (let ((found-context (supertag-schema--get-context-at-point)))
-              (when (equal (plist-get found-context :tag-id) tag-id)
-                (goto-char (line-beginning-position))
-                (cl-return-from supertag-schema--goto-context t)))))))
-    nil))
+  (let ((foundp nil)) ; Use a flag to avoid cl-return-from
+    (goto-char (point-min)
+    (let ((tag-id (plist-get context :tag-id))
+          (field-name (plist-get context :field-name)))
+      (when (and tag-id (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t))
+        ;; We found the tag line.
+        (if (eq (plist-get context :type) :tag)
+            ;; If we are looking for the tag, we're done.
+            (progn
+              (goto-char (line-beginning-position))
+              (setq foundp t))
+          ;; Otherwise, we are looking for a field under this tag.
+          (when (eq (plist-get context :type) :field)
+            (let ((eob (save-excursion (end-of-buffer) (point)))
+                  (search-active t))
+              (while (and search-active (re-search-forward (concat "^\\s-*- " (regexp-quote field-name)) eob t))
+                (let ((found-context (supertag-schema--get-context-at-point)))
+                  (when (equal (plist-get found-context :tag-id) tag-id)
+                    (goto-char (line-beginning-position))
+                    (setq foundp t)
+                    (setq search-active nil))))))))) ; Stop searching
+    foundp)))
 
 (provide 'supertag-view-schema)
 
