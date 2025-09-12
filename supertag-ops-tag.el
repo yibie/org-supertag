@@ -12,6 +12,7 @@
 (require 'supertag-core-schema)   ; For validation functions
 (require 'supertag-core-transform) ; For supertag-transform
 (require 'supertag-ops-relation) ; For relation operations
+(require 'supertag-ops-node)     ; For supertag-node-remove-tag
 
 ;;; --- Internal Helper ---
 
@@ -110,6 +111,37 @@ Returns the deleted tag data."
     ;; supertag-update with nil value leaves a (\"tag\" . nil) entry,
     ;; which causes inconsistencies.
     (when tag (supertag-delete (list :tags id)))))
+
+(defun supertag-ops-delete-tag-everywhere (tag-name)
+  "Delete a tag and all its uses from the database and all org files.
+This is a non-interactive, high-level operation. It finds all nodes
+with TAG-NAME, cleans up all database relations, and then removes
+the tag text from the source files.
+Returns the number of instances removed from files."
+  (when (and tag-name (not (string-empty-p tag-name)))
+    (let* ((nodes-with-tag (supertag-find-nodes-by-tag tag-name))
+           (files (delete-dups (mapcar (lambda (node-pair)
+                                         (let ((node (cdr node-pair)))
+                                           (plist-get node :file)))
+                                       nodes-with-tag))))
+
+      ;; Clean up relations and node properties in a single loop
+      (dolist (node-pair nodes-with-tag)
+        (let* ((node-id (car node-pair))
+               (relations (supertag-relation-find-between node-id tag-name :node-tag)))
+          (dolist (rel relations)
+            (supertag-relation-delete (plist-get rel :id)))
+          (supertag-node-remove-tag node-id tag-name)))
+
+      ;; Delete the tag definition itself
+      (supertag-tag-delete tag-name)
+
+      ;; Remove tag text from all associated files
+      (require 'supertag-view-helper)
+      (let ((total-deleted (supertag-view-helper-remove-tag-text-from-files tag-name files)))
+        (message "Tag '%s' completely deleted. Removed %d instances from files."
+                 tag-name (or total-deleted 0))
+        total-deleted))))
 
 (defun supertag-ops-add-tag-to-node (node-id tag-id &key create-if-needed)
   "High-level operation to add a tag to a node.

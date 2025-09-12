@@ -1,4 +1,19 @@
 * Changelog
+* [5.1.0] - 2025-09-11
+** Features
+*** Implement Interactive Schema View for Tag Management
+- Introduce `supertag-schema-view`, a dedicated buffer for visualizing and managing the entire tag hierarchy.
+- The view is fully interactive, allowing direct manipulation of the tag and field schema from a single interface.
+- **Hierarchical Display**: `:extends` relationships are shown as an indented tree for clarity.
+- **Interactive Commands**:
+  - `a`: Add a new top-level tag.
+  - On a tag: `n` (new field), `e` (set extends), `d` (delete tag).
+  - On a field: `r` (rename), `d` (delete), `M-up`/`M-down` (reorder).
+- **UX Enhancements**:
+  - `g`: Intelligent refresh that preserves cursor position.
+  - `j`/`k`/`p`: Standard navigation keys for familiar Emacs-style browsing.
+- The field reordering capability (`M-up`/`M-down`) has also been added to the Node View (`supertag-view-node.el`) for a consistent experience.
+
 * [5.0.0] - 2025-09-06
 ** Major Refactor
 *** Complete Architecture Overhaul with Pure Emacs Lisp Implementation
