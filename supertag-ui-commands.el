@@ -454,29 +454,8 @@ WARNING: This removes the tag from the database and from all org files."
          (tag-name (completing-read "Delete tag permanently: " all-tags nil t)))
     (when (and (not (string-empty-p tag-name))
                (yes-or-no-p (format "DELETE tag '%s' and ALL its uses? This is irreversible." tag-name)))
-      ;; 1. Find all nodes with this tag before deletion
-      (let* ((nodes-with-tag (supertag-find-nodes-by-tag tag-name))
-             (files (delete-dups (mapcar (lambda (node-pair)
-                                           (let ((node (cdr node-pair)))
-                                             (plist-get node :file)))
-                                           nodes-with-tag))))
-
-        ;; 2. Clean up node-tag relationships and node's internal tags list
-        (dolist (node-pair nodes-with-tag)
-          (let* ((node-id (car node-pair))
-                 (relations (supertag-relation-find-between node-id tag-name :node-tag)))
-            (dolist (rel relations)
-              (supertag-relation-delete (plist-get rel :id)))
-            (supertag-node-remove-tag node-id tag-name)))
-
-        ;; 3. Use supertag-tag-delete for proper database cleanup
-        (supertag-tag-delete tag-name)
-
-        ;; 4. Remove tag text from all files using helper component
-        (require 'supertag-view-helper)
-        (let ((total-deleted (supertag-view-helper-remove-tag-text-from-files tag-name files)))
-          (message "Tag '%s' completely deleted from database and all files (%d total instances removed)."
-                   tag-name (or total-deleted 0)))))))
+      ;; Call the centralized ops function to perform the deletion.
+      (supertag-ops-delete-tag-everywhere tag-name))))
 
 (defun supertag-change-tag-at-point ()
   "Interactively change a tag at the current point to a different tag.

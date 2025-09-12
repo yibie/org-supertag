@@ -8,6 +8,8 @@
 
 (require 'cl-lib)
 (require 'supertag-services-query)
+(require 'supertag-core-schema)
+(require 'supertag-ops-tag)
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -19,46 +21,98 @@
         plist)
     data))
 
-(defun supertag-schema--build-tree ()
-  "Build a hierarchical tree of all tags using a robust, functional approach."
-  (let* ((all-tags-alist (supertag-query :tags))
-         (tags-by-id (make-hash-table :test 'equal))
-         (children-by-id (make-hash-table :test 'equal))
-         (root-ids '()))
-
-    ;; Pass 1: Ingest all data, normalize it, and store by ID.
+(defun supertag-schema--get-all-tags-by-id ()
+  "Query all tags and return a hash-table mapping tag IDs to their data.
+This function also defensively ensures that the plist data for each
+tag contains its own ID, ensuring consistency for later processing."
+  (let ((tags-by-id (make-hash-table :test 'equal))
+        (all-tags-alist (supertag-query :tags)))
+    (message "SCHEMA-DEBUG (1/4): Found %d total tag entries from query." (length all-tags-alist))
     (dolist (pair all-tags-alist)
       (let* ((id (car pair))
              (data (cdr pair))
-             (plist-data (supertag-schema--ensure-plist data)))
+             ;; Defensively ensure the :id key exists in the data plist.
+             (plist-data (plist-put (supertag-schema--ensure-plist data) :id id)))
         (when id
-          (puthash id (cl-copy-list plist-data) tags-by-id))))
+          (puthash id plist-data tags-by-id)
+          (message "SCHEMA-DEBUG (1/4): Ingested tag '%s'." id))))
+    (message "SCHEMA-DEBUG (1/4): Finished. Prepared map with %d tags." (hash-table-count tags-by-id))
+    tags-by-id))
 
-    ;; Pass 2: Determine children and roots based on the :extends property.
+(defun supertag-schema--calculate-hierarchy (tags-by-id)
+  "Calculate parent-child relationships from a map of tags.
+Returns a list containing two items: the children-by-id map and the list of root IDs."
+  (let ((children-by-id (make-hash-table :test 'equal))
+        (root-ids '()))
+    (message "SCHEMA-DEBUG (2/4): Calculating hierarchy for %d tags..." (hash-table-count tags-by-id))
     (maphash
      (lambda (id tag-plist)
        (let ((parent-ids (plist-get tag-plist :extends)))
          (if (and parent-ids (listp parent-ids) (not (null parent-ids)))
-             ;; This tag has parents. For each parent, add this tag's ID
-             ;; to the parent's list of children.
-             (dolist (parent-id parent-ids)
-               (when (gethash parent-id tags-by-id) ; Ensure parent exists
-                 (push id (gethash parent-id children-by-id))))
-           ;; This tag has no valid parents, so it's a root.
-           (push id root-ids))))
+             (progn
+               (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-ids)
+               (dolist (parent-id parent-ids)
+                 (when (gethash parent-id tags-by-id) ; Ensure parent exists
+                   (push id (gethash parent-id children-by-id)))))
+           (progn
+             (message "SCHEMA-DEBUG (2/4): Tag '%s' is a root." id)
+             (push id root-ids)))))
      tags-by-id)
+    (let ((unique-roots (cl-delete-duplicates root-ids :test #'equal)))
+      (message "SCHEMA-DEBUG (2/4): Finished. Found %d root tags." (length unique-roots))
+      (list children-by-id unique-roots))))
 
-    ;; Pass 3: Recursively build the final tree structure from the maps.
-    (cl-labels ((build-node (id)
-                   (let* ((tag-plist (gethash id tags-by-id))
-                          (child-ids (sort (gethash id children-by-id) #'string<))
-                          ;; Recursively build the nodes for all children.
-                          (children (mapcar #'build-node child-ids)))
-                     ;; Return a new, clean plist with the :children key correctly set.
-                     (plist-put (cl-copy-list tag-plist) :children children))))
-      ;; Build the tree starting from the sorted, unique list of root IDs.
-      (mapcar #'build-node (sort (cl-delete-duplicates (cl-copy-list root-ids)) #'string<)))))
+(defun supertag-schema--build-tree-from-maps (tags-by-id children-by-id root-ids)
+  "Recursively build a tree structure from pre-calculated hierarchy maps."
+  (cl-labels ((build-node (id)
+                 (let* ((tag-plist (gethash id tags-by-id))
+                        (child-ids (sort (gethash id children-by-id) #'string<))
+                        (children (mapcar #'build-node child-ids)))
+                   (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
+                   (plist-put (cl-copy-list tag-plist) :children children))))
+    (let ((sorted-roots (sort root-ids #'string<)))
+      (message "SCHEMA-DEBUG (3/4): Building tree from %d sorted root nodes..." (length sorted-roots))
+      (mapcar #'build-node sorted-roots))))
 
+(defun supertag-schema--build-tree ()
+  "Build a hierarchical tree of all tags by composing smaller helper functions."
+  (message "SCHEMA-DEBUG: Starting to build schema tree...")
+  (let* ((tags-by-id (supertag-schema--get-all-tags-by-id))
+         (hierarchy (supertag-schema--calculate-hierarchy tags-by-id))
+         (children-by-id (car hierarchy))
+         (root-ids (cadr hierarchy))
+         (tree (supertag-schema--build-tree-from-maps tags-by-id children-by-id root-ids)))
+    (message "SCHEMA-DEBUG: Finished building schema tree. Result has %d root nodes." (length tree))
+    tree))
+
+
+;;; --- Interactive Helpers ---
+
+(defun supertag-schema--get-context-at-point ()
+  "Parse the buffer to find the tag or field at point from the simplified view."
+  (save-excursion
+    (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+      (cond
+       ;; Check for field: "  - field-name ..."
+       ((string-match "^\\s-*- \\([[:graph:]]+\\)" line)
+        (let ((field-name (match-string 1 line))
+              (tag-id nil)
+              (original-indent (current-indentation)))
+          ;; Search backwards for the parent tag line, which must have less indentation
+          (save-excursion
+            (while (and (not tag-id) (> (line-beginning-position) (point-min)))
+              (previous-line 1)
+              (when (< (current-indentation) original-indent)
+                (let ((parent-line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+                  (when (string-match "^\\s-*\\([[:graph:]]+\\)" parent-line)
+                    (setq tag-id (match-string 1 parent-line)))))))
+          (when tag-id
+            `(:type :field :field-name ,field-name :tag-id ,tag-id))))
+       ;; Check for tag: "tag-name ..."
+       ((string-match "^\\s-*\\([[:graph:]]+\\)" line)
+        (let ((tag-id (match-string 1 line)))
+          `(:type :tag :tag-id ,tag-id)))
+       (t nil)))))
 
 ;;; --- Rendering ---
 
@@ -75,14 +129,14 @@
 (defun supertag-schema--render-tag-node (tag-node &optional level)
   "Recursively render a tag node and its children into the buffer."
   (let* ((level (or level 0))
-         (indent (make-string (* 2 level) ?	))
+         (indent (make-string (* 2 level) ? ))
          (tag-id (plist-get tag-node :id))
          (fields (plist-get tag-node :fields))
          (children (plist-get tag-node :children))
          (extends (plist-get tag-node :extends))
          (extends-str (if extends (format "(extends: %s)" extends) "")))
     ;; Render the tag itself
-    (insert (format "%s[+] %s %s\n" indent tag-id extends-str))
+    (insert (format "%s%s %s\n" indent tag-id extends-str))
 
     ;; Render fields if any
     (when fields
@@ -107,10 +161,39 @@
 
 ;;; --- Major Mode and User Command ---
 
+(defun supertag-schema--rename-field-at-point ()
+  "Interactively rename the field at the current line."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :field))
+        (let* ((tag-id (plist-get context :tag-id))
+               (old-name (plist-get context :field-name))
+               (new-name (read-string (format "Rename field '%s' on tag '%s' to: " old-name tag-id))))
+          (if (and new-name (not (string-empty-p new-name)))
+              (progn
+                (supertag-tag-rename-field tag-id old-name new-name)
+                (message "Field '%s' renamed to '%s'. Refreshing view..." old-name new-name)
+                (revert-buffer))
+            (message "Field rename cancelled.")))
+      (message "Not on a valid field line."))))
+
 (define-derived-mode supertag-schema-view-mode special-mode "Schema"
   "A major mode for viewing the Org-Supertag schema."
   (setq-local buffer-read-only t)
-  (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema--render))))
+  (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh)))
+  (let ((map (make-sparse-keymap)))
+    (define-key map "r" #'supertag-schema--rename-field-at-point)
+    (define-key map "d" #'supertag-schema--delete-at-point)
+    (define-key map "n" #'supertag-schema--add-field-at-point)
+    (define-key map "e" #'supertag-schema--set-extends-at-point)
+    (define-key map "a" #'supertag-schema--add-new-tag)
+    (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
+    (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
+    (define-key map "g" #'supertag-schema-refresh)
+    ;; Navigation
+    (define-key map "j" #'next-line)
+    (define-key map "k" #'previous-line)
+    (use-local-map map)))
 
 ;;;###autoload
 (defun supertag-schema-view ()
@@ -123,6 +206,146 @@
       ;; Set the major mode AFTER rendering is complete.
       (supertag-schema-view-mode))
     (pop-to-buffer buffer)))
+
+(defun supertag-schema--add-new-tag ()
+  "Interactively create a new top-level tag."
+  (interactive)
+  (let ((new-name (read-string "New top-level tag name: ")))
+    (if (and new-name (not (string-empty-p new-name)))
+        (progn
+          ;; The create function handles sanitization and ID creation.
+          (supertag-tag-create `(:name ,new-name))
+          (message "Tag '%s' created. Refreshing view..." new-name)
+          (revert-buffer))
+      (message "Tag creation cancelled."))))
+
+(defun supertag-schema--set-extends-at-point ()
+  "Interactively set or clear the inheritance for the tag at point."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (not (and context (eq (plist-get context :type) :tag)))
+        (message "Not on a valid tag line.")
+      (let* ((child-id (plist-get context :tag-id))
+             (all-tags (mapcar #'car (supertag-query :tags)))
+             (parent-candidates (remove child-id all-tags :test #'equal))
+             (parent-id (completing-read (format "Set parent for '%s' (empty to clear): " child-id)
+                                         (cons "" parent-candidates)
+                                         nil t)))
+        (cond
+         ;; Case 1: User entered empty string to clear inheritance
+         ((string-empty-p parent-id)
+          (let ((current-extends (plist-get (supertag-tag-get child-id) :extends)))
+            (when (and current-extends (yes-or-no-p (format "Clear all inheritance from '%s'?" child-id)))
+              (if (listp current-extends)
+                  (dolist (p current-extends) (supertag-tag-remove-extends child-id p))
+                (supertag-tag-remove-extends child-id current-extends))
+              (message "Cleared inheritance for '%s'. Refreshing..." child-id)
+              (revert-buffer))))
+         ;; Case 2: User selected a parent to add
+         (t
+          (supertag-tag-add-extends child-id parent-id)
+          (message "Set '%s' to extend '%s'. Refreshing..." child-id parent-id)
+          (revert-buffer)))))))
+
+(defun supertag-schema--add-field-at-point ()
+  "Interactively add a new field to the tag at the current line."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :tag))
+        (let* ((tag-id (plist-get context :tag-id))
+               (field-name (read-string (format "New field for tag '%s': " tag-id)))
+               (field-type-strings (mapcar #'(lambda (s) (substring (symbol-name s) 1)) supertag-field-types))
+               (field-type-str (completing-read "Field type: " field-type-strings nil t "string"))
+               (field-type (intern (concat ":" field-type-str)))
+               (field-def `(:name ,field-name :type ,field-type)))
+          (if (and field-name (not (string-empty-p field-name)))
+              (progn
+                (when (eq field-type :options)
+                  (let* ((options-str (read-string "Options (comma-separated): "))
+                         (options-list (when (and options-str (not (string-empty-p options-str)))
+                                         (split-string options-str "[[:space:]]*,[[:space:]]*"))))
+                    (setq field-def (plist-put field-def :options options-list))))
+                (supertag-tag-add-field tag-id field-def)
+                (message "Field '%s' added to tag '%s'. Refreshing view..." field-name tag-id)
+                (revert-buffer))
+            (message "Field creation cancelled.")))
+      (message "Not on a valid tag line."))))
+
+(defun supertag-schema--delete-at-point ()
+  "Interactively delete the tag or field at the current line.
+Dispatches to the correct deletion logic based on context."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (pcase (plist-get context :type)
+      (:field
+       (let* ((tag-id (plist-get context :tag-id))
+              (field-name (plist-get context :field-name)))
+         (when (yes-or-no-p (format "Really delete field '%s' from tag '%s'?" field-name tag-id))
+           (supertag-tag-remove-field tag-id field-name)
+           (message "Field '%s' deleted. Refreshing view..." field-name)
+           (revert-buffer))))
+      (:tag
+       (let ((tag-id (plist-get context :tag-id)))
+         (when (yes-or-no-p (format "DELETE tag '%s' and ALL its uses? This is irreversible." tag-id))
+           (supertag-ops-delete-tag-everywhere tag-id)
+           (revert-buffer))))
+      (_
+       (message "Not on a valid tag or field line.")))))
+
+(defun supertag-schema--move-field-up ()
+  "Move the field at the current line up in the tag's field list."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :field))
+        (let ((tag-id (plist-get context :tag-id))
+              (field-name (plist-get context :field-name)))
+          (supertag-tag-move-field-up tag-id field-name)
+          (message "Moved field '%s' up. Refreshing..." field-name)
+          (revert-buffer))
+      (message "Not on a valid field line."))))
+
+(defun supertag-schema--move-field-down ()
+  "Move the field at the current line down in the tag's field list."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :field))
+        (let ((tag-id (plist-get context :tag-id))
+              (field-name (plist-get context :field-name)))
+          (supertag-tag-move-field-down tag-id field-name)
+          (message "Moved field '%s' down. Refreshing..." field-name)
+          (revert-buffer))
+      (message "Not on a valid field line."))))
+
+(defun supertag-schema-refresh ()
+  "Refresh the schema view while attempting to preserve point."
+  (interactive)
+  (let ((context-before (supertag-schema--get-context-at-point)))
+    (let ((inhibit-read-only t))
+      (supertag-schema--render))
+    (when context-before
+      (supertag-schema--goto-context context-before))))
+
+(defun supertag-schema--goto-context (context)
+  "Search for CONTEXT from top of buffer and move point there."
+  (goto-char (point-min))
+  (let ((tag-id (plist-get context :tag-id))
+        (field-name (plist-get context :field-name)))
+    (when (and tag-id (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t))
+      ;; If we are only looking for a tag, we are done.
+      (when (eq (plist-get context :type) :tag)
+        (goto-char (line-beginning-position))
+        (cl-return-from supertag-schema--goto-context t))
+
+      ;; If we are looking for a field, search from here downwards.
+      (when (eq (plist-get context :type) :field)
+        (let ((eob (save-excursion (end-of-buffer) (point))))
+          (while (re-search-forward (concat "^\\s-*- " (regexp-quote field-name)) eob t)
+            ;; Found a field with the right name. Check if it has the right parent tag.
+            (let ((found-context (supertag-schema--get-context-at-point)))
+              (when (equal (plist-get found-context :tag-id) tag-id)
+                (goto-char (line-beginning-position))
+                (cl-return-from supertag-schema--goto-context t)))))))
+    nil))
 
 (provide 'supertag-view-schema)
 
