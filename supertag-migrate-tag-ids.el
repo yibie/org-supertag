@@ -136,7 +136,7 @@ This function performs the complete migration in a transactional manner."
       (message "Migration completed: %d tags migrated, %d errors." migrated-count error-count)
       
       (when (> error-count 0)
-        (message "Warning: Some tags failed to migrate. Check the database consistency.")))))
+        (message "Warning: Some tags failed to migrate. Check the database consistency."))))))
 
 (defun supertag-migrate--validate-migration ()
   "Validate that the migration was successful.

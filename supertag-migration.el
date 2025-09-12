@@ -187,7 +187,7 @@ This function recursively copies nested hash tables."
          (tags (org-element-property :tags headline))
          (clean-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" ""
                                        (replace-regexp-in-string "#\\w[-_[:alnum:]]*" "" title))))
-         (inline-part (when tags (mapconcat (lambda (t) (concat "#" t)) tags " ")))
+         (inline-part (when tags (mapconcat (lambda (tag) (concat "#" tag)) tags " ")))
          (org-part (when tags (concat ":" (mapconcat #'identity tags ":") ":")))
          (new-line (pcase style
                      ('inline (format "%s %s%s"
