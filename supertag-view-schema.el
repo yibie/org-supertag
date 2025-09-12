@@ -335,8 +335,8 @@ Dispatches to the correct deletion logic based on context."
 
 (defun supertag-schema--goto-context (context)
   "Search for CONTEXT from top of buffer and move point there."
-  (let ((foundp nil)) ; Use a flag to avoid cl-return-from
-    (goto-char (point-min)
+  (let ((foundp nil))
+    (goto-char (point-min))
     (let ((tag-id (plist-get context :tag-id))
           (field-name (plist-get context :field-name)))
       (when (and tag-id (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t))
@@ -355,8 +355,8 @@ Dispatches to the correct deletion logic based on context."
                   (when (equal (plist-get found-context :tag-id) tag-id)
                     (goto-char (line-beginning-position))
                     (setq foundp t)
-                    (setq search-active nil))))))))) ; Stop searching
-    foundp)))
+                    (setq search-active nil)))))))))
+    foundp))
 
 (provide 'supertag-view-schema)
 
