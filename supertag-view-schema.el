@@ -187,6 +187,14 @@ Returns a list containing two items: the children-by-id map and the list of root
   "A major mode for viewing the Org-Supertag schema."
   (setq-local buffer-read-only t)
   (let ((map (make-sparse-keymap)))
+    ;; Marking
+    (define-key map "m" #'supertag-schema--mark-item)
+    (define-key map "u" #'supertag-schema--unmark-item)
+    (define-key map "U" #'supertag-schema--unmark-all)
+    ;; Batch Actions
+    (define-key map "D" #'supertag-schema--batch-delete-marked-items)
+    (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
+    ;; Single-item Actions
     (define-key map "r" #'supertag-schema--rename-field-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
     (define-key map "a" #'supertag-schema--add-field-at-point) ; 'a' for add field
@@ -203,6 +211,12 @@ Returns a list containing two items: the children-by-id map and the list of root
     (define-key map "k" #'previous-line)
     (use-local-map map))
   (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh))))
+
+(defface supertag-schema-marked-face
+  '((t :background "blue" :foreground "white"))
+  "Face for marked items in the schema view.")
+(defvar-local supertag-schema--marked-items nil
+  "A list of context plists for marked items in the schema view.")
 
 ;;;###autoload
 (defun supertag-schema-view ()
@@ -357,6 +371,71 @@ Dispatches to the correct deletion logic based on context."
                     (setq foundp t)
                     (setq search-active nil)))))))))
     foundp))
+
+(defun supertag-schema--mark-item ()
+  "Mark the item at point and move to the next line."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (when context
+      (let ((inhibit-read-only t))
+        (unless (member context supertag-schema--marked-items)
+          (push context supertag-schema--marked-items)
+          (add-text-properties (line-beginning-position) (line-end-position) '(face supertag-schema-marked-face))))
+      (next-line 1))))
+
+(defun supertag-schema--unmark-item ()
+  "Unmark the item at point and move to the next line."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (when context
+      (let ((inhibit-read-only t))
+        (setq supertag-schema--marked-items (cl-remove context supertag-schema--marked-items :test #'equal))
+        (remove-text-properties (line-beginning-position) (line-end-position) '(face supertag-schema-marked-face)))
+      (next-line 1))))
+
+(defun supertag-schema--unmark-all ()
+  "Unmark all marked items in the buffer."
+  (interactive)
+  (let ((inhibit-read-only t))
+    (setq supertag-schema--marked-items nil)
+    (remove-text-properties (point-min) (point-max) '(face supertag-schema-marked-face)))
+  (message "All marks removed."))
+
+(defun supertag-schema--batch-delete-marked-items ()
+  "Delete all marked items."
+  (interactive)
+  (if (not supertag-schema--marked-items)
+      (message "No items marked.")
+    (when (yes-or-no-p (format "Really delete %d marked items?" (length supertag-schema--marked-items)))
+      (dolist (context supertag-schema--marked-items)
+        (pcase (plist-get context :type)
+          (:field
+           (supertag-tag-remove-field (plist-get context :tag-id) (plist-get context :field-name)))
+          (:tag
+           (supertag-ops-delete-tag-everywhere (plist-get context :tag-id)))))
+      (setq supertag-schema--marked-items nil)
+      (supertag-schema-refresh)
+      (message "Batch delete complete."))))
+
+(defun supertag-schema--batch-extends-marked-tags ()
+  "Set a common parent for all marked tags."
+  (interactive)
+  (let ((marked-tags (cl-remove-if-not (lambda (ctx) (eq (plist-get ctx :type) :tag))
+                                       supertag-schema--marked-items)))
+    (if (not marked-tags)
+        (message "No tags marked.")
+      (let* ((all-tags (mapcar #'car (supertag-query :tags)))
+             (marked-tag-ids (mapcar #'(lambda (ctx) (plist-get ctx :tag-id)) marked-tags))
+             (parent-candidates (cl-set-difference all-tags marked-tag-ids :test #'equal))
+             (parent-id (completing-read (format "Set parent for %d marked tags: " (length marked-tags))
+                                         parent-candidates nil t)))
+        (when (and parent-id (not (string-empty-p parent-id)))
+          (when (yes-or-no-p (format "Set %d tags to extend '%s'?" (length marked-tags) parent-id))
+            (dolist (tag-context marked-tags)
+              (supertag-tag-add-extends (plist-get tag-context :tag-id) parent-id))
+            (setq supertag-schema--marked-items nil)
+            (supertag-schema-refresh)
+            (message "Batch extends complete.")))))))
 
 (provide 'supertag-view-schema)
 
