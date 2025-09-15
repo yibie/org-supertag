@@ -43,11 +43,85 @@ Set to nil to disable auto-save."
                 (integer :tag "Interval (seconds)"))
   :group 'org-supertag)
 
+(defcustom supertag-db-backup-interval 86400
+  "Daily backup interval in seconds (default: 24 hours).
+Set to nil to disable daily backups."
+  :type '(choice (const :tag "Disable" nil)
+                (integer :tag "Interval (seconds)"))
+  :group 'org-supertag)
+
+(defcustom supertag-db-backup-keep-days 3
+  "Number of days to keep daily backups.
+Older backups will be automatically cleaned up."
+  :type 'integer
+  :group 'org-supertag)
+
 (defvar supertag-db--auto-save-timer nil
   "Timer for auto-save.")
 
+(defvar supertag-db--backup-timer nil
+  "Timer for daily backup.")
+
 (defvar supertag-db--dirty nil
   "Flag indicating if database has unsaved changes.")
+
+(defvar supertag-db--last-backup-date nil
+  "Date of last backup in YYYY-MM-DD format.")
+
+;;; --- Backup Functions ---
+
+(defun supertag-get-backup-filename (date-str)
+  "Generate backup filename for given DATE-STR in YYYY-MM-DD format."
+  (expand-file-name
+   (format "supertag-db-%s.el" date-str)
+   supertag-db-backup-directory))
+
+(defun supertag-create-daily-backup ()
+  "Create a daily backup of the database if needed.
+Returns t if backup was created, nil if not needed."
+  (let* ((today (format-time-string "%Y-%m-%d"))
+         (backup-file (supertag-get-backup-filename today)))
+    (if (file-exists-p backup-file)
+        (progn
+          (message "Daily backup already exists: %s" backup-file)
+          nil)
+      (when (file-exists-p supertag-db-file)
+        (supertag-persistence-ensure-data-directory)
+        (copy-file supertag-db-file backup-file)
+        (setq supertag-db--last-backup-date today)
+        (message "Daily backup created: %s" backup-file)
+        t))))
+
+(defun supertag-cleanup-old-backups ()
+  "Remove backup files older than `supertag-db-backup-keep-days` days."
+  (when (file-exists-p supertag-db-backup-directory)
+    (let* ((cutoff-time (time-subtract (current-time)
+                                      (days-to-time supertag-db-backup-keep-days)))
+           (backup-files (directory-files supertag-db-backup-directory t
+                                         "^supertag-db-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\.el$"))
+           (removed-count 0))
+      (dolist (backup-file backup-files)
+        (let ((file-time (nth 5 (file-attributes backup-file))))
+          (when (time-less-p file-time cutoff-time)
+            (delete-file backup-file)
+            (cl-incf removed-count)
+            (message "Removed old backup: %s" backup-file))))
+      (when (> removed-count 0)
+        (message "Cleaned up %d old backup files" removed-count)))))
+
+(defun supertag-backup-database-now ()
+  "Force create a backup immediately and clean up old backups.
+This function can be called interactively by users."
+  (interactive)
+  (supertag-create-daily-backup)
+  (supertag-cleanup-old-backups))
+
+(defun supertag-check-daily-backup ()
+  "Check if daily backup is needed and create one if necessary."
+  (let ((today (format-time-string "%Y-%m-%d")))
+    (unless (string= today supertag-db--last-backup-date)
+      (when (supertag-create-daily-backup)
+        (supertag-cleanup-old-backups)))))
 
 ;;; --- Persistence Functions ---
 
@@ -95,6 +169,8 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
               (print-level nil))         ; 不限制打印层级
           (prin1 supertag--store (current-buffer))))
       (supertag-clear-dirty)
+      ;; Check if daily backup is needed after successful save
+      (supertag-check-daily-backup)
       (message "Org-Supertag data saved to: %s" file-to-save))))
 
 (defun supertag-load-store (&optional file)
@@ -192,11 +268,36 @@ Waits for 2 seconds of idle time before saving to avoid frequent saves."
                          supertag-db-auto-save-interval
                          #'supertag-save-store))))
 
+(defun supertag-setup-daily-backup ()
+  "Set up daily backup timer."
+  (when (and supertag-db-backup-interval
+             (null supertag-db--backup-timer))
+    (setq supertag-db--backup-timer
+          (run-with-timer supertag-db-backup-interval
+                         supertag-db-backup-interval
+                         #'supertag-backup-database-now))))
+
 (defun supertag-cleanup-auto-save ()
   "Clean up auto-save timer."
   (when supertag-db--auto-save-timer
     (cancel-timer supertag-db--auto-save-timer)
     (setq supertag-db--auto-save-timer nil)))
+
+(defun supertag-cleanup-daily-backup ()
+  "Clean up daily backup timer."
+  (when supertag-db--backup-timer
+    (cancel-timer supertag-db--backup-timer)
+    (setq supertag-db--backup-timer nil)))
+
+(defun supertag-setup-all-timers ()
+  "Set up both auto-save and daily backup timers."
+  (supertag-setup-auto-save)
+  (supertag-setup-daily-backup))
+
+(defun supertag-cleanup-all-timers ()
+  "Clean up all persistence-related timers."
+  (supertag-cleanup-auto-save)
+  (supertag-cleanup-daily-backup))
 
 ;;; --- Event Subscription ---
 
