@@ -288,12 +288,49 @@
 (defun supertag--convert-to-timestamp (value)
   "Convert VALUE to appropriate timestamp format.
 For internal storage, returns Emacs time format (high low micro pico).
-For display purposes, returns Org-mode timestamp string."
+Supports user-friendly input formats like:
+- '2024-01-15' (date only)
+- '2024-01-15 14:30' (date and time)
+- 'today', 'tomorrow', 'next week'
+- Org timestamps like '<2024-01-15 Mon 14:30>'
+- Unix timestamps (numbers)"
   (cond
    ((stringp value)
-    (if (string-match-p org-ts-regexp value) ; Check if already an Org timestamp
-        value
-      (org-parse-time-string value))) ; Convert to internal time format
+    (cond
+     ;; Handle special keywords
+     ((string= value "today") (current-time))
+     ((string= value "tomorrow") (time-add (current-time) (days-to-time 1)))
+     ((string= value "yesterday") (time-subtract (current-time) (days-to-time 1)))
+     ((string= value "now") (current-time))
+     ;; Handle relative time expressions
+     ((string-match "^\\([+-]?[0-9]+\\)\\s-*\\(day\\|week\\|month\\|year\\)s?$" value)
+      (let ((amount (string-to-number (match-string 1 value)))
+            (unit (match-string 2 value)))
+        (pcase unit
+          ("day" (time-add (current-time) (days-to-time amount)))
+          ("week" (time-add (current-time) (days-to-time (* amount 7))))
+          ("month" (time-add (current-time) (days-to-time (* amount 30))))
+          ("year" (time-add (current-time) (days-to-time (* amount 365)))))))
+     ;; Handle ISO 8601 date format (YYYY-MM-DD)
+     ((string-match "^\\([0-9]\\{4\\}\\)-\\([0-9]\\{1,2\\}\\)-\\([0-9]\\{1,2\\}\\)$" value)
+      (let ((year (string-to-number (match-string 1 value)))
+            (month (string-to-number (match-string 2 value)))
+            (day (string-to-number (match-string 3 value))))
+        (encode-time 0 0 0 day month year)))
+     ;; Handle ISO 8601 datetime format (YYYY-MM-DD HH:MM)
+     ((string-match "^\\([0-9]\\{4\\}\\)-\\([0-9]\\{1,2\\}\\)-\\([0-9]\\{1,2\\}\\)\\s-+\\([0-9]\\{1,2\\}\\):\\([0-9]\\{1,2\\}\\)$" value)
+      (let ((year (string-to-number (match-string 1 value)))
+            (month (string-to-number (match-string 2 value)))
+            (day (string-to-number (match-string 3 value)))
+            (hour (string-to-number (match-string 4 value)))
+            (minute (string-to-number (match-string 5 value))))
+        (encode-time 0 minute hour day month year)))
+     ;; Check if already an Org timestamp
+     ((string-match-p org-ts-regexp value) value)
+     ;; Try org-parse-time-string as fallback
+     (t (condition-case nil
+            (org-parse-time-string value)
+          (error (error "Invalid timestamp format: %s. Try formats like '2024-01-15', '2024-01-15 14:30', 'today', 'tomorrow', or '+7 days'" value))))))
    ((numberp value) (seconds-to-time value)) ; Convert to internal time format
    ((listp value) value) ; Already in internal time format, return as-is
    (t (error "Cannot convert to timestamp: %S" value))))

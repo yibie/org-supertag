@@ -92,17 +92,71 @@ Returns the normalized value."
 
 ;; 4.3 Interactive Field Definition Utilities
 
+(defun supertag-field-read-date-value (&optional prompt)
+  "Interactive helper to read a date value with user-friendly options.
+PROMPT is the optional prompt string to display.
+Returns a date string in a format supported by supertag--convert-to-timestamp."
+  (let* ((prompt (or prompt "Enter date: "))
+         (choices '("today" "tomorrow" "yesterday"
+                   "+1 day" "+3 days" "+7 days" "+1 week" "+1 month"
+                   "-1 day" "-3 days" "-7 days" "-1 week" "-1 month"
+                   "Use org-read-date (calendar picker)"
+                   "Enter custom format"))
+         (choice (completing-read
+                 (concat prompt "(choose option or type directly): ")
+                 choices nil nil)))
+    (cond
+     ;; User selected a predefined option
+     ((member choice choices)
+      (cond
+       ((string= choice "Use org-read-date (calendar picker)")
+        ;; Use org-mode's built-in date picker
+        (require 'org)
+        (format-time-string "%Y-%m-%d" (org-read-date t t)))
+       ((string= choice "Enter custom format")
+        ;; Let user enter custom format with help
+        (read-string
+         "Enter date (formats: 2024-01-15, today, +3 days): "))
+       (t choice))) ; Return the predefined choice directly
+     ;; User typed something directly
+     (t choice))))
+
+(defun supertag-field-read-timestamp-value (&optional prompt)
+  "Interactive helper to read a timestamp value (usually auto-generated).
+PROMPT is the optional prompt string to display.
+For timestamp fields, usually auto-generation is preferred."
+  (let* ((prompt (or prompt "Set timestamp: "))
+         (choices '("now (current time)"
+                   "Use org-read-date (specific date & time)"
+                   "Enter ISO format (2024-01-15 14:30)"
+                   "Enter custom format"))
+         (choice (completing-read
+                 (concat prompt "(choose option): ")
+                 choices nil t)))
+    (cond
+     ((string= choice "now (current time)")
+      "now")
+     ((string= choice "Use org-read-date (specific date & time)")
+      ;; Use org-mode's built-in date picker with time
+      (require 'org)
+      (org-read-date t t nil "Select date and time: "))
+     ((string= choice "Enter ISO format (2024-01-15 14:30)")
+      (read-string "Enter timestamp (YYYY-MM-DD HH:MM): "))
+     ((string= choice "Enter custom format")
+      (read-string "Enter timestamp (formats: now, 2024-01-15 14:30): "))
+     (t choice))))
+
 (defun supertag-field-read-type-with-options (current-type)
   "Interactively read a field type and options for :options type.
 CURRENT-TYPE is the current type of the field (used as default).
-Returns a cons cell (TYPE . OPTIONS) where OPTIONS is a list for 
+Returns a cons cell (TYPE . OPTIONS) where OPTIONS is a list for
 :options type or nil for other types."
   (let* ((type-descriptions '((:string . "string - Plain text")
                               (:number . "number - Numeric value")
                               (:integer . "integer - Whole number")
                               (:boolean . "boolean - True/False")
-                              (:date . "date - Date value")
-                              (:timestamp . "timestamp - Date and time")
+                              (:date . "date - User-input date (supports: 2024-01-15, today, +3 days)")
+                              (:timestamp . "timestamp - Auto-generated timestamp (created/modified time)")
                               (:options . "options - Multiple choice")
                               (:url . "url - Web address")
                               (:email . "email - Email address")
@@ -124,5 +178,21 @@ Returns a cons cell (TYPE . OPTIONS) where OPTIONS is a list for
                (options-list (split-string options-input "," t "[ \t\n\r]+")))
           (cons new-type options-list))
       (cons new-type nil))))
+
+(defun supertag-field-read-value-with-type-assistance (field-type &optional prompt current-value)
+  "Read a field value with type-specific assistance.
+FIELD-TYPE is the field type (e.g., :timestamp, :boolean, :options).
+PROMPT is the optional prompt string.
+CURRENT-VALUE is the current value (for editing).
+Returns the user input appropriate for the field type."
+  (let ((prompt (or prompt (format "Enter %s value: " (substring (symbol-name field-type) 1)))))
+    (pcase field-type
+      (:timestamp (supertag-field-read-timestamp-value prompt))
+      (:boolean (if (y-or-n-p (or prompt "Enable this option? ")) "true" "false"))
+      (:date (supertag-field-read-date-value prompt))
+      (:options (read-string prompt current-value)) ; Could be enhanced further
+      (:integer (read-string prompt (if current-value (format "%s" current-value) "")))
+      (:number (read-string prompt (if current-value (format "%s" current-value) "")))
+      (_ (read-string prompt current-value)))))
 
 (provide 'supertag-ops-field)

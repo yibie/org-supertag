@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'supertag-services-query)
+(require 'supertag-ops-field)  ; For type-specific field input assistance
 
 
 (defun supertag-ui--adjust-content-level (content from-level to-level)
@@ -181,7 +182,11 @@ Returns the new value entered by the user."
     (pcase field-type
       (:options (completing-read prompt options nil t nil))
       (:tag (supertag-ui--read-tag-field current-value))
-      ;; TODO: Add more specific readers for other types like :date, :number
+      (:date (supertag-field-read-date-value prompt))
+      (:timestamp (supertag-field-read-timestamp-value prompt))
+      (:boolean (if (y-or-n-p (format "%s: " (replace-regexp-in-string ": $" "" prompt))) "true" "false"))
+      (:integer (read-string prompt (if current-value (format "%s" current-value) "")))
+      (:number (read-string prompt (if current-value (format "%s" current-value) "")))
       (_ (read-string prompt current-value)))))
 
 (defun supertag-ui-create-field-definition ()
