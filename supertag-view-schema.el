@@ -163,9 +163,8 @@ Returns a list containing two items: the children-by-id map and the list of root
 
     ;; Render fields if any
     (when fields
-      (insert (format "%s    Fields:\n" indent))
       (dolist (field fields)
-        (insert (format "%s      %s\n" indent (supertag-schema--format-field field)))))
+        (insert (format "%s  %s\n" indent (supertag-schema--format-field field)))))
 
     ;; Render children recursively
     (dolist (child children)
