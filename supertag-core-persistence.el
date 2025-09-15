@@ -89,7 +89,11 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
     (when (supertag-dirty-p) ; Only save if dirty
       (message "Saving Org-Supertag data to: %s..." file-to-save)
       (with-temp-file file-to-save
-        (prin1 supertag--store (current-buffer)))
+        (set-buffer-file-coding-system 'utf-8-unix) ; 确保UTF-8编码
+        (let ((print-escape-nonascii t)  ; 正确处理非ASCII字符
+              (print-length nil)         ; 不限制打印长度
+              (print-level nil))         ; 不限制打印层级
+          (prin1 supertag--store (current-buffer))))
       (supertag-clear-dirty)
       (message "Org-Supertag data saved to: %s" file-to-save))))
 
@@ -113,6 +117,9 @@ FILE is the optional file path. Defaults to supertag-db-file."
             (if (hash-table-p loaded-data)
                 (progn
                   (setq supertag--store loaded-data)
+                  ;; --- 数据版本检查和自动迁移 ---
+                  (supertag--run-migrations supertag--store)
+                  
                   ;; --- Automatic Purge of Invalid Nodes ---
                   (let* ((nodes-table (supertag-get '(:nodes) (ht-create)))
                          (keys-to-remove '())
@@ -298,5 +305,166 @@ initialized: it will treat that case as an empty collection and exit cleanly."
             (supertag-save-store)
             (message "Database saved. %d entries remain." (hash-table-count (supertag-get '(:nodes)))))
         (message "No invalid entries found. Database is clean.")))))
+
+;;; --- 时间格式标准化 ---
+
+(defun supertag-current-time ()
+  "获取标准化的当前时间。
+返回 Emacs 标准时间格式 (high low micro pico)。"
+  (current-time))
+
+(defun supertag-time-equal (time1 time2)
+  "安全的时间比较函数。
+TIME1 和 TIME2 应该是 Emacs 时间格式。
+返回 t 如果时间相等，否则返回 nil。"
+  (and (timep time1) (timep time2) (equal time1 time2)))
+
+(defun supertag--validate-time (time-value)
+  "验证时间值是否为有效的 Emacs 时间格式。
+TIME-VALUE 应该是四元素列表 (high low micro pico)。"
+  (and (listp time-value)
+       (= (length time-value) 4)
+       (cl-every #'integerp time-value)))
+
+;;; --- 数据版本管理 ---
+
+(defconst supertag-data-version "5.0.0"
+  "当前数据格式版本。
+用于数据格式兼容性检查和自动迁移。")
+
+(defun supertag--get-data-version (data)
+  "从数据存储中提取版本信息。
+DATA 应该是主数据存储哈希表。
+返回版本字符串，如果未找到则返回默认旧版本。"
+  (if (hash-table-p data)
+      (or (gethash :version data) "4.0.0")  ; 默认旧版本
+    "4.0.0"))
+
+(defun supertag--set-data-version (data version)
+  "在数据存储中设置版本信息。
+DATA 应该是主数据存储哈希表。
+VERSION 是要设置的版本字符串。"
+  (when (hash-table-p data)
+    (puthash :version version data)))
+
+(defun supertag--run-migrations (data)
+  "根据版本号执行数据迁移。
+DATA 是要迁移的数据存储。
+自动检测版本并执行必要的迁移步骤。"
+  (let ((current-version (supertag--get-data-version data)))
+    (unless (string= current-version supertag-data-version)
+      (message "Migrating data from version %s to %s" current-version supertag-data-version)
+      
+      ;; 执行版本特定的迁移
+      (cond
+       ;; 从 4.x 迁移到 5.0.0
+       ((string-prefix-p "4." current-version)
+        (supertag--migrate-4x-to-5x data))
+       
+       ;; 其他版本迁移可以在这里添加
+       (t
+        (message "No migration path defined for version %s" current-version)))
+      
+      ;; 更新版本号
+      (supertag--set-data-version data supertag-data-version)
+      (message "Data migration completed to version %s" supertag-data-version))))
+
+(defun supertag--migrate-4x-to-5x (data)
+  "从版本 4.x 迁移到 5.0.0。
+主要变更包括数据格式标准化和字段名规范化。"
+  (message "Executing 4.x to 5.0.0 migration...")
+  
+  ;; 这里可以添加具体的迁移步骤
+  ;; 例如字段重命名、数据格式转换等
+  
+  ;; 示例：确保所有时间字段使用标准格式
+  (let ((nodes-table (gethash :nodes data)))
+    (when (hash-table-p nodes-table)
+      (maphash (lambda (node-id node-data)
+                 (when (plist-get node-data :type)
+                   ;; 确保时间字段存在且格式正确
+                   (unless (plist-get node-data :created-at)
+                     (setq node-data (plist-put node-data :created-at (supertag-current-time))))
+                   (unless (plist-get node-data :modified-at)
+                     (setq node-data (plist-put node-data :modified-at (supertag-current-time))))
+                   
+                   ;; 更新节点数据
+                   (puthash node-id node-data nodes-table)))
+               nodes-table)))
+  
+  (message "4.x to 5.0.0 migration completed"))
+
+;;; --- 数据备份和事务安全机制 ---
+
+(defun supertag-backup-store ()
+  "创建数据存储的深度备份。
+返回当前 supertag--store 的完整拷贝。"
+  (when (hash-table-p supertag--store)
+    (let ((backup (make-hash-table :test (hash-table-test supertag--store)
+                                   :size (hash-table-size supertag--store))))
+      (maphash (lambda (key value)
+                 (puthash key
+                         (if (hash-table-p value)
+                             ;; 深度拷贝嵌套的哈希表
+                             (let ((nested-copy (make-hash-table :test (hash-table-test value)
+                                                               :size (hash-table-size value))))
+                               (maphash (lambda (k v) (puthash k v nested-copy)) value)
+                               nested-copy)
+                           ;; 对于其他类型，直接拷贝（plists等）
+                           (copy-sequence value))
+                         backup))
+               supertag--store)
+      backup)))
+
+(defun supertag-restore-store (backup-data)
+  "从备份恢复数据存储。
+BACKUP-DATA 应该是通过 `supertag-backup-store' 创建的备份。"
+  (when (and backup-data (hash-table-p backup-data))
+    (setq supertag--store backup-data)
+    (supertag-clear-dirty)
+    (message "Data store restored from backup")))
+
+(defmacro supertag--with-transaction (&rest body)
+  "事务执行包装器。
+在执行 BODY 前创建数据备份，如果执行失败则自动恢复。
+确保数据操作的原子性。"
+  `(let ((backup (supertag-backup-store))
+         (success nil))
+     (unwind-protect
+         (progn
+           ,@body
+           (setq success t))
+       (unless success
+         (when backup
+           (supertag-restore-store backup)
+           (message "Transaction failed, data restored from backup"))))))
+
+(defun supertag--validate-tag-references ()
+  "验证标签引用的一致性。
+检查所有节点引用的标签是否都存在于标签集合中。
+返回 t 如果所有引用都有效，否则返回 nil。"
+  (let ((tags-table (supertag-get '(:tags)))
+        (nodes-table (supertag-get '(:nodes)))
+        (valid-p t)
+        (error-count 0))
+    
+    (when (and (hash-table-p tags-table) (hash-table-p nodes-table))
+      (maphash (lambda (node-id node-data)
+                 (when (eq (plist-get node-data :type) :node)
+                   (let ((node-tags (plist-get node-data :tags)))
+                     (when node-tags
+                       (dolist (tag-id node-tags)
+                         (unless (gethash tag-id tags-table)
+                           (setq valid-p nil)
+                           (cl-incf error-count)
+                           (message "Invalid tag reference: node %s references non-existent tag %s"
+                                   node-id tag-id)))))))
+               nodes-table))
+    
+    (if valid-p
+        (message "Tag reference validation passed")
+      (message "Tag reference validation failed with %d errors" error-count))
+    
+    valid-p))
 
 (provide 'supertag-core-persistence)

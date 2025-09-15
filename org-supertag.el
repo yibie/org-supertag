@@ -54,6 +54,7 @@
 
 ;; Load org-supertag after gptel is loaded
 ;; --- Core Components ---
+(require 'ht) ; Ensure ht is loaded before other modules that might depend on it
 (require 'supertag-core-store)
 (require 'supertag-core-persistence) ; Add persistence module for data loading/saving
 (require 'supertag-core-schema)

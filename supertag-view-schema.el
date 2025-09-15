@@ -48,7 +48,8 @@ Returns a list containing two items: the children-by-id map and the list of root
     (message "SCHEMA-DEBUG (2/4): Calculating hierarchy for %d tags..." (hash-table-count tags-by-id))
     (maphash
      (lambda (id tag-plist)
-       (let ((parent-ids (plist-get tag-plist :extends)))
+       ;; Note: extends functionality has been removed
+       (let ((parent-ids nil)) ; extends is no longer supported
          (if (and parent-ids (listp parent-ids) (not (null parent-ids)))
              (progn
                (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-ids)
@@ -155,11 +156,10 @@ Returns a list containing two items: the children-by-id map and the list of root
          (indent (make-string (* 2 level) ? ))
          (tag-id (plist-get tag-node :id))
          (fields (plist-get tag-node :fields))
-         (children (plist-get tag-node :children))
-         (extends (plist-get tag-node :extends))
-         (extends-str (if extends (format "(extends: %s)" extends) "")))
+         (children (plist-get tag-node :children)))
+         ;; Note: extends display removed as functionality is deprecated
     ;; Render the tag itself
-    (insert (format "%s%s %s\n" indent tag-id extends-str))
+    (insert (format "%s%s\n" indent tag-id))
 
     ;; Render fields if any
     (when fields
@@ -193,13 +193,13 @@ Returns a list containing two items: the children-by-id map and the list of root
     (define-key map "U" #'supertag-schema--unmark-all)
     ;; Batch Actions
     (define-key map "D" #'supertag-schema--batch-delete-marked-items)
-    (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
+    ;; Note: batch extends functionality removed
     ;; Single-item Actions
     (define-key map "r" #'supertag-schema--rename-field-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
     (define-key map "a" #'supertag-schema--add-field-at-point) ; 'a' for add field
     (define-key map "A" #'supertag-schema--add-new-tag)      ; 'A' for add tag
-    (define-key map "e" #'supertag-schema--set-extends-at-point)
+    ;; Note: extends functionality removed
     (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
     (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
     (define-key map "g" #'supertag-schema-refresh)

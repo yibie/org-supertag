@@ -943,7 +943,27 @@ COUNTERS is a plist for tracking relation statistics."
           (message "DEBUG: Removing orphaned reference relation (%s -> %s)." node-id target-id)
           (supertag-relation-delete (plist-get relation :id))
           (setf (plist-get counters :references-deleted)
-                (1+ (or (plist-get counters :references-deleted) 0)))))))) 
+                (1+ (or (plist-get counters :references-deleted) 0))))))))
+
+(defun supertag--extract-node-own-content (headline contents-begin contents-end)
+  "Extract only the content that belongs to HEADLINE, excluding sub-headlines.
+HEADLINE is the org-element headline object.
+CONTENTS-BEGIN and CONTENTS-END are the content boundaries from org-element.
+Returns a string containing only the node's own content."
+  (if (not (and contents-begin contents-end (> contents-end contents-begin)))
+      ""
+    (save-excursion
+      (goto-char contents-begin)
+      (let ((current-level (org-element-property :level headline))
+            (content-end contents-end)
+            (search-pos contents-begin))
+        ;; Use a safer approach: find first child headline
+        (goto-char contents-begin)
+        (when (re-search-forward (format "^\\*\\{%d,\\} " (1+ current-level)) contents-end t)
+          ;; Found a child headline at deeper level
+          (setq content-end (line-beginning-position)))
+        ;; Extract content from contents-begin to the adjusted content-end
+        (buffer-substring-no-properties contents-begin content-end)))))
 
   (defun supertag--convert-element-to-node-plist (headline file)
   "Convert a headline ELEMENT from org-element into a node plist.
@@ -984,7 +1004,8 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
             :ref-to (cl-delete-duplicates refs-to :test #'equal)
             :file file
             :content (let ((raw-content (if (and contents-begin contents-end)
-                                             (buffer-substring-no-properties contents-begin contents-end)
+                                             ;; Extract only content up to first child headline
+                                             (supertag--extract-node-own-content headline contents-begin contents-end)
                                            "")))
                        ;; Aggressively remove any properties drawers found in the content area.
                        ;; This is necessary because drawers in the content area are parsed as
