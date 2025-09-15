@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'supertag-core-store)
+(require 'supertag-core-persistence) ; For transaction support
 (require 'supertag-ops-tag)
 (require 'supertag-ops-node)
 (require 'supertag-ops-relation)
@@ -105,38 +106,48 @@ Returns new tag ID if successful, nil otherwise."
     new-tag-id))
 
 (defun supertag-migrate-tag-ids ()
-  "Main function to migrate all UUID-based tag IDs to name-based IDs.
-This function performs the complete migration in a transactional manner."
+  "Safely migrate tag ID format.
+Uses transaction mechanism to ensure data integrity, 
+automatically rolling back if migration fails."
   (interactive)
+  (message "Starting safe tag ID migration...")
   
-  (message "Starting tag ID migration...")
-  
-  (let ((uuid-tags (supertag-migrate--find-all-uuid-tags))
-        (migrated-count 0)
-        (error-count 0))
-    
-    (if (null uuid-tags)
-        (message "No UUID-based tags found to migrate.")
+  (supertag--with-transaction
+    (let ((uuid-tags (supertag-migrate--find-all-uuid-tags))
+          (migrated-count 0)
+          (migration-errors '()))
       
-      (message "Found %d UUID-based tags to migrate." (length uuid-tags))
-      
-      ;; Perform migration within a transaction for atomicity
-      (supertag-with-transaction
-        (dolist (tag-pair uuid-tags)
-          (let ((old-tag-id (car tag-pair))
-                (tag-data (cdr tag-pair)))
-            
-            (let ((new-tag-id (supertag-migrate--migrate-single-tag old-tag-id tag-data)))
-              (message "Migrated tag: %s -> %s" old-tag-id new-tag-id)
-              (cl-incf migrated-count))))
-      
-      ;; Force save to ensure changes are persisted
-      (supertag-save-store)
-      
-      (message "Migration completed: %d tags migrated, %d errors." migrated-count error-count)
-      
-      (when (> error-count 0)
-        (message "Warning: Some tags failed to migrate. Check the database consistency."))))))
+      (if (null uuid-tags)
+          (message "No UUID-based tags found. Migration not needed.")
+        
+        (message "Found %d UUID-based tags to migrate..." (length uuid-tags))
+        
+        (dolist (tag-entry uuid-tags)
+          (let* ((old-id (car tag-entry))
+                 (tag-data (cdr tag-entry)))
+            (condition-case err
+                (progn
+                  (supertag-migrate--migrate-single-tag old-id tag-data)
+                  (cl-incf migrated-count)
+                  (message "Migrated tag: %s -> %s" old-id (plist-get tag-data :name)))
+              (error
+               (push (format "Failed to migrate tag %s: %s" old-id (error-message-string err))
+                     migration-errors)))))
+        
+        ;; 验证迁移结果
+        (if migration-errors
+            (progn
+              (message "Migration completed with %d errors:" (length migration-errors))
+              (dolist (err migration-errors)
+                (message "  %s" err))
+              (error "Tag ID migration failed with errors"))
+          
+          (if (supertag--validate-tag-references)
+              (progn
+                (message "Tag ID migration completed successfully!")
+                (message "Migrated %d UUID-based tags to name-based IDs" migrated-count)
+                (supertag-mark-dirty))
+            (error "Migration validation failed - data consistency check failed")))))))
 
 (defun supertag-migrate--validate-migration ()
   "Validate that the migration was successful.
