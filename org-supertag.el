@@ -118,8 +118,8 @@ This function loads all necessary components and sets up the environment."
     (supertag-sync-load-state)
     ;; Load data from persistent storage
     (supertag-load-store)
-    ;; Set up auto-save
-    (supertag-setup-auto-save)
+    ;; Set up auto-save and daily backup timers
+    (supertag-setup-all-timers)
     ;; Start auto-sync
     (supertag-sync-start-auto-sync)
     ;; Initialize embed services
@@ -133,6 +133,7 @@ This function loads all necessary components and sets up the environment."
 
 ;; --- Hooks for persistence ---
 (add-hook 'kill-emacs-hook #'supertag-save-store)
+(add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
 (add-hook 'after-init-hook #'supertag-init) ; Initialize on Emacs start, after basic init

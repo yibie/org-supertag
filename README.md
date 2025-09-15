@@ -317,7 +317,29 @@ See [CHANGELOG](./CHANGELOG.org).
 A: Use =M-x org-supertag-recovery-full-suite= for complete recovery.
 
 ##### Q: How do I backup my data?
-A: The database files are located in =~/.emacs.d/org-supertag/=, just back them up regularly.
+A: Org-SuperTag provides automatic daily backup functionality:
+
+**Automatic Backup**:
+- Daily backups are automatically created in `~/.emacs.d/org-supertag/backups/`
+- Keeps backups for the last 3 days (configurable)
+- Old backups are automatically cleaned up
+- Backup files are named: `supertag-db-YYYY-MM-DD.el`
+
+**Manual Backup**:
+- Force backup: `M-x supertag-backup-database-now`
+- Manual backup of entire directory: `~/.emacs.d/org-supertag/`
+
+**Configuration Options**:
+```emacs-lisp
+;; Set backup interval (seconds, default 86400=24 hours)
+(setq supertag-db-backup-interval 86400)
+
+;; Set backup retention days (default 3 days)
+(setq supertag-db-backup-keep-days 3)
+
+;; Disable automatic backup
+(setq supertag-db-backup-interval nil)
+```
 
 ##### Q: How do I get AI tag suggestions?
 A: In the node view (=M-x org-supertag-view-node=), click "💡 Get AI Tag Suggestions" or press =s=. This is manually triggered and won't interfere with your workflow.
