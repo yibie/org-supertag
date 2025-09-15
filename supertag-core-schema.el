@@ -163,7 +163,6 @@
                       (:tag '(:id (:type :string :required t :validator supertag--valid-id-p)
                               :name (:type :string :required t :default "")
                               :fields (:type :list :default nil)
-                              :extends (:type :string :default nil)
                               :created-at (:type :timestamp :default (lambda () (current-time)))
                               :modified-at (:type :timestamp :default (lambda () (current-time)))
                               :description (:type :string :default "")
@@ -289,12 +288,49 @@
 (defun supertag--convert-to-timestamp (value)
   "Convert VALUE to appropriate timestamp format.
 For internal storage, returns Emacs time format (high low micro pico).
-For display purposes, returns Org-mode timestamp string."
+Supports user-friendly input formats like:
+- '2024-01-15' (date only)
+- '2024-01-15 14:30' (date and time)
+- 'today', 'tomorrow', 'next week'
+- Org timestamps like '<2024-01-15 Mon 14:30>'
+- Unix timestamps (numbers)"
   (cond
    ((stringp value)
-    (if (string-match-p org-ts-regexp value) ; Check if already an Org timestamp
-        value
-      (org-parse-time-string value))) ; Convert to internal time format
+    (cond
+     ;; Handle special keywords
+     ((string= value "today") (current-time))
+     ((string= value "tomorrow") (time-add (current-time) (days-to-time 1)))
+     ((string= value "yesterday") (time-subtract (current-time) (days-to-time 1)))
+     ((string= value "now") (current-time))
+     ;; Handle relative time expressions
+     ((string-match "^\\([+-]?[0-9]+\\)\\s-*\\(day\\|week\\|month\\|year\\)s?$" value)
+      (let ((amount (string-to-number (match-string 1 value)))
+            (unit (match-string 2 value)))
+        (pcase unit
+          ("day" (time-add (current-time) (days-to-time amount)))
+          ("week" (time-add (current-time) (days-to-time (* amount 7))))
+          ("month" (time-add (current-time) (days-to-time (* amount 30))))
+          ("year" (time-add (current-time) (days-to-time (* amount 365)))))))
+     ;; Handle ISO 8601 date format (YYYY-MM-DD)
+     ((string-match "^\\([0-9]\\{4\\}\\)-\\([0-9]\\{1,2\\}\\)-\\([0-9]\\{1,2\\}\\)$" value)
+      (let ((year (string-to-number (match-string 1 value)))
+            (month (string-to-number (match-string 2 value)))
+            (day (string-to-number (match-string 3 value))))
+        (encode-time 0 0 0 day month year)))
+     ;; Handle ISO 8601 datetime format (YYYY-MM-DD HH:MM)
+     ((string-match "^\\([0-9]\\{4\\}\\)-\\([0-9]\\{1,2\\}\\)-\\([0-9]\\{1,2\\}\\)\\s-+\\([0-9]\\{1,2\\}\\):\\([0-9]\\{1,2\\}\\)$" value)
+      (let ((year (string-to-number (match-string 1 value)))
+            (month (string-to-number (match-string 2 value)))
+            (day (string-to-number (match-string 3 value)))
+            (hour (string-to-number (match-string 4 value)))
+            (minute (string-to-number (match-string 5 value))))
+        (encode-time 0 minute hour day month year)))
+     ;; Check if already an Org timestamp
+     ((string-match-p org-ts-regexp value) value)
+     ;; Try org-parse-time-string as fallback
+     (t (condition-case nil
+            (org-parse-time-string value)
+          (error (error "Invalid timestamp format: %s. Try formats like '2024-01-15', '2024-01-15 14:30', 'today', 'tomorrow', or '+7 days'" value))))))
    ((numberp value) (seconds-to-time value)) ; Convert to internal time format
    ((listp value) value) ; Already in internal time format, return as-is
    (t (error "Cannot convert to timestamp: %S" value))))
@@ -394,6 +430,95 @@ VALIDATOR is the validation function."
 ;; type conversion functions that may be used by validation functions.
 
 
+
+;;; --- 统一数据验证入口 ---
+
+(defun supertag-validate-data (data &optional type)
+  "统一的数据验证入口函数。
+DATA 是要验证的数据。
+TYPE 是可选的数据类型提示 (:node, :tag, :store 等)。
+返回 t 如果验证通过，否则返回 nil 或抛出错误。"
+  (pcase type
+    (:node (supertag--validate-node data))
+    (:tag (supertag--validate-tag data))
+    (:store (supertag--validate-store data))
+    (:field (supertag--validate-field data))
+    (:relation (supertag--validate-relation data))
+    (_ (supertag--validate-any data))))
+
+(defun supertag--validate-node (node)
+  "验证节点数据格式。
+NODE 应该是包含节点信息的 plist。"
+  (and (listp node)
+       (plist-get node :id)
+       (stringp (plist-get node :id))
+       (plist-get node :type)
+       (eq (plist-get node :type) :node)
+       (supertag--validate-time (plist-get node :created-at))
+       (supertag--validate-time (plist-get node :modified-at))))
+
+(defun supertag--validate-tag (tag)
+  "验证标签数据格式。
+TAG 应该是包含标签信息的 plist。"
+  (and (listp tag)
+       (plist-get tag :id)
+       (stringp (plist-get tag :id))
+       (plist-get tag :name)
+       (stringp (plist-get tag :name))
+       (plist-get tag :type)
+       (eq (plist-get tag :type) :tag)
+       (supertag--validate-time (plist-get tag :created-at))
+       (supertag--validate-time (plist-get tag :modified-at))))
+
+(defun supertag--validate-store (store)
+  "验证存储数据格式。
+STORE 应该是主数据存储哈希表。"
+  (and (hash-table-p store)
+       ;; 检查基本集合是否存在
+       (hash-table-p (gethash :nodes store))
+       (hash-table-p (gethash :tags store))
+       (hash-table-p (gethash :relations store))))
+
+(defun supertag--validate-field (field)
+  "验证字段定义格式。
+FIELD 应该是包含字段定义的 plist。"
+  (and (listp field)
+       (plist-get field :name)
+       (stringp (plist-get field :name))
+       (plist-get field :type)
+       (supertag--valid-field-type-p (plist-get field :type))))
+
+(defun supertag--validate-relation (relation)
+  "验证关系数据格式。
+RELATION 应该是包含关系信息的 plist。"
+  (and (listp relation)
+       (plist-get relation :type)
+       (supertag--valid-relation-type-p (plist-get relation :type))
+       (plist-get relation :from)
+       (stringp (plist-get relation :from))
+       (plist-get relation :to)
+       (stringp (plist-get relation :to))))
+
+(defun supertag--validate-any (data)
+  "通用数据验证函数。
+DATA 可以是任何类型的数据。
+执行基本的结构完整性检查。"
+  (cond
+   ((null data) t) ; 空数据是有效的
+   ((listp data)
+    ;; 如果是 plist，检查基本结构
+    (when (plist-get data :type)
+      (supertag-validate-data data (plist-get data :type))))
+   ((hash-table-p data) t) ; 哈希表假设是有效的
+   (t t))) ; 其他类型假设是有效的
+
+(defun supertag--validate-time (time-value)
+  "验证时间值是否为有效的 Emacs 时间格式。
+TIME-VALUE 应该是四元素列表 (high low micro pico)。"
+  (or (null time-value) ; 允许空时间值
+      (and (listp time-value)
+           (= (length time-value) 4)
+           (cl-every #'integerp time-value))))
 
 (provide 'supertag-core-schema)
 

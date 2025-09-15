@@ -17,6 +17,7 @@
 (require 'supertag-core-store)    ; For supertag-get, supertag-update
 (require 'supertag-core-schema)   ; For validation functions
 (require 'supertag-core-transform) ; For supertag-transform
+(require 'supertag-core-persistence) ; For supertag-current-time
 
 ;;; --- Internal Helper ---
 
@@ -54,8 +55,8 @@ Provides strict validation with immediate error reporting."
          (final-props (plist-put props :id id))
          (final-props (plist-put final-props :type :node))
          (final-props (plist-put final-props :created-at
-                                 (or (plist-get final-props :created-at) (current-time))))
-         (final-props (plist-put final-props :modified-at (current-time))))
+                                 (or (plist-get final-props :created-at) (supertag-current-time))))
+         (final-props (plist-put final-props :modified-at (supertag-current-time))))
     
     (message "DEBUG: supertag-node-create: Adding node with ID: %S, file: %S"
              id (plist-get final-props :file))
@@ -84,7 +85,7 @@ Returns the updated node data."
       (let ((updated-node (funcall updater node)))
         (when updated-node
           ;; Add/update timestamps
-          (let ((final-node (plist-put updated-node :modified-at (current-time))))
+          (let ((final-node (plist-put updated-node :modified-at (supertag-current-time))))
             ;; Strict validation (fail-fast principle)
             (supertag--validate-node-data final-node)
             ;; Direct storage for optimal performance

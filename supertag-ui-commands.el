@@ -495,47 +495,9 @@ Can be used both at headings and within node content areas."
           
           (message "Tag changed from '%s' to '%s'." current-tag new-tag))))))
 
-;;; --- Tag Inheritance Commands ---
-
-(defun supertag-set-tag-extends ()
-  "Interactively set or clear tag inheritance relationship.
-Sets a parent tag for a child tag, or clears inheritance if no parent is selected."
-  (interactive)
-  (let* ((all-tags (mapcar #'car (supertag-query :tags)))
-         (child-tag-id (completing-read "Select child tag: " all-tags nil t))
-         (parent-tag-id (completing-read "Select parent tag (leave empty to clear): " 
-                                        (cons "" (cl-remove child-tag-id all-tags :test 'equal)) 
-                                        nil nil)))
-    
-    ;; Validate child tag exists
-    (unless (supertag-tag-get child-tag-id)
-      (error "Child tag '%s' not found" child-tag-id))
-    
-    ;; Check for self-inheritance
-    (when (and (not (string-empty-p parent-tag-id))
-               (equal child-tag-id parent-tag-id))
-      (user-error "A tag cannot inherit from itself"))
-    
-    ;; If parent tag is empty, clear inheritance
-    (if (string-empty-p parent-tag-id)
-        (progn
-          ;; Get current extends value to know what to remove
-          (let ((current-extends (plist-get (supertag-tag-get child-tag-id) :extends)))
-            (when current-extends
-              (if (listp current-extends)
-                  ;; If extends is a list, remove all parent relationships
-                  (dolist (parent current-extends)
-                    (supertag-tag-remove-extends child-tag-id parent))
-                ;; If extends is a single value, remove that relationship
-                (supertag-tag-remove-extends child-tag-id current-extends)))
-            (message "Cleared inheritance for tag '%s'" child-tag-id)))
-      ;; Validate parent tag exists
-      (unless (supertag-tag-get parent-tag-id)
-        (error "Parent tag '%s' not found" parent-tag-id))
-      
-      ;; Set inheritance relationship
-      (supertag-tag-add-extends child-tag-id parent-tag-id)
-      (message "Tag '%s' now inherits from '%s'" child-tag-id parent-tag-id))))
+;;; --- Tag Inheritance Commands (REMOVED) ---
+;; Note: Tag inheritance functionality has been removed for simplicity
+;; and better data consistency. Tags no longer support extends relationships.
 
 ;;; --- Capture Commands ---
 

@@ -579,15 +579,25 @@ Uses improved styling from old version."
 
 (defun supertag-view-table--format-date (value)
   "Format date VALUE for display."
-  (if (listp value)
-      (format-time-string "%Y-%m-%d" (apply #'encode-time value))
-    (format "%s" value)))
+  (cond
+   ((null value) "")
+   ((listp value)
+    ;; Handle Emacs time format (high low micro pico) or (high low)
+    (condition-case nil
+        (format-time-string "%Y-%m-%d" value)
+      (error (format "%s" value))))
+   (t (format "%s" value))))
 
 (defun supertag-view-table--format-timestamp (value)
   "Format timestamp VALUE for display."
-  (if (listp value)
-      (format-time-string "%Y-%m-%d %H:%M" (apply #'encode-time value))
-    (format "%s" value)))
+  (cond
+   ((null value) "")
+   ((listp value)
+    ;; Handle Emacs time format (high low micro pico) or (high low)
+    (condition-case nil
+        (format-time-string "%Y-%m-%d %H:%M" value)
+      (error (format "%s" value))))
+   (t (format "%s" value))))
 
 (defun supertag-view-table--format-options (value)
   "Format options VALUE for display."

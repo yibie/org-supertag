@@ -25,7 +25,6 @@
 (defalias 'org-supertag-query-export-results-to-new-file 'supertag-search-export-results-to-new-file)
 ;;(defalias 'org-supertag-query-export-results-here ')
 (defalias 'org-supertag-query-insert-at-point 'supertag-search-insert-at-point)
-(defalias 'org-supertag-tag-set-extends 'supertag-set-tag-extends)
 (defalias 'org-supertag-view-chat-open 'supertag-chat)
 (defalias 'org-supertag-view-node 'supertag-view-node)
 (defalias 'org-supertag-view-table 'supertag-view-table)
@@ -66,7 +65,7 @@
     (define-key map (kbd "I") 'org-supertag-query-insert-at-point)
     
     ;; Tag operations
-    (define-key map (kbd "x") 'org-supertag-tag-set-extends)
+    ;; Note: extends functionality has been removed for simplicity
     
     ;; View operations
     (define-key map (kbd "g") 'org-supertag-view-chat-open)

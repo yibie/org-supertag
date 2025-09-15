@@ -94,13 +94,16 @@ Returns the updated tag data."
       
       (let ((updated-tag (funcall updater tag)))
         (when updated-tag
-          ;; Add/update timestamps
-          (let ((final-tag (plist-put updated-tag :modified-at (current-time))))
-            ;; Strict validation (fail-fast principle)
-            (supertag--validate-tag-data final-tag)
-            ;; Direct storage for optimal performance
-            (supertag-store-direct-set :tags id final-tag)
-            final-tag))))))
+          ;; Only update if the tag actually changed
+          (if (equal updated-tag tag)
+              tag  ; Return original tag unchanged
+            ;; Add/update timestamps only when there are real changes
+            (let ((final-tag (plist-put updated-tag :modified-at (current-time))))
+              ;; Strict validation (fail-fast principle)
+              (supertag--validate-tag-data final-tag)
+              ;; Direct storage for optimal performance
+              (supertag-store-direct-set :tags id final-tag)
+              final-tag)))))))
 
 (defun supertag-tag-delete (id)
   "Delete a tag.
@@ -301,35 +304,9 @@ Returns the updated tag data."
             ;; If field is not found or already at the bottom, return unchanged
             tag))))))
 
-;; 3.3 Inheritance Operations
-
-(defun supertag-tag-add-extends (tag-id parent-tag-id)
-  "Add a tag inheritance relationship.
+(defun supertag-tag-get-all-fields (tag-id)
+  "Get all field definitions for a tag.
 TAG-ID is the unique identifier of the tag.
-PARENT-TAG-ID is the unique identifier of the parent tag.
-Returns the updated tag data."
-  (supertag-transform
-   (list :tags tag-id :extends)
-   (lambda (extends)
-     (let ((extends-list (or extends '())))
-       (if (member parent-tag-id extends-list)
-           extends-list
-         (cons parent-tag-id extends-list))))))
-
-(defun supertag-tag-remove-extends (tag-id parent-tag-id)
-  "Remove a tag inheritance relationship.
-TAG-ID is the unique identifier of the tag.
-PARENT-TAG-ID is the unique identifier of the parent tag.
-Returns the updated tag data."
-  (supertag-transform
-   (list :tags tag-id :extends)
-   (lambda (extends)
-     (remove parent-tag-id (or extends '())))))
-
-(defun supertag-tag-get-all-fields (tag-id &optional visited-tags)
-  "Recursively get all field definitions for a tag, including inherited ones.
-TAG-ID is the unique identifier of the tag.
-VISITED-TAGS is an internal parameter to detect circular dependencies.
 Returns a list of field definition plists, or empty list if tag not found."
   (let ((tag (supertag-tag-get tag-id)))
     ;; Return empty list if tag doesn't exist (defensive programming)
@@ -345,27 +322,8 @@ Returns a list of field definition plists, or empty list if tag not found."
                  tag)
         (setq tag plist-tag)))
 
-    ;; Circular dependency detection
-    (when (member tag-id visited-tags)
-      (error "Circular dependency detected in tag inheritance for tag '%s'." tag-id))
-
-    (let ((fields (or (plist-get tag :fields) '()))
-          (extends (plist-get tag :extends))
-          (all-fields ()))
-
-      ;; Add own fields first
-      (dolist (field fields)
-        (push field all-fields))
-
-      ;; Recursively get fields from parent tags
-      (when extends
-        (dolist (parent-id (if (listp extends) extends (list extends))) ; Ensure extends is a list
-          (let ((parent-fields (supertag-tag-get-all-fields parent-id (cons tag-id visited-tags))))
-            (dolist (p-field parent-fields)
-              ;; Add parent field only if not already defined by current tag
-              (unless (cl-find (plist-get p-field :name) all-fields :key (lambda (f) (plist-get f :name)) :test 'equal)
-                (push p-field all-fields))))))
-      (nreverse all-fields)))) ; Return in original order
+    ;; Return only the tag's own fields (no inheritance)
+    (or (plist-get tag :fields) '())))
 
 (defun supertag-sanitize-tag-name (name)
   "Sanitize a string into a valid tag name.
