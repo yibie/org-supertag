@@ -425,55 +425,58 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
     (not (string= old-hash new-hash))))
 
 (defun supertag-sync--process-single-file (file counters)
-  "Process a single FILE for synchronization.
-COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
-  (message "Syncing file: %s" file)
-  (let* ((current-nodes-in-file (make-hash-table :test 'equal))
-         (nodes-from-file (supertag--parse-org-nodes file))
-         (existing-nodes-in-store (supertag-find-nodes-by-file file)))
+     "Process a single FILE for synchronization.
+   COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
+     ;; (message "Syncing file: %s" file)
+     (let* ((current-nodes-in-file (make-hash-table :test 'equal))
+            (nodes-from-file (supertag--parse-org-nodes file))
+            (existing-nodes-in-store (supertag-find-nodes-by-file file)))
 
-    (message "DEBUG-PROCESS: Parser found %d nodes in file." (length nodes-from-file))
-    (message "DEBUG-PROCESS: DB query found %d existing nodes for this file." (length existing-nodes-in-store))
+       ;; (message "DEBUG-PROCESS: Parser found %d nodes in file." (length nodes-from-file))
+       ;; (message "DEBUG-PROCESS: DB query found %d existing nodes for this file." (length existing-nodes-in-store))
 
-    ;; Populate current-nodes-in-file hash table for quick lookup
-    (dolist (node-props nodes-from-file)
-      (puthash (plist-get node-props :id) node-props current-nodes-in-file))
+       ;; Populate current-nodes-in-file hash table for quick lookup
+       (dolist (node-props nodes-from-file)
+         (puthash (plist-get node-props :id) node-props current-nodes-in-file))
 
-    ;; Process existing nodes in store for this file
-    (dolist (existing-node-pair existing-nodes-in-store)
-      (let* ((id (car existing-node-pair))
-             (old-node-props (cdr existing-node-pair))
-             (new-node-props (gethash id current-nodes-in-file)))
-        (cond
-         ((null new-node-props)
-          (supertag-node-mark-deleted-from-file id)
-          (setf (plist-get counters :nodes-deleted) (1+ (or (plist-get counters :nodes-deleted) 0))))
-         ((supertag-node-changed-p old-node-props new-node-props)
-          (message "DEBUG-PROCESS: Node %s CHANGED. Old hash: %s, New hash: %s"
-                   id
-                   (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
-                   (supertag-node-hash new-node-props))
-          (supertag-db-add-with-hash id new-node-props counters)
-          (setf (plist-get counters :nodes-updated) (1+ (or (plist-get counters :nodes-updated) 0))))
-         (t
-          (message "DEBUG-PROCESS: Node %s NOT changed. Old hash: %s, New hash: %s"
-                   id
-                   (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
-                   (supertag-node-hash new-node-props))))
-        (remhash id current-nodes-in-file)))
+       ;; Process existing nodes in store for this file
+       (dolist (existing-node-pair existing-nodes-in-store)
+         (let* ((id (car existing-node-pair))
+                (old-node-props (cdr existing-node-pair))
+                (new-node-props (gethash id current-nodes-in-file)))
+           (cond
+            ((null new-node-props)
+             (supertag-node-mark-deleted-from-file id)
+             (setf (plist-get counters :nodes-deleted) (1+ (or (plist-get counters :nodes-deleted) 0))))
+            ((supertag-node-changed-p old-node-props new-node-props)
+             ;; (message "DEBUG-PROCESS: Node %s CHANGED. Old hash: %s, New hash: %s"
+             ;;          id
+             ;;          (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
+             ;;          (supertag-node-hash new-node-props))
+             (supertag-db-add-with-hash id new-node-props counters)
+             (setf (plist-get counters :nodes-updated) (1+ (or (plist-get counters :nodes-updated) 0))))
+            (t
+             ;; (message "DEBUG-PROCESS: Node %s NOT changed. Old hash: %s, New hash: %s"
+             ;;          id
+             ;;          (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
+             ;;          (supertag-node-hash new-node-props))
+             ))
+           ;; This is now inside the let* block, fixing the scope bug.
+           (remhash id current-nodes-in-file)))
 
-    (message "DEBUG-PROCESS: Found %d new nodes to create." (hash-table-count current-nodes-in-file))
+       ;; (message "DEBUG-PROCESS: Found %d new nodes to create." (hash-table-count current-nodes-in-file))
 
-    ;; Process new nodes from file
-    (maphash (lambda (id new-node-props)
-               (message "DEBUG-PROCESS: Creating new node with ID: %s" id)
-               (supertag-db-add-with-hash id new-node-props counters)
-               (setf (plist-get counters :nodes-created) (1+ (or (plist-get counters :nodes-created) 0))))
-             current-nodes-in-file)
+       ;; Process new nodes from file
+       (maphash (lambda (id new-node-props)
+                  ;; (message "DEBUG-PROCESS: Creating new node with ID: %s" id)
+                  (supertag-db-add-with-hash id new-node-props counters)
+                  (setf (plist-get counters :nodes-created) (1+ (or (plist-get counters :nodes-created) 0))))
+                current-nodes-in-file)
 
-    ;; Update sync state for the file
-    (supertag-sync-update-state file)
-    (message "DEBUG-PROCESS: Finished processing file: %s" file)))
+       ;; Update sync state for the file
+       (supertag-sync-update-state file)
+       ;; (message "DEBUG-PROCESS: Finished processing file: %s" file)
+       ))
 
 (defun supertag-sync--verify-file-nodes (file counters)
   "Verify that nodes in the database still exist in the file.
@@ -693,7 +696,7 @@ This function performs the actual deletion of orphaned nodes."
     (when (> deleted-count 0)
       (supertag-save-store))
 
-    (message "Orphaned node garbage collection complete. %d nodes deleted." deleted-count)
+    ;; (message "Orphaned node garbage collection complete. %d nodes deleted." deleted-count)
 
     deleted-count))
 
@@ -1134,15 +1137,17 @@ This is a safe operation that helps maintain database integrity."
       (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes))
             (refs-created (or (plist-get counters :references-created) 0))
             (refs-deleted (or (plist-get counters :references-deleted) 0)))
-        (message "Real-time sync for %s: %d created, %d updated, %d marked, %d purged, %d refs (+%d/-%d)."
-                 (file-name-nondirectory (buffer-file-name))
-                 (plist-get counters :nodes-created)
-                 (plist-get counters :nodes-updated)
-                 (plist-get counters :nodes-deleted)
-                 deleted-count
-                 (+ refs-created refs-deleted)
-                 refs-created
-                 refs-deleted)))))
+        ;; (message "Real-time sync for %s: %d created, %d updated, %d marked, %d purged, %d refs (+%d/-%d)."
+        ;;          (file-name-nondirectory (buffer-file-name))
+        ;;          (plist-get counters :nodes-created)
+        ;;          (plist-get counters :nodes-updated)
+        ;;          (plist-get counters :nodes-deleted)
+        ;;          deleted-count
+        ;;          (+ refs-created refs-deleted)
+        ;;          refs-created
+        ;;          refs-deleted)
+        ))))
+        
 
 (defun supertag-sync-setup-realtime-hooks ()
   "Add hooks for real-time node synchronization."

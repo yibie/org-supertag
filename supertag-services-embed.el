@@ -34,7 +34,7 @@ Title is NOT updated from the embed block in this new architecture."
               (goto-char (point-min))
               (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
                   (progn
-                    (message "DEBUG: (3b) Found ID in file %s. Rendering..." file-path)
+                    ;;(message "DEBUG: (3b) Found ID in file %s. Rendering..." file-path)
                     (org-back-to-heading t)
                     (let* ((element (org-element-at-point))
                            (start (org-element-property :begin element))
@@ -42,15 +42,11 @@ Title is NOT updated from the embed block in this new architecture."
                       (delete-region start end)
                       (goto-char start)
                       (insert (supertag--generate-org-content (list node-data)))
-                      (save-buffer)
-                      (message "DEBUG: (3c) Buffer for %s saved." file-path)))
-                (message "DEBUG: ERROR - Could not find ID %s in file %s" source-id file-path))))
-        (message "DEBUG: ERROR - File path '%s' for node %s not found or invalid." file-path source-id))
-    (message "DEBUG: ERROR - Could not find node %s in DB during render." source-id)))      
+                      (save-buffer)))))))))      
 
 (defun supertag-embed-sync-modified-blocks ()
   "Sync all modified embed blocks in current buffer back to their sources."
-  (message "DEBUG: (1a) Running supertag-embed-sync-modified-blocks on %s" (buffer-name))
+  ;;(message "DEBUG: (1a) Running supertag-embed-sync-modified-blocks on %s" (buffer-name))
   (save-excursion
     (goto-char (point-min))
     (let ((synced-count 0))
@@ -60,18 +56,16 @@ Title is NOT updated from the embed block in this new architecture."
                (current-content (and inner-region
                                      (buffer-substring-no-properties
                                       (car inner-region) (cdr inner-region)))))
-          (message "DEBUG: (1b) Found embed block for ID %s" source-id)
+          ;;(message "DEBUG: (1b) Found embed block for ID %s" source-id)
           (if current-content
               (progn
-                (message "DEBUG: (2) Calling DB update...")
+                ;;(message "DEBUG: (2) Calling DB update...")
                 (supertag-services-embed--update-node-in-db source-id current-content)
-                (message "DEBUG: (3) Calling render-to-file...")
+                ;;(message "DEBUG: (3) Calling render-to-file...")
                 (supertag-services-embed--render-node-to-file source-id)
                 (setq synced-count (1+ synced-count)))
-            (message "DEBUG: (1c) No content found in embed block. Skipping."))))
-      (if (> synced-count 0)
-          (message "DEBUG: (4) Sync process finished for %d embed block(s)." synced-count)
-        (message "DEBUG: (4) No embed blocks found or synced in this run."))
+            ;;(message "DEBUG: (1c) No content found in embed block. Skipping.")
+            )))
       synced-count)))
 
 ;;; --- Refresh Logic (Remains largely the same) ---
