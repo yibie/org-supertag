@@ -56,6 +56,7 @@
 ;; --- Core Components ---
 (require 'ht) ; Ensure ht is loaded before other modules that might depend on it
 (require 'supertag-core-store)
+(require 'supertag-core-scan)
 (require 'supertag-core-persistence) ; Add persistence module for data loading/saving
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
@@ -130,7 +131,7 @@ This function loads all necessary components and sets up the environment."
     ;; Add a watcher to debug unexpected changes to the store
     (add-variable-watcher 'supertag--store (lambda (sym newval op where) (debug)))
     (message "Org-Supertag system initialized."))
-
+ 
 ;; --- Hooks for persistence ---
 (add-hook 'kill-emacs-hook #'supertag-save-store)
 (add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
@@ -142,3 +143,7 @@ This function loads all necessary components and sets up the environment."
 (provide 'org-supertag)
 
 ;;; org-supertag/supertag.el ends here
+;; Load completion UI and enable globally by default
+(ignore-errors (require 'supertag-ui-completion))
+(when (fboundp 'global-supertag-ui-completion-mode)
+  (global-supertag-ui-completion-mode 1))

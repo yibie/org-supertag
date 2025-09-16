@@ -155,13 +155,22 @@ Key Bindings:
 
 (defun supertag-view-node--get-references (node-id)
   "Get references from NODE-ID to other nodes."
-  (when-let* ((node (supertag-get (list :nodes node-id))))
-    (plist-get node :ref-to)))
+  (when node-id
+    (let ((relations (supertag-relation-find-by-from node-id :reference)))
+      (mapcar (lambda (rel) (plist-get rel :to)) relations))))
 
 (defun supertag-view-node--get-referenced-by (node-id)
   "Get nodes that reference NODE-ID."
-  (when-let* ((node (supertag-get (list :nodes node-id))))
-    (plist-get node :ref-from)))
+  (when node-id
+    (let ((all-relations (supertag-get '(:relations)))
+          (referencing-ids '()))
+      (when (hash-table-p all-relations)
+        (maphash (lambda (_ rel-data)
+                   (when (and (eq (plist-get rel-data :type) :reference)
+                              (equal (plist-get rel-data :to) node-id))
+                     (push (plist-get rel-data :from) referencing-ids)))
+                 all-relations))
+      (nreverse referencing-ids))))
 
 (defun supertag-view-node--format-display-value (value field-def)
   "Format VALUE for display with enhanced styling based on FIELD-DEF."
@@ -230,42 +239,44 @@ Key Bindings:
                             'face `(:foreground ,(supertag-view-helper-get-warning-color))))))))
 
 (defun supertag-view-node--insert-simple-references-section (node-id)
-  "Insert a simple references section for NODE-ID."
+  "Insert a simple references section for NODE-ID, always showing the section."
   (let* ((refs-to (supertag-view-node--get-references node-id))
          (refs-from (supertag-view-node--get-referenced-by node-id))
          (total-refs (+ (length (or refs-to '())) (length (or refs-from '())))))
-    
-    (when (> total-refs 0)
-      (supertag-view-helper-insert-section-title "References" "🔗")
-      
-      ;; References To
-      (when (and refs-to (> (length refs-to) 0))
-        (insert (propertize (format "  → References %d node%s\n" 
-                                   (length refs-to)
-                                   (if (= (length refs-to) 1) "" "s"))
-                           'face `(:foreground ,(supertag-view-helper-get-accent-color))))
-        (dolist (ref-id refs-to)
-          (when-let* ((node (supertag-get (list :nodes ref-id)))
-                      (title (plist-get node :title)))
-            (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                               'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
-      
-      ;; Referenced By
-      (when (and refs-from (> (length refs-from) 0))
-        (insert (propertize (format "  ← Referenced by %d node%s\n" 
-                                   (length refs-from)
-                                   (if (= (length refs-from) 1) "" "s"))
-                           'face `(:foreground ,(supertag-view-helper-get-accent-color))))
-        (dolist (ref-id refs-from)
-          (when-let* ((node (supertag-get (list :nodes ref-id)))
-                      (title (plist-get node :title)))
-            (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                               'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
-      
-      (insert "\n"))))
+
+    (supertag-view-helper-insert-section-title "References" "🔗")
+
+    (if (> total-refs 0)
+        (progn
+          ;; References To
+          (when (and refs-to (> (length refs-to) 0))
+            (insert (propertize (format "  → References %d node%s\n"
+                                       (length refs-to)
+                                       (if (= (length refs-to) 1) "" "s"))
+                               'face `(:foreground ,(supertag-view-helper-get-accent-color))))
+            (dolist (ref-id refs-to)
+              (when-let* ((node (supertag-get (list :nodes ref-id)))
+                          (title (plist-get node :title)))
+                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
+                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+
+          ;; Referenced By
+          (when (and refs-from (> (length refs-from) 0))
+            (insert (propertize (format "  ← Referenced by %d node%s\n"
+                                       (length refs-from)
+                                       (if (= (length refs-from) 1) "" "s"))
+                               'face `(:foreground ,(supertag-view-helper-get-accent-color))))
+            (dolist (ref-id refs-from)
+              (when-let* ((node (supertag-get (list :nodes ref-id)))
+                          (title (plist-get node :title)))
+                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
+                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+          (insert "\n"))
+      ;; Else, show empty state
+      (supertag-view-helper-insert-simple-empty-state "No references found."))))
 
 ;; Add advanced editing functions
-(defun supertag-view-node--get-field-info-at-point ()
+(defun supertag-view-node--get-field-info-at-point ())
   "Return plist of field info at point, or nil."
   (let* ((pos (point))
          (fallback-pos (max (point-min) (1- pos)))
@@ -282,7 +293,7 @@ Key Bindings:
               :tag-id    tag-id
               :field-name field-name
               :field-def field-def
-              :value     value)))))
+              :value     value))))
 
 (defun supertag-view-node-edit-field-definition-at-point ()
   "Edit the field definition at the current point."
@@ -358,9 +369,32 @@ Key Bindings:
       (supertag-view-helper-insert-simple-footer
        "⌨️ Field: [RET] Edit Value | [E] Edit Definition | [a] Add | [d] Delete"
        "📍 Navigation: [j/k] Move | [SPC] Page Down | [S-SPC] Page Up | [M-</>] Start/End"
-       "🔧 Actions: [g] Refresh | [h] Help | [q] Quit"))
+       "🔧 Actions: [g] Refresh | [h] Help | [q] Quit")
+
+      ;; Activate links in the entire buffer
+      (supertag-view-node--activate-links-in-buffer))
     
     (goto-char (point-min))))
+
+;;; --- Link Activation ---
+
+(defun supertag-view-node--activate-links-in-buffer ()
+  "Find all [[id:...]] links in the buffer and make them clickable."
+  (goto-char (point-min))
+  (let ((inhibit-read-only t))
+    (while (re-search-forward "\[\[id:\([0-9A-Za-z-]+\)\]\[\(.*?\)\]\]" nil t)
+      (let* ((id (match-string 1))
+             (desc (match-string 2))
+             (action `(lambda () (interactive) (supertag-goto-node ,id)))
+             (map (make-sparse-keymap)))
+        (define-key map [mouse-1] action)
+        (define-key map (kbd "RET") action)
+
+        (add-text-properties (match-beginning 0) (match-end 0)
+                             `(display ,desc
+                               face org-link
+                               keymap ,map
+                               help-echo ,(format "Jump to node ID: %s" id)))))))
 
 ;;; --- Interactive Functions ---
 

@@ -246,7 +246,7 @@ FILE is the optional file path. Defaults to supertag-db-file."
       (supertag-clear-dirty)
       ;; Rebuild indexes after loading data
       (when (hash-table-p supertag--store)
-        (supertag--rebuild-all-indexes)))
+        ))
     (unless (hash-table-p supertag--store)
       (setq supertag--store (ht-create))
       (message "Initialized empty Org-Supertag store."))))
