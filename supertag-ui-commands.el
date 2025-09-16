@@ -322,10 +322,53 @@ current file and inserted into the target file at a chosen position."
                (link-text (format "[[id:%s][%s]]" to-id (or target-title "Untitled Node"))))
           (insert link-text))
 
-        (message "Reference added to node %s" to-id)))))
+        (message "Reference added to node %s" to-id))))) 
 
-(defun supertag-remove-reference ()
-  "Interactively remove a reference from the current node."
+(defun supertag-add-reference-and-create (beg end) 
+  "Create a new node from the selected region and replace it with a link. 
+  Interactively asks for a target location to save the new node." 
+  (interactive "r") 
+  (let* ((title (buffer-substring-no-properties beg end))) 
+    (if (or (null title) (string-empty-p title)) 
+        (user-error "Region is empty. Cannot create a node.") 
+      ;; 1. Get target location from user 
+      (let* ((target-file (read-file-name "Create node in file: " nil nil t)) 
+             (insert-info (when (and target-file (file-exists-p target-file)) 
+                            (supertag-ui-select-insert-position target-file))) 
+             (insert-pos (plist-get insert-info :position)) 
+             (insert-level (plist-get insert-info :level))) 
+
+        (unless insert-info 
+          (user-error "No valid insert position selected. Aborting.")) 
+
+        (let ((new-node-id (org-id-new))) 
+          ;; 2. Create the node in the target file (physical insertion) 
+          (with-current-buffer (find-file-noselect target-file) 
+            (goto-char insert-pos) 
+            ;; Ensure we are on a new line before inserting 
+            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) 
+            (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:END:\n" 
+                            (make-string insert-level ?*) 
+                            title 
+                            new-node-id)) 
+            (save-buffer)) 
+
+          ;; 3. Create the node in the database (logical creation) 
+          (supertag-node-create 
+           `(:id ,new-node-id 
+             :title ,title 
+             :file ,target-file 
+             :position ,insert-pos 
+             :level ,insert-level)) 
+
+          ;; 4. Replace original text with a link 
+          (delete-region beg end) 
+          (insert (format "[[id:%s][%s]]" new-node-id title)) 
+
+          (message "Node '%s' created and linked." title)))))) 
+
+(defun supertag-remove-reference () 
+  "Interactively remove a reference from the current node." 
   (interactive)
   (let ((from-id (org-id-get)))
     (unless from-id
@@ -783,18 +826,7 @@ If INTERVAL is provided, use it as the sync interval in seconds."
        (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count)))))
 
 ;;;###autoload
-(defun supertag-rebuild-indexes ()
-  "Manually rebuild all search indexes from the main data store.
-This can fix issues where search or queries fail to find items
-that you know exist. This can happen if the index becomes out
-of sync with the main database. The operation may take a few
-moments on large databases."
-  (interactive)
-  (when (yes-or-no-p "Rebuild all search indexes? This may take a moment.")
-    (message "Rebuilding Supertag indexes...")
-    ;; This internal function is defined in supertag-core-store.el
-    (supertag--rebuild-all-indexes)
-    (message "Supertag indexes rebuilt successfully.")))
+
 
 ;;;###autoload
 (defun supertag-cleanup-nil-tags ()

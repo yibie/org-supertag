@@ -1,18 +1,20 @@
 ;;; org-supertag/services/query.el --- Query system for Org-Supertag -*- lexical-binding: t; -*-
 
 ;;; ⚠️  ARCHITECTURE WARNING ⚠️
-;; This file should ONLY contain S-expression query engine functionality.
-;; For internal API queries, use the index functions in supertag-store.el:
-;; - supertag-index-get-nodes-by-tag      (for tag-based queries)
-;; - supertag-index-get-nodes-by-word     (for full-text search)  
-;; - supertag-index-get-nodes-by-date-range (for time-based queries)
-;; - supertag-index-node-has-tag-p        (for boolean checks)
+;; This file should ONLY contain the high-level S-expression query engine.
+;;
+;; For simple, internal API queries, use the functions in `supertag-core-scan.el`.
+;; That file contains all scan-based query functions, such as:
 ;; - supertag-find-nodes-by-tag           (for complete node data)
 ;; - supertag-find-nodes-by-file          (for file-based queries)
 ;; - supertag-find-nodes-by-title         (for title pattern matching)
 ;; - supertag-find-nodes                  (for complex predicate filtering)
+;; - supertag-index-get-nodes-by-tag      (for tag-based queries, returns IDs)
+;; - supertag-index-get-nodes-by-word     (for full-text search, returns IDs)
+;; - supertag-index-get-nodes-by-date-range (for time-based queries, returns IDs)
+;; - supertag-index-node-has-tag-p        (for boolean checks)
 ;;
-;; DO NOT add any simple query functions to this file!
+;; DO NOT add any simple, internal query functions to this file!
 ;;
 ;;; Commentary:
 ;; This file provides S-expression query engine for the Org-Supertag
