@@ -254,7 +254,8 @@
     ;; Run garbage collection
     (garbage-collect)
     
-    (message "Memory cleanup completed: %d items freed" freed-items)))
+    ;;(message "Memory cleanup completed: %d items freed" freed-items)
+    ))
 
 ;;; --- Performance Monitoring ---
 

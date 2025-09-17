@@ -137,7 +137,8 @@ This function loads all necessary components and sets up the environment."
 (add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
-(add-hook 'after-init-hook #'supertag-init) ; Initialize on Emacs start, after basic init
+;;(add-hook 'after-init-hook #'supertag-init) ; Initialize on Emacs start, after basic init
+(add-hook 'emacs-startup-hook #'supertag-init)
 (add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks) ; Add sync hook to all org buffers
 
 (provide 'org-supertag)
