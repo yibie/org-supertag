@@ -41,12 +41,8 @@ dist/
 .venv/
 developing/
 cache/
-simtag/models/
-simtag/__pycache__/
-memory-bank/
-.venv.backup/
-.pytest_cache/
-.developing/
+claude
+.gemini-clipboard/
 cursor-memory-bank/
 .vscode/
 simtag/python-bridge/
