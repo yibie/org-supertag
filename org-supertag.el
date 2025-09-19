@@ -141,10 +141,12 @@ This function loads all necessary components and sets up the environment."
 (add-hook 'emacs-startup-hook #'supertag-init)
 (add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks) ; Add sync hook to all org buffers
 
-(provide 'org-supertag)
-
-;;; org-supertag/supertag.el ends here
-;; Load completion UI and enable globally by default
+;;Load completion UI and enable globally by default
 (ignore-errors (require 'supertag-ui-completion))
 (when (fboundp 'global-supertag-ui-completion-mode)
   (global-supertag-ui-completion-mode 1))
+
+
+(provide 'org-supertag)
+
+;;; org-supertag/supertag.el ends here
