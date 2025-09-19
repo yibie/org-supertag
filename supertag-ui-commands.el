@@ -401,23 +401,53 @@ current file and inserted into the target file at a chosen position."
   "Interactively add a tag to the current node.
 This command handles tag creation, linking, and smart insertion
 of the inline #tag text into the buffer. Can be used both at headings
-and within node content areas."
+and within node content areas.
+
+If you prefix your input with '=' (e.g. '=ref'), it will be treated as a literal
+new tag name, bypassing fuzzy completion matching."
   (interactive)
   (let* ((node-id (supertag-ui--get-containing-node-at-point))
          (all-tags (mapcar #'car (supertag-query :tags))) ; For completion candidates
-         (raw-name (completing-read "Add tag: " all-tags nil nil))
-         (tag-id (supertag-sanitize-tag-name raw-name)))
-    (when (and tag-id (not (string-empty-p tag-id)))
-      (let ((create-new (and (not (supertag-tag-get tag-id))
-                             (yes-or-no-p (format "Tag '%s' does not exist. Create it? " tag-id)))))
-        (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed create-new)
+         (raw-name (completing-read "Add tag (use =tagname for exact match): " all-tags nil nil))
+         (literal-tag (and (> (length raw-name) 0) (eq (aref raw-name 0) ?=))))
+    (when (and raw-name (not (string-empty-p raw-name)))
+      (let* ((tag-name (if literal-tag 
+                          (substring raw-name 1) ; Remove the '=' prefix
+                        raw-name))
+             (tag-id (supertag-sanitize-tag-name tag-name)))
+        (if literal-tag
+            ;; Direct creation for literal tag names
             (progn
-              ;; Insert #tag text with smart spacing at current point
-              (require 'supertag-view-helper)
-              (supertag-view-helper-insert-tag-text tag-id)
-              
-              (message "Tag '%s' added to node '%s'." tag-id node-id))
-          (message "Tag add cancelled or failed."))))))
+              (when (yes-or-no-p (format "Create new tag '%s'? " tag-id))
+                (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
+                    (progn
+                      ;; Insert #tag text with smart spacing at current point
+                      (require 'supertag-view-helper)
+                      (supertag-view-helper-insert-tag-text tag-id)
+                      (message "Tag '%s' created and added to node '%s'." tag-id node-id))
+                  (message "Tag creation cancelled or failed."))))
+          ;; Original behavior for fuzzy matching
+          (let ((tag-exists (supertag-tag-get tag-id)))
+            (cond
+             ;; If tag already exists, use it directly
+             (tag-exists
+              (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed nil)
+                  (progn
+                    ;; Insert #tag text with smart spacing at current point
+                    (require 'supertag-view-helper)
+                    (supertag-view-helper-insert-tag-text tag-id)
+                    (message "Tag '%s' added to node '%s'." tag-id node-id))
+                (message "Tag add cancelled or failed.")))
+             ;; If tag doesn't exist, create it
+             (t
+              (when (yes-or-no-p (format "Tag '%s' does not exist. Create it? " tag-id))
+                (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
+                    (progn
+                      ;; Insert #tag text with smart spacing at current point
+                      (require 'supertag-view-helper)
+                      (supertag-view-helper-insert-tag-text tag-id)
+                      (message "Tag '%s' created and added to node '%s'." tag-id node-id))
+                  (message "Tag creation cancelled or failed.")))))))))))
 
 (defun supertag-remove-tag-from-node ()
   "Interactively remove a tag from the current node.
