@@ -225,7 +225,45 @@ This is a safe wrapper around org-at-commented-p."
                             (format "%s" (or value "")))))
     (if (string-empty-p formatted-value)
         (propertize "[Empty]" 'face `(:foreground ,(supertag-view-helper-get-muted-color) :slant italic))
-      (propertize formatted-value 'face `(:foreground ,(supertag-view-helper-get-accent-color))))))
+      (supertag-view-helper-render-org-links formatted-value))))
+
+(defun supertag-view-helper-render-org-links (text)
+  "Return TEXT with Org-style links rendered as clickable buttons.
+TEXT can be any value convertible to string."
+  (let ((string (cond
+                 ((null text) "")
+                 ((stringp text) (substring-no-properties text))
+                 (t (format "%s" text)))))
+    (if (string-empty-p string)
+        string
+      (with-temp-buffer
+        (insert string)
+        (goto-char (point-min))
+        (while (re-search-forward "\\[\\[\\([^]\n]+\\)\\]\\(\\[\\([^]]+\\)\\]\\)?\\]" nil t)
+          (let* ((match-start (match-beginning 0))
+                 (link (match-string 1))
+                 (desc (or (match-string 3) (match-string 1)))
+                 (link-target link)
+                 (keymap (let ((map (make-sparse-keymap)))
+                           (define-key map (kbd "RET")
+                             (lambda ()
+                               (interactive)
+                               (org-link-open-from-string (format "[[%s]]" link-target))))
+                           (define-key map [mouse-1]
+                             (lambda ()
+                               (interactive)
+                               (org-link-open-from-string (format "[[%s]]" link-target))))
+                           map)))
+            (delete-region match-start (match-end 0))
+            (goto-char match-start)
+            (insert desc)
+            (add-text-properties match-start (+ match-start (length desc))
+                                 `(face org-link
+                                        help-echo ,link
+                                        mouse-face highlight
+                                        keymap ,keymap))
+            (goto-char (+ match-start (length desc)))))
+        (buffer-substring (point-min) (point-max))))))
 
 (defun supertag-view-helper-format-tag-value (value)
   "Format tag VALUE with special styling for tags."
