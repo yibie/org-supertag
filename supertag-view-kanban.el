@@ -14,6 +14,7 @@
 (require 'supertag-ops-node)
 (require 'supertag-ops-field)
 (require 'supertag-ops-tag)
+(require 'supertag-view-helper)
 (require 'supertag-core-notify)
 
 ;;; --- State Management ---
@@ -28,8 +29,8 @@ Contains :base-tag, :group-field, and :columns.")
 (defvar-local supertag-view-kanban--column-values nil
   "The ordered list of column values for the current view.")
 
-(defvar-local supertag-view-kanban--subscription-id nil
-  "ID of the subscription for reactive updates.")
+(defvar-local supertag-view-kanban--unsubscribe-fn nil
+  "The function to call to unsubscribe from updates.")
 
 ;;; --- Configuration ---
 
@@ -124,12 +125,13 @@ This is a self-contained implementation."
 (defun supertag-view-kanban--format-card (node-pair width config)
   "Format a NODE-PAIR into a bordered card of fixed WIDTH.
 Returns the card as a list of strings, each correctly padded."
-  (let* ((node-id (car node-pair))
-         (node-data (cdr node-pair))
-         (title (or (plist-get node-data :title) "No Title"))
-         (inner-width (- width 4)) ; For "│ text │"
-         (wrapped-lines (supertag-view-kanban--wrap-text title inner-width))
-         (card-lines '()))
+    (let* ((node-id (car node-pair))
+           (node-data (cdr node-pair))
+           (title (or (plist-get node-data :title) "No Title"))
+           (rendered-title (supertag-view-helper-render-org-links title))
+           (inner-width (- width 4)) ; For "│ text │"
+           (wrapped-lines (supertag-view-kanban--wrap-text rendered-title inner-width))
+           (card-lines '()))
     ;; Top border
     (push (format "┌%s┐" (make-string (- width 2) ?─)) card-lines)
     ;; Content lines
@@ -298,17 +300,16 @@ Returns plist with :node-id, :current-value, and other card info."
 
 (defun supertag-view-kanban--subscribe-updates ()
   "Subscribe to node update events for reactive Kanban updates."
-  (setq-local supertag-view-kanban--subscription-id
-              (supertag-subscribe :node-updated
-                                 (lambda (path old-value new-value)
-                                   (when (and (listp path) (eq (car path) :nodes))
-                                     (supertag-view-kanban-refresh))))))
+  (setq-local supertag-view-kanban--unsubscribe-fn
+              (supertag-subscribe :node-updated (lambda (path _old-value _new-value)
+                                                  (when (and (listp path) (eq (car path) :nodes))
+                                                    (supertag-view-kanban-refresh))))))
 
 (defun supertag-view-kanban--unsubscribe-updates ()
   "Unsubscribe from update events."
-  (when supertag-view-kanban--subscription-id
-    (supertag-unsubscribe supertag-view-kanban--subscription-id)
-    (setq-local supertag-view-kanban--subscription-id nil)))
+  (when (functionp supertag-view-kanban--unsubscribe-fn)
+    (funcall supertag-view-kanban--unsubscribe-fn)
+    (setq-local supertag-view-kanban--unsubscribe-fn nil)))
 
 ;;; --- Main Interface ---
 
