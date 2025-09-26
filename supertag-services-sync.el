@@ -1004,16 +1004,19 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
   (let* ((id (org-element-property :ID headline))
          (contents-begin (org-element-property :contents-begin headline))
          (contents-end (org-element-property :contents-end headline))
-         (section-elements (org-element-contents headline))
          (original-raw-title (org-element-property :raw-value headline))
          ;; Defensively clean title of both #tags and :tags: to prevent duplication.
-         (cleaned-raw-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
+         (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
 "#\\w[-_[:alnum:]]*" "" original-raw-title))))
-           (headline-tags (supertag--extract-inline-tags original-raw-title))
-           (content-tags (supertag--extract-inline-tags section-elements))
-           (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
-           (all-tags (supertag--merge-and-sanitize-tags
-                     (cl-union headline-tags content-tags :test #'equal)
+         ;; If cleaning results in an empty string (title was only tags), use the original.
+         (final-title (if (string-empty-p title-after-cleaning)
+                          original-raw-title
+                        title-after-cleaning))
+         (headline-tags (supertag--extract-inline-tags original-raw-title))
+         (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
+         (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
+         (all-tags (supertag--merge-and-sanitize-tags
+                   (cl-union headline-tags content-tags :test #'equal)
                      org-native-tags))
          (properties (supertag--parse-properties (org-element-property :properties headline)))
          (refs-to (supertag--extract-refs
@@ -1027,13 +1030,13 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
       (when final-id
         ;; NOTE: 标签创建和关系建立移到了 supertag--process-node-tags 函数中
         ;; 这样只有在节点真正需要创建或更新时才会执行标签操作
-        
+
         (list :id final-id
-            :title (or cleaned-raw-title "Untitled Node")
-            :raw-value cleaned-raw-title ;; Use cleaned title for hashing
-            :tags all-tags
-            :properties properties
-            :ref-to (cl-delete-duplicates refs-to :test #'equal)
+             :title (or final-title "Untitled Node")
+             :raw-value final-title ;; Use final title for hashing
+             :tags all-tags
+             :properties properties
+             :ref-to (cl-delete-duplicates refs-to :test #'equal)
             :file file
             :content (let ((raw-content (if (and contents-begin contents-end)
                                              ;; Extract only content up to first child headline
