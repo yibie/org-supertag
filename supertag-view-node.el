@@ -188,7 +188,7 @@ Key Bindings:
                        (length (supertag-view-node--get-referenced-by node-id))))
          (stats (format "⚡ %d fields | 🔗 %d refs" field-count ref-count)))
     (supertag-view-helper-insert-simple-header 
-     (format "📄 %s" title)
+     (format "📄 %s" (supertag-view-helper-render-org-links title))
      stats)
     (when file
       (insert (propertize (format "📁 %s\n\n" (file-name-nondirectory file))

@@ -151,11 +151,13 @@ Otherwise, it will prompt for a title and create a new heading."
       (supertag-goto-node node-id))))
  
 (defun supertag-find-node-other-window ()
-  "Find a node by its title/path and jump to it in another window."
+  "Find a node by its title/path, with live preview in another window.
+Jumps to the selected node in another window."
   (interactive)
-  (let ((node-id (supertag-ui-select-node "Find node (other window): " t))) ; Use cache for better performance
+  (let ((node-id (supertag-ui-select-node "Find node (other window): " t t))) ; Use cache & preview
     (when node-id
       (supertag-goto-node node-id t))))
+
 
 (defun supertag-delete-node ()
   "Delete the node at point, removing it from the database and the Org file."
@@ -401,7 +403,7 @@ current file and inserted into the target file at a chosen position."
   "Interactively add a tag to the current node.
 This command handles tag creation, linking, and smart insertion
 of the inline #tag text into the buffer. Can be used both at headings
-and within node content areas.
+and within node content area
 
 If you prefix your input with '=' (e.g. '=ref'), it will be treated as a literal
 new tag name, bypassing fuzzy completion matching."
@@ -880,3 +882,4 @@ cause inconsistencies in the system. This command cleans them up."
       (message "No ghost tags found."))))
 
 (provide 'supertag-ui-commands)
+
