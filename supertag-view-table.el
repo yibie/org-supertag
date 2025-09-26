@@ -19,6 +19,7 @@
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
 (require 'supertag-services-formula)
+(require 'supertag-view-helper)
 (require 'org)
 
 ;;; --- Core State Management ---
@@ -135,7 +136,15 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
         
         (message "Rendered table with %d entities" (length entity-ids))))
     
-    (switch-to-buffer buf)
+    (let* ((current-window (selected-window))
+           (target-window (if (window-parameter current-window 'window-side)
+                               (or (when (fboundp 'window-main-window)
+                                     (window-main-window (selected-frame)))
+                                   (frame-root-window))
+                             current-window)))
+      (when (and target-window (window-live-p target-window))
+        (select-window target-window))
+      (switch-to-buffer buf))
     buf))
 
 (defun supertag-view-table--apply-view-config (view-config)
@@ -564,8 +573,10 @@ Uses improved styling from old version."
                                  (supertag-field-get node-id tag-id field-name))))))
                        (_
                         (plist-get entity-data key)))))
-      ;; Format value based on column type
-      (supertag-view-table--format-cell-value raw-value (plist-get column :type)))))
+      ;; Format value based on column type and render Org links for display
+      (let ((formatted (supertag-view-table--format-cell-value
+                        raw-value (plist-get column :type))))
+        (supertag-view-helper-render-org-links formatted)))))
 
 (defun supertag-view-table--format-cell-value (value type)
   "Format VALUE according to TYPE for display in table cells."
@@ -615,28 +626,52 @@ Uses improved styling from old version."
    (t (format "%s" value))))
 
 (defun supertag-view-table--wrap-text (text width)
-  "Wrap TEXT into a list of strings, each fitting within WIDTH.
-Handles text that already contains newlines."
-  (let ((final-lines '()))
-    ;; 1. Split the original text by its own newlines.
-    (dolist (initial-line (split-string text "\n"))
-      ;; 2. Wrap each of those initial lines if they are too long.
-      (if (<= (string-width initial-line) width)
-          (push initial-line final-lines)
-        (let ((remaining-text initial-line))
-          (while (> (string-width remaining-text) width)
-            (let* ((break-pos (or (cl-loop for i from (min (length remaining-text) width) downto 1
-                                           when (<= (string-width remaining-text 0 i) width)
-                                           return i)
-                                  1))
-                   ;; Try to find a natural break point (space)
-                   (space-pos (or (cl-position ?\s remaining-text :from-end t :end break-pos)
-                                  break-pos)))
-              (push (substring remaining-text 0 space-pos) final-lines)
-              (setq remaining-text (string-trim (substring remaining-text space-pos)))))
-          (when (not (string-empty-p remaining-text))
-            (push remaining-text final-lines)))))
-    (nreverse final-lines)))
+  "Wrap TEXT (possibly propertized) into segments within WIDTH columns."
+  (let* ((string (cond
+                  ((null text) "")
+                  ((stringp text) text)
+                  (t (format "%s" text))))
+         (len (length string))
+         (pos 0)
+         (lines '()))
+    (while (< pos len)
+      (if (eq (aref string pos) ?\n)
+          (progn
+            (push "" lines)
+            (setq pos (1+ pos)))
+        (let* ((newline-pos (cl-position ?\n string :start pos))
+               (break-pos (if (and newline-pos (<= (- newline-pos pos) width))
+                              newline-pos
+                            (supertag-view-table--wrap-find-break
+                             string pos width (or newline-pos len)))))
+          (push (substring string pos (or break-pos len)) lines)
+          (setq pos (or break-pos len))
+          (when (and (< pos len) (eq (aref string pos) ?\n))
+            (setq pos (1+ pos))))))
+    (setq lines (nreverse lines))
+    (when (null lines)
+      (setq lines (list "")))
+    lines))
+
+(defun supertag-view-table--wrap-find-break (string start width limit)
+  "Find a break position within STRING starting at START.
+WIDTH is the desired column width. LIMIT bounds the search (e.g., newline)."
+  (let ((pos start)
+        (col 0)
+        (last-break nil))
+    (catch 'wrap-break
+      (while (< pos limit)
+        (let* ((char (aref string pos))
+               (char-width (or (char-width char) 1)))
+          (when (> (+ col char-width) width)
+            (throw 'wrap-break (or last-break (if (> pos start)
+                                                 pos
+                                               (min limit (1+ pos))))))
+          (setq col (+ col char-width))
+          (setq pos (1+ pos))
+          (when (or (eq char ?\s) (eq char ?-))
+            (setq last-break pos))))
+      pos)))
 
 (defun supertag-view-table--format-cell (value width)
   "Format VALUE for a cell with character-WIDTH.
@@ -658,8 +693,19 @@ If VALUE is text, it's wrapped into a list of strings."
           ;; Enforce exact line height on every slice for perfect alignment
           (mapcar (lambda (line) (propertize line 'line-height (supertag-view-table--get-exact-line-height))) lines)))
     ;; For text
-    (let ((lines (supertag-view-table--wrap-text (format "%s" (or value "")) width)))
-      (mapcar (lambda (line) (propertize line 'line-height (supertag-view-table--get-exact-line-height))) lines))))
+    (let* ((text (cond
+                  ((stringp value) value)
+                  ((null value) "")
+                  (t (format "%s" value))))
+           (lines (supertag-view-table--wrap-text text width)))
+      (mapcar (lambda (line)
+                (let* ((display-line (if (string-empty-p line) " " line))
+                       (copy (copy-sequence display-line)))
+                  (add-text-properties 0 (length copy)
+                                        `(line-height ,(supertag-view-table--get-exact-line-height))
+                                        copy)
+                  copy))
+              lines))))
 
 (defun supertag-view-table--get-exact-line-height ()
   "Get exact line height in pixels, including frame-level line-spacing."
@@ -922,19 +968,34 @@ Based on old version's superior navigation system."
       (unless (get-text-property (point) 'entity-id)
         (supertag-view-table-previous-cell)))))
 
+(defun supertag-view-table--goto-row-relative (delta)
+  "Move vertically by DELTA rows while staying in the same column."
+  (let ((coords (supertag-view-table--get-cell-coords)))
+    (if (null coords)
+        (message "No cell at point; move onto a table cell first.")
+      (let* ((entity-id (plist-get coords :entity-id))
+             (col-index (plist-get coords :col-index))
+             (target-index (when entity-id
+                             (cl-position entity-id supertag-view-table--entity-ids :test #'equal))))
+        (if (null target-index)
+            (message "Unable to determine current row.")
+          (let ((new-index (+ target-index delta)))
+            (if (or (< new-index 0)
+                    (>= new-index (length supertag-view-table--entity-ids)))
+                (message "No more rows in that direction.")
+              (let ((target-entity (nth new-index supertag-view-table--entity-ids)))
+                (supertag-view-table--goto-cell
+                 (list :entity-id target-entity :col-index col-index))))))))))
+
 (defun supertag-view-table-next-line ()
   "Move to the cell in the next data row, attempting to preserve column."
   (interactive)
-  (let ((current-col (current-column)))
-    (ignore-errors (forward-line 2))
-    (move-to-column current-col)))
+  (supertag-view-table--goto-row-relative 1))
 
 (defun supertag-view-table-previous-line ()
   "Move to the cell in the previous data row, attempting to preserve column."
   (interactive)
-  (let ((current-col (current-column)))
-    (ignore-errors (forward-line -2))
-    (move-to-column current-col)))
+  (supertag-view-table--goto-row-relative -1))
 
 ;;; --- User Interaction ---
 
@@ -1062,6 +1123,13 @@ COORDS is a plist with :entity-id and :col-index."
                                          (lambda (data) (plist-put data col-key new-value)))
                (supertag-view-table-refresh)
                (supertag-view-table--goto-cell coords)))))))))
+
+(defun supertag-view-table-goto-node ()
+  "Jump to the Org node corresponding to the current row in another window."
+  (interactive)
+  (when-let* ((coords (supertag-view-table--get-cell-coords))
+              (entity-id (plist-get coords :entity-id)))
+    (supertag-node-goto-other-window entity-id)))
 
 (defun supertag-view-table--get-current-query-obj ()
   "Get current query object."
@@ -1328,6 +1396,7 @@ With prefix argument INDEX, switch to specific table number."
     (define-key map (kbd "C-c C-d") #'supertag-view-table-delete-column)
     (define-key map (kbd "C-c C-r") #'supertag-view-table-rename-column)
     (define-key map (kbd "C-c C-t") #'supertag-view-table-set-column-type)
+    (define-key map (kbd "o") #'supertag-view-table-goto-node)
     ;; Help
     (define-key map (kbd "?") #'supertag-view-table-help)
     map)
@@ -1435,4 +1504,3 @@ With prefix argument INDEX, switch to specific table number."
 
 (provide 'supertag-view-table)
 ;;; supertag-view-table.el ends here
-

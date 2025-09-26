@@ -40,6 +40,11 @@
   :type 'integer
   :group 'supertag-sync)
 
+(defcustom supertag-sync-idle-delay 1.0
+  "Seconds of idle time required before automatic sync runs."
+  :type 'number
+  :group 'supertag-sync)
+
 (defcustom org-supertag-sync-directories nil
   "List of directories to monitor for automatic synchronization.
 Each entry should be an absolute path. Subdirectories will also be monitored.
@@ -310,6 +315,30 @@ Returns the loaded or initialized sync state."
     
 (defvar supertag-sync--timer nil
   "Timer for periodic sync checks.")
+
+(defvar supertag-sync--idle-dispatch nil
+  "Idle timer used to defer sync execution until Emacs is idle.")
+
+(defun supertag-sync--cancel-idle-dispatch ()
+  "Cancel any pending idle dispatch for the sync worker."
+  (when (timerp supertag-sync--idle-dispatch)
+    (cancel-timer supertag-sync--idle-dispatch))
+  (setq supertag-sync--idle-dispatch nil))
+
+(defun supertag-sync--queue-idle-dispatch ()
+  "Schedule sync execution for the next idle period."
+  (unless (timerp supertag-sync--idle-dispatch)
+    (setq supertag-sync--idle-dispatch
+          (run-with-idle-timer
+           (max supertag-sync-idle-delay 0)
+           nil
+           #'supertag-sync--run-idle-dispatch))))
+
+(defun supertag-sync--run-idle-dispatch ()
+  "Run the sync worker after idle delay."
+  (setq supertag-sync--idle-dispatch nil)
+  (when (fboundp 'supertag-sync--check-and-sync)
+    (supertag-sync--check-and-sync)))
 
 
 ;; (defun supertag-sync-emergency-recovery ()
@@ -975,16 +1004,19 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
   (let* ((id (org-element-property :ID headline))
          (contents-begin (org-element-property :contents-begin headline))
          (contents-end (org-element-property :contents-end headline))
-         (section-elements (org-element-contents headline))
          (original-raw-title (org-element-property :raw-value headline))
          ;; Defensively clean title of both #tags and :tags: to prevent duplication.
-         (cleaned-raw-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
+         (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
 "#\\w[-_[:alnum:]]*" "" original-raw-title))))
-           (headline-tags (supertag--extract-inline-tags original-raw-title))
-           (content-tags (supertag--extract-inline-tags section-elements))
-           (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
-           (all-tags (supertag--merge-and-sanitize-tags
-                     (cl-union headline-tags content-tags :test #'equal)
+         ;; If cleaning results in an empty string (title was only tags), use the original.
+         (final-title (if (string-empty-p title-after-cleaning)
+                          original-raw-title
+                        title-after-cleaning))
+         (headline-tags (supertag--extract-inline-tags original-raw-title))
+         (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
+         (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
+         (all-tags (supertag--merge-and-sanitize-tags
+                   (cl-union headline-tags content-tags :test #'equal)
                      org-native-tags))
          (properties (supertag--parse-properties (org-element-property :properties headline)))
          (refs-to (supertag--extract-refs
@@ -998,13 +1030,13 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
       (when final-id
         ;; NOTE: 标签创建和关系建立移到了 supertag--process-node-tags 函数中
         ;; 这样只有在节点真正需要创建或更新时才会执行标签操作
-        
+
         (list :id final-id
-            :title (or cleaned-raw-title "Untitled Node")
-            :raw-value cleaned-raw-title ;; Use cleaned title for hashing
-            :tags all-tags
-            :properties properties
-            :ref-to (cl-delete-duplicates refs-to :test #'equal)
+             :title (or final-title "Untitled Node")
+             :raw-value final-title ;; Use final title for hashing
+             :tags all-tags
+             :properties properties
+             :ref-to (cl-delete-duplicates refs-to :test #'equal)
             :file file
             :content (let ((raw-content (if (and contents-begin contents-end)
                                              ;; Extract only content up to first child headline
@@ -1068,6 +1100,9 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
     (cancel-timer supertag-sync--timer)
     (setq supertag-sync--timer nil))
 
+  ;; Clear pending idle work to avoid duplicates
+  (supertag-sync--cancel-idle-dispatch)
+
   ;; Ensure store is initialized before starting auto-sync
   (unless (hash-table-p supertag--store)
     (setq supertag--store (ht-create)))
@@ -1077,9 +1112,8 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
          2 ; Start first sync after a short 2-second delay
          (or interval supertag-sync-auto-interval) ; Then, repeat at the configured interval
          (lambda ()
-            "Safe wrapper for sync function with error handling."
-            (when (fboundp 'supertag-sync--check-and-sync)
-              (supertag-sync--check-and-sync))))))
+           "Safe wrapper for scheduling sync during idle periods."
+           (supertag-sync--queue-idle-dispatch)))))
 
 (defun supertag-sync-stop-auto-sync ()
   "Stop automatic synchronization."
@@ -1087,7 +1121,8 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
   (when supertag-sync--timer
     (cancel-timer supertag-sync--timer)
     (setq supertag-sync--timer nil)
-    (message "Auto-sync stopped")))
+    (message "Auto-sync stopped"))
+  (supertag-sync--cancel-idle-dispatch))
 
 ;;;-------------------------------------------------------------------
 ;;; Database Cleanup

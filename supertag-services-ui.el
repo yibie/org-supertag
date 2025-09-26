@@ -93,6 +93,10 @@ If OTHER-WINDOW is non-nil, open in another window."
 (defvar supertag-ui--cache-timestamp nil
   "Timestamp of when the node cache was last updated.")
 
+(defvar supertag-ui--select-node-candidates nil
+  "A list of node candidates used by `supertag-ui-select-node`.
+For completion framework integration, e.g., live previews.")
+
 (defun supertag-ui--clear-node-cache ()
   "Clear the node selection cache to force refresh on next access."
   (setq supertag-ui--node-cache nil
@@ -134,18 +138,51 @@ If OTHER-WINDOW is non-nil, open in another window."
        nodes-hash))
     (sort candidates (lambda (a b) (string< (car a) (car b))))))
 
-(defun supertag-ui-select-node (&optional prompt use-cache)
+(defun supertag-ui-select-node (&optional prompt use-cache with-preview)
   "Interactively prompt user to select a node.
 PROMPT is the prompt string (defaults to 'Select node: ').
 USE-CACHE when non-nil uses cached data for better performance.
+WITH-PREVIEW when non-nil enables live preview in another window
+if a supported completion framework (Ivy, Vertico) is active.
 Returns the selected node's ID, or nil."
   (let* ((prompt-str (or prompt "Select node: "))
          (candidates (if use-cache
                          (supertag-ui--get-cached-nodes)
                        (supertag-ui--build-node-candidates)))
-         (selected (completing-read prompt-str candidates nil t)))
-    (when selected
-      (cdr (assoc selected candidates)))))
+         (supertag-ui--select-node-candidates candidates)) ; For external hooks
+    (if (not (and with-preview candidates))
+        (let ((selected (completing-read prompt-str candidates nil t)))
+          (when selected (cdr (assoc selected candidates))))
+      (let ((preview-func (lambda (id) (when id (supertag-goto-node id t)))))
+        (cond
+         ((and (bound-and-true-p ivy-mode) (fboundp 'ivy-read))
+          (let* ((ivy-update-fn
+                  (lambda (_)
+                    (let* ((sel (ivy-current-match))
+                           (id (cdr (assoc sel candidates))))
+                      (funcall preview-func id))))
+                 (selection (ivy-read prompt-str (mapcar #'car candidates)
+                                      :require-match t
+                                      :history 'supertag-ui-select-node-history
+                                      :caller 'supertag-ui-select-node)))
+            (when selection (cdr (assoc selection candidates)))))
+         ((bound-and-true-p vertico-mode)
+          (let ((selection nil)
+                (preview-hook
+                 (lambda ()
+                   (let* ((sel (vertico-current-candidate))
+                          (id (cdr (assoc sel candidates))))
+                     (funcall preview-func id)))))
+            (unwind-protect
+                (progn
+                  (add-hook 'vertico-selection-hook preview-hook)
+                  (setq selection (completing-read prompt-str candidates nil t)))
+              (remove-hook 'vertico-selection-hook preview-hook))
+            (when selection (cdr (assoc selection candidates)))))
+         (t
+          (message "Live preview supported with Ivy or Vertico. Falling back to default.")
+          (let ((selected (completing-read prompt-str candidates nil t)))
+            (when selected (cdr (assoc selected candidates))))))))))
 
 
 (defun supertag-ui-select-reference-to-remove (from-node-id)
