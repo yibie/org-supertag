@@ -13,6 +13,7 @@
 (require 'supertag-ops-tag nil t)
 (require 'supertag-ops-node nil t)
 (require 'supertag-services-query nil t)
+(require 'supertag-services-sync nil t)
 
 ;;; --- Caching System ---
 
@@ -215,6 +216,11 @@
   "Enhanced tag exit function with proper error handling."
   (condition-case err
       (when-let ((node-id (supertag-completion--get-node-id-at-point)))
+        ;; Ensure the node exists in the database before adding a tag.
+        ;; This handles the case where completion is used on a plain headline.
+        (unless (supertag-node-get node-id)
+          (when (fboundp 'supertag-node-sync-at-point)
+            (supertag-node-sync-at-point)))
         (when (fboundp 'supertag-ops-add-tag-to-node)
           (supertag-ops-add-tag-to-node node-id candidate :create-if-needed t)
           (message "Tag '%s' added to node %s" candidate node-id))

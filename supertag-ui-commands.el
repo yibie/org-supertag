@@ -410,6 +410,11 @@ new tag name, bypassing fuzzy completion matching."
   (interactive)
   (let* ((node-id (supertag-ui--get-containing-node-at-point))
          (all-tags (mapcar #'car (supertag-query :tags))) ; For completion candidates
+         ;; Ensure the node exists in the database before proceeding.
+         ;; This handles the case where a tag is added to a plain headline
+         ;; for the first time.
+         (_ (unless (supertag-node-get node-id)
+              (supertag-node-sync-at-point)))
          (raw-name (completing-read "Add tag (use =tagname for exact match): " all-tags nil nil))
          (literal-tag (and (> (length raw-name) 0) (eq (aref raw-name 0) ?=))))
     (when (and raw-name (not (string-empty-p raw-name)))
@@ -882,4 +887,3 @@ cause inconsistencies in the system. This command cleans them up."
       (message "No ghost tags found."))))
 
 (provide 'supertag-ui-commands)
-

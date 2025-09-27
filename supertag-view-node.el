@@ -229,7 +229,8 @@ Key Bindings:
       (supertag-view-helper-insert-section-title "Metadata" "🏷️")
       (dolist (tag-id (sort valid-tags #'string<))
         (let ((fields (supertag-tag-get-all-fields tag-id)))
-          (supertag-view-helper-insert-tag-block tag-id fields node-id)))
+          ;; Defensively ensure `fields` is a list to prevent rendering errors.
+          (supertag-view-helper-insert-tag-block tag-id (or fields '()) node-id)))
       
       ;; Show cleaned up deleted tags if any
       (when deleted-tags
