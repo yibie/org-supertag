@@ -31,14 +31,6 @@
     (org-table-align)
     (buffer-string)))
 
-(defun supertag-query-block--get-node-field-value (node-id field-name)
-  "Get the value of FIELD-NAME for NODE-ID from database field relationships."
-  (let ((node-data (supertag-get (list :nodes node-id))))
-    (when node-data
-      (let ((properties (plist-get node-data :properties)))
-        (when properties
-          (plist-get properties (intern (concat ":" field-name))))))))
-
 ;;; --- S-expression Query Block Functions ---
 
 (defun supertag-insert-query-block ()
@@ -72,7 +64,7 @@ This is the primary function for S-expression query blocks."
                                                    (mapconcat #'identity tags ", ") 
                                                  ""))
                                          (mapcar (lambda (key)
-                                                   (let ((val (supertag-query-block--get-node-field-value id key)))
+                                                   (let ((val (supertag-query--get-node-field-value id key)))
                                                      (if val (format "%s" val) "")))
                                                  field-keys))))
                              nodes)))

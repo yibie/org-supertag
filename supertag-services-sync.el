@@ -793,8 +793,8 @@ COUNTERS is a plist for tracking changes."
       (with-temp-buffer
         (insert content-string)
         (goto-char (point-min))
-        (while (re-search-forward "#\\(\\w[-_[:alnum:]]*\\)" nil t)
-          (push (match-string 1) tags))))
+        (while (re-search-forward "#\\([a-zA-Z0-9][-_a-zA-Z0-9]*\\)" nil t)
+             (push (match-string 1) tags))))
     (nreverse tags)))
 
   (defun supertag--extract-inline-tags (elements)
@@ -1189,9 +1189,24 @@ This is a safe operation that helps maintain database integrity."
   (add-hook 'after-save-hook #'supertag-sync--run-on-save nil t))
 
 (defun supertag--parse-node-at-point ()
-  "Parse the Org heading at point and return its property list."
+  "Parse the Org heading at point and return its property list.
+This version manually extracts the subtree to bypass the org-element
+cache, ensuring the current, unsaved buffer state is parsed."
   (when (org-at-heading-p)
-    (let ((headline (org-element-at-point)))
-      (supertag--convert-element-to-node-plist headline (buffer-file-name)))))
+    (save-excursion
+      (org-back-to-heading t)
+      (let* ((begin (point))
+             (end (save-excursion (org-end-of-subtree t t) (point)))
+             (subtree-text (buffer-substring-no-properties begin end)))
+        (with-temp-buffer
+          (insert subtree-text)
+          (org-mode)
+          (let ((ast (org-element-parse-buffer)))
+            ;; The AST of the subtree will have one top-level headline
+            (when (and (eq (org-element-type ast) 'org-data)
+                       (org-element-contents ast))
+              (let ((headline-element (car (org-element-contents ast))))
+                (when (eq (org-element-type headline-element) 'headline)
+                  (supertag--convert-element-to-node-plist headline-element (buffer-file-name)))))))))))
       
 (provide 'supertag-services-sync)
