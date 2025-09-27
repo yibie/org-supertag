@@ -1208,5 +1208,14 @@ cache, ensuring the current, unsaved buffer state is parsed."
               (let ((headline-element (car (org-element-contents ast))))
                 (when (eq (org-element-type headline-element) 'headline)
                   (supertag--convert-element-to-node-plist headline-element (buffer-file-name)))))))))))
-      
+
+;;;###autoload
+(defun supertag-node-sync-at-point ()
+  "Re-sync the node at point with the database.
+Parses the current state of the headline and updates the store."
+  (when (org-at-heading-p)
+    (let ((props (supertag--parse-node-at-point)))
+      (when props
+        (supertag-node-create props)))))
+
 (provide 'supertag-services-sync)
