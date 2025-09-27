@@ -393,7 +393,7 @@ TEXT can be any value convertible to string."
                       'field-name nil
                       'id tag-id))
   
-  (if (not fields)
+  (if (or (null fields) (zerop (length fields)))
       (supertag-view-helper-insert-simple-empty-state "No fields defined")
     (dolist (field-def fields)
       (let* ((field-name (plist-get field-def :name))

@@ -13,12 +13,11 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'org-id)            ; For org-id-new
-(require 'supertag-core-store)    ; For supertag-get, supertag-update
-(require 'supertag-core-schema)   ; For validation functions
-(require 'supertag-core-transform) ; For supertag-transform
-(require 'supertag-core-persistence) ; For supertag-current-time
-
+(require 'org-id)                    
+(require 'supertag-core-store)       
+(require 'supertag-core-schema)      
+(require 'supertag-core-transform)   
+(require 'supertag-core-persistence) 
 ;;; --- Internal Helper ---
 
 (defun supertag--validate-node-data (data)
@@ -171,13 +170,6 @@ This is used when a node is moved from one file to another."
           (p-node (plist-put p-node :position new-position)))
      (supertag-update (list :nodes node-id) p-node))))
 
-(defun supertag-node-sync-at-point ()
-  "Re-sync the node at point with the database.
-Parses the current state of the headline and updates the store."
-  (when (org-at-heading-p)
-    (let* ((props (supertag--parse-node-at-point)))
-      (when props
-        (supertag-node-create props)))))
 (provide 'supertag-ops-node)
 
 ;;; org-supertag/ops/node.el ends here

@@ -60,13 +60,14 @@ Returns the created tag data."
         (progn
           (message "Tag '%s' already exists, returning existing tag." id)
           existing-tag)
-      ;; If tag does not exist, create it
-      (let* ((final-props (plist-put props :id id))
-             (final-props (plist-put final-props :type :tag))
-             (final-props (plist-put final-props :created-at (current-time)))
+         ;; If tag does not exist, create it
+         (let* ((final-props (plist-put props :id id))
+                (final-props (plist-put final-props :type :tag))
+             (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
+                (final-props (plist-put final-props :created-at (current-time)))
              (final-props (plist-put final-props :modified-at (current-time))))
-        ;; Strict validation (fail-fast principle)
-        (supertag--validate-tag-data final-props)
+           ;; Strict validation (fail-fast principle)
+           (supertag--validate-tag-data final-props)
         ;; Direct storage for optimal performance
         (supertag-store-direct-set :tags id final-props)
         final-props))))
