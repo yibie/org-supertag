@@ -25,6 +25,7 @@
 
 (require 'cl-lib)
 (require 'supertag-core-store) ; For supertag-get
+(require 'supertag-ops-field)   ; For supertag-field-get
 
 ;;; --- Query System ---
 
@@ -178,18 +179,19 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
 This is much faster than the old approach that scanned the entire link table."
   ;; For now, fall back to the existing field query implementation
   ;; TODO: Implement field indexing for even better performance
-  (let ((matching-nodes '()))
-    ;; Query using new store format
-    (let ((nodes-collection (supertag-get '(:nodes))))
-      (when (hash-table-p nodes-collection)
-        (maphash
-         (lambda (node-id node-data)
-           (let ((properties (plist-get node-data :properties)))
-             (when (and properties 
-                        (equal (plist-get properties (intern (concat ":" field-name))) value))
-               (push node-id matching-nodes))))
-         nodes-collection)))
-    matching-nodes))
+  (let ((matching-nodes '())
+        (nodes-collection (supertag-get '(:nodes))))
+    (when (hash-table-p nodes-collection)
+      (maphash
+       (lambda (node-id node-data)
+         ;; For each node, check all of its tags to see if any have a matching field value.
+         (let ((tags (plist-get node-data :tags)))
+           (when (cl-some (lambda (tag-id)
+                            (equal (supertag-field-get node-id tag-id field-name) value))
+                          tags)
+             (push node-id matching-nodes))))
+       nodes-collection))
+    (nreverse matching-nodes)))
 
 (defun supertag-query--resolve-date-string (date-str)
   "Resolve a date string into an absolute time value.
@@ -245,11 +247,14 @@ Used for generating table headers in Org Babel output."
 (defun supertag-query--get-node-field-value (node-id field-name)
   "Get the value of FIELD-NAME for NODE-ID.
 This uses the new data format instead of the old link table."
-  (let ((node-data (supertag-get (list :nodes node-id))))
-    (when node-data
-      (let ((properties (plist-get node-data :properties)))
-        (when properties
-          (plist-get properties (intern (concat ":" field-name))))))))
+  (when-let ((node-data (supertag-get (list :nodes node-id))))
+    ;; A field can belong to any tag on the node. Find the first match.
+    (catch 'found
+      (dolist (tag-id (plist-get node-data :tags))
+        (let ((value (supertag-field-get node-id tag-id field-name)))
+          (when value
+            (throw 'found value))))
+      nil)))
 
 ;;; --- Extended Query System for Relations and Databases ---
 
@@ -424,9 +429,13 @@ VIEW-CONFIG contains filter, sort, and grouping options."
     ('todo (plist-get node-data :todo))
     ('priority (plist-get node-data :priority))
     (_
-     ;; Check fields
-     (let ((props (plist-get node-data :properties)))
-       (plist-get props (intern (format ":%s" field)))))))
+     ;; It's a custom field. We must use supertag-field-get.
+     ;; A field can belong to any tag on the node. Find the first value.
+     (catch 'found
+       (dolist (tag-id (plist-get node-data :tags))
+         (let ((value (supertag-field-get (plist-get node-data :id) tag-id (symbol-name field))))
+           (when value
+             (throw 'found value))))))))
 
 (defun supertag-query--compare-sort-values (a b)
   "Compare two sort values A and B."
