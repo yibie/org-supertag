@@ -8,11 +8,13 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'supertag-core-store)    ; For supertag-get, supertag-update
 (require 'supertag-core-schema)   ; For validation functions
 (require 'supertag-core-transform) ; For supertag-transform
 (require 'supertag-ops-relation) ; For relation operations
 (require 'supertag-ops-node)     ; For supertag-node-remove-tag
+(require 'supertag-ops-schema)
 
 ;;; --- Internal Helper ---
 
@@ -41,6 +43,16 @@ Implements immediate error reporting as preferred by the user."
         plist)
     data))
 
+(defun supertag--normalize-tag-extends (tag)
+  "Normalize the :extends field in TAG plist to a sanitized tag id or nil."
+  (if (plist-member tag :extends)
+      (let* ((ext (plist-get tag :extends))
+             (normalized (and (stringp ext)
+                               (not (string-empty-p ext))
+                               (supertag-sanitize-tag-name ext))))
+        (plist-put tag :extends normalized))
+    tag))
+
 ;; ID generation is now handled by supertag-id-utils.el
 
 ;;; --- Tag Operations ---
@@ -54,6 +66,9 @@ Returns the created tag data."
   (let* ((name (plist-get props :name))
          (id (or (plist-get props :id)
                  (when name (supertag-sanitize-tag-name name))))
+         (extends (let ((ext (plist-get props :extends)))
+                    (when (and (stringp ext) (not (string-empty-p ext)))
+                      (supertag-sanitize-tag-name ext))))
          (existing-tag (supertag-tag-get id)))
     ;; Check if tag exists
     (if existing-tag
@@ -63,13 +78,16 @@ Returns the created tag data."
          ;; If tag does not exist, create it
          (let* ((final-props (plist-put props :id id))
                 (final-props (plist-put final-props :type :tag))
-             (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
+                (final-props (plist-put final-props :extends extends))
+                (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
                 (final-props (plist-put final-props :created-at (current-time)))
-             (final-props (plist-put final-props :modified-at (current-time))))
+                (final-props (plist-put final-props :modified-at (current-time)))
+                (final-props (supertag--normalize-tag-extends final-props)))
            ;; Strict validation (fail-fast principle)
            (supertag--validate-tag-data final-props)
         ;; Direct storage for optimal performance
         (supertag-store-direct-set :tags id final-props)
+        (supertag-ops-schema-rebuild-cache)
         final-props))))
 
 (defun supertag-tag-get (id)
@@ -86,24 +104,21 @@ Returns the updated tag data."
   (let ((tag (supertag-tag-get id)))
     (when tag
       ;; Convert hash table to plist if necessary
-      (when (hash-table-p tag)
-        (let ((plist-tag '()))
-          (maphash (lambda (k v)
-                     (setq plist-tag (plist-put plist-tag k v)))
-                   tag)
-          (setq tag plist-tag)))
-      
-      (let ((updated-tag (funcall updater tag)))
+      (let* ((original-plist (supertag--ensure-plist tag))
+             (copy-for-update (copy-tree original-plist))
+             (updated-tag (funcall updater copy-for-update)))
         (when updated-tag
           ;; Only update if the tag actually changed
-          (if (equal updated-tag tag)
+          (if (equal updated-tag original-plist)
               tag  ; Return original tag unchanged
             ;; Add/update timestamps only when there are real changes
-            (let ((final-tag (plist-put updated-tag :modified-at (current-time))))
+            (let* ((normalized-tag (supertag--normalize-tag-extends updated-tag))
+                   (final-tag (plist-put normalized-tag :modified-at (current-time))))
               ;; Strict validation (fail-fast principle)
               (supertag--validate-tag-data final-tag)
               ;; Direct storage for optimal performance
               (supertag-store-direct-set :tags id final-tag)
+              (supertag-ops-schema-rebuild-cache)
               final-tag)))))))
 
 (defun supertag-tag-delete (id)
@@ -114,7 +129,10 @@ Returns the deleted tag data."
     ;; Use supertag-delete for a true hard delete (removes the key).
     ;; supertag-update with nil value leaves a (\"tag\" . nil) entry,
     ;; which causes inconsistencies.
-    (when tag (supertag-delete (list :tags id)))))
+    (when tag
+      (supertag-delete (list :tags id))
+      (supertag-ops-schema-rebuild-cache)
+      tag)))
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)
   "Delete a tag and all its uses from the database and all org files.
@@ -248,23 +266,40 @@ Returns the updated tag data."
                                        fields-list)))
               (plist-put tag :fields new-fields))))))))
 
+(defun supertag--set-parent (child-id parent-id)
+  "Set CHILD-ID to extend PARENT-ID, rebuilding schema cache."
+  (let ((child (supertag-tag-get child-id))
+        (parent (supertag-tag-get parent-id)))
+    (unless child
+      (error "Child tag '%s' does not exist" child-id))
+    (unless parent
+      (error "Parent tag '%s' does not exist" parent-id))
+    (let* ((normalized-child (plist-get (supertag--ensure-plist child) :id))
+           (normalized-parent (supertag-sanitize-tag-name parent-id)))
+      (when (string= normalized-child normalized-parent)
+        (error "Tag '%s' cannot extend itself" normalized-child))
+    (supertag-tag-update child-id
+      (lambda (tag)
+        (when tag
+          (plist-put tag :extends normalized-parent)))))))
+
+(defun supertag--clear-parent (child-id)
+  "Clear the parent (extends) relationship for CHILD-ID."
+  (unless (supertag-tag-get child-id)
+    (error "Child tag '%s' does not exist" child-id))
+  (supertag-tag-update child-id
+    (lambda (tag)
+      (when tag
+        (plist-put tag :extends nil)))))
+
 (defun supertag-tag-get-field (tag-id field-name)
   "Get a field definition from a tag.
 TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field.
 Returns the field definition, or nil if not found."
-  (let ((tag (supertag-tag-get tag-id)))
-    (when tag
-      ;; Convert hash table to plist if necessary
-      (when (hash-table-p tag)
-        (let ((plist-tag '()))
-          (maphash (lambda (k v)
-                     (setq plist-tag (plist-put plist-tag k v)))
-                   tag)
-          (setq tag plist-tag)))
-      
-      (let ((fields (plist-get tag :fields)))
-        (cl-find field-name fields :key (lambda (f) (plist-get f :name)) :test 'equal))))) 
+  (let ((all-fields (supertag-tag-get-all-fields tag-id)))
+    (when all-fields
+      (cl-find field-name all-fields :key (lambda (f) (plist-get f :name)) :test #'equal)))) 
 
 (defun supertag-tag-move-field-up (tag-id field-name)
   "Move a field definition up in the tag's field list.
@@ -310,22 +345,17 @@ Returns the updated tag data."
   "Get all field definitions for a tag.
 TAG-ID is the unique identifier of the tag.
 Returns a list of field definition plists, or empty list if tag not found."
-  (let ((tag (supertag-tag-get tag-id)))
-    ;; Return empty list if tag doesn't exist (defensive programming)
-    (unless tag
-      (message "Warning: Tag '%s' not found, returning empty field list." tag-id)
-      (cl-return-from supertag-tag-get-all-fields '()))
-
-    ;; Convert hash table to plist if necessary
-    (when (hash-table-p tag)
-      (let ((plist-tag '()))
-        (maphash (lambda (k v)
-                   (setq plist-tag (plist-put plist-tag k v)))
-                 tag)
-        (setq tag plist-tag)))
-
-    ;; Return only the tag's own fields (no inheritance)
-    (or (plist-get tag :fields) '())))
+  (let ((resolved (supertag-ops-schema-get-resolved-tag tag-id)))
+    (cond
+     ((and resolved (plist-get resolved :fields))
+      (plist-get resolved :fields))
+     (t
+      (let ((tag (supertag-tag-get tag-id)))
+        (unless tag
+          (message "Warning: Tag '%s' not found, returning empty field list." tag-id)
+          (cl-return-from supertag-tag-get-all-fields '()))
+        (let ((plist-tag (supertag--ensure-plist tag)))
+          (or (plist-get plist-tag :fields) '())))))))
 
 (defun supertag-sanitize-tag-name (name)
   "Sanitize a string into a valid tag name.

@@ -167,6 +167,7 @@
                               :modified-at (:type :timestamp :default (lambda () (current-time)))
                               :description (:type :string :default "")
                               :icon (:type :string :default nil)
+                              :extends (:type :string :default nil)
                               :color (:type :string :default nil)
                               :behaviors (:type :list :default nil)
                               ;; Virtual database configuration

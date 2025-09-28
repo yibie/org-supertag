@@ -67,6 +67,7 @@
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
 (require 'supertag-ops-relation)
+(require 'supertag-ops-schema)
 (require 'supertag-ops-batch)
 (require 'supertag-ops-embed)
 
@@ -119,6 +120,8 @@ This function loads all necessary components and sets up the environment."
     (supertag-sync-load-state)
     ;; Load data from persistent storage
     (supertag-load-store)
+    ;; Materialize tag schema cache after loading data
+    (supertag-ops-schema-rebuild-cache)
     ;; Set up auto-save and daily backup timers
     (supertag-setup-all-timers)
     ;; Start auto-sync

@@ -21,6 +21,50 @@
 (require 'supertag-services-capture) ; For capture services
 (require 'supertag-core-store) ; For supertag--rebuild-all-indexes
 
+(defun supertag-set-child (parent-tag child-tags)
+  "Set CHILD-TAGS to extend a PARENT-TAG using interactive completion.
+When invoked interactively, allows selecting multiple child tags." 
+  (interactive
+   (let* ((tags (mapcar #'car (supertag-query :tags))))
+     (when (null tags)
+       (user-error "No tags available"))
+     (let* ((parent (completing-read "Parent tag: " tags nil t))
+            (child-candidates (remove parent (copy-sequence tags)))
+            (children (completing-read-multiple
+                       (format "Child tags for '%s' (comma-separated): " parent)
+                       child-candidates nil t)))
+       (when (null children)
+         (user-error "You must select at least one child tag"))
+       (list parent children))))
+  (let ((children (if (listp child-tags) child-tags (list child-tags))))
+    (dolist (child children)
+      (when (and child (not (string-empty-p child)))
+        (supertag--set-parent child parent-tag)))
+    (when (called-interactively-p 'interactive)
+      (message "Tags %s now extend %s"
+               (mapconcat #'identity children ", ") parent-tag))
+    children))
+
+(defun supertag-clear-parent (child-tags)
+  "Clear parent relationships for one or more CHILD-TAGS."
+  (interactive
+   (let* ((tags (mapcar #'car (supertag-query :tags))))
+     (when (null tags)
+       (user-error "No tags available"))
+     (let ((children (completing-read-multiple
+                      "Clear parent for tag(s): " tags nil t)))
+       (when (null children)
+         (user-error "You must select at least one tag"))
+       (list children))))
+  (let ((children (if (listp child-tags) child-tags (list child-tags))))
+    (dolist (child children)
+      (when (and child (not (string-empty-p child)))
+        (supertag--clear-parent child)))
+    (when (called-interactively-p 'interactive)
+      (message "Cleared parent for tag(s): %s"
+               (mapconcat #'identity children ", ")))
+    children))
+
 ;;; --- Internal Helper ---
 
 (defun supertag-ui--extract-inline-tags-from-string (content-string)

@@ -7,6 +7,8 @@
 (defalias 'org-supertag-inline-rename 'supertag-rename-tag)
 (defalias 'org-supertag-inline-delete-all 'supertag-delete-tag-everywhere)
 (defalias 'org-supertag-inline-change-tag 'supertag-change-tag-at-point)
+(defalias 'org-supertag-set-child 'supertag-set-child)
+(defalias 'org-supertag-clear-parent 'supertag-clear-parent)
 (defalias 'org-supertag-capture-direct 'supertag-capture)
 (defalias 'org-supertag-capture-template 'supertag-capture-with-template)
 (defalias 'org-supertag-insert-query-block 'supertag-insert-query-block)
@@ -44,6 +46,8 @@
     (define-key map (kbd "n") 'org-supertag-inline-rename)
     (define-key map (kbd "d") 'org-supertag-inline-delete-all)
     (define-key map (kbd "c") 'org-supertag-inline-change-tag)
+    (define-key map (kbd "x") 'org-supertag-set-child)
+    (define-key map (kbd "X") 'org-supertag-clear-parent)
     
     ;; Node operations
     (define-key map (kbd "i") 'org-supertag-insert-query-block)
