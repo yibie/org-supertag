@@ -11,6 +11,7 @@
 (require 'supertag-core-schema)
 (require 'supertag-view-helper)
 (require 'supertag-ops-tag)
+(require 'supertag-ops-schema)
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -48,14 +49,11 @@ Returns a list containing two items: the children-by-id map and the list of root
     (message "SCHEMA-DEBUG (2/4): Calculating hierarchy for %d tags..." (hash-table-count tags-by-id))
     (maphash
      (lambda (id tag-plist)
-       ;; Note: extends functionality has been removed
-       (let ((parent-ids nil)) ; extends is no longer supported
-         (if (and parent-ids (listp parent-ids) (not (null parent-ids)))
+       (let ((parent-id (plist-get tag-plist :extends)))
+         (if (and parent-id (gethash parent-id tags-by-id))
              (progn
-               (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-ids)
-               (dolist (parent-id parent-ids)
-                 (when (gethash parent-id tags-by-id) ; Ensure parent exists
-                   (push id (gethash parent-id children-by-id)))))
+               (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-id)
+               (push id (gethash parent-id children-by-id)))
            (progn
              (message "SCHEMA-DEBUG (2/4): Tag '%s' is a root." id)
              (push id root-ids)))))
@@ -145,7 +143,7 @@ Returns a list containing two items: the children-by-id map and the list of root
       (dolist (root-tag tag-tree)
         (supertag-schema--render-tag-node root-tag))
       (supertag-view-helper-insert-simple-footer
-       "Tag: [a] Add Field | [e] Extends | [d] Delete"
+       "Tag: [a] Add Field | [e] Set Parent | [d] Delete"
        "Field: [r] Rename | [d] Delete | [M-↑/↓] Move"
        "Global: [A] Add Tag | [g] Refresh | [q] Quit")
       (goto-char (point-min)))))
@@ -155,11 +153,15 @@ Returns a list containing two items: the children-by-id map and the list of root
   (let* ((level (or level 0))
          (indent (make-string (* 2 level) ? ))
          (tag-id (plist-get tag-node :id))
-         (fields (plist-get tag-node :fields))
+         ;; Use the resolved fields from the cache
+         (fields (supertag-tag-get-all-fields tag-id))
+         (parent-id (plist-get tag-node :extends))
          (children (plist-get tag-node :children)))
-         ;; Note: extends display removed as functionality is deprecated
     ;; Render the tag itself
-    (insert (format "%s%s\n" indent tag-id))
+    (insert (format "%s%s" indent tag-id))
+    (when parent-id
+      (insert (propertize (format " -> %s" parent-id) 'face 'font-lock-comment-face)))
+    (insert "\n")
 
     ;; Render fields if any
     (when fields
@@ -192,13 +194,13 @@ Returns a list containing two items: the children-by-id map and the list of root
     (define-key map "U" #'supertag-schema--unmark-all)
     ;; Batch Actions
     (define-key map "D" #'supertag-schema--batch-delete-marked-items)
-    ;; Note: batch extends functionality removed
+    (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
     ;; Single-item Actions
     (define-key map "r" #'supertag-schema--rename-field-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
     (define-key map "a" #'supertag-schema--add-field-at-point) ; 'a' for add field
     (define-key map "A" #'supertag-schema--add-new-tag)      ; 'A' for add tag
-    ;; Note: extends functionality removed
+    (define-key map "e" #'supertag-view-schema-set-extends)
     (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
     (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
     (define-key map "g" #'supertag-schema-refresh)
@@ -241,7 +243,7 @@ Returns a list containing two items: the children-by-id map and the list of root
           (supertag-schema-refresh))
       (message "Tag creation cancelled."))))
 
-(defun supertag-schema--set-extends-at-point ()
+(defun supertag-view-schema-set-extends ()
   "Interactively set or clear the inheritance for the tag at point."
   (interactive)
   (let ((context (supertag-schema--get-context-at-point)))
@@ -256,15 +258,12 @@ Returns a list containing two items: the children-by-id map and the list of root
         (cond
          ;; Case 1: User entered empty string to clear inheritance
          ((string-empty-p parent-id)
-          (let ((current-extends (plist-get (supertag-tag-get child-id) :extends)))
-            (when (and current-extends (yes-or-no-p (format "Clear all inheritance from '%s'?" child-id)))
-              (if (listp current-extends)
-                  (dolist (p current-extends) (supertag-tag-remove-extends child-id p))
-                (supertag-tag-remove-extends child-id current-extends))
-              (message "Cleared inheritance for '%s'. Refreshing..." child-id) (supertag-schema-refresh))))
+          (when (yes-or-no-p (format "Clear parent for '%s'?" child-id))
+            (supertag--clear-parent child-id)
+            (message "Cleared parent for '%s'. Refreshing..." child-id) (supertag-schema-refresh)))
          ;; Case 2: User selected a parent to add
          (t
-          (supertag-tag-add-extends child-id parent-id)
+          (supertag--set-parent child-id parent-id)
           (message "Set '%s' to extend '%s'. Refreshing..." child-id parent-id)
           (supertag-schema-refresh)))))))
 
@@ -431,7 +430,7 @@ Dispatches to the correct deletion logic based on context."
         (when (and parent-id (not (string-empty-p parent-id)))
           (when (yes-or-no-p (format "Set %d tags to extend '%s'?" (length marked-tags) parent-id))
             (dolist (tag-context marked-tags)
-              (supertag-tag-add-extends (plist-get tag-context :tag-id) parent-id))
+              (supertag--set-parent (plist-get tag-context :tag-id) parent-id))
             (setq supertag-schema--marked-items nil)
             (supertag-schema-refresh)
             (message "Batch extends complete.")))))))
