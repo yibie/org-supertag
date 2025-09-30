@@ -13,12 +13,14 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'supertag-core-store)
 (require 'supertag-core-notify)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
 (require 'supertag-services-formula)
+(require 'supertag-services-ui)
 (require 'supertag-view-helper)
 (require 'org)
 
@@ -105,7 +107,10 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (supertag-view-table-mode)
-        
+        ;; Forcefully set truncate-lines, as it might be overridden by other hooks.
+        ;; This ensures that long lines are truncated rather than wrapped.
+        (setq-local truncate-lines t)
+
         ;; Store view state
         (setq-local supertag-view-table--query-objs query-objs)
         (setq-local supertag-view-table--entity-ids entity-ids)
@@ -144,7 +149,8 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
                              current-window)))
       (when (and target-window (window-live-p target-window))
         (select-window target-window))
-      (switch-to-buffer buf))
+      (switch-to-buffer buf)
+      (set-window-scroll-bars (selected-window) nil t nil t))
     buf))
 
 (defun supertag-view-table--apply-view-config (view-config)
@@ -157,8 +163,8 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
       ;; Filter columns based on visible fields
       (when visible-fields
         (setq-local supertag-view-table--columns
-                  (cl-remove-if-not 
-                   (lambda (col) 
+                  (cl-remove-if-not
+                   (lambda (col)
                      (member (symbol-name (plist-get col :key)) visible-fields))
                    supertag-view-table--columns)))
       
@@ -240,8 +246,23 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
      (let* ((field-name (cadr condition))
             (operator (caddr condition))
             (expected-value (cadddr condition))
-            (props (plist-get entity-data :properties))
-            (actual-value (plist-get props (intern field-name))))
+            (query-obj (supertag-view-table--get-current-query-obj))
+            (actual-value
+             (pcase (plist-get query-obj :type)
+               (:tag
+                ;; For tag queries, get field value using supertag-field-get
+                (let* ((node-id (plist-get entity-data :id))
+                       (tag-id (supertag-view-table--get-current-tag-id))
+                       ;; Remove leading colon from field-name if present
+                       (clean-field-name (if (string-prefix-p ":" field-name)
+                                            (substring field-name 1)
+                                          field-name)))
+                  (when (and node-id tag-id)
+                    (supertag-field-get node-id tag-id clean-field-name))))
+               (_
+                ;; For other query types, try properties first
+                (let ((props (plist-get entity-data :properties)))
+                  (plist-get props (intern field-name)))))))
        (supertag-view-table--compare-values actual-value operator expected-value)))
     
     ('title
@@ -468,7 +489,16 @@ Table information is displayed above the table, not inside it."
                     (insert "\n" (supertag-view-table--draw-separator "├" "┼" "┤") "\n")))))))
         
         ;; Render bottom border
-        (insert "\n" (supertag-view-table--draw-separator "└" "┴" "┘")))
+        (insert "\n" (supertag-view-table--draw-separator "└" "┴" "┘"))
+        
+        ;; Insert footer with keyboard shortcuts
+        (insert "\n\n")
+        (supertag-view-helper-insert-simple-footer
+         "⌨️ Edit: [RET] Edit Cell | [C-c C-i] Insert Image | [w] Adjust Image Width"
+         "📊 Columns: [C-c C-a] Add | [C-c C-d] Delete | [C-c C-r] Rename | [C-c C-t] Set Type"
+         "🔍 Filter: [/] Apply Filter | [C-c /] Clear Filter | [C-c v s] Switch View"
+         "📍 Navigation: [n/p] Line | [f/b] Cell | [TAB] Next Cell | [t] Switch Table | [o] Goto Node"
+         "🔧 Actions: [g] Refresh | [?] Help | [q] Quit"))
       
       ;; After rendering, move cursor to the first cell
       (supertag-view-table--goto-first-cell)
@@ -476,8 +506,8 @@ Table information is displayed above the table, not inside it."
       (setq buffer-read-only t))))
 
 (defun supertag-view-table--pad-string (text width)
-  "Pad TEXT with spaces to fit WIDTH."
-  (let* ((text-str (format "%s" text))
+  "Pad TEXT with spaces to fit WIDTH while respecting maximum cell width."
+  (let* ((text-str (truncate-string-to-width (format "%s" text) width 0 nil))
          (padding (- width (string-width text-str))))
     (if (> padding 0)
         (concat text-str (make-string padding ?\s))
@@ -625,58 +655,10 @@ Uses improved styling from old version."
    ((equal value "false") "No")
    (t (format "%s" value))))
 
-(defun supertag-view-table--wrap-text (text width)
-  "Wrap TEXT (possibly propertized) into segments within WIDTH columns."
-  (let* ((string (cond
-                  ((null text) "")
-                  ((stringp text) text)
-                  (t (format "%s" text))))
-         (len (length string))
-         (pos 0)
-         (lines '()))
-    (while (< pos len)
-      (if (eq (aref string pos) ?\n)
-          (progn
-            (push "" lines)
-            (setq pos (1+ pos)))
-        (let* ((newline-pos (cl-position ?\n string :start pos))
-               (break-pos (if (and newline-pos (<= (- newline-pos pos) width))
-                              newline-pos
-                            (supertag-view-table--wrap-find-break
-                             string pos width (or newline-pos len)))))
-          (push (substring string pos (or break-pos len)) lines)
-          (setq pos (or break-pos len))
-          (when (and (< pos len) (eq (aref string pos) ?\n))
-            (setq pos (1+ pos))))))
-    (setq lines (nreverse lines))
-    (when (null lines)
-      (setq lines (list "")))
-    lines))
-
-(defun supertag-view-table--wrap-find-break (string start width limit)
-  "Find a break position within STRING starting at START.
-WIDTH is the desired column width. LIMIT bounds the search (e.g., newline)."
-  (let ((pos start)
-        (col 0)
-        (last-break nil))
-    (catch 'wrap-break
-      (while (< pos limit)
-        (let* ((char (aref string pos))
-               (char-width (or (char-width char) 1)))
-          (when (> (+ col char-width) width)
-            (throw 'wrap-break (or last-break (if (> pos start)
-                                                 pos
-                                               (min limit (1+ pos))))))
-          (setq col (+ col char-width))
-          (setq pos (1+ pos))
-          (when (or (eq char ?\s) (eq char ?-))
-            (setq last-break pos))))
-      pos)))
-
 (defun supertag-view-table--format-cell (value width)
   "Format VALUE for a cell with character-WIDTH.
-If VALUE is an image path, it's sliced into a list of strings.
-If VALUE is text, it's wrapped into a list of strings."
+If VALUE is an image path, it's sliced into multiple strings.
+If VALUE is text, keep it on a single truncated line so horizontal scrolling can reveal hidden content."
   (if (supertag-view-table--is-image-path-p value)
       (with-temp-buffer
         (let ((lines
@@ -692,20 +674,19 @@ If VALUE is text, it's wrapped into a list of strings."
                  (list (format "[Image: %s]" (file-name-nondirectory value))))))
           ;; Enforce exact line height on every slice for perfect alignment
           (mapcar (lambda (line) (propertize line 'line-height (supertag-view-table--get-exact-line-height))) lines)))
-    ;; For text
+    ;; For text keep a single truncated display line (no wrapping)
     (let* ((text (cond
                   ((stringp value) value)
                   ((null value) "")
                   (t (format "%s" value))))
-           (lines (supertag-view-table--wrap-text text width)))
-      (mapcar (lambda (line)
-                (let* ((display-line (if (string-empty-p line) " " line))
-                       (copy (copy-sequence display-line)))
-                  (add-text-properties 0 (length copy)
-                                        `(line-height ,(supertag-view-table--get-exact-line-height))
-                                        copy)
-                  copy))
-              lines))))
+           (flattened (replace-regexp-in-string "\n" " " text))
+           (display-line (truncate-string-to-width flattened width 0 nil))
+           (final-line (if (string-empty-p display-line) " " display-line))
+           (copy (copy-sequence final-line)))
+      (add-text-properties 0 (length copy)
+                            `(line-height ,(supertag-view-table--get-exact-line-height))
+                            copy)
+      (list copy))))
 
 (defun supertag-view-table--get-exact-line-height ()
   "Get exact line height in pixels, including frame-level line-spacing."
@@ -1125,11 +1106,35 @@ COORDS is a plist with :entity-id and :col-index."
                (supertag-view-table--goto-cell coords)))))))))
 
 (defun supertag-view-table-goto-node ()
-  "Jump to the Org node corresponding to the current row in another window."
+  "Jump to the Org node corresponding to the current row in a side window on the right."
   (interactive)
-  (when-let* ((coords (supertag-view-table--get-cell-coords))
-              (entity-id (plist-get coords :entity-id)))
-    (supertag-node-goto-other-window entity-id)))
+  (let ((coords (supertag-view-table--get-cell-coords)))
+    (if (null coords)
+        (message "No cell found at point. Please move to a table cell first.")
+      (let ((entity-id (plist-get coords :entity-id)))
+        (if (null entity-id)
+            (message "No entity ID found in cell coordinates.")
+          (when-let* ((node (supertag-get (list :nodes entity-id)))
+                      (file (plist-get node :file)))
+            (if (not (file-exists-p file))
+                (message "Error: File for node %s does not exist." entity-id)
+              (let* ((buffer (find-file-noselect file))
+                     ;; Display in a window on the right side
+                     (window (display-buffer buffer
+                                            '(display-buffer-in-direction
+                                              (direction . right)
+                                              (window-width . 0.5)))))
+                (when window
+                  (with-selected-window window
+                    (with-current-buffer buffer
+                      (goto-char (point-min))
+                      (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
+                          (progn
+                            (org-back-to-heading t)
+                            (org-show-context)
+                            (recenter)
+                            (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
+                        (message "Error: Could not find ID %s in file %s" entity-id file)))))))))))))
 
 (defun supertag-view-table--get-current-query-obj ()
   "Get current query object."
@@ -1408,7 +1413,19 @@ With prefix argument INDEX, switch to specific table number."
   ;; Critical: Set line-spacing to 0 to ensure image slices align perfectly,
   ;; recreating the "perfect display environment" from the old version.
   (setq-local line-spacing 0)
-  (setq-local truncate-lines t))
+  ;; Prevent line wrapping to keep table structure intact
+  (setq-local truncate-lines t)
+  ;; Even in narrow split windows we want truncation instead of wrapping
+  (setq-local truncate-partial-width-windows nil)
+  ;; Enable horizontal scrolling
+  (setq-local auto-hscroll-mode t)
+  ;; Disable word wrap
+  (setq-local word-wrap nil)
+  ;; Ensure consistent line height
+  (setq-local line-height-factor 1.0)
+  ;; Disable visual line mode if active
+  (when (bound-and-true-p visual-line-mode)
+    (visual-line-mode -1)))
 
 (defun supertag-view-table-refresh ()
   "Refresh the grid view with current data."
@@ -1419,8 +1436,12 @@ With prefix argument INDEX, switch to specific table number."
            (_ (setq-local supertag-view-table--entity-ids (supertag-view-table--get-entities current-query)))
            (_ (setq-local supertag-view-table--columns (supertag-view-table--get-columns current-query)))
            ;; 2. Get active view config
-           (active-config (if supertag-view-table--current-view-name
-                              (cdr (assoc supertag-view-table--current-view-name supertag-view-table--named-views))
+           ;; If current-view-name is "Unsaved Filter", use view-config directly
+           ;; Otherwise, try to find named view, falling back to view-config
+           (active-config (if (and supertag-view-table--current-view-name
+                                   (not (equal supertag-view-table--current-view-name "Unsaved Filter")))
+                              (or (cdr (assoc supertag-view-table--current-view-name supertag-view-table--named-views))
+                                  supertag-view-table--view-config)
                             supertag-view-table--view-config)))
 
       ;; 3. Apply view config to the freshly fetched entities
