@@ -441,6 +441,25 @@ current file and inserted into the target file at a chosen position."
 
         (message "Reference to node %s removed." to-id)))))
 
+;; --- Embed Commands ---
+
+(defun supertag-insert-embed ()
+  "Insert an embed block at point by selecting a node.
+This command provides a convenient way to embed node content directly
+without first creating a link. It will prompt you to select a node
+and then insert the embed block at the current position."
+  (interactive)
+  (require 'supertag-ui-embed)
+  (supertag-ui-embed--insert-block))
+
+(defun supertag-convert-link-to-embed ()
+  "Convert the org id: link at point to an embed block.
+This command provides a user-friendly interface to convert an existing
+id: link into an embed block that displays the node's content inline."
+  (interactive)
+  (require 'supertag-ui-embed)
+  (supertag-ui-embed--link-to-block))
+
 ;; --- Tag Commands: add, remove ----
 
 (defun supertag-add-tag ()

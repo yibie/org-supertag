@@ -87,5 +87,93 @@ NODE-ID: The node identifier to embed"
             clean-content
           (concat clean-content "\n"))))))
 
+(defun supertag-ui-embed-get-link-at-point ()
+  "Get the org-link at point and extract its ID.
+Returns a plist with :id, :description, :begin, and :end, or nil if not on a link."
+  (let ((element (org-element-context)))
+    (when (eq (org-element-type element) 'link)
+      (let* ((link-type (org-element-property :type element))
+             (path (org-element-property :path element))
+             (begin (org-element-property :begin element))
+             (end (org-element-property :end element))
+             (contents-begin (org-element-property :contents-begin element))
+             (contents-end (org-element-property :contents-end element))
+             (description (when (and contents-begin contents-end)
+                           (buffer-substring-no-properties contents-begin contents-end))))
+        (when (string= link-type "id")
+          (list :id path
+                :description description
+                :begin begin
+                :end end))))))
+
+(defun supertag-ui-embed--link-to-block ()
+  "Internal function to convert the org-link at point to an embed block.
+The link must be an id: link pointing to a node in the database.
+This is an internal function and should not be called directly by users."
+  (let ((link-info (supertag-ui-embed-get-link-at-point)))
+    (unless link-info
+      (user-error "Point is not on an org id: link"))
+    
+    (let* ((node-id (plist-get link-info :id))
+           (begin (plist-get link-info :begin))
+           (end (plist-get link-info :end))
+           (node-data (supertag-get (list :nodes node-id))))
+      
+      (unless node-data
+        (user-error "Node %s not found in database" node-id))
+      
+      ;; Generate embed block content
+      (let ((embed-content (supertag-ui-embed-generate-node-content node-id)))
+        (unless embed-content
+          (user-error "Failed to generate embed content for node %s" node-id))
+        
+        ;; Replace the link with embed block
+        (delete-region begin end)
+        (goto-char begin)
+        (insert (format "#+begin_embed: %s\n" node-id))
+        (insert embed-content)
+        (unless (string-suffix-p "\n" embed-content)
+          (insert "\n"))
+        (insert "#+end_embed\n")
+        
+        (message "Converted link to embed block for node %s" node-id)))))
+
+(defun supertag-ui-embed--insert-block ()
+  "Internal function to select a node and insert an embed block at point.
+This allows you to directly insert an embed block without first creating a link.
+It will prompt you to select a node from the database and then insert the
+embed block at the current position. This is an internal function and should
+not be called directly by users."
+  (require 'supertag-services-ui)
+  
+  ;; Use the existing node selection UI with cache for better performance
+  (let ((node-id (supertag-ui-select-node "Insert embed block for node: " t)))
+    (unless node-id
+      (user-error "No node selected"))
+    
+    ;; Verify node exists in database
+    (let ((node-data (supertag-get (list :nodes node-id))))
+      (unless node-data
+        (user-error "Node %s not found in database" node-id))
+      
+      ;; Generate embed block content
+      (let ((embed-content (supertag-ui-embed-generate-node-content node-id)))
+        (unless embed-content
+          (user-error "Failed to generate embed content for node %s" node-id))
+        
+        ;; Insert embed block at current position
+        (let ((start-pos (point)))
+          ;; Ensure we're at the beginning of a line
+          (unless (bolp)
+            (insert "\n"))
+          
+          (insert (format "#+begin_embed: %s\n" node-id))
+          (insert embed-content)
+          (unless (string-suffix-p "\n" embed-content)
+            (insert "\n"))
+          (insert "#+end_embed\n")
+          
+          (message "Inserted embed block for node %s" node-id))))))
+
 (provide 'supertag-ui-embed)
 ;;; supertag-ui-embed.el ends here
