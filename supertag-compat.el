@@ -32,6 +32,10 @@
 (defalias 'org-supertag-view-table 'supertag-view-table)
 (defalias 'org-supertag-view-kanban 'supertag-view-kanban)
 (defalias 'org-supertag-clean-database 'supertag-sync-cleanup-database)
+;; Embed operations
+(defalias 'org-supertag-insert-embed 'supertag-insert-embed)
+(defalias 'org-supertag-convert-link-to-embed 'supertag-convert-link-to-embed)
+(defalias 'org-supertag-embed-refresh-all 'supertag-services-embed-refresh-all)
 
 ;; Define the prefix key first
 (defvar org-supertag-prefix-map
@@ -76,6 +80,11 @@
     (define-key map (kbd "v") 'org-supertag-view-node)
     (define-key map (kbd "T") 'org-supertag-view-table)
     (define-key map (kbd "k") 'org-supertag-view-kanban)
+    
+    ;; Embed operations
+    (define-key map (kbd "b") 'org-supertag-insert-embed)
+    (define-key map (kbd "B") 'org-supertag-convert-link-to-embed)
+    (define-key map (kbd "C-r") 'org-supertag-embed-refresh-all)
     
     ;; Database operations
     (define-key map (kbd "C-c") 'org-supertag-clean-database)
