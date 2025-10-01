@@ -182,20 +182,24 @@ Returns t if the relationship was created or already exists, nil otherwise."
     ;; 2. If tag exists, create the relationship and update node.
     (if-let ((raw-tag (supertag-tag-get tag-id)))
         (let ((tag (supertag--ensure-plist raw-tag))) ; Ensure we have a plist
-          (progn
-            ;; Update the node's :tags property to trigger index update
-            (let ((node (supertag-node-get node-id)))
-              (when node
-                (let ((current-tags (or (plist-get node :tags) '())))
-                  (unless (member tag-id current-tags)
-                    ;; Add tag to node's tags list
-                    (let ((updated-node (plist-put node :tags (cons tag-id current-tags))))
-                      (supertag-store-direct-set :nodes node-id updated-node))))))
-            
-            ;; Avoid creating duplicate relations
-            (unless (supertag-relation-find-between node-id (plist-get tag :id) :node-tag)
-              (supertag-relation-create `(:type :node-tag :from ,node-id :to ,(plist-get tag :id))))
-            t))
+          ;; Update the node's :tags property to trigger index update
+          (let ((node (supertag-node-get node-id)))
+            (when node
+              (let ((current-tags (or (plist-get node :tags) '())))
+                (if (member tag-id current-tags)
+                    ;; CRITICAL FIX: Even if tag exists, we must ensure the node
+                    ;; is marked as modified to trigger persistence events.
+                    ;; Update the :modified-at timestamp to ensure store change event.
+                    (let ((updated-node (plist-put node :modified-at (current-time))))
+                      (supertag-store-direct-set :nodes node-id updated-node))
+                  ;; Add tag to node's tags list
+                  (let ((updated-node (plist-put node :tags (cons tag-id current-tags))))
+                    (supertag-store-direct-set :nodes node-id updated-node))))))
+          
+          ;; Avoid creating duplicate relations
+          (unless (supertag-relation-find-between node-id (plist-get tag :id) :node-tag)
+            (supertag-relation-create `(:type :node-tag :from ,node-id :to ,(plist-get tag :id))))
+          t)
       nil)))
 
 ;; 3.2 Field Operations
