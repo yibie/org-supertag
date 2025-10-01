@@ -247,19 +247,24 @@ Returns a list of exported node data."
   (defun supertag--generate-org-content (nodes)
   "Helper function to generate Org content from node plists.
 NODES is a list of node plists.
-Returns a string containing the Org content."
+Returns a string containing the Org content.
+Respects `supertag-tag-style` configuration for tag formatting."
     (with-temp-buffer
       (dolist (node nodes)
         (let* ((title (plist-get node :title))
                (tags (plist-get node :tags))
                (level (or (plist-get node :level) 1))
                (content (or (plist-get node :content) ""))
-               (id (plist-get node :id)))
-          ;; Reconstruct the node with org native :tag: formatting (no behavior change on export).
+               (id (plist-get node :id))
+               (file (plist-get node :file))
+               ;; Use the configured tag style
+               (tag-style (supertag--resolve-tag-style node file))
+               (tags-part (supertag--format-tags-by-style tags tag-style)))
+          ;; Reconstruct the node with configured tag formatting
           (insert (format "%s %s%s\n"
                           (make-string level ?*)
                           title
-                          (if tags (concat " :" (mapconcat #'identity tags ":") ":") "")))
+                          tags-part))
           (insert (format ":PROPERTIES:\n:ID:       %s\n:END:\n" id))
           ;; Insert content
           (when content
@@ -1067,20 +1072,27 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
 ;;;###autoload
 (defun supertag--parse-org-nodes (file)
   "Parse the org file and return a list of nodes. Entry point.
-This function IGNORES content inside #+begin_embed blocks."
+This function IGNORES content inside #+begin_embed blocks.
+Uses a temporary buffer with minimal side effects to avoid interfering with other packages."
   (unless (file-exists-p file)
     (error "File does not exist: %s" file))
   (with-temp-buffer
-    (insert-file-contents file)
-    (goto-char (point-min))
-    ;; Pre-process to remove content of embed blocks before parsing
-    (while (re-search-forward "^#\\+begin_embed:.*$" nil t)
-      (let ((start (match-end 0)))
-        (when (re-search-forward "^#\\+end_embed" nil t)
-          (delete-region start (match-beginning 0)))))
-    (goto-char (point-min)) ; Go back to beginning for parsing
-    (let ((parsed-ast (org-element-parse-buffer)))
-      (supertag--map-headlines parsed-ast file))))
+    ;; Disable hooks and modes that might interfere
+    (let ((inhibit-modification-hooks t)
+          (org-mode-hook nil)
+          (org-inhibit-startup t)
+          (org-agenda-inhibit-startup t))
+      (insert-file-contents file)
+      (goto-char (point-min))
+      ;; Pre-process to remove content of embed blocks before parsing
+      (while (re-search-forward "^#\\+begin_embed:.*$" nil t)
+        (let ((start (match-end 0)))
+          (when (re-search-forward "^#\\+end_embed" nil t)
+            (delete-region start (match-beginning 0)))))
+      (goto-char (point-min))
+      ;; Parse without triggering org-mode initialization
+      (let ((parsed-ast (org-element-parse-buffer)))
+        (supertag--map-headlines parsed-ast file)))))
 
 ;;;------------------------------------------------------------------
 ;;; Supertag Sync Auto Star or Stop
@@ -1158,30 +1170,23 @@ This is a safe operation that helps maintain database integrity."
 ;;;-------------------------------------------------------------------
 
 (defun supertag-sync--run-on-save ()
-  "Hook function to run single-node sync after saving a buffer."
+  "Hook function to run single-node sync after saving a buffer.
+This function is designed to minimize interference with other packages by:
+1. Preserving buffer-local variables
+2. Suppressing unnecessary buffer modifications
+3. Avoiding triggering of other hooks during processing."
   ;; We only run this for org-mode buffers that are part of the sync scope.
-  (when (and (derived-mode-p 'org-mode) ; Remove debug message
+  (when (and (derived-mode-p 'org-mode)
              (buffer-file-name)
              (supertag-sync--in-sync-scope-p (buffer-file-name)))
-    ;; Create a dummy counters plist, as the function expects one.
-    (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
+    ;; Save current buffer-local state to restore later if needed
+    (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0))
+          (inhibit-modification-hooks t))  ; Prevent other hooks from firing during our processing
       ;; Process the file within a transaction for atomicity
       (supertag-with-transaction
         (supertag-sync--process-single-file (buffer-file-name) counters))
       ;; Immediately run garbage collection after processing
-      (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes))
-            (refs-created (or (plist-get counters :references-created) 0))
-            (refs-deleted (or (plist-get counters :references-deleted) 0)))
-        ;; (message "Real-time sync for %s: %d created, %d updated, %d marked, %d purged, %d refs (+%d/-%d)."
-        ;;          (file-name-nondirectory (buffer-file-name))
-        ;;          (plist-get counters :nodes-created)
-        ;;          (plist-get counters :nodes-updated)
-        ;;          (plist-get counters :nodes-deleted)
-        ;;          deleted-count
-        ;;          (+ refs-created refs-deleted)
-        ;;          refs-created
-        ;;          refs-deleted)
-        ))))
+      (supertag-sync-garbage-collect-orphaned-nodes))))
         
 
 (defun supertag-sync-setup-realtime-hooks ()
@@ -1191,23 +1196,30 @@ This is a safe operation that helps maintain database integrity."
 (defun supertag--parse-node-at-point ()
   "Parse the Org heading at point and return its property list.
 This version manually extracts the subtree to bypass the org-element
-cache, ensuring the current, unsaved buffer state is parsed."
+cache, ensuring the current, unsaved buffer state is parsed.
+Uses minimal side effects to avoid interfering with other packages."
   (when (org-at-heading-p)
     (save-excursion
       (org-back-to-heading t)
       (let* ((begin (point))
              (end (save-excursion (org-end-of-subtree t t) (point)))
-             (subtree-text (buffer-substring-no-properties begin end)))
+             (subtree-text (buffer-substring-no-properties begin end))
+             (current-file (buffer-file-name)))
         (with-temp-buffer
-          (insert subtree-text)
-          (org-mode)
-          (let ((ast (org-element-parse-buffer)))
-            ;; The AST of the subtree will have one top-level headline
-            (when (and (eq (org-element-type ast) 'org-data)
-                       (org-element-contents ast))
-              (let ((headline-element (car (org-element-contents ast))))
-                (when (eq (org-element-type headline-element) 'headline)
-                  (supertag--convert-element-to-node-plist headline-element (buffer-file-name)))))))))))
+          ;; Disable hooks that might interfere
+          (let ((org-mode-hook nil)
+                (org-inhibit-startup t)
+                (org-agenda-inhibit-startup t)
+                (inhibit-modification-hooks t))
+            (insert subtree-text)
+            (org-mode)
+            (let ((ast (org-element-parse-buffer)))
+              ;; The AST of the subtree will have one top-level headline
+              (when (and (eq (org-element-type ast) 'org-data)
+                         (org-element-contents ast))
+                (let ((headline-element (car (org-element-contents ast))))
+                  (when (eq (org-element-type headline-element) 'headline)
+                    (supertag--convert-element-to-node-plist headline-element current-file)))))))))))
 
 ;;;###autoload
 (defun supertag-node-sync-at-point ()
