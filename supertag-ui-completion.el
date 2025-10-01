@@ -222,8 +222,9 @@
           (when (fboundp 'supertag-node-sync-at-point)
             (supertag-node-sync-at-point)))
         (when (fboundp 'supertag-ops-add-tag-to-node)
-          (supertag-ops-add-tag-to-node node-id candidate :create-if-needed t)
-          (message "Tag '%s' added to node %s" candidate node-id))
+          (let ((result (supertag-ops-add-tag-to-node node-id candidate :create-if-needed t)))
+            (when result
+              (message "Tag '%s' added to node %s" candidate node-id))))
         ;; Add space after tag for better UX
         (unless (looking-at-p "\\s-")
           (insert " "))
