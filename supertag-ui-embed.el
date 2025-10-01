@@ -59,33 +59,28 @@ CONTENT: The content string to filter"
 
 (cl-defun supertag-ui-embed-generate-node-content (node-id)
   "Generate embed content for a single node.
-NODE-ID: The node identifier to embed"
+NODE-ID: The node identifier to embed.
+Returns ONLY the content part, without the headline."
   (let* ((node-data (supertag-get (list :nodes node-id))))
     (unless node-data
       (cl-return-from supertag-ui-embed-generate-node-content
         "** Error: Node not found in DB **"))
     
-    (let* ((title (plist-get node-data :title))
-           (content (plist-get node-data :content))
-           (level (or (plist-get node-data :level) 1))
-           (heading-prefix (make-string level ?*)))
-      
-      ;; Generate heading and content
-      (let* ((heading-line (format "%s %s" heading-prefix (or title "Untitled")))
-             (content-text (if (and content (not (string-empty-p (string-trim content))))
+    (let* ((content (plist-get node-data :content)))
+      ;; Return only the content, filtered and cleaned
+      (let* ((content-text (if (and content (not (string-empty-p (string-trim content))))
                                content
                              ""))
-             (full-content (if (string-empty-p content-text)
-                               heading-line
-                             (concat heading-line "\n" content-text)))
-             (normalized-content (replace-regexp-in-string "\n*\\'" "\n" full-content))
+             (normalized-content (replace-regexp-in-string "\n*\\'" "\n" content-text))
              (filtered-content (supertag-ui-embed--filter-embed-markers normalized-content))
              (clean-content (string-trim-right filtered-content)))
         
-        ;; Ensure content ends with exactly one newline
-        (if (string-suffix-p "\n" clean-content)
-            clean-content
-          (concat clean-content "\n"))))))
+        ;; Ensure content ends with exactly one newline if not empty
+        (if (string-empty-p clean-content)
+            ""
+          (if (string-suffix-p "\n" clean-content)
+              clean-content
+            (concat clean-content "\n")))))))
 
 (defun supertag-ui-embed-get-link-at-point ()
   "Get the org-link at point and extract its ID.
@@ -123,14 +118,16 @@ This is an internal function and should not be called directly by users."
         (user-error "Node %s not found in database" node-id))
       
       ;; Generate embed block content
-      (let ((embed-content (supertag-ui-embed-generate-node-content node-id)))
+      (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
+            (title (plist-get node-data :title)))
         (unless embed-content
           (user-error "Failed to generate embed content for node %s" node-id))
         
         ;; Replace the link with embed block
         (delete-region begin end)
         (goto-char begin)
-        (insert (format "#+begin_embed: %s\n" node-id))
+        ;; Include title in the begin_embed line for reference
+        (insert (format "#+begin_embed: %s [%s]\n" node-id (or title "Untitled")))
         (insert embed-content)
         (unless (string-suffix-p "\n" embed-content)
           (insert "\n"))
@@ -157,7 +154,8 @@ not be called directly by users."
         (user-error "Node %s not found in database" node-id))
       
       ;; Generate embed block content
-      (let ((embed-content (supertag-ui-embed-generate-node-content node-id)))
+      (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
+            (title (plist-get node-data :title)))
         (unless embed-content
           (user-error "Failed to generate embed content for node %s" node-id))
         
@@ -167,7 +165,8 @@ not be called directly by users."
           (unless (bolp)
             (insert "\n"))
           
-          (insert (format "#+begin_embed: %s\n" node-id))
+          ;; Include title in the begin_embed line for reference
+          (insert (format "#+begin_embed: %s [%s]\n" node-id (or title "Untitled")))
           (insert embed-content)
           (unless (string-suffix-p "\n" embed-content)
             (insert "\n"))
