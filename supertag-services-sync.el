@@ -1082,6 +1082,8 @@ Uses a temporary buffer with minimal side effects to avoid interfering with othe
           (org-mode-hook nil)
           (org-inhibit-startup t)
           (org-agenda-inhibit-startup t))
+      ;; Ensure tab-width is 8 as required by org-current-text-column
+      (setq-local tab-width 8)
       (insert-file-contents file)
       (goto-char (point-min))
       ;; Pre-process to remove content of embed blocks before parsing
@@ -1213,6 +1215,8 @@ Uses minimal side effects to avoid interfering with other packages."
                 (inhibit-modification-hooks t))
             (insert subtree-text)
             (org-mode)
+            ;; Ensure tab-width is 8 as required by org-current-text-column
+            (setq-local tab-width 8)
             (let ((ast (org-element-parse-buffer)))
               ;; The AST of the subtree will have one top-level headline
               (when (and (eq (org-element-type ast) 'org-data)
