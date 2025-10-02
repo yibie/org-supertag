@@ -472,7 +472,7 @@ Key Bindings:
   "Display the Org-Supertag node view for the node at point."
   (interactive)
   (let* ((node-id (supertag-ui--get-node-at-point))
-         (buffer-name (format "Supertag: %s" node-id))
+         (buffer-name "*Supertag Node View*")
          (buffer (get-buffer-create buffer-name)))
     (with-current-buffer buffer
       (supertag-view-node-mode)
