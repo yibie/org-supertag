@@ -24,6 +24,8 @@
   (require 'org-table)
   (with-temp-buffer
     (org-mode)
+    ;; Ensure tab-width is 8 as required by org-current-text-column
+    (setq-local tab-width 8)
     (insert "| " (mapconcat #'identity headers " | ") " |\n")
     (insert "|-" (mapconcat (lambda (h) (make-string (length h) ?-)) headers "-|-") "-|\n")
     (dolist (row data)

@@ -515,6 +515,8 @@ Handles both time stamps (list) and date strings."
         (with-current-buffer (find-file-noselect file)
           (erase-buffer)
           (org-mode)
+          ;; Ensure tab-width is 8 as required by org-current-text-column
+          (setq-local tab-width 8)
           (let ((title (file-name-base file)))
             (insert (format "#+TITLE: %s\n" title)
                     "#+OPTIONS: ^:nil\n"

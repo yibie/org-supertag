@@ -703,6 +703,8 @@ If VALUE is text, keep it on a single truncated line so horizontal scrolling can
       ""
     (with-temp-buffer
       (org-mode)
+      ;; Ensure tab-width is 8 as required by org-current-text-column
+      (setq-local tab-width 8)
       ;; Insert text and ensure it's treated as a paragraph
       (insert text "\n\n")
       (goto-char (point-min))
