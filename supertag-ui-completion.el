@@ -68,28 +68,13 @@ Returns (START . END) where START is right after the # character."
     (let ((end (point))
           (start nil))
       
-      ;; Show context around point
-      (message "DEBUG bounds: point=%d, char-at-point=%S, char-before-point=%S"
-               (point)
-               (char-after (point))
-               (char-before (point)))
-      (message "DEBUG bounds: text around point: '%s'"
-               (buffer-substring-no-properties
-                (max (point-min) (- (point) 10))
-                (min (point-max) (+ (point) 10))))
-      
       ;; Skip back over valid tag characters
       (skip-chars-backward "a-zA-Z0-9_-")
       (setq start (point))
       
-      (message "DEBUG bounds: end=%d, after-skip=%d, char-before-start=%S"
-               end start (char-before start))
-      
       ;; Check if we're right after a # character
       (when (and (> start (point-min))
                  (eq (char-before start) ?#))
-        (message "DEBUG: Found tag bounds: (%d . %d), prefix='%s'"
-                 start end (buffer-substring-no-properties start end))
         (cons start end)))))
 
 (defun supertag-completion--get-completion-table (prefix)
@@ -106,8 +91,6 @@ Returns (START . END) where START is right after the # character."
          (should-add-new (and (not (string-empty-p safe-prefix))
                              (not (member safe-prefix matching-tags))
                              (not (member safe-prefix current-tags)))))
-    (message "DEBUG table: prefix='%s', matching=%d, should-add-new=%s"
-             safe-prefix (length matching-tags) should-add-new)
     
     ;; Return all matching tags, plus [Create New Tag] if applicable
     (if should-add-new
@@ -157,61 +140,46 @@ completion candidate and correcting the buffer if necessary."
 
 (defun supertag-completion-at-point ()
   "Main `completion-at-point` function using the classic, compatible API."
-  (message "DEBUG CAPF: supertag-completion-at-point called at point=%d" (point))
-  (message "DEBUG CAPF: About to call get-prefix-bounds")
-  (let ((bounds (supertag-completion--get-prefix-bounds)))
-    (message "DEBUG CAPF: bounds=%S" bounds)
-    (if (not bounds)
-        (progn
-          (message "DEBUG CAPF: No bounds found, returning nil")
-          nil)
-      (let* ((start (car bounds))
-             (end (cdr bounds))
-             (prefix (buffer-substring-no-properties start end)))
-        (message "DEBUG CAPF: prefix='%s', start=%d, end=%d" prefix start end)
-        
-        (list start end
-              ;; 1. The completion table. Returns a custom completion function
-              ;;    that always includes [Create New Tag] in results
-              (lambda (str pred action)
-                (message "DEBUG: completion table called with action=%S, str='%s'" action str)
-                (cond
-                 ;; Return metadata
-                 ((eq action 'metadata)
-                  '(metadata (category . supertag-tag)
-                            (annotation-function . (lambda (cand)
-                                                     (if (get-text-property 0 'is-new-tag cand)
-                                                         " [new]"
-                                                       " [tag]")))))
-                 ;; Return all candidates (for display)
-                 ((eq action t)
-                  (let ((table (supertag-completion--get-completion-table prefix)))
-                    (message "DEBUG: action=t, returning %d candidates" (length table))
-                    table))
-                 ;; Test for exact match
-                 ((eq action 'lambda)
-                  (message "DEBUG: action=lambda, testing str='%s'" str)
-                  (member str (supertag-completion--get-completion-table prefix)))
-                 ;; Try completion (return common prefix or t if unique)
-                 ((null action)
-                  (message "DEBUG: action=nil (try-completion)")
-                  (try-completion str (supertag-completion--get-completion-table prefix) pred))
-                 ;; Boundaries
-                 (t
-                  (message "DEBUG: action=%S (other)" action)
-                  (complete-with-action action
-                                       (supertag-completion--get-completion-table prefix)
-                                       str pred))))
+  (when-let ((bounds (supertag-completion--get-prefix-bounds)))
+    (let* ((start (car bounds))
+           (end (cdr bounds))
+           (prefix (buffer-substring-no-properties start end)))
+      
+      (list start end
+            ;; 1. The completion table. Returns a custom completion function
+            ;;    that always includes [Create New Tag] in results
+            (lambda (str pred action)
+              (cond
+               ;; Return metadata
+               ((eq action 'metadata)
+                '(metadata (category . supertag-tag)
+                          (annotation-function . (lambda (cand)
+                                                   (if (get-text-property 0 'is-new-tag cand)
+                                                       " [new]"
+                                                     " [tag]")))))
+               ;; Return all candidates (for display)
+               ((eq action t)
+                (supertag-completion--get-completion-table prefix))
+               ;; Test for exact match
+               ((eq action 'lambda)
+                (member str (supertag-completion--get-completion-table prefix)))
+               ;; Try completion (return common prefix or t if unique)
+               ((null action)
+                (try-completion str (supertag-completion--get-completion-table prefix) pred))
+               ;; Boundaries and other actions
+               (t
+                (complete-with-action action
+                                     (supertag-completion--get-completion-table prefix)
+                                     str pred))))
 
-              ;; 2. A SINGLE, UNIFIED :exit-function. This is also
-              ;;    universally understood by all completion frameworks.
-              :exit-function
-              (lambda (selected-string status)
-                (message "DEBUG: exit-function called with status=%S, selected='%s'" status selected-string)
-                ;; The condition now accepts 'finished, 'exact', and 'sole' to be
-                ;; compatible with various completion UIs like Corfu.
-                (when (memq status '(finished exact sole))
-                  (supertag-completion--post-completion-action selected-string prefix))))))))
+            ;; 2. A SINGLE, UNIFIED :exit-function. This is also
+            ;;    universally understood by all completion frameworks.
+            :exit-function
+            (lambda (selected-string status)
+              ;; The condition now accepts 'finished, 'exact', and 'sole' to be
+              ;; compatible with various completion UIs like Corfu.
+              (when (memq status '(finished exact sole))
+                (supertag-completion--post-completion-action selected-string prefix)))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Setup
@@ -220,24 +188,17 @@ completion candidate and correcting the buffer if necessary."
 ;;;###autoload
 (defun supertag-completion-setup ()
   "Setup completion for org-supertag."
-  (message "DEBUG: supertag-completion-setup called in buffer %s" (buffer-name))
-  (message "DEBUG: completion-at-point-functions before: %S" completion-at-point-functions)
   (add-hook 'completion-at-point-functions
-            #'supertag-completion-at-point nil t)
-  (message "DEBUG: completion-at-point-functions after: %S" completion-at-point-functions))
+            #'supertag-completion-at-point nil t))
 
 ;;;###autoload
 (define-minor-mode supertag-ui-completion-mode
   "Enhanced tag completion for org-supertag."
   :lighter " ST-C"
-  (message "DEBUG: supertag-ui-completion-mode toggled to %s in buffer %s"
-           supertag-ui-completion-mode (buffer-name))
   (if supertag-ui-completion-mode
       (supertag-completion-setup)
-    (progn
-      (message "DEBUG: Removing completion hook")
-      (remove-hook 'completion-at-point-functions
-                   #'supertag-completion-at-point t))))
+    (remove-hook 'completion-at-point-functions
+                 #'supertag-completion-at-point t)))
 
 ;;;###autoload
 (defun supertag-ui-completion-enable ()
