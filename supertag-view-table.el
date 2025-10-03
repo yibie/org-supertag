@@ -655,10 +655,58 @@ Uses improved styling from old version."
    ((equal value "false") "No")
    (t (format "%s" value))))
 
+(defun supertag-view-table--wrap-text (text width)
+  "Wrap TEXT (possibly propertized) into segments within WIDTH columns."
+  (let* ((string (cond
+                  ((null text) "")
+                  ((stringp text) text)
+                  (t (format "%s" text))))
+         (len (length string))
+         (pos 0)
+         (lines '()))
+    (while (< pos len)
+      (if (eq (aref string pos) ?\n)
+          (progn
+            (push "" lines)
+            (setq pos (1+ pos)))
+        (let* ((newline-pos (cl-position ?\n string :start pos))
+               (break-pos (if (and newline-pos (<= (- newline-pos pos) width))
+                              newline-pos
+                            (supertag-view-table--wrap-find-break
+                             string pos width (or newline-pos len)))))
+          (push (substring string pos (or break-pos len)) lines)
+          (setq pos (or break-pos len))
+          (when (and (< pos len) (eq (aref string pos) ?\n))
+            (setq pos (1+ pos))))))
+    (setq lines (nreverse lines))
+    (when (null lines)
+      (setq lines (list "")))
+    lines))
+
+(defun supertag-view-table--wrap-find-break (string start width limit)
+  "Find a break position within STRING starting at START.
+WIDTH is the desired column width. LIMIT bounds the search (e.g., newline)."
+  (let ((pos start)
+        (col 0)
+        (last-break nil))
+    (catch 'wrap-break
+      (while (< pos limit)
+        (let* ((char (aref string pos))
+               (char-width (or (char-width char) 1)))
+          (when (> (+ col char-width) width)
+            (throw 'wrap-break (or last-break (if (> pos start)
+                                                 pos
+                                               (min limit (1+ pos))))))
+          (setq col (+ col char-width))
+          (setq pos (1+ pos))
+          (when (or (eq char ?\s) (eq char ?-))
+            (setq last-break pos))))
+      pos)))
+
 (defun supertag-view-table--format-cell (value width)
   "Format VALUE for a cell with character-WIDTH.
 If VALUE is an image path, it's sliced into multiple strings.
-If VALUE is text, keep it on a single truncated line so horizontal scrolling can reveal hidden content."
+If VALUE is text, wrap it into multiple lines within WIDTH and apply org-mode markup rendering."
   (if (supertag-view-table--is-image-path-p value)
       (with-temp-buffer
         (let ((lines
@@ -674,19 +722,23 @@ If VALUE is text, keep it on a single truncated line so horizontal scrolling can
                  (list (format "[Image: %s]" (file-name-nondirectory value))))))
           ;; Enforce exact line height on every slice for perfect alignment
           (mapcar (lambda (line) (propertize line 'line-height (supertag-view-table--get-exact-line-height))) lines)))
-    ;; For text keep a single truncated display line (no wrapping)
+    ;; For text, wrap into multiple lines and apply org-mode markup
     (let* ((text (cond
                   ((stringp value) value)
                   ((null value) "")
                   (t (format "%s" value))))
            (flattened (replace-regexp-in-string "\n" " " text))
-           (display-line (truncate-string-to-width flattened width 0 nil))
-           (final-line (if (string-empty-p display-line) " " display-line))
-           (copy (copy-sequence final-line)))
-      (add-text-properties 0 (length copy)
-                            `(line-height ,(supertag-view-table--get-exact-line-height))
-                            copy)
-      (list copy))))
+           ;; Apply org-mode markup rendering before wrapping
+           (propertized (supertag-view-table--propertize-org-markup flattened))
+           (wrapped-lines (supertag-view-table--wrap-text propertized width)))
+      (mapcar (lambda (line)
+                (let* ((padded (supertag-view-table--pad-string line width))
+                       (copy (copy-sequence padded)))
+                  (add-text-properties 0 (length copy)
+                                       `(line-height ,(supertag-view-table--get-exact-line-height))
+                                       copy)
+                  copy))
+              wrapped-lines))))
 
 (defun supertag-view-table--get-exact-line-height ()
   "Get exact line height in pixels, including frame-level line-spacing."

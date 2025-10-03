@@ -1,294 +1,247 @@
-;;; supertag-ui-completion.el --- Enhanced tag completion for org-supertag -*- lexical-binding: t; -*-
+;;; supertag-ui-completion.el --- Universal and robust completion for org-supertag -*- lexical-binding: t; -*-
 
-;; Enhanced, robust tag completion system for org-supertag.
-;; Features: intelligent caching, optimized triggers, robust boundary detection.
-
-;;; Code:
+;; This file provides a completion-at-point function (CAPF) for org-supertag.
+;; It uses the classic, most compatible CAPF design pattern to ensure it works
+;; correctly across all completion UIs, including company-mode and corfu.
+;;
+;; The core principle is to return a list of PURE, PROPERTIZED STRINGS,
+;; and use a SINGLE :exit-function that inspects the properties of the
+;; selected string to decide on the action. This is the "lowest common
+;; denominator" approach that all completion frameworks understand.
 
 (require 'org)
 (require 'org-id nil t)
 (require 'cl-lib)
 
-;; Optional requires
+;; Optional requires for new supertag architecture
 (require 'supertag-ops-tag nil t)
 (require 'supertag-ops-node nil t)
 (require 'supertag-services-query nil t)
-(require 'supertag-services-sync nil t)
 
-;;; --- Caching System ---
+;;;----------------------------------------------------------------------
+;;; Customization
+;;;----------------------------------------------------------------------
 
-(defvar supertag-completion--cache
-  (make-hash-table :test 'eq)
-  "Cache for completion candidates by type.")
+(defgroup supertag-completion nil
+  "Completion settings for org-supertag."
+  :group 'org-supertag
+  :prefix "supertag-completion-")
 
-(defvar supertag-completion--cache-timestamp
-  (make-hash-table :test 'eq)
-  "Timestamp for cache entries.")
+(defcustom supertag-completion-auto-enable t
+  "Whether to automatically enable tag completion in org-mode buffers.
+When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
+  :type 'boolean
+  :group 'supertag-completion)
 
-(defvar supertag-completion--cache-ttl 30
-  "Cache time-to-live in seconds.")
+;;;----------------------------------------------------------------------
+;;; Helper Functions
+;;;----------------------------------------------------------------------
 
-(defun supertag-completion--cache-valid-p (type)
-  "Check if cache for TYPE is still valid."
-  (when-let ((timestamp (gethash type supertag-completion--cache-timestamp)))
-    (< (float-time (time-subtract (current-time) timestamp)) 
-       supertag-completion--cache-ttl)))
-
-(defun supertag-completion--get-cached-candidates (type)
-  "Get cached candidates for TYPE, refreshing if needed."
-  (unless (supertag-completion--cache-valid-p type)
-    (supertag-completion--refresh-cache type))
-  (gethash type supertag-completion--cache '()))
-
-(defun supertag-completion--refresh-cache (type)
-  "Refresh cache for TYPE with fresh data."
-  (let ((candidates (supertag-completion--fetch-candidates type)))
-    (puthash type candidates supertag-completion--cache)
-    (puthash type (current-time) supertag-completion--cache-timestamp)
-    candidates))
-
-(defun supertag-completion--fetch-candidates (type)
-  "Fetch fresh candidates for TYPE from the store using multiple strategies."
+(defun supertag-completion--get-all-tags ()
+  "Get all available tag names from the supertag store."
   (condition-case err
-      (pcase type
-        (:tag
-         ;; Strategy 1: Try supertag-query first
-         (or (when (fboundp 'supertag-query)
-               (let ((result (supertag-query '(:tags))))
-                 (mapcar #'car result)))
-             ;; Strategy 2: Scan all nodes and collect unique tags
-             (supertag-completion--get-tags-from-nodes)
-             ;; Strategy 3: Provide helpful fallback suggestions
-             '("project" "task" "idea" "note" "todo" "important" "urgent" "work" "personal")))
-        (:node
-         ;; Strategy 1: Try supertag-query first
-         (or (when (fboundp 'supertag-query)
-               (let ((result (supertag-query '(:nodes))))
-                 (delq nil (mapcar (lambda (node-pair)
-                                    (plist-get (cdr node-pair) :title))
-                                   result))))
-             ;; Strategy 2: Direct store access
-             (supertag-completion--get-nodes-direct)
-             ;; Strategy 3: Provide fallback
-             '()))
-        (_ '()))
+      (or (when (fboundp 'supertag-query)
+            (let ((result (supertag-query '(:tags))))
+              (mapcar #'car result)))
+          ;; Fallback: scan nodes directly
+          (let ((nodes-ht (supertag-get '(:nodes)))
+                (all-tags '()))
+            (when (hash-table-p nodes-ht)
+              (maphash (lambda (_node-id node-data)
+                         (when-let ((tags (plist-get node-data :tags)))
+                           (setq all-tags (append tags all-tags))))
+                       nodes-ht))
+            (delete-dups all-tags)))
     (error
-     (message "supertag-completion: Failed to fetch %s candidates: %S" type err)
+     (message "supertag-completion: Failed to get tags: %S" err)
      '())))
 
-(defun supertag-completion--get-tags-from-nodes ()
-  "Extract all unique tag names from nodes by scanning the store."
-  (let ((nodes-ht (supertag-get '(:nodes)))
-        (all-tags '()))
-    (when (hash-table-p nodes-ht)
-      (maphash (lambda (_node-id node-data)
-                 (when-let ((tags (plist-get node-data :tags)))
-                   (setq all-tags (append tags all-tags))))
-               nodes-ht))
-    (delete-dups all-tags)))
+(defun supertag-completion--get-node-tags (node-id)
+  "Get tags currently applied to NODE-ID."
+  (when-let ((node-data (supertag-node-get node-id)))
+    (plist-get node-data :tags)))
 
-(defun supertag-completion--get-nodes-direct ()
-  "Get all node titles by direct store access."
-  (let ((nodes-ht (supertag-get '(:nodes)))
-        (all-titles '()))
-    (when (hash-table-p nodes-ht)
-      (maphash (lambda (_node-id node-data)
-                 (when-let ((title (plist-get node-data :title)))
-                   (push title all-titles)))
-               nodes-ht))
-    all-titles))
-
-(defun supertag-completion--invalidate-cache (&optional type)
-  "Invalidate cache for TYPE, or all types if TYPE is nil."
-  (if type
-      (progn
-        (remhash type supertag-completion--cache)
-        (remhash type supertag-completion--cache-timestamp))
-    (clrhash supertag-completion--cache)
-    (clrhash supertag-completion--cache-timestamp)))
-
-;;; --- Robust Boundary Detection ---
-
-(defun supertag-completion--tag-bounds ()
-  "Return (START . END) for tag name after `#`, with robust detection."
+(defun supertag-completion--get-prefix-bounds ()
+  "Find the bounds of a tag prefix at point, if any.
+Returns (START . END) where START is right after the # character."
   (save-excursion
     (let ((end (point))
           (start nil))
-      ;; Look backward for # character
-      (when (re-search-backward "#\\([a-zA-Z0-9_-]*\\)" (line-beginning-position) t)
-        (let ((hash-pos (match-beginning 0))
-              (tag-start (match-beginning 1))
-              (tag-end (match-end 1)))
-          ;; Ensure we're still within the tag being typed
-          (when (and (<= hash-pos end) (<= end tag-end))
-            (setq start (if (= end tag-end) tag-start (1+ hash-pos)))
-            (cons start end)))))))
-
-(defun supertag-completion--node-bounds ()
-  "Return (START . END) for node link after `[[`, with robust detection."
-  (save-excursion
-    (let ((end (point)))
-      ;; Look for [[ pattern before current point
-      (when (re-search-backward "\\[\\[\\([^]]*\\)" (line-beginning-position) t)
-        (let ((bracket-pos (match-beginning 0))
-              (content-start (match-beginning 1))
-              (content-end (match-end 1)))
-          ;; Ensure we're still within the link being typed and no closing ]]
-          (when (and (<= bracket-pos end) 
-                     (<= end content-end)
-                     (not (re-search-forward "\\]\\]" end t)))
-            (cons content-start end)))))))
-
-;;; --- Smart Triggering ---
-
-(defvar supertag-completion--last-trigger-time 0
-  "Timestamp of last completion trigger.")
-
-(defvar supertag-completion--trigger-debounce 0.1
-  "Minimum seconds between completion triggers.")
-
-(defun supertag-completion--should-trigger-p ()
-  "Check if completion should be triggered based on context and timing."
-  (and (derived-mode-p 'org-mode)
-       (let ((now (float-time)))
-         (when (> (- now supertag-completion--last-trigger-time) 
-                  supertag-completion--trigger-debounce)
-           (setq supertag-completion--last-trigger-time now)
-           t))))
-
-(defun supertag-completion--smart-trigger ()
-  "Smart completion trigger with debouncing and context awareness."
-  (when (supertag-completion--should-trigger-p)
-    (let ((char-before (char-before))
-          (context-valid nil))
       
-      ;; Check for tag completion context
-      (when (eq char-before ?#)
-        (setq context-valid t))
+      ;; Show context around point
+      (message "DEBUG bounds: point=%d, char-at-point=%S, char-before-point=%S"
+               (point)
+               (char-after (point))
+               (char-before (point)))
+      (message "DEBUG bounds: text around point: '%s'"
+               (buffer-substring-no-properties
+                (max (point-min) (- (point) 10))
+                (min (point-max) (+ (point) 10))))
       
-      ;; Check for node completion context  
-      (when (and (eq char-before ?\[)
-                 (eq (char-before (1- (point))) ?\[))
-        (setq context-valid t))
+      ;; Skip back over valid tag characters
+      (skip-chars-backward "a-zA-Z0-9_-")
+      (setq start (point))
       
-      ;; Trigger completion if context is valid
-      (when context-valid
-        (completion-at-point)))))
+      (message "DEBUG bounds: end=%d, after-skip=%d, char-before-start=%S"
+               end start (char-before start))
+      
+      ;; Check if we're right after a # character
+      (when (and (> start (point-min))
+                 (eq (char-before start) ?#))
+        (message "DEBUG: Found tag bounds: (%d . %d), prefix='%s'"
+                 start end (buffer-substring-no-properties start end))
+        (cons start end)))))
 
-;;; --- Enhanced CAPF ---
+(defun supertag-completion--get-completion-table (prefix)
+  "Return a completion table function that handles both existing tags and new tag creation."
+  (let* ((safe-prefix (or prefix ""))
+         (node-id (org-id-get))
+         (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
+         (all-tags (supertag-completion--get-all-tags))
+         (available-tags (if current-tags
+                             (seq-remove (lambda (tag) (member tag current-tags)) all-tags)
+                           all-tags))
+         (matching-tags (all-completions safe-prefix available-tags))
+         (new-tag-candidate (propertize "[Create New Tag]" 'is-new-tag t))
+         (should-add-new (and (not (string-empty-p safe-prefix))
+                             (not (member safe-prefix matching-tags))
+                             (not (member safe-prefix current-tags)))))
+    (message "DEBUG table: prefix='%s', matching=%d, should-add-new=%s"
+             safe-prefix (length matching-tags) should-add-new)
+    
+    ;; Return all matching tags, plus [Create New Tag] if applicable
+    (if should-add-new
+        (cons new-tag-candidate matching-tags)
+      matching-tags)))
 
-(defun supertag-completion--capf ()
-  "Enhanced completion-at-point function with caching and error handling."
-  (or
-   ;; Node completion
-   (when-let ((bounds (supertag-completion--node-bounds)))
-     (list (car bounds) (cdr bounds)
-           (supertag-completion--get-cached-candidates :node)
-           ;; Use a custom action function to override default insertion.
-           :action-function #'supertag-completion--node-action-function
-           :category 'supertag-node
-           :annotation-function (lambda (_) " [node]")))
-   
-   ;; Tag completion
-   (when-let ((bounds (supertag-completion--tag-bounds)))
-     (list (car bounds) (cdr bounds)
-           (supertag-completion--get-cached-candidates :tag)
-           :exit-function #'supertag-completion--tag-exit-function
-           :category 'supertag-tag
-           :annotation-function (lambda (_) " [tag]")))))
+(defun supertag-completion--post-completion-action (selected-string original-prefix)
+  "The single, unified post-completion action.
+It handles both existing and new tags correctly by inspecting the
+completion candidate and correcting the buffer if necessary."
+  (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
+         ;; For new tags, the REAL tag name is the prefix the user typed.
+         ;; For existing tags, it's the candidate they selected.
+         (clean-tag-string (if is-new original-prefix (substring-no-properties selected-string)))
+         (tag-name clean-tag-string)
+         (node-id (org-id-get-create)))
 
-;;; --- Exit Functions ---
+    (when (and tag-name (not (string-empty-p tag-name)) node-id)
 
-(defun supertag-completion--get-node-id-at-point ()
-  "Find the node ID for the current context, with error handling."
-  (condition-case err
-      (save-excursion
-        (unless (org-at-heading-p)
-          (org-back-to-heading t))
-        (unless (org-at-heading-p)
-          (user-error "Not within an Org heading's scope"))
-        (org-id-get-create))
-    (error
-     (message "supertag-completion: Failed to get node ID: %S" err)
-     nil)))
+      ;; --- CRITICAL FIX ---
+      ;; If this is a new tag, the completion UI has inserted the placeholder
+      ;; text "[Create New Tag]". We MUST delete that and insert the actual
+      ;; tag name that the user typed (`original-prefix`).
+      (when is-new
+        (delete-region (- (point) (length selected-string)) (point))
+        (insert original-prefix))
 
-(defun supertag-completion--tag-exit-function (candidate _status)
-  "Enhanced tag exit function with proper error handling."
-  (condition-case err
-      (when-let ((node-id (supertag-completion--get-node-id-at-point)))
-        ;; Ensure the node exists in the database before adding a tag.
-        ;; This handles the case where completion is used on a plain headline.
-        (unless (supertag-node-get node-id)
-          (when (fboundp 'supertag-node-sync-at-point)
-            (supertag-node-sync-at-point)))
-        (when (fboundp 'supertag-ops-add-tag-to-node)
-          (let ((result (supertag-ops-add-tag-to-node node-id candidate :create-if-needed t)))
-            (when result
-              (message "Tag '%s' added to node %s" candidate node-id))))
-        ;; Add space after tag for better UX
-        (unless (looking-at-p "\\s-")
-          (insert " "))
-        ;; Invalidate cache since we added a new tag relationship
-        (supertag-completion--invalidate-cache :tag))
-    (error
-     (message "supertag-completion: Tag completion error: %S" err))))
+      ;; Ensure the node exists in the database
+      (unless (supertag-node-get node-id)
+        (when (fboundp 'supertag-node-sync-at-point)
+          (supertag-node-sync-at-point)))
 
-(defun supertag-completion--node-action-function (candidate)
-  "Custom action function for node completion.
-Replaces the completion prefix with a full org-id link."
-  (let ((bounds (supertag-completion--node-bounds)))
-    (when bounds
-      (let ((start (car bounds))
-            (end (cdr bounds)))
-        ;; 1. Delete the text being completed (e.g., "my-no")
-        (delete-region start end)
-        ;; 2. Also delete the `[[` prefix
-        (save-excursion
-          (goto-char start)
-          (when (re-search-backward "\\[\\[" (line-beginning-position) t)
-            (delete-region (match-beginning 0) start)))
+      ;; Add the tag to the node (creates tag if needed)
+      (when (fboundp 'supertag-ops-add-tag-to-node)
+        (let ((result (supertag-ops-add-tag-to-node node-id tag-name :create-if-needed t)))
+          (when result
+            (if is-new
+                (message "New tag '%s' created and added to node %s" tag-name node-id)
+              (message "Tag '%s' added to node %s" tag-name node-id)))))
+
+      ;; Finally, add the trailing space to delimit the tag.
+      (insert " "))))
+
+;;;----------------------------------------------------------------------
+;;; Main CAPF Entry Point
+;;;----------------------------------------------------------------------
+
+(defun supertag-completion-at-point ()
+  "Main `completion-at-point` function using the classic, compatible API."
+  (message "DEBUG CAPF: supertag-completion-at-point called at point=%d" (point))
+  (message "DEBUG CAPF: About to call get-prefix-bounds")
+  (let ((bounds (supertag-completion--get-prefix-bounds)))
+    (message "DEBUG CAPF: bounds=%S" bounds)
+    (if (not bounds)
+        (progn
+          (message "DEBUG CAPF: No bounds found, returning nil")
+          nil)
+      (let* ((start (car bounds))
+             (end (cdr bounds))
+             (prefix (buffer-substring-no-properties start end)))
+        (message "DEBUG CAPF: prefix='%s', start=%d, end=%d" prefix start end)
         
-        ;; 3. Find the node-id for the selected candidate
-        (let* ((nodes (supertag-query '(:nodes)))
-               (node-pair (cl-find candidate nodes
-                                   :key (lambda (p) (plist-get (cdr p) :title))
-                                   :test #'string=))
-               (node-id (car node-pair))
-               (from-node-id (supertag-completion--get-node-id-at-point)))
-          
-          (if node-id
-              (progn
-                ;; 4. Insert the full link
-                (insert (format "[[id:%s][%s]]" node-id candidate))
-                
-                ;; 5. Add relation automatically if inside a node
-                (when (and from-node-id node-id (fboundp 'supertag-ops-add-relation))
-                  (supertag-ops-add-relation from-node-id node-id '("references"))
-                  (message "Reference added from %s to %s" from-node-id node-id)))
-            ;; Fallback: if node not found (should be rare), just insert candidate
-            (insert candidate)
-            (message "supertag-completion: Could not find node ID for '%s'" candidate)))))))
+        (list start end
+              ;; 1. The completion table. Returns a custom completion function
+              ;;    that always includes [Create New Tag] in results
+              (lambda (str pred action)
+                (message "DEBUG: completion table called with action=%S, str='%s'" action str)
+                (cond
+                 ;; Return metadata
+                 ((eq action 'metadata)
+                  '(metadata (category . supertag-tag)
+                            (annotation-function . (lambda (cand)
+                                                     (if (get-text-property 0 'is-new-tag cand)
+                                                         " [new]"
+                                                       " [tag]")))))
+                 ;; Return all candidates (for display)
+                 ((eq action t)
+                  (let ((table (supertag-completion--get-completion-table prefix)))
+                    (message "DEBUG: action=t, returning %d candidates" (length table))
+                    table))
+                 ;; Test for exact match
+                 ((eq action 'lambda)
+                  (message "DEBUG: action=lambda, testing str='%s'" str)
+                  (member str (supertag-completion--get-completion-table prefix)))
+                 ;; Try completion (return common prefix or t if unique)
+                 ((null action)
+                  (message "DEBUG: action=nil (try-completion)")
+                  (try-completion str (supertag-completion--get-completion-table prefix) pred))
+                 ;; Boundaries
+                 (t
+                  (message "DEBUG: action=%S (other)" action)
+                  (complete-with-action action
+                                       (supertag-completion--get-completion-table prefix)
+                                       str pred))))
 
-;;; --- Minor Mode ---
+              ;; 2. A SINGLE, UNIFIED :exit-function. This is also
+              ;;    universally understood by all completion frameworks.
+              :exit-function
+              (lambda (selected-string status)
+                (message "DEBUG: exit-function called with status=%S, selected='%s'" status selected-string)
+                ;; The condition now accepts 'finished, 'exact', and 'sole' to be
+                ;; compatible with various completion UIs like Corfu.
+                (when (memq status '(finished exact sole))
+                  (supertag-completion--post-completion-action selected-string prefix))))))))
+
+;;;----------------------------------------------------------------------
+;;; Setup
+;;;----------------------------------------------------------------------
+
+;;;###autoload
+(defun supertag-completion-setup ()
+  "Setup completion for org-supertag."
+  (message "DEBUG: supertag-completion-setup called in buffer %s" (buffer-name))
+  (message "DEBUG: completion-at-point-functions before: %S" completion-at-point-functions)
+  (add-hook 'completion-at-point-functions
+            #'supertag-completion-at-point nil t)
+  (message "DEBUG: completion-at-point-functions after: %S" completion-at-point-functions))
 
 ;;;###autoload
 (define-minor-mode supertag-ui-completion-mode
-  "Enhanced tag completion for org-supertag with intelligent caching."
-  :lighter " ST-C+"
+  "Enhanced tag completion for org-supertag."
+  :lighter " ST-C"
+  (message "DEBUG: supertag-ui-completion-mode toggled to %s in buffer %s"
+           supertag-ui-completion-mode (buffer-name))
   (if supertag-ui-completion-mode
-      (progn
-        (add-hook 'completion-at-point-functions #'supertag-completion--capf nil t)
-        (add-hook 'post-self-insert-hook #'supertag-completion--smart-trigger nil t)
-        ;; Initialize cache
-        (supertag-completion--invalidate-cache))
-    (remove-hook 'completion-at-point-functions #'supertag-completion--capf t)
-    (remove-hook 'post-self-insert-hook #'supertag-completion--smart-trigger t)
-    ;; Clear cache
-    (supertag-completion--invalidate-cache)))
+      (supertag-completion-setup)
+    (progn
+      (message "DEBUG: Removing completion hook")
+      (remove-hook 'completion-at-point-functions
+                   #'supertag-completion-at-point t))))
 
 ;;;###autoload
 (defun supertag-ui-completion-enable ()
-  "Enable enhanced tag completion in org-mode buffers."
+  "Enable tag completion in org-mode buffers."
   (when (derived-mode-p 'org-mode)
     (supertag-ui-completion-mode 1)))
 
@@ -297,28 +250,11 @@ Replaces the completion prefix with a full org-id link."
   supertag-ui-completion-mode
   supertag-ui-completion-enable)
 
-;;; --- Manual Cache Management ---
-
+;; Auto-enable if customization variable is set
 ;;;###autoload
-(defun supertag-completion-refresh-cache ()
-  "Manually refresh completion cache."
-  (interactive)
-  (supertag-completion--invalidate-cache)
-  (message "supertag-completion: Cache refreshed"))
-
-;;;###autoload
-(defun supertag-completion-show-cache-stats ()
-  "Show completion cache statistics."
-  (interactive)
-  (let ((tag-count (length (gethash :tag supertag-completion--cache '())))
-        (node-count (length (gethash :node supertag-completion--cache '())))
-        (tag-age (when-let ((ts (gethash :tag supertag-completion--cache-timestamp)))
-                   (float-time (time-subtract (current-time) ts))))
-        (node-age (when-let ((ts (gethash :node supertag-completion--cache-timestamp)))
-                    (float-time (time-subtract (current-time) ts)))))
-    (message "Cache: %d tags (%.1fs old), %d nodes (%.1fs old)"
-             tag-count (or tag-age 0)
-             node-count (or node-age 0))))
+(when (and (boundp 'supertag-completion-auto-enable)
+           supertag-completion-auto-enable)
+  (add-hook 'org-mode-hook #'supertag-ui-completion-mode))
 
 (provide 'supertag-ui-completion)
 
