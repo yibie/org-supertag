@@ -38,9 +38,10 @@ Uses find-file-noselect with minimal side effects."
                                   (after-find-file nil))       ; Disable after-find-file
                               (find-file-noselect file-path))))
         (with-current-buffer target-buffer
-          (save-excursion
-            (goto-char (point-min))
-            (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
+          (when (derived-mode-p 'org-mode)
+            (save-excursion
+              (goto-char (point-min))
+              (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
               ;; Find the end of the properties drawer
               (let ((props-end (save-excursion
                                  (when (re-search-forward "^[ \t]*:END:[ \t]*$" nil t)
@@ -60,7 +61,7 @@ Uses find-file-noselect with minimal side effects."
                       (insert new-content)
                       (unless (string-suffix-p "\n" new-content)
                         (insert "\n")))
-                    (save-buffer)))))))))))
+                    (save-buffer))))))))))))
 
 (defun supertag-embed-sync-modified-blocks ()
   "Sync all modified embed blocks in current buffer back to their sources.
