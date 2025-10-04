@@ -57,8 +57,9 @@ This is a safe wrapper around org-in-src-block-p."
         (org-in-src-block-p))
        ;; Fallback implementation
        (t
-        (let ((element (org-element-at-point)))
-          (memq (org-element-type element) '(src-block example-block))))))))
+        (when (derived-mode-p 'org-mode)
+          (let ((element (org-element-at-point)))
+            (memq (org-element-type element) '(src-block example-block)))))))))
 
 (defun supertag-view-helper--at-table-p (&optional pos)
   "Check if point (or POS) is at a table.
@@ -72,8 +73,9 @@ This is a safe wrapper around org-at-table-p."
         (org-at-table-p))
        ;; Fallback implementation
        (t
-        (let ((element (org-element-at-point)))
-          (eq (org-element-type element) 'table)))))))
+        (when (derived-mode-p 'org-mode)
+          (let ((element (org-element-at-point)))
+            (eq (org-element-type element) 'table)))))))
 
 (defun supertag-view-helper--at-commented-p (&optional pos)
   "Check if point (or POS) is at a commented line.
@@ -639,30 +641,31 @@ Returns the position where tags should be inserted."
 
 (defun supertag-view-helper--find-drawer-end ()
   "Find the end position of the current node's drawer."
-  (save-excursion
-    (org-back-to-heading t)
-    (forward-line 1)
-    (let ((end-pos nil)
-          (section-end (save-excursion
-                        (org-end-of-subtree t t)
-                        (point))))
-      ;; Find the end position of the last drawer
-      (while (and (< (point) section-end)
-                 (not (org-at-heading-p)))
-        (let ((element (org-element-at-point)))
-          (cond
-           ;; Property drawer
-           ((eq (org-element-type element) 'property-drawer)
-            (setq end-pos (org-element-property :end element))
-            (goto-char end-pos))
-           ;; Other drawers
-           ((eq (org-element-type element) 'drawer)
-            (setq end-pos (org-element-property :end element))
-            (goto-char end-pos))
-           ;; Other elements, continue forward
-           (t
-            (forward-line 1)))))
-      end-pos)))
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (org-back-to-heading t)
+      (forward-line 1)
+      (let ((end-pos nil)
+            (section-end (save-excursion
+                          (org-end-of-subtree t t)
+                          (point))))
+        ;; Find the end position of the last drawer
+        (while (and (< (point) section-end)
+                   (not (org-at-heading-p)))
+          (let ((element (org-element-at-point)))
+            (cond
+             ;; Property drawer
+             ((eq (org-element-type element) 'property-drawer)
+              (setq end-pos (org-element-property :end element))
+              (goto-char end-pos))
+             ;; Other drawers
+             ((eq (org-element-type element) 'drawer)
+              (setq end-pos (org-element-property :end element))
+              (goto-char end-pos))
+             ;; Other elements, continue forward
+             (t
+              (forward-line 1)))))
+        end-pos))))
 
 (defun supertag-view-helper--find-existing-tag-line ()
   "Find the position of an existing tag line in the current node."
