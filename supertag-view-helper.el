@@ -75,7 +75,7 @@ This is a safe wrapper around org-at-table-p."
        (t
         (when (derived-mode-p 'org-mode)
           (let ((element (org-element-at-point)))
-            (eq (org-element-type element) 'table)))))))
+            (eq (org-element-type element) 'table))))))))
 
 (defun supertag-view-helper--at-commented-p (&optional pos)
   "Check if point (or POS) is at a commented line.
