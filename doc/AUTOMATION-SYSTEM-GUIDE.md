@@ -301,6 +301,7 @@ Each action is a `plist` in the format `(:action :action-type :params (...))`.
 | Action Type (`:action-type`) | `:params` Parameters | Description |
 | :--- | :--- | :--- |
 | **`:update-property`** | `(:property :prop-name :value new-value)` | Update or add a property to the node. `new-value` can be a direct value or a Lisp expression that returns a value. |
+| **`:update-todo-state`** | `(:state "new-state")` | Update the TODO state of the current node (e.g., to "DONE", "TODO"). This directly changes the headline's keyword, unlike `:update-property`. |
 | **`:add-tag`** | `(:tag "tag-name")` | Add a new tag to the current node. |
 | **`:remove-tag`** | `(:tag "tag-name")` | Remove a tag from the current node. |
 | **`:call-function`** | `(:function #'your-function)` | Call an Emacs Lisp function you've defined yourself. This is the "ultimate weapon" for implementing complex logic. The function will receive `(node-id context)` as two parameters. |

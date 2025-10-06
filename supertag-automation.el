@@ -317,7 +317,10 @@ CONTEXT provides execution context"
   (pcase action-type
     (:update-property
      (supertag-automation-action-update-property node-id params))
-    
+
+    (:update-todo-state
+     (supertag-automation-action-update-todo-state node-id params))
+        
     (:call-function
      (supertag-automation-action-call-function node-id params context))
     
@@ -328,13 +331,31 @@ CONTEXT provides execution context"
   "Update an Org-mode property on the node.
 This updates native Org properties like :SCHEDULED:, :DEADLINE:, etc."
   (let ((property (plist-get params :property))
-        (value (plist-get params :value)))
+       (value (plist-get params :value))
+       (todo (if (and (string= (symbol-name property) "status") value)
+                  (cond
+                    ((string= value "DONE") "DONE")
+                    ((string= value "TODO") "TODO")
+                    (t "TODO")))))
     (when (and property value)
       (supertag-update (list :nodes node-id)
                        (lambda (node)
                          (let ((props (or (plist-get node :properties) '())))
                            (plist-put node :properties
                                      (plist-put props property value))))))))
+
+(defun supertag-automation-action-update-todo-state (node-id params)
+  "Update the TODO state of a node.
+PARAMS should contain :state with the new TODO keyword (e.g., \"DONE\")."
+  (let* ((new-state (plist-get params :state))
+         (node-info (supertag-get `(:nodes ,node-id))))
+    (when (and new-state node-info)
+      (let ((marker (plist-get node-info :marker)))
+        (when (and marker (marker-buffer marker))
+          (with-current-buffer (marker-buffer marker)
+            (goto-char marker)
+            (when (org-at-heading-p)
+              (org-todo new-state))))))))
 
 (defun supertag-automation-action-call-function (node-id params context)
   "Call a custom function with node context."
