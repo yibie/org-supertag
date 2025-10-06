@@ -57,7 +57,7 @@ This is a safe wrapper around org-in-src-block-p."
         (org-in-src-block-p))
        ;; Fallback implementation
        (t
-        (when (derived-mode-p 'org-mode)
+        (when (eq major-mode 'org-mode)
           (let ((element (org-element-at-point)))
             (memq (org-element-type element) '(src-block example-block)))))))))
 
@@ -73,7 +73,7 @@ This is a safe wrapper around org-at-table-p."
         (org-at-table-p))
        ;; Fallback implementation
        (t
-        (when (derived-mode-p 'org-mode)
+        (when (eq major-mode 'org-mode)
           (let ((element (org-element-at-point)))
             (eq (org-element-type element) 'table))))))))
 
@@ -641,7 +641,7 @@ Returns the position where tags should be inserted."
 
 (defun supertag-view-helper--find-drawer-end ()
   "Find the end position of the current node's drawer."
-  (when (derived-mode-p 'org-mode)
+  (when (eq major-mode 'org-mode)
     (save-excursion
       (org-back-to-heading t)
       (forward-line 1)
@@ -760,7 +760,7 @@ TAG-NAME is the tag name to remove."
 (defun supertag-view-helper-get-tag-at-point ()
   "Get the inline supertag name at point.
 Returns the tag name (without #) if found, nil otherwise."
-  (when (derived-mode-p 'org-mode)
+  (when (eq major-mode 'org-mode)
     (save-excursion
       (let* ((tag-re (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
              (start (point)))
