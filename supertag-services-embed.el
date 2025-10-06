@@ -38,7 +38,7 @@ Uses find-file-noselect with minimal side effects."
                                   (after-find-file nil))       ; Disable after-find-file
                               (find-file-noselect file-path))))
         (with-current-buffer target-buffer
-          (when (derived-mode-p 'org-mode)
+          (when (eq major-mode 'org-mode)
             (save-excursion
               (goto-char (point-min))
               (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
