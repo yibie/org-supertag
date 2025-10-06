@@ -301,6 +301,7 @@ graph LR
 | 动作类型 (`:action-type`) | `:params` 参数 | 描述 |
 | :--- | :--- | :--- |
 | **`:update-property`** | `(:property :prop-name :value new-value)` | 更新或添加节点的某个属性。`new-value` 可以是直接的值，也可以是返回值的Lisp表达式。 |
+| **`:update-todo-state`** | `(:state "new-state")` | 更新当前节点的 TODO 状态 (例如 "DONE", "TODO")。这会直接修改标题的关键字，与 `:update-property` 不同。 |
 | **`:add-tag`** | `(:tag "tag-name")` | 为当前节点添加一个新标签。 |
 | **`:remove-tag`** | `(:tag "tag-name")` | 从当前节点移除一个标签。 |
 | **`:call-function`** | `(:function #'your-function)` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context)` 两个参数。 |
