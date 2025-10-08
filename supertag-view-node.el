@@ -19,6 +19,22 @@
 (defvar-local supertag-view-node--current-node-id nil
   "The ID of the node currently displayed in the view buffer.")
 
+(defcustom supertag-view-node-strip-todo-keywords t
+  "Whether to strip TODO keywords from node titles in view buffers.
+If non-nil, TODO keywords will be removed from titles.
+If nil, titles will be displayed as-is with TODO keywords."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom supertag-view-node-todo-keywords
+  '("TODO" "DONE" "NEXT" "WAITING" "HOLD" "CANCELLED" "CANCELED" 
+    "STARTED" "DELEGATED" "DEFERRED" "SOMEDAY")
+  "List of TODO keywords to strip from node titles.
+Only used when `supertag-view-node-strip-todo-keywords' is non-nil.
+You can customize this list to match your org-mode TODO keywords."
+  :type '(repeat string)
+  :group 'org-supertag)
+
 ;;; --- Visual Style Variables ---
 
 ;; These functions are now available in supertag-view-helper.el
@@ -128,7 +144,47 @@ Key Bindings:
           " %[%p%] "))
   ;; Line highlighting disabled to prevent cursor movement flickering
   ;; (supertag-view-helper-enable-line-highlighting)
-  )
+  
+  ;; Subscribe to store changes for auto-refresh
+  (supertag-view-node--subscribe-to-events))
+
+;;; --- Event Subscription ---
+
+(defun supertag-view-node--subscribe-to-events ()
+  "Subscribe to store events for auto-refresh.
+This implements the correct separation: data layer emits events, UI subscribes."
+  (when (fboundp 'supertag-subscribe)
+    ;; Subscribe to store changes
+    (supertag-subscribe :store-changed #'supertag-view-node--handle-store-change)))
+
+(defun supertag-view-node--handle-store-change (path old-value new-value)
+  "Handle store change events and refresh if relevant.
+PATH is the change path, e.g., (:nodes node-id) or (:relations rel-id).
+OLD-VALUE is the value before change (used for deletions).
+NEW-VALUE is the value after change (nil for deletions)."
+  (when (and supertag-view-node--current-node-id
+             (listp path)
+             (>= (length path) 2))
+    (let* ((entity-type (car path))
+           (entity-id (cadr path))
+           ;; For relations, use new-value if available, otherwise use old-value
+           ;; This is critical for detecting deletions!
+           (relation-data (when (eq entity-type :relations)
+                           (or new-value old-value))))
+      ;; Refresh if:
+      ;; 1. The changed entity is the current node
+      ;; 2. The changed entity is a relation involving the current node (create/update/delete)
+      ;; 3. The changed entity is a field of the current node
+      (when (or (and (eq entity-type :nodes) 
+                     (equal entity-id supertag-view-node--current-node-id))
+                (and (eq entity-type :relations)
+                     relation-data
+                     (or (equal (plist-get relation-data :from) supertag-view-node--current-node-id)
+                         (equal (plist-get relation-data :to) supertag-view-node--current-node-id)))
+                (and (eq entity-type :fields)
+                     (equal entity-id supertag-view-node--current-node-id)))
+        ;; Refresh after a short delay to batch multiple rapid changes
+        (run-with-idle-timer 0.1 nil #'supertag-view-node-refresh)))))
 
 ;;; --- Helper Functions ---
 
@@ -178,9 +234,25 @@ Key Bindings:
 
 ;;; --- Modern Rendering Functions ---
 
+(defun supertag-view-node--strip-todo-keyword (title)
+  "Remove TODO keywords from TITLE if configured to do so.
+Removes org-mode TODO keywords based on `supertag-view-node-todo-keywords'.
+Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
+  (if (not supertag-view-node-strip-todo-keywords)
+      title
+    (let ((keywords-regexp (concat "^\\("
+                                   (mapconcat #'regexp-quote 
+                                             supertag-view-node-todo-keywords
+                                             "\\|")
+                                   "\\)\\s-+")))
+      (if (string-match keywords-regexp title)
+          (string-trim (substring title (match-end 0)))
+        title))))
+
 (defun supertag-view-node--insert-simple-header (node-data)
   "Insert a simple, clean header with NODE-DATA."
-  (let* ((title (or (plist-get node-data :title) "Untitled Node"))
+  (let* ((raw-title (or (plist-get node-data :title) "Untitled Node"))
+         (title (supertag-view-node--strip-todo-keyword raw-title))
          (file (plist-get node-data :file))
          (node-id supertag-view-node--current-node-id)
          (field-count (supertag-view-node--count-fields node-id))

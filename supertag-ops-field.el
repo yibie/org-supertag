@@ -23,6 +23,7 @@ TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field.
 VALUE is the field value.
 Returns the updated field value."
+  ;; (message "DEBUG-1: supertag-field-set called. Node: %s, Field: %s, Value: %s" node-id field-name value)
   (supertag-transform
    (list :fields node-id tag-id field-name)
    (lambda (_) value)))

@@ -74,9 +74,6 @@
 ;; --- Automation System 2.0 ---
 (require 'supertag-automation)
 
-;; --- Performance Optimizations ---
-(require 'supertag-performance-optimizer)
-
 ;; --- Service Functions (services) ---
 (require 'supertag-services-query)
 (require 'supertag-services-sync)
