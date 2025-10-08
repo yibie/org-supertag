@@ -116,7 +116,36 @@ Supported values:
 Key: file path
 Value: last sync time")
 
+(defvar supertag-sync--internal-modifications (make-hash-table :test 'equal)
+  "Track files modified internally by Supertag code.
+Key: file path (absolute)
+Value: timestamp of last internal modification.
+This is used to distinguish internal modifications (by automation/UI) from
+external modifications (by user/other tools), preventing unnecessary re-sync.")
+
 ;;; Helper functions for accessing sync state data
+
+(defun supertag--mark-internal-modification (file)
+  "Mark FILE as internally modified by Supertag.
+FILE should be an absolute path. This function records the current time
+to prevent sync from re-parsing the file we just modified."
+  (when file
+    (let ((abs-file (expand-file-name file)))
+      (puthash abs-file (current-time) supertag-sync--internal-modifications))))
+
+(defun supertag--is-internal-modification-p (file)
+  "Check if FILE was recently modified internally by Supertag.
+Returns t if the file's modification time is within 1 second of the last
+internal modification timestamp, indicating this save is from Supertag code."
+  (when file
+    (let* ((abs-file (expand-file-name file))
+           (last-internal (gethash abs-file supertag-sync--internal-modifications))
+           (file-mtime (when (file-exists-p abs-file)
+                        (file-attribute-modification-time (file-attributes abs-file)))))
+      (and last-internal
+           file-mtime
+           ;; If file mtime is within 2 seconds after internal modification, skip sync
+           (time-less-p file-mtime (time-add last-internal 2))))))
 
 (defun supertag-sync--get-state-table ()
   "Get the actual state hash table from supertag-sync--state.
@@ -1010,9 +1039,15 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
          (contents-begin (org-element-property :contents-begin headline))
          (contents-end (org-element-property :contents-end headline))
          (original-raw-title (org-element-property :raw-value headline))
-         ;; Defensively clean title of both #tags and :tags: to prevent duplication.
+         (todo-keyword (org-element-property :todo-keyword headline))
+         ;; Clean title: remove TODO keyword, #tags, and :tags:
+         (title-without-todo (if todo-keyword
+                                 (string-trim (replace-regexp-in-string
+                                              (concat "^" (regexp-quote todo-keyword) "\\s-+")
+                                              "" original-raw-title))
+                               original-raw-title))
          (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
-"#\\w[-_[:alnum:]]*" "" original-raw-title))))
+"#\\w[-_[:alnum:]]*" "" title-without-todo))))
          ;; If cleaning results in an empty string (title was only tags), use the original.
          (final-title (if (string-empty-p title-after-cleaning)
                           original-raw-title
@@ -1173,22 +1208,29 @@ This is a safe operation that helps maintain database integrity."
 
 (defun supertag-sync--run-on-save ()
   "Hook function to run single-node sync after saving a buffer.
-This function is designed to minimize interference with other packages by:
-1. Preserving buffer-local variables
-2. Suppressing unnecessary buffer modifications
-3. Avoiding triggering of other hooks during processing."
-  ;; We only run this for org-mode buffers that are part of the sync scope.
+This function distinguishes between internal modifications (by Supertag) and
+external modifications (by user/other tools) to avoid unnecessary re-parsing."
+  ;; Only run for org-mode buffers that are part of the sync scope
   (when (and (derived-mode-p 'org-mode)
              (buffer-file-name)
              (supertag-sync--in-sync-scope-p (buffer-file-name)))
-    ;; Save current buffer-local state to restore later if needed
-    (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0))
-          (inhibit-modification-hooks t))  ; Prevent other hooks from firing during our processing
-      ;; Process the file within a transaction for atomicity
-      (supertag-with-transaction
-        (supertag-sync--process-single-file (buffer-file-name) counters))
-      ;; Immediately run garbage collection after processing
-      (supertag-sync-garbage-collect-orphaned-nodes))))
+    (let ((file (buffer-file-name)))
+      ;; Check if this is an internal modification
+      (if (supertag--is-internal-modification-p file)
+          ;; Internal modification: skip sync, memory is already up-to-date
+          (progn
+            (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file))
+            ;; Update sync state to prevent periodic sync from re-syncing
+            (supertag-sync-update-state file))
+        ;; External modification: sync from file to memory
+        (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0))
+              (inhibit-modification-hooks t))
+          (message "Supertag: Sync external modification: %s" (file-name-nondirectory file))
+          ;; Process the file within a transaction for atomicity
+          (supertag-with-transaction
+            (supertag-sync--process-single-file file counters))
+          ;; Immediately run garbage collection after processing
+          (supertag-sync-garbage-collect-orphaned-nodes))))))
         
 
 (defun supertag-sync-setup-realtime-hooks ()
