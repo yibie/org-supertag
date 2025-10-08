@@ -407,7 +407,13 @@ current file and inserted into the target file at a chosen position."
              :position ,insert-pos 
              :level ,insert-level)) 
 
-          ;; 4. Replace original text with a link 
+          ;; 4. Create the relationship in the database
+          (let ((from-id (org-id-get)))
+            (when from-id
+              (supertag-relation-create
+               `(:type :reference :from ,from-id :to ,new-node-id))))
+
+          ;; 5. Replace original text with a link 
           (delete-region beg end) 
           (insert (format "[[id:%s][%s]]" new-node-id title)) 
 
