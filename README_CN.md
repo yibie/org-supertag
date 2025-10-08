@@ -235,7 +235,8 @@ Org-SuperTag 提供了一套全面的键盘快捷键，可通过 `C-c s` 前缀�
 | `C-c s t` | org-supertag-capture-template | 使用模板捕获 |
 | `C-c s i` | org-supertag-insert-query-block | 插入查询块 |
 | `C-c s m` | org-supertag-move-node-and-link | 移动节点并链接 |
-| `C-c s A` | org-supertag-node-add-reference | 为节点添加引用 |
+| `C-c s l` | org-supertag-node-add-reference | 为节点添加引用 |
+| `C-c s L` | org-supertag-reference-and-create | 添加引用并在不存在时创建节点 |
 | `C-c s R` | org-supertag-node-remove-reference | 从节点删除引用 |
 | `C-c s h` | org-supertag-node-back-to-heading | 返回标题 |
 | `C-c s N` | org-supertag-node-create | 创建新节点 |

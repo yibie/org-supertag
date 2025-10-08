@@ -1,4 +1,28 @@
 ;;; supertag-compat.el --- Compatibility layer for supertag -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;;
+;; This file provides backward compatibility for org-supertag commands and keybindings.
+;; All commands use the `org-supertag-` prefix and are bound to `C-c s` by default.
+;;
+;; ## Customizing Keybindings
+;;
+;; To disable all compatibility keybindings:
+;;
+;;     (org-supertag-compat-mode 0)
+;;
+;; To unbind a specific key:
+;;
+;;     (with-eval-after-load 'supertag-compat
+;;       (define-key org-supertag-compat-mode-map (kbd "C-c s b") nil))
+;;
+;; To rebind a command to a different key:
+;;
+;;     (with-eval-after-load 'supertag-compat
+;;       (define-key org-supertag-compat-mode-map (kbd "C-c s b") nil)
+;;       (define-key org-supertag-compat-mode-map (kbd "C-c o b") 'org-supertag-insert-embed))
+;;
+
 ;;; Code:
 
 ;; Backward compatibility aliases
@@ -36,67 +60,58 @@
 (defalias 'org-supertag-insert-embed 'supertag-insert-embed)
 (defalias 'org-supertag-convert-link-to-embed 'supertag-convert-link-to-embed)
 (defalias 'org-supertag-embed-refresh-all 'supertag-services-embed-refresh-all)
+(defalias 'org-supertag-reference-and-create 'supertag-add-reference-and-create)
 
-;; Define the prefix key first
-(defvar org-supertag-prefix-map
-  (let ((map (make-sparse-keymap)))
-    ;; Capture operations
-    (define-key map (kbd "C") 'org-supertag-capture-direct)
-    (define-key map (kbd "t") 'org-supertag-capture-template)
-    
-    ;; Tag operations
-    (define-key map (kbd "a") 'org-supertag-inline-add)
-    (define-key map (kbd "r") 'org-supertag-inline-remove)
-    (define-key map (kbd "n") 'org-supertag-inline-rename)
-    (define-key map (kbd "d") 'org-supertag-inline-delete-all)
-    (define-key map (kbd "c") 'org-supertag-inline-change-tag)
-    (define-key map (kbd "x") 'org-supertag-set-child)
-    (define-key map (kbd "X") 'org-supertag-clear-parent)
-    
-    ;; Node operations
-    (define-key map (kbd "i") 'org-supertag-insert-query-block)
-    (define-key map (kbd "m") 'org-supertag-move-node-and-link)
-    (define-key map (kbd "A") 'org-supertag-node-add-reference)
-    (define-key map (kbd "R") 'org-supertag-node-remove-reference)
-    (define-key map (kbd "h") 'org-supertag-node-back-to-heading)
-    (define-key map (kbd "N") 'org-supertag-node-create)
-    (define-key map (kbd "D") 'org-supertag-node-delete)
-    (define-key map (kbd "f") 'org-supertag-node-find)
-    (define-key map (kbd "o") 'org-supertag-node-find-other-window)
-    (define-key map (kbd "M") 'org-supertag-node-move)
-    (define-key map (kbd "u") 'org-supertag-node-update)
-    
-    ;; Query operations
-    (define-key map (kbd "s") 'org-supertag-query)
-    (define-key map (kbd "e") 'org-supertag-query-export-results-to-file)
-    (define-key map (kbd "E") 'org-supertag-query-export-results-to-new-file)
-    (define-key map (kbd "I") 'org-supertag-query-insert-at-point)
-    
-    ;; Tag operations
-    ;; Note: extends functionality has been removed for simplicity
-    
-    ;; View operations
-    (define-key map (kbd "g") 'org-supertag-view-chat-open)
-    (define-key map (kbd "v") 'org-supertag-view-node)
-    (define-key map (kbd "T") 'org-supertag-view-table)
-    (define-key map (kbd "k") 'org-supertag-view-kanban)
-    
-    ;; Embed operations
-    (define-key map (kbd "b") 'org-supertag-insert-embed)
-    (define-key map (kbd "B") 'org-supertag-convert-link-to-embed)
-    (define-key map (kbd "C-r") 'org-supertag-embed-refresh-all)
-    
-    ;; Database operations
-    (define-key map (kbd "C-c") 'org-supertag-clean-database)
-      
-    map)
-  "Keymap for org-supertag prefix commands.")
-
-;; Keymap definitions for backward compatibility with C-c s prefix
+;; Keymap definitions for backward compatibility
 (defvar org-supertag-compat-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; Set up the prefix key C-c s
-    (define-key map (kbd "C-c s") org-supertag-prefix-map)
+    ;; Capture operations
+    (define-key map (kbd "C-c s C") 'org-supertag-capture-direct)
+    (define-key map (kbd "C-c s t") 'org-supertag-capture-template)
+    
+    ;; Tag operations
+    (define-key map (kbd "C-c s a") 'org-supertag-inline-add)
+    (define-key map (kbd "C-c s r") 'org-supertag-inline-remove)
+    (define-key map (kbd "C-c s n") 'org-supertag-inline-rename)
+    (define-key map (kbd "C-c s d") 'org-supertag-inline-delete-all)
+    (define-key map (kbd "C-c s c") 'org-supertag-inline-change-tag)
+    (define-key map (kbd "C-c s x") 'org-supertag-set-child)
+    (define-key map (kbd "C-c s X") 'org-supertag-clear-parent)
+    
+    ;; Node operations
+    (define-key map (kbd "C-c s i") 'org-supertag-insert-query-block)
+    (define-key map (kbd "C-c s m") 'org-supertag-move-node-and-link)
+    (define-key map (kbd "C-c s l") 'org-supertag-node-add-reference)
+    (define-key map (kbd "C-c s L") 'org-supertag-reference-and-create)
+    (define-key map (kbd "C-c s R") 'org-supertag-node-remove-reference)
+    (define-key map (kbd "C-c s h") 'org-supertag-node-back-to-heading)
+    (define-key map (kbd "C-c s N") 'org-supertag-node-create)
+    (define-key map (kbd "C-c s D") 'org-supertag-node-delete)
+    (define-key map (kbd "C-c s f") 'org-supertag-node-find)
+    (define-key map (kbd "C-c s o") 'org-supertag-node-find-other-window)
+    (define-key map (kbd "C-c s M") 'org-supertag-node-move)
+    (define-key map (kbd "C-c s u") 'org-supertag-node-update)
+    
+    ;; Query operations
+    (define-key map (kbd "C-c s s") 'org-supertag-query)
+    (define-key map (kbd "C-c s e") 'org-supertag-query-export-results-to-file)
+    (define-key map (kbd "C-c s E") 'org-supertag-query-export-results-to-new-file)
+    (define-key map (kbd "C-c s I") 'org-supertag-query-insert-at-point)
+    
+    ;; View operations
+    (define-key map (kbd "C-c s g") 'org-supertag-view-chat-open)
+    (define-key map (kbd "C-c s v") 'org-supertag-view-node)
+    (define-key map (kbd "C-c s T") 'org-supertag-view-table)
+    (define-key map (kbd "C-c s k") 'org-supertag-view-kanban)
+    
+    ;; Embed operations
+    (define-key map (kbd "C-c s b") 'org-supertag-insert-embed)
+    (define-key map (kbd "C-c s B") 'org-supertag-convert-link-to-embed)
+    (define-key map (kbd "C-c s C-r") 'org-supertag-embed-refresh-all)
+    
+    ;; Database operations
+    (define-key map (kbd "C-c s C-c") 'org-supertag-clean-database)
+    
     map)
   "Keymap for org-supertag compatibility mode.")
 
@@ -110,8 +125,5 @@
 
 ;; Enable the mode by default
 (org-supertag-compat-mode 1)
-
-;; Also bind the prefix key globally to ensure it works
-(global-set-key (kbd "C-c s") org-supertag-prefix-map)
 
 (provide 'supertag-compat)

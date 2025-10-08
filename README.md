@@ -239,7 +239,8 @@ Org-SuperTag provides a comprehensive set of keyboard shortcuts accessible throu
 | `C-c s t` | org-supertag-capture-template | Capture with template |
 | `C-c s i` | org-supertag-insert-query-block | Insert query block |
 | `C-c s m` | org-supertag-move-node-and-link | Move node and link |
-| `C-c s A` | org-supertag-node-add-reference | Add reference to node |
+| `C-c s l` | org-supertag-node-add-reference | Add reference to node |
+| `C-c s L` | org-supertag-reference-and-create | Add reference and create node if not exists |
 | `C-c s R` | org-supertag-node-remove-reference | Remove reference from node |
 | `C-c s h` | org-supertag-node-back-to-heading | Back to heading |
 | `C-c s N` | org-supertag-node-create | Create new node |
