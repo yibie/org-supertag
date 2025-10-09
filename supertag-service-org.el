@@ -18,18 +18,20 @@
 
   (defun supertag-service-org--with-node-buffer (node-id func)
     "Find the buffer and position for NODE-ID using robust org-id-goto
-  and execute FUNC there."
+  and execute FUNC there.
+  Uses save-window-excursion to avoid disrupting user's view."
     (let* ((node-info (supertag-get `(:nodes ,node-id)))
            (file-path (plist-get node-info :file)))
       (when (and file-path (file-exists-p file-path))
-        (let ((buffer (find-file-noselect file-path)))
-          (with-current-buffer buffer
-            (save-excursion
-              ;; DO NOT trust the :position property. It can be stale.
-              ;; Instead, use the canonical way to find a node by its ID.
-              (org-id-goto node-id)
-              (when (org-at-heading-p)
-                (funcall func))))))))
+        (save-window-excursion
+          (let ((buffer (find-file-noselect file-path)))
+            (with-current-buffer buffer
+              (save-excursion
+                ;; DO NOT trust the :position property. It can be stale.
+                ;; Instead, use the canonical way to find a node by its ID.
+                (org-id-goto node-id)
+                (when (org-at-heading-p)
+                  (funcall func)))))))))
 
   (defun supertag-service-org--update-buffer-and-resync (node-id buffer-update-func)
     "Generic function to run a buffer-updating function and then trigger a resync."

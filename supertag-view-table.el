@@ -1160,7 +1160,8 @@ COORDS is a plist with :entity-id and :col-index."
                (supertag-view-table--goto-cell coords)))))))))
 
 (defun supertag-view-table-goto-node ()
-  "Jump to the Org node corresponding to the current row in a side window on the right."
+  "Jump to the Org node corresponding to the current row.
+Opens the file in a new window on the right and moves cursor to the node."
   (interactive)
   (let ((coords (supertag-view-table--get-cell-coords)))
     (if (null coords)
@@ -1172,23 +1173,23 @@ COORDS is a plist with :entity-id and :col-index."
                       (file (plist-get node :file)))
             (if (not (file-exists-p file))
                 (message "Error: File for node %s does not exist." entity-id)
-              (let* ((buffer (find-file-noselect file))
-                     ;; Display in a window on the right side
-                     (window (display-buffer buffer
-                                            '(display-buffer-in-direction
-                                              (direction . right)
-                                              (window-width . 0.5)))))
-                (when window
-                  (with-selected-window window
-                    (with-current-buffer buffer
-                      (goto-char (point-min))
-                      (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
-                          (progn
-                            (org-back-to-heading t)
-                            (org-show-context)
-                            (recenter)
-                            (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
-                        (message "Error: Could not find ID %s in file %s" entity-id file)))))))))))))
+              ;; Split window to the right if not already split
+              (unless (window-in-direction 'right)
+                (split-window-right))
+              ;; Select the right window
+              (let ((target-window (window-in-direction 'right)))
+                (select-window target-window)
+                ;; Open the file in the selected window
+                (find-file file)
+                ;; Find and jump to the node
+                (goto-char (point-min))
+                (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
+                    (progn
+                      (org-back-to-heading t)
+                      (org-show-context)
+                      (recenter)
+                      (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
+                  (message "Error: Could not find ID %s in file %s" entity-id file))))))))))
 
 (defun supertag-view-table--get-current-query-obj ()
   "Get current query object."
