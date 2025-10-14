@@ -8,7 +8,7 @@
 
 (require 'cl-lib)
 (require 'org-element)
-(require 'supertag-core-store)
+(require 'supertag-ops-node)
 
 (defun supertag-ui-embed-find-block-by-source (source-id)
   "Find embed block by source ID using regex search.
@@ -61,7 +61,7 @@ CONTENT: The content string to filter"
   "Generate embed content for a single node.
 NODE-ID: The node identifier to embed.
 Returns ONLY the content part, without the headline."
-  (let* ((node-data (supertag-get (list :nodes node-id))))
+  (let* ((node-data (supertag-node-get node-id)))
     (unless node-data
       (cl-return-from supertag-ui-embed-generate-node-content
         "** Error: Node not found in DB **"))
@@ -112,7 +112,7 @@ This is an internal function and should not be called directly by users."
     (let* ((node-id (plist-get link-info :id))
            (begin (plist-get link-info :begin))
            (end (plist-get link-info :end))
-           (node-data (supertag-get (list :nodes node-id))))
+           (node-data (supertag-node-get node-id))))
       
       (unless node-data
         (user-error "Node %s not found in database" node-id))
@@ -133,7 +133,7 @@ This is an internal function and should not be called directly by users."
           (insert "\n"))
         (insert "#+end_embed\n")
         
-        (message "Converted link to embed block for node %s" node-id)))))
+        (message "Converted link to embed block for node %s" node-id))))
 
 (defun supertag-ui-embed--insert-block ()
   "Internal function to select a node and insert an embed block at point.
@@ -149,7 +149,7 @@ not be called directly by users."
       (user-error "No node selected"))
     
     ;; Verify node exists in database
-    (let ((node-data (supertag-get (list :nodes node-id))))
+    (let ((node-data (supertag-node-get node-id))))
       (unless node-data
         (user-error "Node %s not found in database" node-id))
       
@@ -172,7 +172,7 @@ not be called directly by users."
             (insert "\n"))
           (insert "#+end_embed\n")
           
-          (message "Inserted embed block for node %s" node-id))))))
+          (message "Inserted embed block for node %s" node-id)))))
 
 (provide 'supertag-ui-embed)
 ;;; supertag-ui-embed.el ends here

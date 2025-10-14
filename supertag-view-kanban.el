@@ -45,13 +45,12 @@ COLUMN-ORDER is an optional list of column values in specific order."
 
 (defun supertag-view-kanban--get-all-tags ()
   "Get list of all tag names."
-  (let ((tags (supertag-get (list :tags)))
+  (let ((tags (supertag-store-get-collection :tags))
         (tag-names '()))
-    (when (hash-table-p tags)
-      (maphash (lambda (id tag-data)
-                 (when (plist-get tag-data :name)
-                   (push (plist-get tag-data :name) tag-names)))
-               tags))
+    (maphash (lambda (_id tag-data)
+               (when (plist-get tag-data :name)
+                 (push (plist-get tag-data :name) tag-names)))
+             tags)
     (sort tag-names #'string<)))
 
 ;;; --- Data Querying ---

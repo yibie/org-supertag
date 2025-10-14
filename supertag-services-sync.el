@@ -449,14 +449,12 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
   "Mark a node as deleted from its file by setting its :file property to nil.
 This does not remove the node from the store immediately."
   ;;(message "DEBUG: supertag-node-mark-deleted-from-file called for ID: %S" id)
-  (when-let ((node (supertag-get (list :nodes id))))
-    ;;(message "DEBUG: supertag-node-mark-deleted-from-file: Node file before update: %S" (plist-get node :file))
-    (let ((modified-node (plist-put node :file nil)))
-      ;; 直接更新现有节点，而不是"创建"新节点
-      ;; 这避免了产生混乱的debug输出和file: nil的节点创建消息
-      (supertag-store-direct-set :nodes id modified-node))
-    ;;(message "DEBUG: supertag-node-mark-deleted-from-file: Node file after update (should be nil): %S" (plist-get (supertag-get (list :nodes id)) :file))
-    ))
+  (supertag-node-update
+   id
+   (lambda (node)
+     (when node
+       (let ((modified (copy-sequence node)))
+         (plist-put modified :file nil))))))
 
 (defun supertag-db-add-with-hash (id props &optional counters)
   "Add node with ID and PROPS to database, including hash value.
@@ -504,9 +502,9 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
 
        ;; Process existing nodes in store for this file
        (dolist (existing-node-pair existing-nodes-in-store)
-         (let* ((id (car existing-node-pair))
-                (old-node-props (cdr existing-node-pair))
-                (new-node-props (gethash id current-nodes-in-file)))
+        (let* ((id (car existing-node-pair))
+               (old-node-props (cdr existing-node-pair))
+               (new-node-props (gethash id current-nodes-in-file)))
            (cond
             ((null new-node-props)
              (supertag-node-mark-deleted-from-file id)
@@ -558,7 +556,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (message "DEBUG: File %s no longer exists, marking all its nodes as orphaned" file)
       (dolist (existing-node-pair existing-nodes-in-store)
         (let* ((id (car existing-node-pair))
-               (db-node (supertag-get (list :nodes id))))
+               (db-node (supertag-node-get id)))
           (when (and db-node
                      (let ((db-node-file (plist-get db-node :file)))
                        (and db-node-file
@@ -579,7 +577,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
              (new-node-props (gethash id current-nodes-in-file)))
         ;; If node exists in store but not in file, mark it as orphaned
         (when (null new-node-props)
-          (let ((db-node (supertag-get (list :nodes id))))
+          (let ((db-node (supertag-node-get id)))
             ;;(message "DEBUG: supertag-sync--verify-file-nodes: Node %s exists in DB but not in file %s. DB node file: %S" id file (plist-get db-node :file))
             (when (and db-node
                        (let ((db-node-file (plist-get db-node :file)))
@@ -686,7 +684,9 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
   "Traverse a collection in the nested hash table at COLLECTION-PATH.
 CALLBACK is a function that receives (id value) pairs.
 Returns a list of results from CALLBACK."
-  (let ((collection (supertag-get collection-path))
+  (let* ((path (if (listp collection-path) collection_path (list collection_path)))
+         (key (car path))
+         (collection (and key (supertag-store-get-collection key)))
         (results '()))
     (when (hash-table-p collection)
       (maphash (lambda (id value)
@@ -698,7 +698,7 @@ Returns a list of results from CALLBACK."
   "Traverse all nodes in the store.
 CALLBACK is a function that receives (id node-data) pairs.
 Returns a list of results from CALLBACK."
-  (let ((nodes-collection (supertag-get (list :nodes)))
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
         (results '())
         (total-nodes 0)
         (valid-nodes 0))
@@ -747,12 +747,12 @@ This function performs the actual deletion of orphaned nodes."
     ;; Delete orphaned nodes outside of transaction to ensure immediate persistence
     (when orphaned-ids
       (dolist (id orphaned-ids)
-        (let ((node (supertag-get (list :nodes id))))
+        (let ((node (supertag-node-get id)))
           (when node
             ;; Double-check that this is indeed an orphaned node
             (when (and (eq (plist-get node :type) :node)
                        (null (plist-get node :file)))
-              (supertag-update (list :nodes id) nil)
+              (supertag-node-delete id)
               (cl-incf deleted-count))))))
 
     ;; Force immediate save after garbage collection
@@ -977,7 +977,7 @@ This function is called only when a node is actually being created or updated."
       (dolist (target-id ref-to-list)
         (when (and (stringp target-id) (not (string-empty-p target-id)))
           ;; Check if target node exists in the store
-          (let ((target-node (supertag-get (list :nodes target-id))))
+          (let ((target-node (supertag-node-get target-id)))
             (if target-node
                 (progn
                   ;; Create reference relation (supertag-relation-create handles duplicates)

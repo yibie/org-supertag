@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'supertag-core-store)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
@@ -218,14 +219,21 @@ NEW-VALUE is the value after change (nil for deletions)."
 (defun supertag-view-node--get-referenced-by (node-id)
   "Get nodes that reference NODE-ID."
   (when node-id
-    (let ((all-relations (supertag-get '(:relations)))
+    (let ((relations (supertag-store-get-collection :relations))
           (referencing-ids '()))
-      (when (hash-table-p all-relations)
-        (maphash (lambda (_ rel-data)
-                   (when (and (eq (plist-get rel-data :type) :reference)
-                              (equal (plist-get rel-data :to) node-id))
-                     (push (plist-get rel-data :from) referencing-ids)))
-                 all-relations))
+      (maphash
+       (lambda (_ rel-data)
+         (let ((relation (if (hash-table-p rel-data)
+                             (let (plist)
+                               (maphash (lambda (k v)
+                                          (setq plist (plist-put plist k v)))
+                                        rel-data)
+                               plist)
+                           rel-data)))
+           (when (and (eq (plist-get relation :type) :reference)
+                      (equal (plist-get relation :to) node-id))
+             (push (plist-get relation :from) referencing-ids))))
+       relations)
       (nreverse referencing-ids))))
 
 (defun supertag-view-node--format-display-value (value field-def)
@@ -328,8 +336,8 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-to) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-to)
-              (when-let* ((node (supertag-get (list :nodes ref-id)))
-                          (title (plist-get node :title)))
+          (when-let* ((node (supertag-node-get ref-id))
+                      (title (plist-get node :title)))
                 (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
                                    'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
 
@@ -340,8 +348,8 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-from) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-from)
-              (when-let* ((node (supertag-get (list :nodes ref-id)))
-                          (title (plist-get node :title)))
+          (when-let* ((node (supertag-node-get ref-id))
+                      (title (plist-get node :title)))
                 (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
                                    'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
           (insert "\n"))
@@ -359,9 +367,9 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                          (get-text-property fallback-pos 'field-name)))
          (node-id supertag-view-node--current-node-id))
     (when (and tag-id field-name node-id)
-      (let* ((field-def (supertag-tag-get-field tag-id field-name))
-             (value (when field-def
-                      (supertag-field-get node-id tag-id field-name))))
+         (let* ((field-def (supertag-tag-get-field tag-id field-name))
+                (value (when field-def
+                         (supertag-field-get-with-default node-id tag-id field-name))))
         (list :node-id   node-id
               :tag-id    tag-id
               :field-name field-name
@@ -424,7 +432,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
 
 (defun supertag-view-node--render (node-id)
   "Render a simple, clean view for NODE-ID."
-  (let ((node-data (supertag-get (list :nodes node-id)))
+  (let ((node-data (supertag-node-get node-id))
         (inhibit-read-only t))
     (erase-buffer)
     (setq supertag-view-node--current-node-id node-id)
@@ -495,7 +503,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
          (tag-id (plist-get context :tag-id))
          (field-name (plist-get context :field-name))
          (field-def (supertag-tag-get-field tag-id field-name))
-         (current-value (supertag-field-get node-id tag-id field-name)))
+         (current-value (supertag-field-get-with-default node-id tag-id field-name)))
     (when field-def
       (let ((new-value (supertag-ui-read-field-value field-def current-value)))
         ;; We don't check for nil, allowing user to clear a value

@@ -9,7 +9,8 @@
   (require 'cl-lib)
   (require 'org)
   (require 'org-id) ;; Required for org-id-goto
-  (require 'supertag-core-store)
+(require 'supertag-core-store)
+(require 'supertag-ops-node)
   (require 'supertag-services-sync)
   (require 'supertag-ops-tag)
   (require 'supertag-ops-relation)
@@ -20,7 +21,7 @@
     "Find the buffer and position for NODE-ID using robust org-id-goto
   and execute FUNC there.
   Uses save-window-excursion to avoid disrupting user's view."
-    (let* ((node-info (supertag-get `(:nodes ,node-id)))
+    (let* ((node-info (supertag-node-get node-id))
            (file-path (plist-get node-info :file)))
       (when (and file-path (file-exists-p file-path))
         (save-window-excursion

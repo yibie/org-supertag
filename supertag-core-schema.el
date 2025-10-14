@@ -19,7 +19,7 @@
 ;;; Code:
 
 (require 'cl-lib) ; For cl-find, cl-loop, etc.
-(require 'ht)     ; For hash-table operations (if used in validators/converters)
+(require 'ht)
 
 ;;; --- Cache for schema definitions ---
 

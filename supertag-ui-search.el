@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'supertag-core-store) ; For data access
+(require 'supertag-ops-node)
 
 ;;; --- Search History Management ---
 
@@ -173,10 +174,10 @@ Handles both time stamps (list) and date strings."
 (defun supertag-search-find-nodes (keywords)
   "Find nodes matching KEYWORDS."
   (let (results)
-    (let ((nodes-collection (supertag-get '(:nodes))))
-      (when (hash-table-p nodes-collection)
-        (maphash
-         (lambda (id node-data)
+    (let ((nodes-collection (supertag-store-get-collection :nodes)))
+      (maphash
+       (lambda (_id node-data)
+         (when node-data
            (let* ((title (plist-get node-data :title))
                   (content (plist-get node-data :content))
                   (tags (plist-get node-data :tags))
@@ -189,18 +190,17 @@ Handles both time stamps (list) and date strings."
                       (tag-match (and tags (cl-some (lambda (tag) (string-match-p keyword-re tag)) tags)))
                       (content-match (and content (string-match keyword-re content)))
                       (field-match (and properties
-                                           (cl-some (lambda (prop)
-                                                      (and (stringp prop)
-                                                           (string-match-p keyword-re prop)))
-                                                    (let (prop-values)
-                                                      (let ((props properties))
-                                                        (while props
-                                                          (push (cadr props) prop-values)
-                                                          (setq props (cddr props))))
-                                                      prop-values)))))
+                                         (cl-some (lambda (prop)
+                                                    (and (stringp prop)
+                                                         (string-match-p keyword-re prop)))
+                                                  (let (prop-values props)
+                                                    (setq props properties)
+                                                    (while props
+                                                      (push (cadr props) prop-values)
+                                                      (setq props (cddr props)))
+                                                    prop-values)))))
                  (unless (or title-match tag-match content-match field-match)
                    (setq all-match nil))
-                 ;; Generate context for content matches
                  (when (and content-match (not match-context))
                    (let* ((match-start (match-beginning 0))
                           (context-start (max 0 (- match-start 40)))
@@ -209,9 +209,9 @@ Handles both time stamps (list) and date strings."
                           (suffix (if (< context-end (length content)) "..." "")))
                      (setq match-context (concat prefix (substring content context-start context-end) suffix))))))
              (when all-match
-               (push (cons node-data match-context) results))))
-         nodes-collection))
-    (nreverse results))))
+               (push (cons node-data match-context) results)))))
+       nodes-collection))
+    (nreverse results)))
 
 ;;; --- Card Formatting ---
 
@@ -245,7 +245,7 @@ Handles both time stamps (list) and date strings."
 
 (defun supertag-search--get-node-tags (node-id)
   "Get all tags for a node for search display."
-  (when-let* ((node-data (supertag-get (list :nodes node-id))))
+  (when-let* ((node-data (supertag-node-get node-id)))
     (plist-get node-data :tags)))
 
 (defun supertag-search--format-card (node-props context-snippet width marked-p)
@@ -417,7 +417,7 @@ Handles both time stamps (list) and date strings."
 
 (defun supertag-search--find-node (node-id)
   "Visit node with specified ID."
-  (let ((node-data (supertag-get (list :nodes node-id))))
+  (let ((node-data (supertag-node-get node-id)))
     (if node-data
         (let ((file-path (plist-get node-data :file)))
           (if (and file-path (file-exists-p file-path))
@@ -478,7 +478,7 @@ Handles both time stamps (list) and date strings."
           (let ((content
                  (with-temp-buffer
                    (dolist (node-id selected-nodes)
-                     (when-let* ((node-data (supertag-get (list :nodes node-id)))
+                     (when-let* ((node-data (supertag-node-get node-id))
                                 (title (plist-get node-data :title))
                                 (clean-title 
                                  (substring-no-properties 
@@ -523,7 +523,7 @@ Handles both time stamps (list) and date strings."
             "#+STARTUP: showeverything\n\n"
             "* Search Results\n\n"))
           (dolist (node-id selected-nodes)
-            (when-let* ((node-data (supertag-get (list :nodes node-id)))
+            (when-let* ((node-data (supertag-node-get node-id))
                        (title (plist-get node-data :title))
                        (clean-title (if (stringp title)
                                        (substring-no-properties title)

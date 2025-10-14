@@ -42,7 +42,7 @@ Returns alist of (old-uuid-id . tag-data) pairs."
                (when (and (eq (plist-get tag-data :type) :tag)
                           (supertag-migrate--is-uuid-tag-id-p id))
                  (push (cons id tag-data) uuid-tags)))
-             (supertag-get (list :tags)))
+             (supertag-store-get-collection :tags))
     uuid-tags))
 
 (defun supertag-migrate--update-node-tags-list (node-id old-tag-id new-tag-id)
@@ -59,13 +59,11 @@ Returns alist of (old-uuid-id . tag-data) pairs."
 
 (defun supertag-migrate--update-all-node-tags (old-tag-id new-tag-id)
   "Update all nodes that reference OLD-TAG-ID to use NEW-TAG-ID."
-  (let ((nodes (supertag-get (list :nodes))))
-    (when (hash-table-p nodes)
-      (maphash (lambda (node-id node-data)
-                 (when (and (eq (plist-get node-data :type) :node)
-                            (member old-tag-id (plist-get node-data :tags)))
-                   (supertag-migrate--update-node-tags-list node-id old-tag-id new-tag-id)))
-               nodes))))
+  (maphash (lambda (node-id node-data)
+             (when (and (eq (plist-get node-data :type) :node)
+                        (member old-tag-id (plist-get node-data :tags)))
+               (supertag-migrate--update-node-tags-list node-id old-tag-id new-tag-id)))
+           (supertag-store-get-collection :nodes)))
 
 (defun supertag-migrate--update-node-tag-relations (old-tag-id new-tag-id)
   "Update all node-tag relations from OLD-TAG-ID to NEW-TAG-ID."
@@ -93,9 +91,9 @@ Returns new tag ID if successful, nil otherwise."
       (error "Cannot migrate tag %s: new ID %s already exists" old-tag-id new-tag-id))
     
     ;; Update tag entity ID
-    (let ((updated-tag-data (plist-put tag-data :id new-tag-id)))
-      (supertag-store-direct-set :tags new-tag-id updated-tag-data)
-      (supertag-update (list :tags old-tag-id) nil))
+    (let ((updated-tag-data (plist-put (copy-sequence tag-data) :id new-tag-id)))
+      (supertag-store-put-entity :tags new-tag-id updated-tag-data t)
+      (supertag-store-remove-entity :tags old-tag-id))
     
     ;; Update all node tag lists
     (supertag-migrate--update-all-node-tags old-tag-id new-tag-id)
@@ -161,26 +159,22 @@ Checks that no UUID-based tags remain and all references are updated."
             validation-errors))
     
     ;; Check for orphaned node tag references
-    (let ((nodes (supertag-get (list :nodes))))
-      (when (hash-table-p nodes)
-        (maphash (lambda (node-id node-data)
-                   (when (eq (plist-get node-data :type) :node)
-                     (dolist (tag-id (plist-get node-data :tags))
-                       (when (supertag-migrate--is-uuid-tag-id-p tag-id)
-                         (push (format "Node %s has orphaned UUID tag reference: %s" node-id tag-id)
-                               validation-errors)))))
-                 nodes)))
+    (maphash (lambda (node-id node-data)
+               (when (eq (plist-get node-data :type) :node)
+                 (dolist (tag-id (plist-get node-data :tags))
+                   (when (supertag-migrate--is-uuid-tag-id-p tag-id)
+                     (push (format "Node %s has orphaned UUID tag reference: %s" node-id tag-id)
+                           validation-errors)))))
+             (supertag-store-get-collection :nodes))
     
     ;; Check for orphaned relations
-    (let ((relations (supertag-get (list :relations))))
-      (when (hash-table-p relations)
-        (maphash (lambda (relation-id relation-data)
-                   (when (and (eq (plist-get relation-data :type) :node-tag)
-                              (supertag-migrate--is-uuid-tag-id-p (plist-get relation-data :to)))
-                     (push (format "Orphaned node-tag relation: %s -> %s" 
-                                   (plist-get relation-data :from) (plist-get relation-data :to))
-                           validation-errors)))
-                 relations)))
+    (maphash (lambda (_relation-id relation-data)
+               (when (and (eq (plist-get relation-data :type) :node-tag)
+                          (supertag-migrate--is-uuid-tag-id-p (plist-get relation-data :to)))
+                 (push (format "Orphaned node-tag relation: %s -> %s" 
+                               (plist-get relation-data :from) (plist-get relation-data :to))
+                       validation-errors)))
+             (supertag-store-get-collection :relations))
     
     (if validation-errors
         (progn

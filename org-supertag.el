@@ -52,15 +52,14 @@
   :type 'directory
   :group 'org-supertag)
 
-;; Load org-supertag after gptel is loaded
 ;; --- Core Components ---
 (require 'ht) ; Ensure ht is loaded before other modules that might depend on it
 (require 'supertag-core-store)
 (require 'supertag-core-scan)
-(require 'supertag-core-persistence) ; Add persistence module for data loading/saving
+(require 'supertag-core-persistence)
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
-(require 'supertag-core-notify) ; Renamed from supertag-notify for clarity
+(require 'supertag-core-notify)
 
 ;; --- Entity Operations (ops) ---
 (require 'supertag-ops-node)
@@ -71,7 +70,8 @@
 (require 'supertag-ops-batch)
 (require 'supertag-ops-embed)
 
-;; --- Automation System 2.0 ---
+;; --- Automation System ---
+(require 'supertag-automation-sync)
 (require 'supertag-automation)
 
 ;; --- Service Functions (services) ---
@@ -82,12 +82,14 @@
 (require 'supertag-services-embed)
 (require 'supertag-services-scheduler)
 
+
 ;; --- User Interface (ui) ---
 (require 'supertag-ui-commands)
 (require 'supertag-ui-chat)
 (require 'supertag-ui-embed)
 (require 'supertag-ui-query-block)
 (require 'supertag-ui-search)
+(require 'supertag-ui-completion)
 
 ;; --- View ---
 (require 'supertag-view-schema)
@@ -128,8 +130,13 @@ This function loads all necessary components and sets up the environment."
       (supertag-services-embed-init))
     ;; Start scheduler
     (supertag-scheduler-start)
-    ;; Add a watcher to debug unexpected changes to the store
-    (add-variable-watcher 'supertag--store (lambda (sym newval op where) (debug)))
+    ;; Enable completion globally
+    (global-supertag-ui-completion-mode 1)
+    ;; Enable completion in already-open org buffers
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (derived-mode-p 'org-mode)
+          (supertag-ui-completion-mode 1))))
     (message "Org-Supertag system initialized."))
  
 ;; --- Hooks for persistence ---
@@ -137,16 +144,11 @@ This function loads all necessary components and sets up the environment."
 (add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
-;;(add-hook 'after-init-hook #'supertag-init) ; Initialize on Emacs start, after basic init
 (add-hook 'emacs-startup-hook #'supertag-init)
-(add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks) ; Add sync hook to all org buffers
-
-;;Load completion UI and enable globally by default
-(ignore-errors (require 'supertag-ui-completion))
-(when (fboundp 'global-supertag-ui-completion-mode)
-  (global-supertag-ui-completion-mode 1))
-
+(add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks)
 
 (provide 'org-supertag)
 
-;;; org-supertag/supertag.el ends here
+;;; org-supertag.el ends here
+
+ 

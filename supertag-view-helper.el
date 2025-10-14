@@ -10,7 +10,7 @@
 (require 'org)
 
 ;; Forward declare functions to avoid circular dependencies
-(declare-function supertag-field-get "supertag-ops-field")
+(declare-function supertag-field-get-with-default "supertag-ops-field")
 
 ;;;----------------------------------------------------------------------
 ;;; Constants and Configuration
@@ -399,7 +399,7 @@ TEXT can be any value convertible to string."
       (supertag-view-helper-insert-simple-empty-state "No fields defined")
     (dolist (field-def fields)
       (let* ((field-name (plist-get field-def :name))
-             (value (supertag-field-get node-id tag-id field-name))
+             (value (supertag-field-get-with-default node-id tag-id field-name))
              (interactive-props `(field-name ,field-name
                                   tag-id ,tag-id
                                   field-def ,field-def

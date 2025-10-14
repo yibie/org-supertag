@@ -354,7 +354,7 @@ graph LR
                            completed-task-id "depends_on")))
     (dolist (task-info dependent-tasks)
       (let ((task-id (plist-get task-info :id))
-            (task-data (supertag-get `(:nodes ,(plist-get task-info :id)))))
+            (task-data (supertag-node-get (plist-get task-info :id))))
         (when (equal (plist-get task-data :status) "Waiting")
           (supertag-node-update-property task-id :status "Todo")
           (message "Task %s unlocked, status set to TODO." (plist-get task-data :title)))))))
@@ -401,7 +401,7 @@ graph LR
            (all-done t))
       ;; 2. 检查项目下的所有任务是否都已完成
       (dolist (task all-tasks)
-        (unless (equal (plist-get (supertag-get `(:nodes ,(plist-get task :id))) :status) "Done")
+        (unless (equal (plist-get (supertag-node-get (plist-get task :id)) :status) "Done")
           (setq all-done nil)))
       ;; 3. 如果所有任务都完成，则更新项目状态
       (when all-done
@@ -492,7 +492,7 @@ graph LR
   )
 
 ;; 检查节点属性
-(supertag-get `(:nodes ,node-id))
+(supertag-node-get node-id)
 
 ;; 检查规则是否正确索引
 (gethash "your-trigger-key" supertag--rule-index)
@@ -840,7 +840,7 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 **诊断步骤**：
 ```elisp
 ;; 检查节点属性
-(supertag-get `(:nodes ,node-id))
+(supertag-node-get node-id)
 
 ;; 手动重新计算汇总
 (supertag-automation-recalculate-all-rollups)
@@ -884,10 +884,12 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
       (push "Rule index is not properly initialized" issues))
     
     ;; 检查关系一致性
-    (dolist (relation (supertag-get-all-relations))
-      (let ((relation-name (plist-get relation :name)))
-        (unless (supertag-relation-validate relation-name)
-          (push (format "Relation %s has consistency issues" relation-name) issues))))
+    (maphash
+     (lambda (_ relation)
+       (let ((relation-name (plist-get relation :name)))
+         (unless (supertag-relation-validate relation-name)
+           (push (format "Relation %s has consistency issues" relation-name) issues))))
+     (supertag-store-get-collection :relations))
     
     ;; 检查汇总计算
     (supertag-automation-recalculate-all-rollups)
@@ -954,7 +956,7 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
   "将旧版本的行为规则迁移到新的自动化系统。"
   (interactive)
   ;; 1. 收集所有旧规则
-  (let ((old-behaviors (supertag-get-all-behaviors)))  ; 假设的API
+  (let ((old-behaviors (supertag-behavior-list)))  ; 旧版 API 占位
     (dolist (behavior old-behaviors)
       (let ((tag (plist-get behavior :tag))
             (trigger (plist-get behavior :trigger))
@@ -1206,15 +1208,15 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
       (insert ";; Generated: " (current-time-string) "\n\n")
       ;; 备份标签定义
       (insert "(setq supertag-tags-backup\n")
-      (pp (supertag-get-all-tags) (current-buffer))
+      (pp (supertag-query '(:tags)) (current-buffer))
       (insert ")\n\n")
       ;; 备份关系定义
       (insert "(setq supertag-relations-backup\n")
-      (pp (supertag-get-all-relations) (current-buffer))
+      (pp (supertag-query '(:relations)) (current-buffer))
       (insert ")\n\n")
       ;; 备份自动化规则
       (insert "(setq supertag-automation-rules-backup\n")
-      (pp (supertag-get-all-automation-rules) (current-buffer))
+      (pp (supertag-automation-list) (current-buffer))
       (insert ")\n"))
     (message "Configuration backed up to %s" backup-file)))
 ```

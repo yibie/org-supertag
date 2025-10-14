@@ -8,7 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib) ; For cl-loop, cl-find, etc.
-(require 'ht)     ; For hash-table operations
+(require 'ht) ; Provides basic `ht` operations when library missing
 
 ;;; --- Shared Core State Variables ---
 

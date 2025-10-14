@@ -29,7 +29,7 @@
 
 (defun supertag-ops-schema--get-all-raw-tags ()
   "Return a hash table of tag-id -> raw tag plist."
-  (let ((raw (supertag-get '(:tags)))
+  (let ((raw (supertag-store-get-collection :tags))
         (result (make-hash-table :test 'equal))
         (count 0))
     (when (hash-table-p raw)

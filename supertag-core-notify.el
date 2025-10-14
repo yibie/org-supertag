@@ -8,7 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib) ; For cl-delete
-(require 'ht)                ; For hash-table operations
+(require 'ht)
 (require 'supertag-core-state) ; For supertag--subscribers, supertag--suppress-notifications, supertag--pending-changes
 
 ;;; --- Change Notification System ---

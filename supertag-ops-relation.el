@@ -8,10 +8,13 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'supertag-core-store)    ; For supertag-get, supertag-update
-(require 'supertag-core-schema)   ; For validation functions
-(require 'supertag-core-transform) ; For supertag-transform
-(require 'sha1)              ; For secure-hash
+(require 'supertag-core-store)
+(require 'supertag-core-schema)
+(require 'supertag-core-transform)
+(require 'sha1)
+
+(declare-function supertag-node-update "supertag-ops-node" (id updater))
+(declare-function supertag-tag-update "supertag-ops-tag" (id updater))
 
 ;;; --- Internal Helper ---
 
@@ -33,6 +36,29 @@ Implements immediate error reporting as preferred by the user."
   (unless (stringp (plist-get data :to))
     (error "Relation :to must be a string, got: %S" (plist-get data :to))))
 
+(defun supertag-ops-relation--ensure-plist (data)
+  "Return a plist copy of DATA, converting hash tables when necessary."
+  (cond
+   ((null data) nil)
+   ((hash-table-p data)
+    (let (plist)
+      (maphash (lambda (k v)
+                 (setq plist (plist-put plist k v)))
+               data)
+      plist))
+   ((listp data)
+    (copy-tree data))
+   (t
+    (error "Unsupported relation entity format: %S" data))))
+
+(defun supertag-ops-relation--normalize-keyword (name)
+  "Normalize NAME into a keyword symbol."
+  (cond
+   ((keywordp name) name)
+   ((symbolp name) (intern (concat ":" (symbol-name name))))
+   ((stringp name) (intern (concat ":" name)))
+   (t (error "Unsupported property key: %S" name))))
+
 (defun supertag-generate-relation-id (from-id to-id type)
   "Generate a deterministic relation ID based on FROM-ID, TO-ID, and TYPE.
 Uses SHA1 hash for consistent ID generation, preventing duplicates."
@@ -41,15 +67,16 @@ Uses SHA1 hash for consistent ID generation, preventing duplicates."
 (defun supertag--relation-update-node-references (from-id to-id operation)
   "Private helper to update reference properties on nodes.
 OPERATION can be 'add or 'remove."
-  (let ((from-node (supertag-get (list :nodes from-id)))
-        (to-node (supertag-get (list :nodes to-id))))
+  (let ((from-node (supertag-store-get-entity :nodes from-id))
+        (to-node (supertag-store-get-entity :nodes to-id)))
     (when (and from-node to-node)
       ;; Update the 'from' node's :ref-to list
       (let* ((ref-to-list (or (plist-get from-node :ref-to) '()))
              (new-ref-to (if (eq operation 'add)
                              (if (member to-id ref-to-list) ref-to-list (cons to-id ref-to-list))
                            (remove to-id ref-to-list))))
-        (supertag-update (list :nodes from-id) (plist-put from-node :ref-to new-ref-to)))
+        (supertag-store-put-entity :nodes from-id
+                                   (plist-put (copy-sequence from-node) :ref-to new-ref-to)))
 
       ;; Update the 'to' node's :ref-from and :ref-count
       (let* ((ref-from-list (or (plist-get to-node :ref-from) '()))
@@ -57,9 +84,9 @@ OPERATION can be 'add or 'remove."
                                (if (member from-id ref-from-list) ref-from-list (cons from-id ref-from-list))
                              (remove from-id ref-from-list)))
              (new-ref-count (length new-ref-from)))
-        (let* ((p-node (plist-put to-node :ref-from new-ref-from))
+        (let* ((p-node (plist-put (copy-sequence to-node) :ref-from new-ref-from))
                (p-node (plist-put p-node :ref-count new-ref-count)))
-          (supertag-update (list :nodes to-id) p-node))))))
+          (supertag-store-put-entity :nodes to-id p-node))))))
 
 
 ;;; --- Relation Operations ---
@@ -67,84 +94,90 @@ OPERATION can be 'add or 'remove."
 ;; 5.1 Basic Operations
 
 (defun supertag-relation-create (relation-data)
-    "Create a new relation using hybrid architecture.
-Combines old architecture performance with new architecture safety.
-Automatically checks for existing relations to prevent duplicates.
-Also updates ref-counts on relevant nodes."
-    (supertag-with-transaction
-      (let* ((type (plist-get relation-data :type))
-             (from (plist-get relation-data :from))
-             (to   (plist-get relation-data :to)))
-        
-        ;; Strict validation (fail-fast principle)
-        (supertag--validate-relation-data relation-data)
-        
-        ;; Check if relation already exists
-        (let ((existing-relations (supertag-relation-find-between from to type)))
-          (if existing-relations
-              (progn
-                (message "DEBUG: Relation (%s -> %s [%s]) already exists, reusing existing relation." 
-                         from to type)
-                ;; Return the first existing relation
-                (car existing-relations))
-            ;; Create new relation if none exists
-            (let* ((rel-id (supertag-generate-relation-id from to type))
-                   (relation-plist (list :id rel-id 
-                                         :type type
-                                         :from from
-                                         :to to
-                                         :created-at (current-time))))
-              (message "DEBUG: Creating new relation (%s -> %s [%s]) with ID: %s" 
-                       from to type rel-id)
-              
-              ;; Direct storage for optimal performance (old-style efficiency)
-              (supertag-store-direct-set :relations rel-id relation-plist)
-              
-              ;; If it's a reference, update the nodes via helper
-              (when (eq type :reference)
-                (supertag--relation-update-node-references from to 'add))
-              relation-plist))))))
+  "Create a new relation using the unified commit system.
+RELATION-DATA is a plist of relation properties.
+Returns the created relation data."
+  (let* ((type (plist-get relation-data :type))
+         (from (plist-get relation-data :from))
+         (to   (plist-get relation-data :to))
+         (rel-id (supertag-generate-relation-id from to type))
+         (relation-plist (list :id rel-id
+                               :type type
+                               :from from
+                               :to to
+                               :created-at (current-time))))
+
+    ;; Strict validation
+    (supertag--validate-relation-data relation-plist)
+
+    ;; Check if relation already exists
+    (let ((existing-relations (supertag-relation-find-between from to type)))
+      (if existing-relations
+          (progn
+            (message "DEBUG: Relation (%s -> %s [%s]) already exists, reusing existing relation."
+                     from to type)
+            ;; Return the first existing relation
+            (car existing-relations))
+        ;; Create new relation if none exists
+        (message "DEBUG: Creating new relation (%s -> %s [%s]) with ID: %s"
+                 from to type rel-id)
+
+        ;; Use unified commit system
+        (supertag-ops-commit
+         :operation :create
+         :collection :relations
+         :id rel-id
+         :new relation-plist
+         :perform (lambda ()
+                    (supertag-store-put-entity :relations rel-id relation-plist)
+                    (when (eq type :reference)
+                      (supertag--relation-update-node-references from to 'add))
+                    relation-plist))))))
 
 (defun supertag-relation-get (id)
   "Get relation data.
 ID is the unique identifier of the relation.
 Returns relation data, or nil if it does not exist."
-  (supertag-get (list :relations id)))
+  (supertag-store-get-entity :relations id))
 
 (defun supertag-relation-update (id updater)
-  "Update relation data using hybrid architecture.
+  "Update relation data using the unified commit system.
 ID is the unique identifier of the relation.
 UPDATER is a function that receives the current relation data and returns the updated data.
 Returns the updated relation data."
-  (let ((relation (supertag-relation-get id)))
-    (when relation
-      (let ((updated-relation (funcall updater relation)))
-        (when updated-relation
-          ;; Add/update timestamps
-          (let ((final-relation (plist-put updated-relation :modified-at (current-time))))
-            ;; Strict validation (fail-fast principle)
-            (supertag--validate-relation-data final-relation)
-            ;; Direct storage for optimal performance
-            (supertag-store-direct-set :relations id final-relation)
-            final-relation))))))
+  (let ((previous (supertag-relation-get id)))
+    (when previous
+      (supertag-ops-commit
+       :operation :update
+       :collection :relations
+       :id id
+       :previous previous
+       :perform (lambda ()
+                  (let ((updated-relation (funcall updater previous)))
+                    (when updated-relation
+                      (let ((final-relation (plist-put updated-relation :modified-at (current-time))))
+                        (supertag--validate-relation-data final-relation)
+                        (supertag-store-put-entity :relations id final-relation)
+                        final-relation))))))))
 
 (defun supertag-relation-delete (id)
   "Delete a relation by its ID and update node ref-counts if applicable.
-  ID is the unique identifier of the relation.
+ID is the unique identifier of the relation.
 Returns the deleted relation data."
-  (supertag-with-transaction
-    (let ((relation (supertag-relation-get id)))
-      (when relation
-        ;; 1. Delete the relation object itself using the correct delete function
-        (supertag-delete (list :relations id))
-
-        ;; 2. If it's a reference, update the affected nodes
-        (when (eq (plist-get relation :type) :reference)
-          (let ((from-id (plist-get relation :from))
-                (to-id (plist-get relation :to)))
-            (supertag--relation-update-node-references from-id to-id 'remove)))
-
-        relation))))
+  (let ((previous (supertag-relation-get id)))
+    (when previous
+      (supertag-ops-commit
+       :operation :delete
+       :collection :relations
+       :id id
+       :previous previous
+       :perform (lambda ()
+                  (supertag-store-remove-entity :relations id)
+                  (when (eq (plist-get previous :type) :reference)
+                    (let ((from-id (plist-get previous :from))
+                          (to-id (plist-get previous :to)))
+                      (supertag--relation-update-node-references from-id to-id 'remove)))
+                  nil)))))
 
 ;; 5.2 Relation Query Operations
 
@@ -153,7 +186,7 @@ Returns the deleted relation data."
 FROM-ID is the unique identifier of the source entity.
 TYPE is an optional relation type filter.
 Returns a list of relations."
-  (let ((relations (supertag-get (list :relations))))
+  (let ((relations (supertag-store-get-collection :relations)))
     (when relations
       (let ((result '()))
         (maphash
@@ -169,7 +202,7 @@ Returns a list of relations."
 TO-ID is the unique identifier of the target entity.
 TYPE is an optional relation type filter.
 Returns a list of relations."
-  (let ((relations (supertag-get (list :relations))))
+  (let ((relations (supertag-store-get-collection :relations)))
     (when relations
       (let ((result '()))
         (maphash
@@ -186,7 +219,7 @@ FROM-ID is the unique identifier of the source entity.
 TO-ID is the unique identifier of the target entity.
 TYPE is an optional relation type filter.
 Returns a list of relations."
-  (let ((relations (supertag-get (list :relations))))
+  (let ((relations (supertag-store-get-collection :relations)))
     (when relations
       (let ((result '()))
         (maphash
@@ -204,7 +237,7 @@ Returns a list of relations."
   "Clean up duplicate relations in the database.
 Keeps the first relation for each unique (from, to, type) combination."
   (interactive)
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (relation-groups (make-hash-table :test 'equal))
         (duplicates-found 0)
         (removed-count 0))
@@ -236,7 +269,7 @@ Keeps the first relation for each unique (from, to, type) combination."
                    (message "Keeping relation ID: %s" (car keep-relation))
                    (dolist (dup-relation delete-relations)
                      (message "Deleting duplicate relation ID: %s" (car dup-relation))
-                     (supertag-delete (list :relations (car dup-relation)))
+                     (supertag-store-remove-entity :relations (car dup-relation))
                      (cl-incf removed-count)))))
              relation-groups)
     
@@ -248,7 +281,7 @@ Keeps the first relation for each unique (from, to, type) combination."
   "Delete all relations associated with a specific node.
 NODE-ID is the unique identifier of the node.
 Returns the number of deleted relations."
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (count 0))
     (when relations
       (maphash
@@ -264,7 +297,7 @@ Returns the number of deleted relations."
   "Delete all relations associated with a specific tag.
 TAG-ID is the unique identifier of the tag.
 Returns the number of deleted relations."
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (count 0))
     (when relations
       (maphash
@@ -348,26 +381,35 @@ RELATION-ID is the identifier of the relation defining the sync rules."
       (let* ((from-id (plist-get relation :from))
              (to-id (plist-get relation :to))
              (sync-fields (plist-get relation :sync-fields))
-             (from-entity (or (supertag-get (list :nodes from-id))
-                            (supertag-get (list :tags from-id))))
-             (to-entity (or (supertag-get (list :nodes to-id))
-                          (supertag-get (list :tags to-id)))))
-        
-        (when (and from-entity to-entity sync-fields)
+             (from-entity (or (supertag-store-get-entity :nodes from-id)
+                              (supertag-store-get-entity :tags from-id)))
+             (from-plist (supertag-ops-relation--ensure-plist from-entity))
+             (target-node (supertag-store-get-entity :nodes to-id))
+             (target-tag (and (not target-node) (supertag-store-get-entity :tags to-id))))
+        (when (and from-plist (or target-node target-tag) sync-fields)
           (dolist (prop-name sync-fields)
-            (let ((prop-value (plist-get from-entity (intern (concat ":" prop-name)))))
+            (let* ((prop-key (supertag-ops-relation--normalize-keyword prop-name))
+                   (prop-value (plist-get from-plist prop-key)))
               (when prop-value
-                ;; Update target entity's property
-                (if (supertag-get (list :nodes to-id))
-                    ;; Update node
-                    (supertag-update (list :nodes to-id)
-                                     (lambda (node)
-                                       (plist-put node (intern (concat ":" prop-name)) prop-value)))
-                  ;; Update tag
-                  (supertag-update (list :tags to-id)
-                                   (lambda (tag)
-                                     (plist-put tag (intern (concat ":" prop-name)) prop-value))))))))
-        
+                (if target-node
+                    (when (fboundp 'supertag-node-update)
+                      (supertag-node-update
+                       to-id
+                       (lambda (node)
+                         (let* ((plist (supertag-ops-relation--ensure-plist node))
+                                (current (plist-get plist prop-key)))
+                           (if (equal current prop-value)
+                               nil
+                             (plist-put plist prop-key prop-value))))))
+                  (when (and target-tag (fboundp 'supertag-tag-update))
+                    (supertag-tag-update
+                     to-id
+                     (lambda (tag)
+                       (let* ((plist (supertag-ops-relation--ensure-plist tag))
+                              (current (plist-get plist prop-key)))
+                         (if (equal current prop-value)
+                             nil
+                           (plist-put plist prop-key prop-value)))))))))))
         (message "Synced properties for relation %s: %s" relation-id sync-fields)))))
 
 (defun supertag-relation-calculate-rollup (relation-id)
@@ -386,26 +428,46 @@ RELATION-ID is the identifier of the rollup relation."
           (let ((values '()))
             (dolist (rel related-entities)
               (let* ((entity-id (plist-get rel :to))
-                     (entity (or (supertag-get (list :nodes entity-id))
-                               (supertag-get (list :tags entity-id))))
-                     (value (when entity
-                              (plist-get entity (intern (concat ":" rollup-field))))))
+                     (entity (or (supertag-store-get-entity :nodes entity-id)
+                                 (supertag-store-get-entity :tags entity-id)))
+                     (entity-plist (supertag-ops-relation--ensure-plist entity))
+                     (value-key (supertag-ops-relation--normalize-keyword rollup-field))
+                     (value (when entity-plist
+                              (plist-get entity-plist value-key))))
                 (when value
                   (push value values))))
             
             ;; Calculate rollup result
-            (let ((result (funcall rollup-function values)))
-              ;; Update target entity with rollup result
-              (if (supertag-get (list :nodes to-id))
-                  (supertag-update (list :nodes to-id)
-                                   (lambda (node)
-                                     (plist-put node (intern (concat ":rollup-" rollup-field)) result)))
-                (supertag-update (list :tags to-id)
-                                 (lambda (tag)
-                                   (plist-put tag (intern (concat ":rollup-" rollup-field)) result))))
-              
-              (message "Calculated rollup for %s: %s = %s" to-id rollup-field result)
-              result)))))))
+              (let ((result (funcall rollup-function values)))
+                ;; Update target entity with rollup result
+                (let* ((field-name (cond
+                                    ((keywordp rollup-field) (substring (symbol-name rollup-field) 1))
+                                    ((symbolp rollup-field) (symbol-name rollup-field))
+                                    ((stringp rollup-field) rollup-field)
+                                    (t (format "%s" rollup-field))))
+                       (rollup-key (intern (concat ":rollup-" field-name))))
+                  (if (supertag-store-get-entity :nodes to-id)
+                      (when (fboundp 'supertag-node-update)
+                        (supertag-node-update
+                         to-id
+                         (lambda (node)
+                           (let* ((plist (supertag-ops-relation--ensure-plist node))
+                                  (current (plist-get plist rollup-key)))
+                             (if (equal current result)
+                                 nil
+                               (plist-put plist rollup-key result))))))
+                    (when (fboundp 'supertag-tag-update)
+                      (supertag-tag-update
+                       to-id
+                       (lambda (tag)
+                         (let* ((plist (supertag-ops-relation--ensure-plist tag))
+                                (current (plist-get plist rollup-key)))
+                           (if (equal current result)
+                               nil
+                             (plist-put plist rollup-key result))))))))
+
+                  (message "Calculated rollup for %s: %s = %s" to-id rollup-field result)
+                  result)))))))
 
 (defun supertag-relation-define-database-relation (from-tag to-tag relation-config)
   "Define a Notion-style database relation between two tags.
@@ -441,7 +503,7 @@ Returns the created relation."
   "Get all database relations for a tag (virtual database).
 TAG-ID is the tag identifier.
 Returns list of database relations."
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (result '()))
     (when relations
       (maphash
@@ -457,7 +519,7 @@ Returns list of database relations."
   "Update all rollup calculations in the system.
 This function finds all rollup relations and recalculates their values."
   (interactive)
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (count 0))
     (when relations
       (maphash
@@ -472,7 +534,7 @@ This function finds all rollup relations and recalculates their values."
 (defun supertag-relation-sync-all-fields ()
   "Sync all field synchronization relations in the system."
   (interactive)
-  (let ((relations (supertag-get (list :relations)))
+  (let ((relations (supertag-store-get-collection :relations))
         (count 0))
     (when relations
       (maphash

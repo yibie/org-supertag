@@ -34,6 +34,7 @@
 (require 'gptel)
 (require 'supertag-core-store)
 (require 'supertag-services-query)
+(require 'supertag-ops-node) ;; For supertag-node-get API
 (require 'json) ;; For safer parsing of LLM responses
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -288,7 +289,7 @@ ARGS is a property list that can contain the following keys:
 (defun supertag-rag-debug-node-data (node-id)
   "Debug function to inspect the data structure of a specific node."
   (interactive "sNode ID to inspect: ")
-  (let ((node-data (supertag-store-direct-get :nodes node-id)))
+  (let ((node-data (supertag-node-get node-id)))
     (message "Node data for %s: %s" node-id node-data)
     (if (null node-data)
         (message "Node with ID %s not found in store" node-id)
@@ -313,7 +314,7 @@ ARGS is a property list that can contain the following keys:
 (defun supertag-rag-debug-list-all-nodes ()
   "Debug function to list all nodes in the store with basic information."
   (interactive)
-  (let ((nodes-collection (supertag-get '(:nodes)))
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
         (node-count 0))
     (message "Supertag RAG Debug: Listing all nodes in store...")
     (when (hash-table-p nodes-collection)
@@ -338,7 +339,7 @@ ARGS is a property list that can contain the following keys:
     (let ((context-parts '())
           (max-context-length supertag-rag-max-context-length))
       (dolist (id node-ids)
-        (let ((node-data (supertag-store-direct-get :nodes id)))
+        (let ((node-data (supertag-node-get id)))
           ;; Debug: Print node data to messages buffer
           (message "Supertag RAG Debug: Node ID %s data: %s" id node-data)
           (if (null node-data)

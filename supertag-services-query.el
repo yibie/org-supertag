@@ -24,7 +24,9 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'supertag-core-store) ; For supertag-get
+(require 'supertag-core-store) ; For store buckets
+(require 'supertag-ops-node)
+(require 'supertag-ops-tag)
 (require 'supertag-ops-field)   ; For supertag-field-get
 
 ;;; --- Query System ---
@@ -34,16 +36,28 @@
 COLLECTION is the path to the collection (e.g., :nodes, :tags, :relations).
 FILTER is an optional function that receives (id . data) pairs and returns t if the item should be included.
 Returns a list of (id . data) pairs for matching items."
-  (let ((data (supertag-get (list collection)))) ; collection should be a list of keys
-    (if (not (hash-table-p data))
-        '() ; Return empty list if collection is not a hash table
-      (let ((results '()))
-        (maphash
-         (lambda (id value)
-           (when (or (null filter) (funcall filter id value))
-             (push (cons id value) results)))
-         data)
-        (nreverse results)))))
+  (let* ((path (if (listp collection) collection (list collection)))
+         (key (and (= (length path) 1) (car path))))
+    (if key
+        (let ((bucket (supertag-store-get-collection key))
+              results)
+          (maphash
+           (lambda (id value)
+             (when (or (null filter) (funcall filter id value))
+               (push (cons id value) results)))
+           bucket)
+          (nreverse results))
+      ;; Path is deeper than one segment; use store API for nested access
+      (let ((data (supertag-store-get-entity (car path) (cadr path))))
+        (if (not (hash-table-p data))
+            '()
+          (let (results)
+            (maphash
+             (lambda (id value)
+               (when (or (null filter) (funcall filter id value))
+                 (push (cons id value) results)))
+             data)
+            (nreverse results)))))))
 
 ;;; --- S-expression Query Engine (User-facing) ---
 ;; All simple API queries have been moved to supertag-store.el index functions
@@ -168,10 +182,9 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
 
 (defun supertag-query--get-all-node-ids ()
   "Get all node IDs in the system."
-  (let ((nodes-collection (supertag-get '(:nodes)))
-        (all-ids '()))
-    (when (hash-table-p nodes-collection)
-      (maphash (lambda (id _data) (push id all-ids)) nodes-collection))
+  (let (all-ids)
+    (maphash (lambda (id _data) (push id all-ids))
+             (supertag-store-get-collection :nodes))
     all-ids))
 
 (defun supertag-query--find-nodes-by-field-indexed (field-name value)
@@ -180,17 +193,15 @@ This is much faster than the old approach that scanned the entire link table."
   ;; For now, fall back to the existing field query implementation
   ;; TODO: Implement field indexing for even better performance
   (let ((matching-nodes '())
-        (nodes-collection (supertag-get '(:nodes))))
-    (when (hash-table-p nodes-collection)
-      (maphash
-       (lambda (node-id node-data)
-         ;; For each node, check all of its tags to see if any have a matching field value.
-         (let ((tags (plist-get node-data :tags)))
-           (when (cl-some (lambda (tag-id)
-                            (equal (supertag-field-get node-id tag-id field-name) value))
-                          tags)
-             (push node-id matching-nodes))))
-       nodes-collection))
+        (nodes-collection (supertag-store-get-collection :nodes)))
+    (maphash
+     (lambda (node-id node-data)
+       (let ((tags (plist-get node-data :tags)))
+         (when (cl-some (lambda (tag-id)
+                          (equal (supertag-field-get node-id tag-id field-name) value))
+                        tags)
+           (push node-id matching-nodes))))
+     nodes-collection)
     (nreverse matching-nodes)))
 
 (defun supertag-query--resolve-date-string (date-str)
@@ -247,7 +258,7 @@ Used for generating table headers in Org Babel output."
 (defun supertag-query--get-node-field-value (node-id field-name)
   "Get the value of FIELD-NAME for NODE-ID.
 This uses the new data format instead of the old link table."
-  (when-let ((node-data (supertag-get (list :nodes node-id))))
+  (when-let ((node-data (supertag-node-get node-id)))
     ;; A field can belong to any tag on the node. Find the first match.
     (catch 'found
       (dolist (tag-id (plist-get node-data :tags))
@@ -274,16 +285,16 @@ Returns list of (related-id . related-data) pairs."
     ;; Collect related entities from outgoing relations
     (dolist (relation relations-from)
       (let* ((related-id (plist-get relation :to))
-             (related-data (or (supertag-get (list :nodes related-id))
-                              (supertag-get (list :tags related-id)))))
+             (related-data (or (supertag-node-get related-id)
+                               (supertag-tag-get related-id))))
         (when related-data
           (push (cons related-id related-data) results))))
     
     ;; Collect related entities from incoming relations
     (dolist (relation relations-to)
       (let* ((related-id (plist-get relation :from))
-             (related-data (or (supertag-get (list :nodes related-id))
-                              (supertag-get (list :tags related-id)))))
+             (related-data (or (supertag-node-get related-id)
+                               (supertag-tag-get related-id))))
         (when related-data
           (push (cons related-id related-data) results))))
     
@@ -591,18 +602,16 @@ Returns a query builder object that can be chained."
   "Return all nodes and links from the store as a single list of plists.
 This is a low-level function for services like knowledge sync."
   (let ((all-items '()))
-    (let ((nodes-table (supertag-get '(:nodes)))
-          (relations-table (supertag-get '(:relations))))
+    (let ((nodes-table (supertag-store-get-collection :nodes))
+          (relations-table (supertag-store-get-collection :relations)))
       ;; Add all nodes
-      (when nodes-table
-        (maphash (lambda (_id props)
-                   (push props all-items))
-                 nodes-table))
+      (maphash (lambda (_id props)
+                 (push props all-items))
+               nodes-table)
       ;; Add all relations
-      (when relations-table
-        (maphash (lambda (_id props)
-                   (push props all-items))
-                 relations-table)))
+      (maphash (lambda (_id props)
+                 (push props all-items))
+               relations-table))
     (nreverse all-items)))
 
 (provide 'supertag-services-query)
