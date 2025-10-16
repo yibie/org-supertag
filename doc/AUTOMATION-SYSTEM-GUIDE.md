@@ -354,7 +354,7 @@ This example will demonstrate some features that are difficult or impossible to 
                            completed-task-id "depends_on")))
     (dolist (task-info dependent-tasks)
       (let ((task-id (plist-get task-info :id))
-            (task-data (supertag-get `(:nodes ,(plist-get task-info :id)))))
+            (task-data (supertag-node-get (plist-get task-info :id))))
         (when (equal (plist-get task-data :status) "Waiting")
           (supertag-node-update-property task-id :status "Todo")
           (message "Task %s unlocked, status set to TODO." (plist-get task-data :title)))))))
@@ -401,7 +401,7 @@ When a subtask's status changes, we want to check if all tasks in the parent pro
            (all-done t))
       ;; 2. Check if all tasks under the project are completed
       (dolist (task all-tasks)
-        (unless (equal (plist-get (supertag-get `(:nodes ,(plist-get task :id))) :status) "Done")
+        (unless (equal (plist-get (supertag-node-get (plist-get task :id)) :status) "Done")
           (setq all-done nil)))
       ;; 3. If all tasks are completed, update project status
       (when all-done
@@ -492,7 +492,7 @@ After creating automation rules, you can use the following methods to test and d
   )
 
 ;; Check node properties
-(supertag-get `(:nodes ,node-id))
+(supertag-node-get node-id)
 
 ;; Check if rule is correctly indexed
 (gethash "your-trigger-key" supertag--rule-index)
@@ -838,7 +838,7 @@ When processing large numbers of nodes, consider the following optimization stra
 **Diagnostic Steps**:
 ```elisp
 ;; Check node properties
-(supertag-get `(:nodes ,node-id))
+(supertag-node-get node-id)
 
 ;; Manually recalculate rollup
 (supertag-automation-recalculate-all-rollups)
@@ -882,10 +882,12 @@ Run system health checks regularly to ensure data integrity:
       (push "Rule index is not properly initialized" issues))
     
     ;; Check relationship consistency
-    (dolist (relation (supertag-get-all-relations))
-      (let ((relation-name (plist-get relation :name)))
-        (unless (supertag-relation-validate relation-name)
-          (push (format "Relation %s has consistency issues" relation-name) issues))))
+    (maphash
+     (lambda (_ relation)
+       (let ((relation-name (plist-get relation :name)))
+         (unless (supertag-relation-validate relation-name)
+           (push (format "Relation %s has consistency issues" relation-name) issues))))
+     (supertag-store-get-collection :relations))
     
     ;; Check rollup calculations
     (supertag-automation-recalculate-all-rollups)
@@ -952,7 +954,7 @@ Run system health checks regularly to ensure data integrity:
   "Migrate behavior rules from old version to new automation system."
   (interactive)
   ;; 1. Collect all old rules
-  (let ((old-behaviors (supertag-get-all-behaviors)))  ; Hypothetical API
+  (let ((old-behaviors (supertag-behavior-list)))  ; Legacy API placeholder
     (dolist (behavior old-behaviors)
       (let ((tag (plist-get behavior :tag))
             (trigger (plist-get behavior :trigger))
@@ -1204,15 +1206,15 @@ Regularly back up important configurations and data.
       (insert ";; Generated: " (current-time-string) "\n\n")
       ;; Backup tag definitions
       (insert "(setq supertag-tags-backup\n")
-      (pp (supertag-get-all-tags) (current-buffer))
+      (pp (supertag-query '(:tags)) (current-buffer))
       (insert ")\n\n")
       ;; Backup relationship definitions
       (insert "(setq supertag-relations-backup\n")
-      (pp (supertag-get-all-relations) (current-buffer))
+      (pp (supertag-query '(:relations)) (current-buffer))
       (insert ")\n\n")
       ;; Backup automation rules
       (insert "(setq supertag-automation-rules-backup\n")
-      (pp (supertag-get-all-automation-rules) (current-buffer))
+      (pp (supertag-automation-list) (current-buffer))
       (insert ")\n"))
     (message "Configuration backed up to %s" backup-file)))
 ```

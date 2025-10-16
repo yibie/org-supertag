@@ -13,11 +13,10 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'org-id)                    
-(require 'supertag-core-store)       
-(require 'supertag-core-schema)      
-(require 'supertag-core-transform)   
-(require 'supertag-core-persistence) 
+(require 'org-id)
+(require 'supertag-core-store)
+(require 'supertag-core-schema)
+(require 'supertag-core-persistence)
 ;;; --- Internal Helper ---
 
 (defun supertag--validate-node-data (data)
@@ -46,70 +45,96 @@ Implements immediate error reporting as preferred by the user."
 ;; 2.1 Basic Operations
 
 (defun supertag-node-create (props)
-  "Create a new node using hybrid architecture.
-Combines old architecture performance with new architecture safety.
-Provides strict validation with immediate error reporting."
+  "Create a new node using the unified commit system.
+PROPS is a plist of node properties.
+Returns the created node data."
   (let* ((id (or (plist-get props :id) (org-id-new)))
-         ;; Build final props with required fields (hybrid approach)
+         ;; Build final props with required fields
          (final-props (plist-put props :id id))
          (final-props (plist-put final-props :type :node))
          (final-props (plist-put final-props :created-at
                                  (or (plist-get final-props :created-at) (supertag-current-time))))
          (final-props (plist-put final-props :modified-at (supertag-current-time))))
-    
-    (message "DEBUG: supertag-node-create: Adding node with ID: %S, file: %S"
+
+    (message "DEBUG: supertag-node-create: Creating node with ID: %S, file: %S"
              id (plist-get final-props :file))
-    
-    ;; Strict validation (fail-fast principle)
-    (supertag--validate-node-data final-props)
-    
-    ;; Direct storage for optimal performance (old-style efficiency)
-    (supertag-store-direct-set :nodes id final-props)
-    
-    final-props))
+
+    ;; Use unified commit system
+    (supertag-ops-commit
+     :operation :create
+     :collection :nodes
+     :id id
+     :previous nil
+     :new final-props
+     :perform (lambda ()
+                (supertag-store-put-entity :nodes id final-props)
+                final-props))))
 
 (defun supertag-node-get (id)
   "Get node data.
 ID is the unique identifier of the node.
 Returns node data, or nil if it does not exist."
-  (supertag-get (list :nodes id)))
+  (supertag-store-get-entity :nodes id))
 
 (defun supertag-node-update (id updater)
-  "Update node data using hybrid architecture.
+  "Update node data using the unified commit system.
 ID is the unique identifier of the node.
 UPDATER is a function that receives the current node data and returns the updated data.
 Returns the updated node data."
-  (let ((node (supertag-node-get id)))
-    (when node
-      (let ((updated-node (funcall updater node)))
-        (when updated-node
-          ;; Add/update timestamps
-          (let ((final-node (plist-put updated-node :modified-at (supertag-current-time))))
-            ;; Strict validation (fail-fast principle)
-            (supertag--validate-node-data final-node)
-            ;; Direct storage for optimal performance
-            (supertag-store-direct-set :nodes id final-node)
-            final-node))))))
+  (let ((previous (supertag-node-get id)))
+    (when previous
+      (supertag-ops-commit
+       :operation :update
+       :collection :nodes
+       :id id
+       :previous previous
+       :perform (lambda ()
+                  (let* ((updated-node (funcall updater previous)))
+                    (when updated-node
+                      (let* ((final-node (plist-put updated-node :modified-at (supertag-current-time))))
+                        (supertag--validate-node-data final-node)
+                        (supertag-store-put-entity :nodes id final-node)
+                        final-node)))))))
 
 (defun supertag-node-delete (node-id)
   "Delete a node and all of its relationships from the store.
 This operation is atomic and ensures no dangling references remain."
   (when node-id
-    (supertag-with-transaction
-      (let ((relations-to-delete '()))
-        ;; 1. Find all relations involving this node.
-        (let ((all-relations (supertag-get '(:relations))))
-          (when (hash-table-p all-relations)
-            (maphash (lambda (rel-id rel-data)
-                       (when (or (equal (plist-get rel-data :from) node-id)
-                                 (equal (plist-get rel-data :to) node-id))
-                         (push rel-id relations-to-delete)))
-                     all-relations)))
-        ;; 2. Delete all found relations.
-        (dolist (rel-id relations-to-delete)
-          (supertag-delete (list :relations rel-id)))
-        ;; 3. Delete the node itself.
-        (supertag-delete (list :nodes node-id))))))
+    (let ((previous (supertag-node-get node-id)))
+      (when previous
+        (supertag-ops-commit
+         :operation :delete
+         :collection :nodes
+         :id node-id
+         :previous previous
+         :perform (lambda ()
+                    ;; Custom deletion logic for relations and fields
+                    (let ((relations-table (supertag-store-get-collection :relations))
+                          (relations-to-delete '()))
+                      ;; Collect relations to delete
+                      (maphash
+                       (lambda (rel-id rel-data)
+                         (let ((relation
+                                (if (hash-table-p rel-data)
+                                    (let (plist)
+                                      (maphash (lambda (k v)
+                                                 (setq plist (plist-put plist k v)))
+                                               rel-data)
+                                      plist)
+                                  rel-data)))
+                           (when (or (equal (plist-get relation :from) node-id)
+                                     (equal (plist-get relation :to) node-id))
+                             (push rel-id relations-to-delete))))
+                       relations-table)
+                      ;; Delete relations
+                      (dolist (rel-id relations-to-delete)
+                        (supertag-store-remove-entity :relations rel-id)))
+                    ;; Remove field values
+                    (let ((fields-table (supertag-store-get-collection :fields)))
+                      (when (hash-table-p fields-table)
+                        (supertag-store-remove-entity :fields node-id)))
+                    (supertag-store-remove-entity :nodes node-id)
+                    nil)))))))
 
 ;; 2.2 Tag Operations
 
@@ -118,22 +143,31 @@ This operation is atomic and ensures no dangling references remain."
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
 Returns the updated node data."
-  (supertag-transform
-   (list :nodes node-id :tags)
-   (lambda (tags)
-     (if (member tag-id (or tags '()))
-         (or tags '())  ; Tag already exists, no change
-       (cons tag-id (or tags '())))))) ; Add new tag
+  (supertag-node-update
+   node-id
+   (lambda (node)
+     (when node
+       (let* ((tags (plist-get node :tags))
+              (present (and tags (member tag-id tags))))
+         (unless present
+           (let* ((copy (copy-sequence node))
+                  (new-tags (cons tag-id (or tags '()))))
+             (plist-put copy :tags new-tags))))))))
 
 (defun supertag-node-remove-tag (node-id tag-id)
   "Remove a tag from a node.
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
 Returns the updated node data."
-  (supertag-transform
-   (list :nodes node-id :tags)
-   (lambda (tags)
-     (remove tag-id (or tags '())))))
+  (supertag-node-update
+   node-id
+   (lambda (node)
+     (when node
+       (let* ((tags (plist-get node :tags))
+              (filtered (remove tag-id (or tags '()))))
+         (unless (equal filtered tags)
+           (let ((copy (copy-sequence node)))
+             (plist-put copy :tags filtered))))))))
 
 (defun supertag-node-has-tag-p (node-id tag-id)
   "Check if a node has a specific tag.
@@ -165,10 +199,12 @@ Returns the updated node data."
 (defun supertag-node-set-location (node-id new-file new-position)
  "Update the file path and position for a node in the store.
 This is used when a node is moved from one file to another."
- (when-let ((node (supertag-get (list :nodes node-id))))
-   (let* ((p-node (plist-put node :file new-file))
-          (p-node (plist-put p-node :position new-position)))
-     (supertag-update (list :nodes node-id) p-node))))
+ (when-let ((node (supertag-node-get node-id)))
+   (supertag-node-update node-id
+     (lambda (n)
+       (let* ((p-node (plist-put n :file new-file))
+              (p-node (plist-put p-node :position new-position)))
+         p-node)))))
 
 (provide 'supertag-ops-node)
 

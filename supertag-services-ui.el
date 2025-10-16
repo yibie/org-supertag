@@ -3,6 +3,8 @@
 (require 'cl-lib)
 (require 'org)
 (require 'supertag-services-query)
+(require 'supertag-core-store)
+(require 'supertag-ops-node)
 (require 'supertag-ops-field)  ; For type-specific field input assistance
 
 
@@ -71,7 +73,7 @@ all subheadings proportionally."
 (defun supertag-goto-node (node-id &optional other-window)
   "Navigate to the location of NODE-ID based on data in the supertag store.
 If OTHER-WINDOW is non-nil, open in another window."
-  (when-let* ((node (supertag-get (list :nodes node-id)))
+  (when-let* ((node (supertag-node-get node-id))
               (file (plist-get node :file)))
     (if (not (and file (file-exists-p file)))
         (message "Error: File for node %s does not exist or is not set." node-id)
@@ -117,25 +119,24 @@ For completion framework integration, e.g., live previews.")
 
 (defun supertag-ui--build-node-candidates ()
   "Build the node candidates list efficiently."
-  (let* ((nodes-hash (supertag-get '(:nodes)))
+  (let* ((nodes-hash (supertag-store-get-collection :nodes))
          (candidates '()))
-    (when (hash-table-p nodes-hash)
-      (maphash
-       (lambda (id node-data)
-         (when node-data
-           (let* ((raw-title (or (plist-get node-data :raw-value)
-                                 (plist-get node-data :title)
-                                 "Untitled"))
-                  (olp (plist-get node-data :olp))
-                  (file (plist-get node-data :file))
-                  (display-path (if olp
-                                    (concat (mapconcat 'identity olp " / ") " / " raw-title)
-                                  raw-title))
-                  (display-str (if file
-                                   (format "%s  (in %s)" display-path (file-name-nondirectory file))
-                                 (format "%s  [orphaned]" display-path))))
-             (push (cons display-str id) candidates))))
-       nodes-hash))
+    (maphash
+     (lambda (id node-data)
+       (when node-data
+         (let* ((raw-title (or (plist-get node-data :raw-value)
+                               (plist-get node-data :title)
+                               "Untitled"))
+                (olp (plist-get node-data :olp))
+                (file (plist-get node-data :file))
+                (display-path (if olp
+                                  (concat (mapconcat #'identity olp " / ") " / " raw-title)
+                                raw-title))
+                (display-str (if file
+                                 (format "%s  (in %s)" display-path (file-name-nondirectory file))
+                               (format "%s  [orphaned]" display-path))))
+           (push (cons display-str id) candidates))))
+     nodes-hash)
     (sort candidates (lambda (a b) (string< (car a) (car b))))))
 
 (defun supertag-ui-select-node (&optional prompt use-cache with-preview)
@@ -189,13 +190,13 @@ Returns the selected node's ID, or nil."
   "Interactively select a reference to remove from a given node.
 FROM-NODE-ID is the ID of the node whose references are to be listed.
 Returns the ID of the selected node to unlink."
-  (let* ((source-node (supertag-get (list :nodes from-node-id)))
+  (let* ((source-node (supertag-node-get from-node-id))
          (ref-to-ids (plist-get source-node :ref-to)))
     (if (not ref-to-ids)
         (progn (message "Node has no outgoing references.") nil)
       (let* ((candidates
               (mapcar (lambda (node-id)
-                        (let* ((node-data (supertag-get (list :nodes node-id)))
+                        (let* ((node-data (supertag-node-get node-id))
                                (title (or (plist-get node-data :title) "Untitled"))
                                (file (plist-get node-data :file)))
                           (cons (if file

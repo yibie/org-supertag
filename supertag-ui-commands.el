@@ -21,6 +21,16 @@
 (require 'supertag-services-capture) ; For capture services
 (require 'supertag-core-store) ; For supertag--rebuild-all-indexes
 
+;;; --- Customization ---
+
+(defcustom supertag-batch-tag-insert-position 'end
+  "Where to insert tags when adding tags in batch mode.
+- 'end: Insert tags at the end of the heading (default)
+- 'beginning: Insert tags at the beginning of the heading (after the stars and TODO keyword if any)"
+  :type '(choice (const :tag "End of heading" end)
+                 (const :tag "Beginning of heading" beginning))
+  :group 'org-supertag)
+
 (defun supertag-set-child (parent-tag child-tags)
   "Set CHILD-TAGS to extend a PARENT-TAG using interactive completion.
 When invoked interactively, allows selecting multiple child tags." 
@@ -77,6 +87,29 @@ When invoked interactively, allows selecting multiple child tags."
         (while (re-search-forward "#\(\w[-_[:alnum:]]*\)" nil t)
           (push (match-string 1) tags))))
     (nreverse tags)))
+
+(defun supertag-ui--get-nodes-in-region (beg end)
+  "Extract all node IDs from Org headings within the region BEG to END.
+Returns a list of node IDs. Creates IDs for headings that don't have one.
+Only includes headings whose starting position is within [BEG, END)."
+  (let ((node-ids '()))
+    (save-excursion
+      (goto-char beg)
+      ;; Move to the beginning of the first heading in or after BEG
+      (unless (org-at-heading-p)
+        (org-next-visible-heading 1))
+      
+      ;; Collect all headings that start within the region
+      (while (and (not (eobp))
+                  (org-at-heading-p)
+                  (< (point) end))  ; Heading must start before END
+        (let ((heading-start (point))
+              (node-id (org-id-get-create)))
+          ;; Only include if heading starts within region
+          (when (>= heading-start beg)
+            (push node-id node-ids)))
+        (org-next-visible-heading 1)))
+    (nreverse node-ids)))
 
 (defun supertag--get-node-props-at-point ()
   "Extract node properties from the current Org heading at point.
@@ -251,19 +284,32 @@ Jumps to the selected node in another window."
        (supertag-node-delete node-id)
        (message "Node %s removed from database. It is now a regular Org heading." node-id))))
 
-(defun supertag-move-node ()
-  "Interactively move the node at point to another file.
+(defun supertag-move-node (&optional beg end)
+  "Interactively move node(s) to another file.
+If region is active (BEG and END provided), move all nodes in the region.
+Otherwise, move the node at point.
 The node's content (the entire subtree) will be cut from the
 current file and inserted into the target file at a chosen position."
-  (interactive)
-  (unless (org-at-heading-p)
-    (user-error "Point must be at a heading to move a node."))
-  (let ((node-id (org-id-get)))
-    (unless node-id
-      (user-error "Current heading does not have an ID, it is not a node."))
-
+  (interactive
+   (when (use-region-p)
+     (list (region-beginning) (region-end))))
+  
+  (let ((node-ids (if (and beg end)
+                      ;; Batch mode: get all nodes in region
+                      (supertag-ui--get-nodes-in-region beg end)
+                    ;; Single mode: get node at point
+                    (unless (org-at-heading-p)
+                      (user-error "Point must be at a heading to move a node."))
+                    (let ((node-id (org-id-get)))
+                      (unless node-id
+                        (user-error "Current heading does not have an ID, it is not a node."))
+                      (list node-id)))))
+    
+    (unless node-ids
+      (user-error "No nodes found to move."))
+    
     ;; 1. Prompt for target file and position
-    (let* ((target-file (read-file-name "Move node to file: "))
+    (let* ((target-file (read-file-name "Move node(s) to file: "))
            (insert-info (supertag-ui-select-insert-position target-file))
            (target-pos (plist-get insert-info :position))
            (target-level (plist-get insert-info :level)))
@@ -272,31 +318,85 @@ current file and inserted into the target file at a chosen position."
       (unless insert-info
         (user-error "No valid insert position selected."))
 
-      (when (yes-or-no-p (format "Really move node %s to %s? " node-id (file-name-nondirectory target-file)))
-        ;; 2. Get node content and original level
-        (let* ((element (org-element-at-point))
-               (begin (org-element-property :begin element))
-               (end (org-element-property :end element))
-               (original-level (org-element-property :level element))
-               (content (buffer-substring-no-properties begin end)))
-
-          ;; 3. Delete from source buffer
-          (delete-region begin end)
-          (save-buffer)
-          (message "Cut node %s from source file." node-id)
-
-          ;; 4. Adjust content level and insert into target file
-          (let ((adjusted-content (supertag-ui--adjust-content-level content original-level target-level)))
-            (with-current-buffer (find-file-noselect target-file)
-              (goto-char target-pos)
-              (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-              (insert adjusted-content)
-              (save-buffer))
-            (message "Pasted node into %s." (file-name-nondirectory target-file)))
-
-          ;; 5. Update the database with the new location
-          (supertag-node-set-location node-id target-file target-pos)
-          (message "Node %s successfully moved." node-id))))))
+      (when (yes-or-no-p (format "Really move %d node(s) to %s? "
+                                 (length node-ids)
+                                 (file-name-nondirectory target-file)))
+        (require 'supertag-ops-batch)
+        (supertag-with-transaction
+          (let ((current-target-pos target-pos)
+                (nodes-to-move '()))
+            
+            ;; 2. First pass: collect all node data before any modifications
+            ;;    Read directly from current buffer to avoid database dependency
+            (dolist (node-id node-ids)
+              (let* ((marker (org-id-find node-id 'marker)))
+                (when marker
+                  (with-current-buffer (marker-buffer marker)
+                    (goto-char (marker-position marker))
+                    (when (org-at-heading-p)
+                      (let* ((element (org-element-at-point))
+                             (begin (org-element-property :begin element))
+                             (end (org-element-property :end element))
+                             (original-level (org-element-property :level element))
+                             (content (buffer-substring-no-properties begin end))
+                             (node-file (buffer-file-name)))
+                        (push (list :id node-id
+                                   :file node-file
+                                   :begin begin
+                                   :end end
+                                   :level original-level
+                                   :content content)
+                              nodes-to-move)))))))
+            
+            (setq nodes-to-move (nreverse nodes-to-move))
+            
+            ;; 3. Second pass: group nodes by file and delete from each file
+            ;;    (in reverse position order to preserve positions)
+            (let ((nodes-by-file (make-hash-table :test 'equal)))
+              ;; Group nodes by file
+              (dolist (node-info nodes-to-move)
+                (let ((file (plist-get node-info :file)))
+                  (push node-info (gethash file nodes-by-file))))
+              
+              ;; Delete from each file (nodes in reverse position order)
+              (maphash
+               (lambda (file nodes-in-file)
+                 (let ((sorted-nodes (sort nodes-in-file
+                                          (lambda (a b)
+                                            (> (plist-get a :begin)
+                                               (plist-get b :begin))))))
+                   (with-current-buffer (find-file-noselect file)
+                     (dolist (node-info sorted-nodes)
+                       (let ((begin (plist-get node-info :begin))
+                             (end (plist-get node-info :end)))
+                         (delete-region begin end)))
+                     (save-buffer))))
+               nodes-by-file))
+            
+            ;; 4. Third pass: insert into target file and update database
+            (dolist (node-info nodes-to-move)
+              (let* ((node-id (plist-get node-info :id))
+                     (content (plist-get node-info :content))
+                     (original-level (plist-get node-info :level))
+                     (adjusted-content (supertag-ui--adjust-content-level content original-level target-level))
+                     (node-start-pos nil))
+                
+                (with-current-buffer (find-file-noselect target-file)
+                  (goto-char current-target-pos)
+                  (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+                  ;; Record the position where the node starts
+                  (setq node-start-pos (point))
+                  (insert adjusted-content)
+                  ;; Update position for next node (after current insertion)
+                  (setq current-target-pos (point))
+                  (save-buffer))
+                
+                ;; Update the database with the new location (use node start position)
+                (supertag-node-set-location node-id target-file node-start-pos)))
+            
+            (message "%d node(s) successfully moved to %s."
+                     (length nodes-to-move)
+                     (file-name-nondirectory target-file))))))))
 
 (defun supertag-move-node-and-link ()
     "Move the node at point to another file, leaving a link behind."
@@ -363,7 +463,7 @@ current file and inserted into the target file at a chosen position."
          `(:type :reference :from ,from-id :to ,to-id))
 
         ;; 2. Insert the org-link into the buffer
-        (let* ((target-node-props (supertag-get (list :nodes to-id)))
+        (let* ((target-node-props (supertag-store-get-entity :nodes to-id))
                (target-title (plist-get target-node-props :raw-value))
                (link-text (format "[[id:%s][%s]]" to-id (or target-title "Untitled Node"))))
           (insert link-text))
@@ -468,62 +568,172 @@ id: link into an embed block that displays the node's content inline."
 
 ;; --- Tag Commands: add, remove ----
 
-(defun supertag-add-tag ()
-  "Interactively add a tag to the current node.
+(defun supertag-add-tag (&optional beg end)
+  "Interactively add a tag to node(s).
+If region is active (BEG and END provided), add tag to all nodes in the region.
+Otherwise, add tag to the node at point.
 This command handles tag creation, linking, and smart insertion
 of the inline #tag text into the buffer. Can be used both at headings
-and within node content area
+and within node content area.
 
 If you prefix your input with '=' (e.g. '=ref'), it will be treated as a literal
 new tag name, bypassing fuzzy completion matching."
-  (interactive)
-  (let* ((node-id (supertag-ui--get-containing-node-at-point))
+  (interactive
+   (when (use-region-p)
+     (list (region-beginning) (region-end))))
+  
+  (let* ((batch-mode (and beg end))
+         (current-point (point))  ; Save current cursor position for single mode
+         (node-ids (if batch-mode
+                       ;; Batch mode: get all nodes in region
+                       (supertag-ui--get-nodes-in-region beg end)
+                     ;; Single mode: get node at point
+                     (let ((node-id (supertag-ui--get-containing-node-at-point)))
+                       ;; Ensure the node exists in the database before proceeding.
+                       (unless (supertag-node-get node-id)
+                         (supertag-node-sync-at-point))
+                       (list node-id))))
          (all-tags (mapcar #'car (supertag-query :tags))) ; For completion candidates
-         ;; Ensure the node exists in the database before proceeding.
-         ;; This handles the case where a tag is added to a plain headline
-         ;; for the first time.
-         (_ (unless (supertag-node-get node-id)
-              (supertag-node-sync-at-point)))
-         (raw-name (completing-read "Add tag (use =tagname for exact match): " all-tags nil nil))
+         (raw-name (completing-read (format "Add tag to %d node(s) (use =tagname for exact match): "
+                                            (length node-ids))
+                                    all-tags nil nil))
          (literal-tag (and (> (length raw-name) 0) (eq (aref raw-name 0) ?=))))
+    
+    (unless node-ids
+      (user-error "No nodes found to add tag to."))
+    
     (when (and raw-name (not (string-empty-p raw-name)))
-      (let* ((tag-name (if literal-tag 
+      (let* ((tag-name (if literal-tag
                           (substring raw-name 1) ; Remove the '=' prefix
                         raw-name))
              (tag-id (supertag-sanitize-tag-name tag-name)))
         (if literal-tag
             ;; Direct creation for literal tag names
-            (progn
-              (when (yes-or-no-p (format "Create new tag '%s'? " tag-id))
-                (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
-                    (progn
-                      ;; Insert #tag text with smart spacing at current point
-                      (require 'supertag-view-helper)
-                      (supertag-view-helper-insert-tag-text tag-id)
-                      (message "Tag '%s' created and added to node '%s'." tag-id node-id))
-                  (message "Tag creation cancelled or failed."))))
+            (when (yes-or-no-p (format "Create new tag '%s' and add to %d node(s)? "
+                                       tag-id (length node-ids)))
+              (require 'supertag-ops-batch)
+              (require 'supertag-view-helper)
+              (supertag-with-transaction
+                (dolist (node-id node-ids)
+                  ;; Ensure node exists
+                  (unless (supertag-node-get node-id)
+                    (let* ((marker (org-id-find node-id 'marker)))
+                      (when marker
+                        (with-current-buffer (marker-buffer marker)
+                          (goto-char (marker-position marker))
+                          (supertag-node-sync-at-point)))))
+                  
+                  (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
+                    ;; Insert #tag text
+                    (let* ((marker (org-id-find node-id 'marker)))
+                      (when marker
+                        (with-current-buffer (marker-buffer marker)
+                          (if batch-mode
+                              ;; Batch mode: insert based on user preference
+                              (progn
+                                (goto-char (marker-position marker))
+                                (when (org-at-heading-p)
+                                  (if (eq supertag-batch-tag-insert-position 'beginning)
+                                      ;; Insert at beginning (after stars and TODO keyword)
+                                      (progn
+                                        (org-back-to-heading t)
+                                        (forward-word)  ; Skip stars
+                                        (when (org-get-todo-state)
+                                          (forward-word))  ; Skip TODO keyword if present
+                                        (supertag-view-helper-insert-tag-text tag-id))
+                                    ;; Insert at end (default)
+                                    (end-of-line)
+                                    (supertag-view-helper-insert-tag-text tag-id))))
+                            ;; Single mode: insert at current cursor position
+                            (goto-char current-point)
+                            (supertag-view-helper-insert-tag-text tag-id))
+                          (save-buffer)))))))
+              (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))
           ;; Original behavior for fuzzy matching
           (let ((tag-exists (supertag-tag-get tag-id)))
             (cond
              ;; If tag already exists, use it directly
              (tag-exists
-              (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed nil)
-                  (progn
-                    ;; Insert #tag text with smart spacing at current point
-                    (require 'supertag-view-helper)
-                    (supertag-view-helper-insert-tag-text tag-id)
-                    (message "Tag '%s' added to node '%s'." tag-id node-id))
-                (message "Tag add cancelled or failed.")))
+              (require 'supertag-ops-batch)
+              (require 'supertag-view-helper)
+              (supertag-with-transaction
+                (dolist (node-id node-ids)
+                  ;; Ensure node exists
+                  (unless (supertag-node-get node-id)
+                    (let* ((marker (org-id-find node-id 'marker)))
+                      (when marker
+                        (with-current-buffer (marker-buffer marker)
+                          (goto-char (marker-position marker))
+                          (supertag-node-sync-at-point)))))
+                  
+                  (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed nil)
+                    ;; Insert #tag text
+                    (let* ((marker (org-id-find node-id 'marker)))
+                      (when marker
+                        (with-current-buffer (marker-buffer marker)
+                          (if batch-mode
+                              ;; Batch mode: insert based on user preference
+                              (progn
+                                (goto-char (marker-position marker))
+                                (when (org-at-heading-p)
+                                  (if (eq supertag-batch-tag-insert-position 'beginning)
+                                      ;; Insert at beginning (after stars and TODO keyword)
+                                      (progn
+                                        (org-back-to-heading t)
+                                        (forward-word)  ; Skip stars
+                                        (when (org-get-todo-state)
+                                          (forward-word))  ; Skip TODO keyword if present
+                                        (supertag-view-helper-insert-tag-text tag-id))
+                                    ;; Insert at end (default)
+                                    (end-of-line)
+                                    (supertag-view-helper-insert-tag-text tag-id))))
+                            ;; Single mode: insert at current cursor position
+                            (goto-char current-point)
+                            (supertag-view-helper-insert-tag-text tag-id))
+                          (save-buffer)))))))
+              (message "Tag '%s' added to %d node(s)." tag-id (length node-ids)))
              ;; If tag doesn't exist, create it
              (t
-              (when (yes-or-no-p (format "Tag '%s' does not exist. Create it? " tag-id))
-                (if (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
-                    (progn
-                      ;; Insert #tag text with smart spacing at current point
-                      (require 'supertag-view-helper)
-                      (supertag-view-helper-insert-tag-text tag-id)
-                      (message "Tag '%s' created and added to node '%s'." tag-id node-id))
-                  (message "Tag creation cancelled or failed.")))))))))))
+              (when (yes-or-no-p (format "Tag '%s' does not exist. Create it and add to %d node(s)? "
+                                         tag-id (length node-ids)))
+                (require 'supertag-ops-batch)
+                (require 'supertag-view-helper)
+                (supertag-with-transaction
+                  (dolist (node-id node-ids)
+                    ;; Ensure node exists
+                    (unless (supertag-node-get node-id)
+                      (let* ((marker (org-id-find node-id 'marker)))
+                        (when marker
+                          (with-current-buffer (marker-buffer marker)
+                            (goto-char (marker-position marker))
+                            (supertag-node-sync-at-point)))))
+                    
+                    (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
+                      ;; Insert #tag text
+                      (let* ((marker (org-id-find node-id 'marker)))
+                        (when marker
+                          (with-current-buffer (marker-buffer marker)
+                            (if batch-mode
+                                ;; Batch mode: insert based on user preference
+                                (progn
+                                  (goto-char (marker-position marker))
+                                  (when (org-at-heading-p)
+                                    (if (eq supertag-batch-tag-insert-position 'beginning)
+                                        ;; Insert at beginning (after stars and TODO keyword)
+                                        (progn
+                                          (org-back-to-heading t)
+                                          (forward-word)  ; Skip stars
+                                          (when (org-get-todo-state)
+                                            (forward-word))  ; Skip TODO keyword if present
+                                          (supertag-view-helper-insert-tag-text tag-id))
+                                      ;; Insert at end (default)
+                                      (end-of-line)
+                                      (supertag-view-helper-insert-tag-text tag-id))))
+                              ;; Single mode: insert at current cursor position
+                              (goto-char current-point)
+                              (supertag-view-helper-insert-tag-text tag-id))
+                            (save-buffer)))))))
+                (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))))))))))
 
 (defun supertag-remove-tag-from-node ()
   "Interactively remove a tag from the current node.
@@ -941,8 +1151,8 @@ A 'ghost' tag is a tag entry that has a nil value, which can
 cause inconsistencies in the system. This command cleans them up."
   (interactive)
   (let ((tags-to-remove '())
-        (tags-table (supertag-get '(:tags))))
-    (when (hash-table-p tags-table)
+        (tags-table (supertag-store-get-collection :tags)))
+    (when tags-table
       (maphash (lambda (key value)
                  (when (null value)
                    (push key tags-to-remove)))
@@ -951,7 +1161,7 @@ cause inconsistencies in the system. This command cleans them up."
         (progn
           (message "Removing %d ghost tags: %s" (length tags-to-remove) tags-to-remove)
           (dolist (tag-id tags-to-remove)
-            (supertag-delete (list :tags tag-id)))
+            (supertag-store-remove-entity :tags tag-id))
           (message "Ghost tag cleanup complete."))
       (message "No ghost tags found."))))
 

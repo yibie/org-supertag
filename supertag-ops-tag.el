@@ -9,11 +9,10 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'supertag-core-store)    ; For supertag-get, supertag-update
-(require 'supertag-core-schema)   ; For validation functions
-(require 'supertag-core-transform) ; For supertag-transform
-(require 'supertag-ops-relation) ; For relation operations
-(require 'supertag-ops-node)     ; For supertag-node-remove-tag
+(require 'supertag-core-store)
+(require 'supertag-core-schema)
+(require 'supertag-ops-relation)
+(require 'supertag-ops-node)
 (require 'supertag-ops-schema)
 
 ;;; --- Internal Helper ---
@@ -60,7 +59,7 @@ Implements immediate error reporting as preferred by the user."
 ;; 3.1 Basic Operations
 
 (defun supertag-tag-create (props)
-  "Create a new tag using hybrid architecture.
+  "Create a new tag using the unified commit system.
 PROPS is a plist of tag properties.
 Returns the created tag data."
   (let* ((name (plist-get props :name))
@@ -75,64 +74,73 @@ Returns the created tag data."
         (progn
           (message "Tag '%s' already exists, returning existing tag." id)
           existing-tag)
-         ;; If tag does not exist, create it
-         (let* ((final-props (plist-put props :id id))
-                (final-props (plist-put final-props :type :tag))
-                (final-props (plist-put final-props :extends extends))
-                (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
-                (final-props (plist-put final-props :created-at (current-time)))
-                (final-props (plist-put final-props :modified-at (current-time)))
-                (final-props (supertag--normalize-tag-extends final-props)))
-           ;; Strict validation (fail-fast principle)
-           (supertag--validate-tag-data final-props)
-        ;; Direct storage for optimal performance
-        (supertag-store-direct-set :tags id final-props)
-        (supertag-ops-schema-rebuild-cache)
-        final-props))))
+      ;; If tag does not exist, create it
+      (let* ((final-props (plist-put props :id id))
+             (final-props (plist-put final-props :type :tag))
+             (final-props (plist-put final-props :extends extends))
+             (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
+             (final-props (plist-put final-props :created-at (current-time)))
+             (final-props (plist-put final-props :modified-at (current-time)))
+             (final-props (supertag--normalize-tag-extends final-props)))
+        ;; Use unified commit system
+        (supertag-ops-commit
+         :operation :create
+         :collection :tags
+         :id id
+         :new final-props
+         :perform (lambda ()
+                    (supertag-store-put-entity :tags id final-props)
+                    (supertag-ops-schema-rebuild-cache)
+                    final-props))))))
 
 (defun supertag-tag-get (id)
   "Get tag data.
 ID is the unique identifier of the tag.
 Returns tag data, or nil if it does not exist."
-  (supertag-get (list :tags id)))
+  (supertag-store-get-entity :tags id))
 
 (defun supertag-tag-update (id updater)
-  "Update tag data using hybrid architecture.
+  "Update tag data using the unified commit system.
 ID is the unique identifier of the tag.
 UPDATER is a function that receives the current tag data and returns the updated data.
 Returns the updated tag data."
-  (let ((tag (supertag-tag-get id)))
-    (when tag
+  (let ((previous (supertag-tag-get id)))
+    (when previous
       ;; Convert hash table to plist if necessary
-      (let* ((original-plist (supertag--ensure-plist tag))
-             (copy-for-update (copy-tree original-plist))
-             (updated-tag (funcall updater copy-for-update)))
-        (when updated-tag
-          ;; Only update if the tag actually changed
-          (if (equal updated-tag original-plist)
-              tag  ; Return original tag unchanged
-            ;; Add/update timestamps only when there are real changes
-            (let* ((normalized-tag (supertag--normalize-tag-extends updated-tag))
-                   (final-tag (plist-put normalized-tag :modified-at (current-time))))
-              ;; Strict validation (fail-fast principle)
-              (supertag--validate-tag-data final-tag)
-              ;; Direct storage for optimal performance
-              (supertag-store-direct-set :tags id final-tag)
-              (supertag-ops-schema-rebuild-cache)
-              final-tag)))))))
+      (let* ((original-plist (supertag--ensure-plist previous))
+             (copy-for-update (copy-tree original-plist)))
+        (supertag-ops-commit
+         :operation :update
+         :collection :tags
+         :id id
+         :previous original-plist
+         :perform (lambda ()
+                    (let ((updated-tag (funcall updater copy-for-update)))
+                      (when updated-tag
+                        (if (equal updated-tag original-plist)
+                            original-plist
+                          (let* ((normalized-tag (supertag--normalize-tag-extends updated-tag))
+                                 (final-tag (plist-put normalized-tag :modified-at (current-time))))
+                            (supertag--validate-tag-data final-tag)
+                            (supertag-store-put-entity :tags id final-tag)
+                            (supertag-ops-schema-rebuild-cache)
+                            final-tag))))))))))
 
 (defun supertag-tag-delete (id)
-  "Delete a tag.
+  "Delete a tag using the unified commit system.
 ID is the unique identifier of the tag.
 Returns the deleted tag data."
-  (let ((tag (supertag-tag-get id)))
-    ;; Use supertag-delete for a true hard delete (removes the key).
-    ;; supertag-update with nil value leaves a (\"tag\" . nil) entry,
-    ;; which causes inconsistencies.
-    (when tag
-      (supertag-delete (list :tags id))
-      (supertag-ops-schema-rebuild-cache)
-      tag)))
+  (let ((previous (supertag-tag-get id)))
+    (when previous
+      (supertag-ops-commit
+       :operation :delete
+       :collection :tags
+       :id id
+       :previous previous
+       :perform (lambda ()
+                  (supertag-store-remove-entity :tags id)
+                  (supertag-ops-schema-rebuild-cache)
+                  nil))))) 
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)
   "Delete a tag and all its uses from the database and all org files.
@@ -182,16 +190,9 @@ Returns t if the relationship was created or already exists, nil otherwise."
     ;; 2. If tag exists, create the relationship and update node.
     (if-let ((raw-tag (supertag-tag-get tag-id)))
         (let ((tag (supertag--ensure-plist raw-tag))) ; Ensure we have a plist
-          ;; Update the node's :tags property using transform (consistent with remove-tag)
-          ;; Use transform to ensure we work with the LATEST tags, not a cached snapshot
-          (supertag-transform
-           (list :nodes node-id :tags)
-           (lambda (current-tags)
-             ;; Only add if not already present
-             (if (member tag-id current-tags)
-                 current-tags  ; Return unchanged
-               (cons tag-id current-tags))))  ; Add tag
-          
+          ;; Update the node's :tags property through the node CRUD API.
+          (supertag-node-add-tag node-id tag-id)
+
           ;; Avoid creating duplicate relations
           (unless (supertag-relation-find-between node-id (plist-get tag :id) :node-tag)
             (supertag-relation-create `(:type :node-tag :from ,node-id :to ,(plist-get tag :id))))

@@ -7,26 +7,134 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'supertag-core-store)    ; For supertag-get
-(require 'supertag-core-schema)   ; For supertag--convert-type
-(require 'supertag-core-transform) ; For supertag-transform
-(require 'supertag-ops-tag)  ; For supertag-tag-get-field
+(require 'ht)
+(require 'supertag-core-store)
+(require 'supertag-core-schema)
+(require 'supertag-core-transform)
+(require 'supertag-core-scan)
+(require 'supertag-ops-tag)
+
+(defconst supertag-field--missing (list :supertag-field-missing)
+  "Sentinel used to detect missing field values.")
+
+(defconst supertag-field--node-missing (list :supertag-field-node-missing)
+  "Sentinel used to detect missing node field tables.")
+
+(defconst supertag-field--tag-missing (list :supertag-field-tag-missing)
+  "Sentinel used to detect missing tag field tables.")
+
+(defun supertag-field--list-to-hash (data)
+  "Convert DATA (alist or plist) into a hash table."
+  (let ((table (ht-create)))
+    (cond
+     ((null data)
+      table)
+     ;; Alist: ((\"field\" . value) ...)
+     ((and (listp data) (consp (car data)))
+      (dolist (cell data table)
+        (puthash (car cell) (cdr cell) table)))
+     ;; Flat key/value list: (\"field\" value \"other\" value)
+     ((and (listp data) (zerop (% (length data) 2)))
+      (let ((cursor data))
+        (while cursor
+          (let ((key (pop cursor))
+                (value (pop cursor)))
+            (puthash key value table)))))
+     (t
+      ;; Fallback: store under :value to avoid dropping data.
+      (puthash :value data table)))
+    table))
+
+(defun supertag-field--ensure-node-table (node-id &optional create)
+  "Return hash table for NODE-ID in the :fields collection.
+When CREATE is non-nil, allocate and store a new table if absent."
+  (let* ((fields-root (supertag-store-get-collection :fields))
+         (existing (gethash node-id fields-root supertag-field--node-missing)))
+    (cond
+     ((eq existing supertag-field--node-missing)
+      (when create
+        (let ((table (ht-create)))
+          (puthash node-id table fields-root)
+          table)))
+     ((hash-table-p existing) existing)
+     ((listp existing)
+      (let ((table (supertag-field--list-to-hash existing)))
+        (puthash node-id table fields-root)
+        table))
+     ((null existing)
+      (when create
+        (let ((table (ht-create)))
+          (puthash node-id table fields-root)
+          table)))
+     (t
+      (when create
+        (let ((table (ht-create)))
+          (puthash node-id table fields-root)
+          table))))))
+
+(defun supertag-field--ensure-tag-table (node-table tag-id &optional create)
+  "Return hash table for TAG-ID inside NODE-TABLE.
+When CREATE is non-nil, allocate and store a new table if absent."
+  (let ((existing (gethash tag-id node-table supertag-field--tag-missing)))
+    (cond
+     ((eq existing supertag-field--tag-missing)
+      (when create
+        (let ((table (ht-create)))
+          (puthash tag-id table node-table)
+          table)))
+     ((hash-table-p existing) existing)
+     ((listp existing)
+      (let ((table (supertag-field--list-to-hash existing)))
+        (puthash tag-id table node-table)
+        table))
+     ((null existing)
+      (when create
+        (let ((table (ht-create)))
+          (puthash tag-id table node-table)
+          table)))
+     (t
+      (when create
+        (let ((table (ht-create)))
+          (puthash tag-id table node-table)
+          table))))))
+
+;; Note: Change notifications are now handled by the unified commit system
+;; (supertag-ops-commit). No need for separate notification handling.
 
 ;;; --- Field Operations ---
 
 ;; 4.1 Field Value Operations
 
 (defun supertag-field-set (node-id tag-id field-name value)
-  "Set the value of a tag field for a node.
+  "Set the value of a tag field for a node using the unified commit system.
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field.
 VALUE is the field value.
 Returns the updated field value."
-  ;; (message "DEBUG-1: supertag-field-set called. Node: %s, Field: %s, Value: %s" node-id field-name value)
-  (supertag-transform
-   (list :fields node-id tag-id field-name)
-   (lambda (_) value)))
+  (let* ((old-raw (supertag-field-get node-id tag-id field-name supertag-field--missing))
+         (old-value (if (eq old-raw supertag-field--missing) nil old-raw))
+         (event-old (when (not (eq old-raw supertag-field--missing))
+                      (list :node-id node-id :tag-id tag-id :field-name field-name :value old-value)))
+         (event-new (list :node-id node-id :tag-id tag-id :field-name field-name :value value)))
+    (if (and (not (eq old-raw supertag-field--missing))
+             (equal old-value value))
+        value
+      (progn
+        (supertag-ops-commit
+         :operation :field-set
+         :collection :fields
+         :id node-id
+         :path (list :fields node-id tag-id field-name)
+         :previous event-old
+         :new event-new
+         :context (list :node-id node-id :tag-id tag-id :field-name field-name)
+         :perform (lambda ()
+                    (let* ((node-table (supertag-field--ensure-node-table node-id t))
+                           (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
+                      (puthash field-name value tag-table)
+                      event-new))))
+        value)))
 
 (defun supertag-field-get (node-id tag-id field-name &optional default)
   "Get the value of a tag field for a node.
@@ -35,17 +143,152 @@ TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field.
 DEFAULT is the default value to return if the field does not exist.
 Returns the field value, or DEFAULT if it does not exist."
-  (supertag-get (list :fields node-id tag-id field-name) default))
+  (let ((node-table (supertag-field--ensure-node-table node-id)))
+    (if (not node-table)
+        default
+      (let ((tag-table (supertag-field--ensure-tag-table node-table tag-id)))
+        (if (not tag-table)
+            default
+          (let ((value (gethash field-name tag-table supertag-field--missing)))
+            (if (eq value supertag-field--missing) default value)))))))
+
+(defun supertag-field-rename (tag-id old-name new-name)
+  "Rename a field on TAG-ID from OLD-NAME to NEW-NAME across schema and data.
+Signals an error if the source field is missing or the target already exists.
+All node field values are migrated atomically inside a transaction."
+  (unless (and (stringp tag-id) (not (string-empty-p tag-id)))
+    (error "Invalid tag id: %S" tag-id))
+  (unless (and (stringp old-name) (not (string-empty-p old-name)))
+    (error "Invalid old field name: %S" old-name))
+  (unless (and (stringp new-name) (not (string-empty-p new-name)))
+    (error "Invalid new field name: %S" new-name))
+  (when (string= old-name new-name)
+    (cl-return-from supertag-field-rename
+      (list :status :skipped :reason "Names are identical")))
+  (let ((existing (supertag-tag-get-field tag-id old-name))
+        (target (supertag-tag-get-field tag-id new-name)))
+    (unless existing
+      (error "Field '%s' not found on tag '%s'" old-name tag-id))
+    (when target
+      (error "Field '%s' already exists on tag '%s'" new-name tag-id)))
+  (cl-labels
+      ((rewrite-field-name (value)
+         (cond
+          ((and (stringp value) (string= value old-name)) new-name)
+          ((keywordp value)
+           (let ((name (substring (symbol-name value) 1)))
+             (if (string= name old-name)
+                 (intern (concat ":" new-name))
+               value)))
+          ((symbolp value)
+           (let ((name (symbol-name value)))
+             (if (string= name old-name)
+                 (intern new-name)
+               value)))
+          (t value)))
+       (ensure-plist (data)
+         (cond
+          ((hash-table-p data)
+           (let (plist)
+             (maphash (lambda (k v)
+                        (setq plist (plist-put plist k v)))
+                      data)
+             plist))
+          ((listp data) (copy-tree data))
+          (t data))))
+    (supertag-with-transaction
+      ;; Update tag definition (rebuilds schema cache internally).
+      (supertag-tag-rename-field tag-id old-name new-name)
+      ;; Migrate stored values for each node using this tag.
+      (let ((sentinel supertag-field--missing))
+        (dolist (node-id (supertag-index-get-nodes-by-tag tag-id))
+          (let ((value (supertag-field-get node-id tag-id old-name sentinel)))
+            (unless (eq value sentinel)
+              (let ((existing-new (supertag-field-get node-id tag-id new-name sentinel)))
+                (when (not (eq existing-new sentinel))
+                  (error "Cannot rename: node %s already has value for field '%s' on tag '%s'"
+                         node-id new-name tag-id)))
+              (supertag-field-set node-id tag-id new-name value)
+              (supertag-field-remove node-id tag-id old-name)))))
+      ;; Update relation metadata that references this field.
+      (let ((relations (supertag-store-get-collection :relations)))
+        (maphash
+         (lambda (rel-id rel-data)
+           (let* ((rel-plist (ensure-plist rel-data))
+                  (updated nil))
+             ;; Update :sync-fields list.
+             (when-let ((fields (plist-get rel-plist :sync-fields)))
+               (let ((new-fields (mapcar #'rewrite-field-name fields)))
+                 (unless (equal new-fields fields)
+                   (setq rel-plist (plist-put rel-plist :sync-fields new-fields))
+                   (setq updated t))))
+             ;; Update :rollup-field if present.
+             (when-let ((rollup (plist-get rel-plist :rollup-field)))
+               (let ((new-rollup (rewrite-field-name rollup)))
+                 (unless (equal new-rollup rollup)
+                   (setq rel-plist (plist-put rel-plist :rollup-field new-rollup))
+                   (setq updated t))))
+             ;; Update nested :props keys that may reference field names.
+             (when-let ((props (plist-get rel-plist :props)))
+               (let* ((props-plist (ensure-plist props))
+                      (props-updated nil))
+                 (dolist (key '(:from-property :to-property :rollup-field))
+                   (when (plist-member props-plist key)
+                     (let* ((val (plist-get props-plist key))
+                            (new-val (rewrite-field-name val)))
+                       (unless (equal new-val val)
+                         (setq props-plist (plist-put props-plist key new-val))
+                         (setq props-updated t)))))
+                 (when props-updated
+                   (setq rel-plist (plist-put rel-plist :props props-plist))
+                   (setq updated t))))
+             (when updated
+               (supertag-store-put-entity :relations rel-id rel-plist t))))
+         relations))
+      (list :status :renamed :tag-id tag-id :from old-name :to new-name))))
+
+(defun supertag-field-get-with-default (node-id tag-id field-name)
+  "Get field value for NODE-ID/TAG-ID/FIELD-NAME, falling back to schema default.
+Returns the stored field value when present. If the field is unset, returns
+the :default from the field definition, evaluating functional defaults when
+necessary. Signals nil when the field definition cannot be found."
+  (let ((value (supertag-field-get node-id tag-id field-name supertag-field--missing)))
+    (if (eq value supertag-field--missing)
+        (when-let ((field-def (supertag-tag-get-field tag-id field-name)))
+          (let ((default (plist-get field-def :default)))
+            (if (functionp default) (funcall default) default)))
+      value)))
 
 (defun supertag-field-remove (node-id tag-id field-name)
-  "Remove the value of a tag field for a node.
+  "Remove the value of a tag field for a node using the unified commit system.
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field.
 Returns the removed field value."
-  (supertag-transform
-   (list :fields node-id tag-id field-name)
-   (lambda (_) nil))) ; Setting value to nil effectively removes it
+  (let* ((old-raw (supertag-field-get node-id tag-id field-name supertag-field--missing))
+         (old-value (if (eq old-raw supertag-field--missing) nil old-raw))
+         (event-old (when (not (eq old-raw supertag-field--missing))
+                      (list :node-id node-id :tag-id tag-id :field-name field-name :value old-value)))
+         (event-new (list :node-id node-id :tag-id tag-id :field-name field-name :value nil)))
+    (if (eq old-raw supertag-field--missing)
+        nil
+      ;; Use unified commit system for field operations
+      (progn
+        (supertag-ops-commit
+         :operation :field-remove
+         :collection :fields
+         :id node-id
+         :path (list :fields node-id tag-id field-name)
+         :previous event-old
+         :new event-new
+         :context (list :node-id node-id :tag-id tag-id :field-name field-name)
+         :perform (lambda ()
+                    (let* ((node-table (supertag-field--ensure-node-table node-id))
+                           (tag-table (and node-table (supertag-field--ensure-tag-table node-table tag-id))))
+                      (when (and node-table tag-table)
+                        (remhash field-name tag-table))
+                      event-old))))
+        old-value)))
 
 ;; 4.2 Field Validation and Normalization
 

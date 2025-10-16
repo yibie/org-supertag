@@ -14,7 +14,7 @@
   "Update a node's content in the database from an embed block.
 Title is NOT updated from the embed block in this new architecture."
   ;;(message "DEBUG: (2a) Running update-node-in-db for %s" source-id)
-  (when-let ((old-node-data (supertag-get (list :nodes source-id))))
+  (when-let ((old-node-data (supertag-node-get source-id)))
     (let ((updated-node-data (cl-copy-list old-node-data)))
       ;; The entire block content is the new node content.
       (setf (plist-get updated-node-data :content) new-embed-content)
@@ -29,7 +29,7 @@ Title is NOT updated from the embed block in this new architecture."
   "Renders a node's CONTENT from the database to its source file.
 Only updates the content section, preserving the headline and properties.
 Uses find-file-noselect with minimal side effects."
-  (when-let* ((node-data (supertag-get (list :nodes source-id)))
+  (when-let* ((node-data (supertag-node-get source-id))
               (file-path (plist-get node-data :file)))
     (when (file-exists-p file-path)
       ;; Use find-file-noselect but suppress hooks that might interfere

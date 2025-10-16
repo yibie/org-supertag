@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'supertag-core-store)
+(require 'supertag-ops-node)
 
 
 ;;; --- Scan-based Query Functions ---
@@ -16,7 +17,7 @@
 (defun supertag-index-get-nodes-by-tag (tag-name)
   "Find all nodes with TAG-NAME by scanning the store.
 This is an O(N) operation."
-  (let ((nodes-ht (supertag-get '(:nodes)))
+  (let ((nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
@@ -28,7 +29,7 @@ This is an O(N) operation."
 (defun supertag-index-get-nodes-by-word (word)
   "Find all nodes containing WORD by scanning the store.
 This is an O(N) operation and performs a simple substring search."
-  (let ((nodes-ht (supertag-get '(:nodes)))
+  (let ((nodes-ht (supertag-store-get-collection :nodes))
         (results '())
         (search-word (downcase word)))
     (when (hash-table-p nodes-ht)
@@ -46,7 +47,7 @@ This is an O(N) operation and performs a simple substring search."
 This is an O(N) operation.
 DATE-FIELD can be :created-at or :modified-at (default :created-at)."
   (let* ((field (or date-field :created-at))
-         (nodes-ht (supertag-get '(:nodes)))
+         (nodes-ht (supertag-store-get-collection :nodes))
          (matching-nodes '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
@@ -64,7 +65,7 @@ DATE-FIELD can be :created-at or :modified-at (default :created-at)."
 This is an O(N) operation.
 TAG-NAME is the name of the tag to search for.
 Returns a list of (node-id . node-data) pairs."
-  (let ((nodes-ht (supertag-get '(:nodes)))
+  (let ((nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
@@ -76,7 +77,7 @@ Returns a list of (node-id . node-data) pairs."
 (defun supertag-find-nodes-by-file (file-path)
   "Find all nodes located in FILE-PATH.
 Returns a list of (node-id . node-data) pairs."
-  (let ((nodes-collection (supertag-get '(:nodes)))
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
         (found-nodes '()))
     (when (hash-table-p nodes-collection)
       (maphash
@@ -94,7 +95,7 @@ Returns a list of (node-id . node-data) pairs."
   "Find all nodes whose title matches TITLE-PATTERN by scanning the store.
 TITLE-PATTERN is a regular expression string.
 Returns a list of (node-id . node-data) pairs."
-  (let ((nodes-ht (supertag-get '(:nodes)))
+  (let ((nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
@@ -109,7 +110,7 @@ Returns a list of (node-id . node-data) pairs."
   "Find nodes satisfying PREDICATES by scanning the store.
 PREDICATES is a list of predicate functions. Each predicate function receives (id . data) and returns t or nil.
 Returns a list of (node-id . node-data) pairs that satisfy all predicates."
-  (let ((nodes-ht (supertag-get '(:nodes)))
+  (let ((nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
@@ -122,7 +123,7 @@ Returns a list of (node-id . node-data) pairs that satisfy all predicates."
 (defun supertag-index-node-has-tag-p (node-id tag-name)
   "Check if a node has a specific tag by direct lookup.
 This is an O(1) operation on the node data."
-  (when-let ((node-data (supertag-get (list :nodes node-id))))
+  (when-let ((node-data (supertag-node-get node-id)))
     (member tag-name (plist-get node-data :tags))))
 
 (provide 'supertag-core-scan)

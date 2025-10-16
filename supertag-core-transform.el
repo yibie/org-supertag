@@ -8,7 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib) ; For cl-loop, cl-find, etc.
-(require 'ht)     ; For hash-table operations (ht-create, ht-get, ht-set, ht-remove)
+(require 'ht) ; Ensures `ht` API availability
 (require 'supertag-core-store) ; Depends on supertag-get and supertag-update
 (require 'supertag-core-state) ; For shared state variables
 (require 'supertag-core-notify) ; For supertag--notify-change
@@ -19,20 +19,25 @@
   "Transform data at PATH using function FN.
 PATH is a list of keys (e.g., '(:nodes \"123\" :tags)).
 FN is a function that receives the current value as its first argument,
-and ARGS as subsequent arguments.
-Returns the new, transformed value."
+and ARGS as subsequent arguments. Returns the transformed value.
+
+Canonical store mode restricts PATH to collection or collection-entity locations."
+  (unless (and (listp path) path)
+    (error "PATH must be a non-empty list, got: %S" path))
+  (when (> (length path) 2)
+    (error "Canonical transform only supports collection/entity paths, got: %S" path))
   (let* ((current-value (supertag-get path))
-       (new-value (apply fn current-value args)))
-  ;; Update store with new value directly.
-  ;; Validation is handled by specific ops functions in hybrid architecture.
-  (supertag-update path new-value)
+         (new-value (apply fn current-value args)))
+    ;; Update store with new value directly.
+    ;; Validation is handled by specific ops functions in hybrid architecture.
+    (supertag-update path new-value)
 
-  ;; If in a transaction, log the change for potential rollback
-  (when supertag--transaction-active
-    (push (list path current-value new-value) supertag--transaction-log))
+    ;; If in a transaction, log the change for potential rollback
+    (when supertag--transaction-active
+      (push (list path current-value new-value) supertag--transaction-log))
 
-  ;; Return new value
-  new-value))
+    ;; Return new value
+    new-value))
 
 ;;; --- Batch Transform ---
 

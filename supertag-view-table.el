@@ -249,20 +249,20 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
             (query-obj (supertag-view-table--get-current-query-obj))
             (actual-value
              (pcase (plist-get query-obj :type)
-               (:tag
-                ;; For tag queries, get field value using supertag-field-get
-                (let* ((node-id (plist-get entity-data :id))
-                       (tag-id (supertag-view-table--get-current-tag-id))
-                       ;; Remove leading colon from field-name if present
-                       (clean-field-name (if (string-prefix-p ":" field-name)
-                                            (substring field-name 1)
-                                          field-name)))
-                  (when (and node-id tag-id)
-                    (supertag-field-get node-id tag-id clean-field-name))))
-               (_
-                ;; For other query types, try properties first
-                (let ((props (plist-get entity-data :properties)))
-                  (plist-get props (intern field-name)))))))
+                (:tag
+                 ;; For tag queries, get field value using default-aware accessor
+                 (let* ((node-id (plist-get entity-data :id))
+                        (tag-id (supertag-view-table--get-current-tag-id))
+                        ;; Remove leading colon from field-name if present
+                        (clean-field-name (if (string-prefix-p ":" field-name)
+                                             (substring field-name 1)
+                                           field-name)))
+                   (when (and node-id tag-id)
+                     (supertag-field-get-with-default node-id tag-id clean-field-name))))
+                (_
+                 ;; For other query types, try properties first
+                 (let ((props (plist-get entity-data :properties)))
+                   (plist-get props (intern field-name)))))))
        (supertag-view-table--compare-values actual-value operator expected-value)))
     
     ('title
@@ -349,7 +349,7 @@ Prompts user to select a tag from available tags."
 
 (defun supertag-view-table--get-available-tags ()
   "Return list of available tag names."
-  (let ((tags (supertag-get (list :tags)))
+  (let ((tags (supertag-store-get-collection :tags))
         (tag-names '()))
     (when (hash-table-p tags)
       (maphash (lambda (id tag-data)
@@ -360,7 +360,7 @@ Prompts user to select a tag from available tags."
 
 (defun supertag-tag-get-id-by-name (tag-name)
   "Get tag ID by TAG-NAME."
-  (let ((tags (supertag-get (list :tags))))
+  (let ((tags (supertag-store-get-collection :tags)))
     (when (hash-table-p tags)
       (catch 'found
         (maphash (lambda (id tag-data)
@@ -577,7 +577,7 @@ Uses improved styling from old version."
   (let ((query-obj (supertag-view-table--get-current-query-obj)))
     (pcase (plist-get query-obj :type)
       (:tag
-       (supertag-get (list :nodes entity-id)))
+       (supertag-node-get entity-id))
       (:behavior
        (supertag-database-get-behavior entity-id))
       (:automation
@@ -585,7 +585,7 @@ Uses improved styling from old version."
       (:database
        (supertag-database-get-database entity-id))
       (_
-       (supertag-get (list (plist-get query-obj :type) entity-id))))))
+       (supertag-store-get-entity (plist-get query-obj :type) entity-id)))))
 
 (defun supertag-view-table--get-cell-value (entity-data key column)
   "Get cell value from ENTITY-DATA for KEY, formatted according to COLUMN type."
@@ -596,11 +596,11 @@ Uses improved styling from old version."
                           (:title (or (plist-get entity-data :title) "No Title"))
                           (:file (or (plist-get entity-data :file) "No File"))
                           (:tags (string-join (plist-get entity-data :tags) ", "))
-                          (_ (let* ((node-id (plist-get entity-data :id))
-                                    (tag-id (supertag-view-table--get-current-tag-id))
-                                    (field-name (symbol-name key)))
-                               (when (and node-id tag-id)
-                                 (supertag-field-get node-id tag-id field-name))))))
+                           (_ (let* ((node-id (plist-get entity-data :id))
+                                     (tag-id (supertag-view-table--get-current-tag-id))
+                                     (field-name (symbol-name key)))
+                                (when (and node-id tag-id)
+                                  (supertag-field-get-with-default node-id tag-id field-name))))))
                        (_
                         (plist-get entity-data key)))))
       ;; Format value based on column type and render Org links for display
@@ -1141,9 +1141,9 @@ COORDS is a plist with :entity-id and :col-index."
                   (query-obj   (supertag-view-table--get-current-query-obj)))
         (pcase (plist-get query-obj :type)
           (:tag
-           (let* ((current-value (supertag-field-get entity-id
-                                                     (supertag-view-table--get-current-tag-id)
-                                                     (symbol-name col-key)))
+           (let* ((current-value (supertag-field-get-with-default entity-id
+                                                                  (supertag-view-table--get-current-tag-id)
+                                                                  (symbol-name col-key)))
                   (new-value (supertag-ui-read-field-value col-def current-value)))
              (when new-value
                (supertag-field-set entity-id (supertag-view-table--get-current-tag-id) (symbol-name col-key) new-value)
@@ -1169,7 +1169,7 @@ Opens the file in a new window on the right and moves cursor to the node."
       (let ((entity-id (plist-get coords :entity-id)))
         (if (null entity-id)
             (message "No entity ID found in cell coordinates.")
-          (when-let* ((node (supertag-get (list :nodes entity-id)))
+          (when-let* ((node (supertag-node-get entity-id))
                       (file (plist-get node :file)))
             (if (not (file-exists-p file))
                 (message "Error: File for node %s does not exist." entity-id)

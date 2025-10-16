@@ -16,6 +16,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'supertag-services-query) ; For the core query engine
+(require 'supertag-ops-node)
 
 ;;; --- Table Formatting ---
 
@@ -54,9 +55,7 @@ This is the primary function for S-expression query blocks."
          (node-ids (supertag-query--execute-ast ast))
          (field-keys (supertag-query--get-fields-from-ast ast))
          (headers (append '("Node" "Tags") field-keys))
-         (nodes (delq nil (mapcar (lambda (id)
-                                    (supertag-get (list :nodes id)))
-                                  node-ids)))
+         (nodes (delq nil (mapcar #'supertag-node-get node-ids)))
          (table-data (mapcar (lambda (node)
                                (let* ((id (plist-get node :id))
                                       (title (or (plist-get node :title) "Untitled"))

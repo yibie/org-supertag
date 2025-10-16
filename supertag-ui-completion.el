@@ -10,13 +10,16 @@
 ;; denominator" approach that all completion frameworks understand.
 
 (require 'org)
-(require 'org-id nil t)
+(require 'org-id)
 (require 'cl-lib)
 
-;; Optional requires for new supertag architecture
-(require 'supertag-ops-tag nil t)
-(require 'supertag-ops-node nil t)
-(require 'supertag-services-query nil t)
+;; Required dependencies for supertag architecture
+;; These MUST be loaded for completion to work correctly
+(require 'supertag-core-store)
+(require 'supertag-core-scan)
+(require 'supertag-ops-tag)
+(require 'supertag-ops-node)
+(require 'supertag-services-query)
 
 ;;;----------------------------------------------------------------------
 ;;; Customization
@@ -40,18 +43,25 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
 (defun supertag-completion--get-all-tags ()
   "Get all available tag names from the supertag store."
   (condition-case err
-      (or (when (fboundp 'supertag-query)
-            (let ((result (supertag-query '(:tags))))
-              (mapcar #'car result)))
-          ;; Fallback: scan nodes directly
-          (let ((nodes-ht (supertag-get '(:nodes)))
-                (all-tags '()))
+      (let ((tags-ht (and (fboundp 'supertag-store-get-collection)
+                          (supertag-store-get-collection :tags)))
+            (all-tags '()))
+        (if (hash-table-p tags-ht)
+            ;; Primary method: get all tag IDs from :tags collection
+            (progn
+              (maphash (lambda (tag-id _tag-data)
+                         (push tag-id all-tags))
+                       tags-ht)
+              (nreverse all-tags))
+          ;; Fallback: scan nodes to collect unique tags
+          (let ((nodes-ht (and (fboundp 'supertag-store-get-collection)
+                               (supertag-store-get-collection :nodes))))
             (when (hash-table-p nodes-ht)
               (maphash (lambda (_node-id node-data)
                          (when-let ((tags (plist-get node-data :tags)))
                            (setq all-tags (append tags all-tags))))
                        nodes-ht))
-            (delete-dups all-tags)))
+            (delete-dups all-tags))))
     (error
      (message "supertag-completion: Failed to get tags: %S" err)
      '())))
@@ -65,17 +75,33 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
   "Find the bounds of a tag prefix at point, if any.
 Returns (START . END) where START is right after the # character."
   (save-excursion
-    (let ((end (point))
-          (start nil))
+    (let* ((end (point))
+           (start nil)
+           (result nil))
       
-      ;; Skip back over valid tag characters
-      (skip-chars-backward "a-zA-Z0-9_-")
-      (setq start (point))
+      ;; Skip back over valid tag characters (NOT including #, which is the trigger)
+      ;; Support Org-mode tag character set: alphanumeric, underscore, hyphen, @, %
+      ;; Note: # is the TRIGGER character, not part of the tag name itself
+      (skip-chars-backward "a-zA-Z0-9_-@%")
       
       ;; Check if we're right after a # character
-      (when (and (> start (point-min))
-                 (eq (char-before start) ?#))
-        (cons start end)))))
+      ;; Note: after skip-chars-backward, point is at the start of the tag prefix
+      (when (and (> (point) (point-min))
+                 (eq (char-before (point)) ?#))
+        ;; Found a #, so the tag starts right after it
+        (setq start (point))
+        (setq result (cons start end))
+        (message "supertag-completion: Found tag prefix bounds: %S, prefix: '%s'"
+                 result (buffer-substring-no-properties start end)))
+      
+      ;; Debug: show why we didn't match
+      (unless result
+        (message "supertag-completion: No match. Point: %d, char-before: %S, char-at: %S"
+                 (point)
+                 (and (> (point) (point-min)) (char-before (point)))
+                 (and (< (point) (point-max)) (char-after (point)))))
+      
+      result)))
 
 (defun supertag-completion--get-completion-table (prefix)
   "Return a completion table function that handles both existing tags and new tag creation."
@@ -210,12 +236,6 @@ completion candidate and correcting the buffer if necessary."
 (define-globalized-minor-mode global-supertag-ui-completion-mode
   supertag-ui-completion-mode
   supertag-ui-completion-enable)
-
-;; Auto-enable if customization variable is set
-;;;###autoload
-(when (and (boundp 'supertag-completion-auto-enable)
-           supertag-completion-auto-enable)
-  (add-hook 'org-mode-hook #'supertag-ui-completion-mode))
 
 (provide 'supertag-ui-completion)
 
