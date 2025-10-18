@@ -70,6 +70,39 @@
   :type '(alist :key-type string :value-type integer)
   :group 'supertag-view)
 
+;;; --- TODO State Handling ---
+
+(defcustom supertag-view-table-strip-todo-keywords t
+  "Whether to strip TODO keywords from node titles in table view.
+If non-nil, TODO keywords will be removed from titles.
+If nil, titles will be displayed as-is with TODO keywords."
+  :type 'boolean
+  :group 'supertag-view)
+
+(defcustom supertag-view-table-todo-keywords
+  '("TODO" "DONE" "NEXT" "WAITING" "HOLD" "CANCELLED" "CANCELED"
+    "STARTED" "DELEGATED" "DEFERRED" "SOMEDAY")
+  "List of TODO keywords to strip from node titles in table view.
+Only used when `supertag-view-table-strip-todo-keywords' is non-nil.
+You can customize this list to match your org-mode TODO keywords."
+  :type '(repeat string)
+  :group 'supertag-view)
+
+(defun supertag-view-table--strip-todo-keyword (title)
+  "Remove TODO keywords from TITLE if configured to do so.
+Removes org-mode TODO keywords based on `supertag-view-table-todo-keywords'.
+Only strips keywords if `supertag-view-table-strip-todo-keywords' is non-nil."
+  (if (not supertag-view-table-strip-todo-keywords)
+      title
+    (let ((keywords-regexp (concat "^\\("
+                                   (mapconcat #'regexp-quote
+                                             supertag-view-table-todo-keywords
+                                             "\\|")
+                                   "\\)\\s-+")))
+      (if (string-match keywords-regexp title)
+          (string-trim (substring title (match-end 0)))
+        title))))
+
 ;;; --- Grid Rendering Engine ---
 
 (defun supertag-view-table (data-source &optional columns view-config named-views)
@@ -593,7 +626,8 @@ Uses improved styling from old version."
     (let ((raw-value (pcase (plist-get query-obj :type)
                        (:tag
                         (pcase key
-                          (:title (or (plist-get entity-data :title) "No Title"))
+                          (:title (supertag-view-table--strip-todo-keyword
+                                  (or (plist-get entity-data :title) "No Title")))
                           (:file (or (plist-get entity-data :file) "No File"))
                           (:tags (string-join (plist-get entity-data :tags) ", "))
                            (_ (let* ((node-id (plist-get entity-data :id))
@@ -1086,12 +1120,12 @@ Based on old version's superior navigation system."
         (when (and new-type field-def)
           (let ((new-field-def (plist-put field-def :type new-type)))
             ;; Handle options type specifically
-            (if (eq new-type :options)
-                (let* ((options-str (read-string "Enter options (comma-separated): "))
-                       (options (split-string options-str "," t " ")))
-                  (setq new-field-def (plist-put new-field-def :options options)))
-              ;; Remove options if not options type
-              (setq new-field-def (plist-delete new-field-def :options)))
+            (when (eq new-type :options)
+              (let* ((options-str (read-string "Enter options (comma-separated): "))
+                     (options (split-string options-str "," t " ")))
+                (setq new-field-def (plist-put new-field-def :options options))))
+            ;; For non-options types, we don't need to remove :options
+            ;; The system handles nil options correctly
             (supertag-tag-add-field tag-id new-field-def)
             (supertag-view-table-refresh)
             (message "Column '%s' type set to '%s'." col-name new-type)))))))
@@ -1372,7 +1406,7 @@ With prefix argument INDEX, switch to specific table number."
 (defun supertag-view-table-clear-filter ()
   "Clear the currently applied filter."
   (interactive)
-  (setq-local supertag-view-table--view-config (plist-delete supertag-view-table--view-config :filter))
+  (setq-local supertag-view-table--view-config (plist-put supertag-view-table--view-config :filter nil))
   (setq-local supertag-view-table--current-view-name nil)
   (supertag-view-table-refresh)
   (message "Filter cleared."))
@@ -1533,6 +1567,11 @@ With prefix argument INDEX, switch to specific table number."
     (princ "  C-c v s     - Switch to a named view\n")
     (princ "  C-c v S     - Save current view as named view\n")
     (princ "  C-c v d     - Delete a named view\n\n")
+    (princ "Field Management:\n")
+    (princ "  C-c C-a     - Add new field/column\n")
+    (princ "  C-c C-d     - Delete field/column\n")
+    (princ "  C-c C-r     - Rename field/column\n")
+    (princ "  C-c C-t     - Set field/column type\n\n")
     (princ "=== Image Support ===\n\n")
     (princ "The table view supports image rendering:\n")
     (princ "- Simply enter the full path to an image file in any cell\n")

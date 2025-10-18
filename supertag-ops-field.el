@@ -14,6 +14,12 @@
 (require 'supertag-core-scan)
 (require 'supertag-ops-tag)
 
+(defcustom supertag-debug-log-field-events nil
+  "When non-nil, log detailed field mutation events and automation processing.
+Useful for diagnosing field value loss or unexpected overwrites."
+  :type 'boolean
+  :group 'org-supertag)
+
 (defconst supertag-field--missing (list :supertag-field-missing)
   "Sentinel used to detect missing field values.")
 
@@ -119,7 +125,11 @@ Returns the updated field value."
          (event-new (list :node-id node-id :tag-id tag-id :field-name field-name :value value)))
     (if (and (not (eq old-raw supertag-field--missing))
              (equal old-value value))
-        value
+        (progn
+          (when supertag-debug-log-field-events
+            (message "supertag-field-set SKIP %s/%s/%s unchanged=%S"
+                     node-id tag-id field-name value))
+          value)
       (progn
         (supertag-ops-commit
          :operation :field-set
@@ -133,6 +143,9 @@ Returns the updated field value."
                     (let* ((node-table (supertag-field--ensure-node-table node-id t))
                            (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
                       (puthash field-name value tag-table)
+                      (when supertag-debug-log-field-events
+                        (message "supertag-field-set WRITE %s/%s/%s old=%S new=%S"
+                                 node-id tag-id field-name old-value value))
                       event-new))))
         value)))
 

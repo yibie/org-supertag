@@ -94,7 +94,7 @@ Returns the updated node data."
                       (let* ((final-node (plist-put updated-node :modified-at (supertag-current-time))))
                         (supertag--validate-node-data final-node)
                         (supertag-store-put-entity :nodes id final-node)
-                        final-node)))))))
+                        final-node))))))))
 
 (defun supertag-node-delete (node-id)
   "Delete a node and all of its relationships from the store.
@@ -134,7 +134,7 @@ This operation is atomic and ensures no dangling references remain."
                       (when (hash-table-p fields-table)
                         (supertag-store-remove-entity :fields node-id)))
                     (supertag-store-remove-entity :nodes node-id)
-                    nil)))))))
+                    nil))))))
 
 ;; 2.2 Tag Operations
 

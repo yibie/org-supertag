@@ -43,13 +43,19 @@
 ;;; --- Core State Management ---
 
 (defun supertag-automation--ensure-plist (data)
-  "Return a plist copy of DATA, converting hash tables when necessary."
+  "Return a plist copy of DATA, converting hash tables when necessary.
+This function preserves all data including tags and fields."
   (cond
    ((null data) nil)
    ((hash-table-p data)
+    ;; Convert hash table to plist while preserving all data
     (let (plist)
       (maphash (lambda (k v)
-                 (setq plist (plist-put plist k v)))
+                 ;; Ensure we don't lose data during conversion
+                 (if (eq k :tags)
+                     ;; Special handling for tags to ensure list format
+                     (setq plist (plist-put plist :tags (if (listp v) v (list v))))
+                   (setq plist (plist-put plist k v))))
                data)
       plist))
    ((listp data)
@@ -527,22 +533,25 @@ CONTEXT provides execution context"
 
 (defun supertag-automation-action-update-property (node-id params)
   "Update an Org-mode property on the node.
-This updates native Org properties like :SCHEDULED:, :DEADLINE:, etc."
+This updates native Org properties like :SCHEDULED:, :DEADLINE:, etc.
+Preserves all existing node data including tags and other properties."
   (let ((property (plist-get params :property))
         (value (plist-get params :value)))
     (when (and node-id property)
       (supertag-node-update
        node-id
        (lambda (node)
-         (let* ((plist (supertag-automation--ensure-plist node))
-                (props (copy-tree (or (plist-get plist :properties) '())))
-                (current (plist-get props property)))
-           (if (equal current value)
-               (progn
-                 (message "SKIP(update-property): %s unchanged on node %s" property node-id)
-                 nil)
-             (let ((new-props (plist-put props property value)))
-               (plist-put plist :properties new-props)))))))))
+         (when node
+           (let* ((props (copy-tree (or (plist-get node :properties) '())))
+                  (current (plist-get props property)))
+             (if (equal current value)
+                 (progn
+                   (message "SKIP(update-property): %s unchanged on node %s" property node-id)
+                   node)  ; Return unchanged node to preserve data
+               ;; Create new node copy with updated property while preserving everything else
+               (let ((new-props (plist-put props property value))
+                     (updated-node (copy-tree node)))
+                 (plist-put updated-node :properties new-props))))))))))
 
 (defun supertag-automation-action-update-todo-state (node-id params)
   "Update the TODO state of a node.
@@ -680,18 +689,22 @@ RELATION-CONFIG provides sync configuration from the relation."
                  field-name value from-id to-id)))))
 
 (defun supertag-automation--sync-to-node (node-id field-name value)
-  "Sync field to a node entity via properties."
+  "Sync field to a node entity via properties.
+Preserves all existing node data including tags and other properties."
   (let ((field-key (supertag-automation--normalize-keyword field-name)))
     (supertag-node-update
      node-id
      (lambda (node)
-       (let* ((plist (supertag-automation--ensure-plist node))
-              (props (copy-tree (or (plist-get plist :properties) '())))
-              (current (plist-get props field-key)))
-         (if (equal current value)
-             nil
-           (let ((new-props (plist-put props field-key value)))
-             (plist-put plist :properties new-props))))))))
+       (when node
+         (let* ((props (copy-tree (or (plist-get node :properties) '())))
+                (current (plist-get props field-key)))
+           (if (equal current value)
+               node  ; Return unchanged node to preserve data
+             ;; Create new props with updated field
+             (let ((new-props (plist-put props field-key value)))
+               ;; Update node while preserving all other fields
+               (let ((updated-node (copy-tree node)))
+                 (plist-put updated-node :properties new-props))))))))))
 
 (defun supertag-automation--sync-to-tag (tag-id field-name value)
   "Sync field to a tag entity."
