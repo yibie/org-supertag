@@ -803,15 +803,24 @@ WARNING: This removes the tag from the database and from all org files."
       ;; Call the centralized ops function to perform the deletion.
       (supertag-ops-delete-tag-everywhere tag-name))))
 
+(defun supertag-ui-select-tag-on-node (node-id)
+  "Interactively select a tag from the ones associated with NODE-ID.
+Returns the selected tag ID (a string), or nil if canceled."
+  (let* ((node (supertag-node-get node-id))
+         (tags (and node (plist-get node :tags))))
+    (unless tags
+      (user-error "Node has no tags to select from."))
+    (completing-read "Select tag: " tags nil t)))
+
 (defun supertag-change-tag-at-point ()
-  "Interactively change a tag at the current point to a different tag.
-Can be used both at headings and within node content areas."
+  "Interactively change a tag on the current node to a different tag.
+This command reads the authoritative list of tags from the database."
   (interactive)
   (require 'supertag-view-helper)
-  (let* ((current-tag (supertag-view-helper-get-tag-at-point))
-         (node-id (supertag-ui--get-containing-node-at-point)))
+  (let* ((node-id (supertag-ui--get-containing-node-at-point))
+         (current-tag (supertag-ui-select-tag-on-node node-id)))
     (unless current-tag
-      (user-error "No tag found at point"))
+      (user-error "No tag selected."))
     
     (let* ((all-tags (mapcar #'car (supertag-query :tags)))
            (new-tag-raw (completing-read (format "Change tag '%s' to: " current-tag) all-tags nil nil))
@@ -823,21 +832,23 @@ Can be used both at headings and within node content areas."
             (supertag-tag-create `(:name ,new-tag :id ,new-tag))))
         
         (when (supertag-tag-get new-tag)
-          ;; 2. Update database relationships
-          (let* ((old-relations (supertag-relation-find-between node-id current-tag :node-tag))
-                 (old-relation (car old-relations)))
-            (when old-relation
-              (supertag-relation-delete (plist-get old-relation :id)))
-            (supertag-relation-create `(:type :node-tag :from ,node-id :to ,new-tag)))
+          ;; 2. Update database relationships and node data
+          (supertag-with-transaction
+            ;; Remove old relation
+            (let* ((old-relations (supertag-relation-find-between node-id current-tag :node-tag))
+                   (old-relation (car old-relations)))
+              (when old-relation
+                (supertag-relation-delete (plist-get old-relation :id))))
+            ;; Remove old tag from node's list
+            (supertag-node-remove-tag node-id current-tag)
+            
+            ;; Add new relation
+            (supertag-relation-create `(:type :node-tag :from ,node-id :to ,new-tag))
+            ;; Add new tag to node's list
+            (supertag-node-add-tag node-id new-tag))
           
-          ;; 3. Replace tag text at point
-          (save-excursion
-            (let* ((tag-re (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
-                   (start (point)))
-              (when (re-search-backward tag-re nil t)
-                (when (and (<= (match-beginning 0) start)
-                           (> (match-end 0) start))
-                  (replace-match (concat "#" new-tag))))))
+          ;; 3. Replace all instances of the old tag text with the new one in the buffer
+          (supertag-view-helper-rename-tag-text-in-node current-tag new-tag)
           
           (message "Tag changed from '%s' to '%s'." current-tag new-tag))))))
 

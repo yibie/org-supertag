@@ -771,6 +771,30 @@ Returns the tag name (without #) if found, nil otherwise."
             ;; Extract the tag name, removing the leading '#' 
             (substring (match-string 0) 1)))))))
 
+(defun supertag-view-helper-rename-tag-text-in-node (old-tag-name new-tag-name)
+  "Rename all occurrences of #OLD-TAG-NAME to #NEW-TAG-NAME within the current node's subtree.
+This provides a granular rename, scoped only to the current node."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((beg (point))
+          (end (save-excursion (org-end-of-subtree t t) (point)))
+          (renamed-count 0)
+          (regex (concat "#" (regexp-quote old-tag-name) "\\b")))
+      (narrow-to-region beg end)
+      (goto-char (point-min))
+      (while (re-search-forward regex nil t)
+        (unless (or (save-excursion
+                      (goto-char (match-beginning 0))
+                      (org-in-src-block-p))
+                    (save-excursion
+                      (goto-char (match-beginning 0))
+                      (beginning-of-line)
+                      (looking-at-p "^[ \t]*#\\+")))
+          (replace-match (concat "#" new-tag-name) t t)
+          (setq renamed-count (1+ renamed-count))))
+      (widen)
+      renamed-count)))
+
 ;;;----------------------------------------------------------------------
 ;;; Cross-File Tag Text Operations
 ;;;----------------------------------------------------------------------
@@ -815,6 +839,25 @@ Returns the total number of instances removed."
                 (setq total-removed (+ total-removed removed-count))
                 (message "Removed %d instances of #%s from %s" removed-count tag-name (file-name-nondirectory file))))))
     total-removed))))
+
+(defun supertag-view-helper-rename-tag-text-in-buffer (old-tag-name new-tag-name)
+  "Rename all occurrences of #OLD-TAG-NAME to #NEW-TAG-NAME in the current buffer.
+Returns the total number of instances renamed."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((renamed-count 0)
+          (regex (concat "#" (regexp-quote old-tag-name) "\\b"))) ; Use word boundary
+      (while (re-search-forward regex nil t)
+        (unless (or (save-excursion
+                      (goto-char (match-beginning 0))
+                      (org-in-src-block-p))
+                    (save-excursion
+                      (goto-char (match-beginning 0))
+                      (beginning-of-line)
+                      (looking-at-p "^[ \t]*#\\+")))
+          (replace-match (concat "#" new-tag-name) t t)
+          (setq renamed-count (1+ renamed-count))))
+      renamed-count)))
 
 (defun supertag-view-helper-rename-tag-text-in-files (old-tag-name new-tag-name files)
   "Rename all occurrences of #OLD-TAG-NAME to #NEW-TAG-NAME in specified FILES.
