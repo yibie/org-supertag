@@ -126,8 +126,19 @@ MATCHES is the list to collect matching paths."
        (t
         (let ((value (gethash key store)))
           (when (and value (hash-table-p value))
-            (supertag--traverse-store-matches
-             value rest-pattern (cons key current-path) matches))))))))
+             (supertag--traverse-store-matches
+              value rest-pattern (cons key current-path) matches))))))))
+
+(defun supertag-transform-extract-inline-tags (content-string)
+  "Extract all #tags from a CONTENT-STRING using a regex."
+  (let ((tags '()))
+    (when content-string
+      (with-temp-buffer
+        (insert content-string)
+        (goto-char (point-min))
+        (while (re-search-forward "#\\(\\w[-_[:alnum:]]*\\)" nil t)
+          (push (match-string 1) tags))))
+    (nreverse tags)))
 
 (provide 'supertag-core-transform)
 

@@ -90,16 +90,7 @@ Returns (START . END) where START is right after the # character."
                  (eq (char-before (point)) ?#))
         ;; Found a #, so the tag starts right after it
         (setq start (point))
-        (setq result (cons start end))
-        (message "supertag-completion: Found tag prefix bounds: %S, prefix: '%s'"
-                 result (buffer-substring-no-properties start end)))
-      
-      ;; Debug: show why we didn't match
-      (unless result
-        (message "supertag-completion: No match. Point: %d, char-before: %S, char-at: %S"
-                 (point)
-                 (and (> (point) (point-min)) (char-before (point)))
-                 (and (< (point) (point-max)) (char-after (point)))))
+        (setq result (cons start end)))
       
       result)))
 

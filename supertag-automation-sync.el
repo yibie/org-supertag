@@ -17,6 +17,8 @@
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 
+(defvar supertag-debug-log-field-events nil)
+
 ;;; --- Synchronous Event Processing State ---
 
 (defvar supertag-automation-sync--processing-stack nil
@@ -87,6 +89,9 @@ METADATA is additional operation context."
       (when (and node-id field-name)
         (supertag-automation-sync--with-protection node-id
           (lambda ()
+            (when supertag-debug-log-field-events
+              (message "supertag-automation-sync EVENT %s node=%s tag=%s field=%s old=%S new=%S"
+                       operation node-id tag-id field-name old-value new-value))
             ;; 1. Trigger field synchronization for relations
             (supertag-automation-sync-all-relations node-id field-name new-value)
             
@@ -300,7 +305,8 @@ This is an optimized version of the original rule lookup."
     (plist-get entity (intern (concat ":" field-name)))))
 
 (defun supertag-automation-sync-field (from-id to-id field-name value relation-config)
-  "Sync a field value between two entities synchronously."
+  "Sync a field value between two entities synchronously.
+Preserves all existing target entity data."
   (let ((sync-key (format "%s->%s:%s" from-id to-id field-name)))
     ;; Check cache to avoid redundant syncs
     (unless (equal (gethash sync-key supertag-automation--sync-cache) value)
@@ -323,7 +329,8 @@ This is an optimized version of the original rule lookup."
           (message "Warning: Unknown target entity type for %s" to-id)))))))
 
 (defun supertag-automation-sync--update-node-field (node-id field-name value)
-  "Update a field on a node entity synchronously."
+  "Update a field on a node entity synchronously.
+Preserves all existing node data including tags and other properties."
   (let ((field-key (intern (concat ":" field-name))))
     (supertag-node-update
      node-id
@@ -332,8 +339,10 @@ This is an optimized version of the original rule lookup."
          (let* ((props (copy-tree (or (plist-get node :properties) '())))
                 (current (plist-get props field-key)))
            (if (equal current value)
-               node
-             (plist-put node :properties (plist-put props field-key value)))))))))
+               node  ; Return unchanged node to preserve data
+             ;; Create new node copy with updated field while preserving everything else
+             (let ((updated-node (copy-tree node)))
+               (plist-put updated-node :properties (plist-put props field-key value))))))))))
 
 (defun supertag-automation-sync--update-tag-field (tag-id field-name value)
   "Update a field on a tag entity synchronously."

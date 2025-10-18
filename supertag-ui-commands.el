@@ -75,19 +75,6 @@ When invoked interactively, allows selecting multiple child tags."
                (mapconcat #'identity children ", ")))
     children))
 
-;;; --- Internal Helper ---
-
-(defun supertag-ui--extract-inline-tags-from-string (content-string)
-  "Extract all #tags from a CONTENT-STRING using a regex."
-  (let ((tags '()))
-    (when content-string
-      (with-temp-buffer
-        (insert content-string)
-        (goto-char (point-min))
-        (while (re-search-forward "#\(\w[-_[:alnum:]]*\)" nil t)
-          (push (match-string 1) tags))))
-    (nreverse tags)))
-
 (defun supertag-ui--get-nodes-in-region (beg end)
   "Extract all node IDs from Org headings within the region BEG to END.
 Returns a list of node IDs. Creates IDs for headings that don't have one.
@@ -124,8 +111,8 @@ Returns a plist of properties suitable for node creation/update."
            (content (save-excursion
                        (org-end-of-meta-data t)
                        (buffer-substring-no-properties (point) (save-excursion (org-end-of-subtree t t) (point)))))
-           (headline-tags (supertag-ui--extract-inline-tags-from-string title))
-           (content-tags (supertag-ui--extract-inline-tags-from-string content))
+           (headline-tags (supertag-transform-extract-inline-tags title))
+           (content-tags (supertag-transform-extract-inline-tags content))
            (all-tags (cl-union headline-tags content-tags :test 'equal)))
       (list :id id
             :title title
@@ -925,33 +912,72 @@ If TEMPLATE-KEY is not provided, prompts for one."
 
   ;; 1. Select Template
   (let* ((template-alist supertag-capture-templates)
-         ;; Create an alist of ("KEY: DESCRIPTION" . "KEY") for completion.
-         ;; This allows displaying descriptive text while easily retrieving the key.
-         (completion-alist (mapcar (lambda (tag)
-                                     (cons (format "%s - %s" (car tag) (cadr tag))
-                                           (car tag)))
+         ;; Create an alist of ("KEY - DESCRIPTION" . TEMPLATE-DATA) for completion.
+         (completion-alist (mapcar (lambda (template)
+                                     (cons (format "%s - %s" (car template) (cadr template))
+                                           template))
                                    template-alist))
-         (selected-display (completing-read "Template: " completion-alist nil t))
-         ;; Get the actual key (e.g., "l") from the selected display string.
-         (key (or template-key (cdr (assoc selected-display completion-alist))))
-         ;; Each template has shape: (KEY DESCRIPTION PLIST)
-         ;; We need the PLIST only, so drop the first two elements.
-         (template-data (cddr (assoc key template-alist)))
-         (target-file (plist-get template-data :file))
-         (node-spec (plist-get template-data :node-spec)))
+         (selected-display (completing-read "Template: " (mapcar #'car completion-alist) nil t))
+         (selected-template (cdr (assoc selected-display completion-alist)))
+         (key (car selected-template))
+         ;; The rest of the template is the plist part.
+         (template-data (cddr selected-template)))
     (unless template-data
       (user-error "Template doesn't exist: %s" key))
-    (unless target-file
-      (user-error "Template '%s' has no target file specified. Please set :file property." key))
-    ;; Expand the file path to handle ~ and relative paths
-    (setq target-file (expand-file-name target-file))
-    (unless (file-exists-p target-file)
-      (user-error "Target file does not exist: %s" target-file))
-
-    ;; 2. Process spec into data (Call Processor)
-    (let ((processed-data (supertag-capture--process-spec node-spec)))
-      ;; 3. Execute capture with data (Call Executor)
-      (supertag-capture--execute target-file processed-data))))
+    
+    (let* ((target-file (plist-get template-data :file))
+           (raw-node-spec (plist-get template-data :node-spec))
+           ;; Check if the node-spec is a :template string and parse it.
+           (node-spec (if (and (consp raw-node-spec) (eq (car raw-node-spec) :template))
+                          (supertag-capture--parse-template-string (cadr raw-node-spec))
+                        raw-node-spec)))
+      ;; If no target file specified, use move-node logic to select target
+      (if target-file
+          ;; Case 1: Template has :file - use it directly
+          (progn
+            ;; Expand the file path to handle ~ and relative paths
+            (setq target-file (expand-file-name target-file))
+            (unless (file-exists-p target-file)
+              (user-error "Target file does not exist: %s" target-file))
+            ;; Process spec into data and execute
+            (let ((processed-data (supertag-capture--process-spec node-spec)))
+              (supertag-capture--execute target-file processed-data)))
+        ;; Case 2: No :file specified - use move-node style selection
+        (let* ((processed-data (supertag-capture--process-spec node-spec))
+               (title (plist-get processed-data :title))
+               (tags (plist-get processed-data :tags))
+               (body (plist-get processed-data :body))
+               (field-settings (plist-get processed-data :fields))
+               ;; Use move-node style file selection
+               (selected-file (read-file-name "Capture node to file: " nil nil t))
+               (insert-info (supertag-ui-select-insert-position selected-file))
+               (insert-pos (plist-get insert-info :position))
+               (insert-level (plist-get insert-info :level)))
+          (unless insert-info
+            (user-error "No valid insert position selected"))
+          ;; Create node directly at selected location
+          (let ((new-node-id (org-id-new)))
+            (supertag-capture--insert-node-into-buffer
+             (find-file-noselect selected-file)
+             insert-pos insert-level title tags body new-node-id)
+            ;; Create database record and set fields
+            (supertag-node-create (list :id new-node-id
+                                        :title title
+                                        :tags tags
+                                        :file selected-file))
+            (message "Node %s created in %s" new-node-id (file-name-nondirectory selected-file))
+            ;; Set field values from template
+            (when field-settings
+              (dolist (f-spec field-settings)
+                (let* ((f-tag (plist-get f-spec :tag))
+                       (f-field (plist-get f-spec :field))
+                       (f-get (plist-get f-spec :get))
+                       (f-value (if f-get
+                                    (supertag-capture--get-content f-get)
+                                  (plist-get f-spec :value))))
+                  (when (and f-tag f-field f-value)
+                    (supertag-field-set new-node-id f-tag f-field f-value)
+                    (message "Set field: %s/%s -> %s" f-tag f-field f-value)))))))))))
 
 ;;; --- Sync Commands ---
 

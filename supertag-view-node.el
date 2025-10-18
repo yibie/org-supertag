@@ -80,6 +80,8 @@ You can customize this list to match your org-mode TODO keywords."
     (define-key map (kbd "g") 'supertag-view-node-refresh)
     (define-key map (kbd "q") 'quit-window)
     (define-key map (kbd "h") 'describe-mode)
+    ;; Debug
+    (define-key map (kbd "?") 'supertag-view-node-debug-field-at-point)
     map)
   "Keymap for `supertag-view-node-mode'.")
 
@@ -357,7 +359,22 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
       (supertag-view-helper-insert-simple-empty-state "No references found."))))
 
 ;; Add advanced editing functions
-(defun supertag-view-node--get-field-info-at-point ())
+(defun supertag-view-node-debug-field-at-point ()
+  "Debug function to show field information at point."
+  (interactive)
+  (let* ((pos (point))
+         (fallback-pos (max (point-min) (1- pos)))
+         (tag-id     (or (get-text-property pos 'tag-id)
+                         (get-text-property fallback-pos 'tag-id)))
+         (field-name (or (get-text-property pos 'field-name)
+                         (get-text-property fallback-pos 'field-name)))
+         (node-id supertag-view-node--current-node-id)
+         (context (get-text-property pos 'supertag-context))
+         (type (get-text-property pos 'type)))
+    (message "Debug: pos=%d, tag-id=%s, field-name=%s, node-id=%s, context=%s, type=%s"
+             pos tag-id field-name node-id context type)))
+
+(defun supertag-view-node--get-field-info-at-point ()
   "Return plist of field info at point, or nil."
   (let* ((pos (point))
          (fallback-pos (max (point-min) (1- pos)))
@@ -374,35 +391,38 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
               :tag-id    tag-id
               :field-name field-name
               :field-def field-def
-              :value     value))))
+              :value     value)))))
 
 (defun supertag-view-node-edit-field-definition-at-point ()
   "Edit the field definition at the current point."
   (interactive)
-  (when-let* ((field-info (supertag-view-node--get-field-info-at-point))
-              (tag-id (plist-get field-info :tag-id))
-              (field-name (plist-get field-info :field-name))
-              (field-def (plist-get field-info :field-def)))
-    (when (and tag-id field-name field-def)
-      (let* ((current-type (plist-get field-def :type))
-             (action (completing-read "Edit: " '("Name" "Type") nil t)))
-        (cond
-         ((string= action "Name")
-          (let ((new-name (read-string (format "New name for field '%s': " field-name) nil nil field-name)))
-            (when (and new-name (not (string-empty-p new-name)) (not (string= new-name field-name)))
-              (supertag-tag-rename-field tag-id field-name new-name)
-              (supertag-view-node-refresh)
-              (message "✓ Field renamed from '%s' to '%s'" field-name new-name))))
-         ((string= action "Type")
-          (let* ((type-and-options (supertag-field-read-type-with-options current-type))
-                 (new-type (car type-and-options))
-                 (options (cdr type-and-options))
-                 (new-field-def (list :name field-name :type new-type)))
-            ;; Add options for :options type
-            (when (eq new-type :options)
-              (setq new-field-def (plist-put new-field-def :options options)))
-            (when (supertag-tag-add-field tag-id new-field-def)  ; This will update the existing field
-              (supertag-view-node-refresh)))))))))
+  (let ((field-info (supertag-view-node--get-field-info-at-point)))
+    (if field-info
+        (let* ((tag-id (plist-get field-info :tag-id))
+               (field-name (plist-get field-info :field-name))
+               (field-def (plist-get field-info :field-def)))
+          (when (and tag-id field-name field-def)
+            (let* ((current-type (plist-get field-def :type))
+                   (action (completing-read "Edit: " '("Name" "Type") nil t)))
+              (cond
+               ((string= action "Name")
+                (let ((new-name (read-string (format "New name for field '%s': " field-name) nil nil field-name)))
+                  (when (and new-name (not (string-empty-p new-name)) (not (string= new-name field-name)))
+                    (supertag-tag-rename-field tag-id field-name new-name)
+                    (supertag-view-node-refresh)
+                    (message "✓ Field renamed from '%s' to '%s'" field-name new-name))))
+               ((string= action "Type")
+                (let* ((type-and-options (supertag-field-read-type-with-options current-type))
+                       (new-type (car type-and-options))
+                       (options (cdr type-and-options))
+                       (new-field-def (list :name field-name :type new-type)))
+                  ;; Add options for :options type
+                  (when (eq new-type :options)
+                    (setq new-field-def (plist-put new-field-def :options options)))
+                  (when (supertag-tag-add-field tag-id new-field-def)  ; This will update the existing field
+                    (supertag-view-node-refresh))))))
+          (message "Field info: tag-id=%s, field-name=%s" tag-id field-name))
+      (message "No field found at point. Please position cursor on a field.")))))
 
 (defun supertag-view-node-move-field-up ()
   "Move the field at point up in its tag's field list."

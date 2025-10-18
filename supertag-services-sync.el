@@ -1040,15 +1040,14 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
          (contents-end (org-element-property :contents-end headline))
          (original-raw-title (org-element-property :raw-value headline))
          (todo-keyword (org-element-property :todo-keyword headline))
-         ;; Clean title: remove TODO keyword, #tags, and :tags:
+         ;; Clean title: remove TODO keyword and :tags: but keep #tags
          (title-without-todo (if todo-keyword
                                  (string-trim (replace-regexp-in-string
                                               (concat "^" (regexp-quote todo-keyword) "\\s-+")
                                               "" original-raw-title))
                                original-raw-title))
-         (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" (replace-regexp-in-string
-"#\\w[-_[:alnum:]]*" "" title-without-todo))))
-         ;; If cleaning results in an empty string (title was only tags), use the original.
+         (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title-without-todo)))
+         ;; If cleaning results in an empty string (title was only org tags), use the original.
          (final-title (if (string-empty-p title-after-cleaning)
                           original-raw-title
                         title-after-cleaning))

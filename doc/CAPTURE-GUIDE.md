@@ -26,7 +26,7 @@ M-x supertag-capture-with-template RET t RET
   :PROPERTIES:
   :ID: a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8
   :END:
-  
+
   Creation date: 2025-09-06
   Status: To Start
 ```
@@ -44,6 +44,7 @@ M-x supertag-capture
 ```
 
 **Operation Flow**:
+
 1. Enter node title
 2. Select tags (optional, supports multiple selection)
 3. Select target file and insertion position
@@ -51,6 +52,7 @@ M-x supertag-capture
 5. Optionally enrich field values
 
 **Use Cases**:
+
 - Temporary idea recording
 - Simple task creation
 - Quick content capture
@@ -64,12 +66,16 @@ M-x supertag-capture-with-template
 ```
 
 **Operation Flow**:
+
 1. Select a configured template
 2. Provide content according to template specifications
-3. System automatically generates complete node
-4. Optionally enrich with additional fields
+3. If template has `:file`, node is created directly at that location
+4. If template has no `:file`, user selects target file and insertion position
+5. System automatically generates complete node
+6. Optionally enrich with additional fields
 
 **Use Cases**:
+
 - Standardized document creation
 - Repetitive task recording
 - Structured information collection
@@ -81,7 +87,7 @@ M-x supertag-capture-with-template
 ```elisp
 (setq supertag-capture-templates
       '((template-key "template-description"
-         :file "target-file-path"
+         :file "target-file-path"  ; Optional: if omitted, user selects target file
          :node-spec
          ((node-specification-list...)))))
 ```
@@ -90,10 +96,10 @@ M-x supertag-capture-with-template
 
 Each node specification item contains two core parts:
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `:part` | Symbol | Yes | Node part type (`:title`, `:tags`, `:body`, `:fields`) |
-| `:get` | List | Yes | Content generation specification |
+| Parameter | Type   | Required | Description                                            |
+| --------- | ------ | -------- | ------------------------------------------------------ |
+| `:part`   | Symbol | Yes      | Node part type (`:title`, `:tags`, `:body`, `:fields`) |
+| `:get`    | List   | Yes      | Content generation specification                       |
 
 ### Content Generators
 
@@ -161,45 +167,51 @@ Generate content using template strings with placeholder replacement.
 **Supported Placeholders**:
 
 ##### ⏰ Time-Related Placeholders
-| Placeholder | Description | Example Output |
-|--------|------|----------|
-| `%date` | Current date | 2025-09-06 |
-| `%time` | Current time | 14:30 |
-| `%datetime` | Date and time | 2025-09-06 14:30 |
-| `%timestamp` | Full timestamp | 2025-09-06 14:30:45 |
-| `%week` | Current week number | W36 |
-| `%month` | Current month | September |
-| `%year` | Current year | 2025 |
+
+| Placeholder  | Description         | Example Output      |
+| ------------ | ------------------- | ------------------- |
+| `%date`      | Current date        | 2025-09-06          |
+| `%time`      | Current time        | 14:30               |
+| `%datetime`  | Date and time       | 2025-09-06 14:30    |
+| `%timestamp` | Full timestamp      | 2025-09-06 14:30:45 |
+| `%week`      | Current week number | W36                 |
+| `%month`     | Current month       | September           |
+| `%year`      | Current year        | 2025                |
 
 ##### 👤 User Information Placeholders
-| Placeholder | Description | Example Output |
-|--------|------|----------|
-| `%user` | User login name | chenyibin |
-| `%fullname` | User full name | Chen Yibin |
-| `%hostname` | System hostname | MacBook-Pro |
+
+| Placeholder | Description     | Example Output |
+| ----------- | --------------- | -------------- |
+| `%user`     | User login name | chenyibin      |
+| `%fullname` | User full name  | Chen Yibin     |
+| `%hostname` | System hostname | MacBook-Pro    |
 
 ##### 📁 File Context Placeholders
-| Placeholder | Description | Example Output |
-|--------|------|----------|
-| `%filename` | Current buffer filename | project.org |
-| `%filepath` | Current buffer full path | /Users/user/org/project.org |
-| `%directory` | Current buffer directory | /Users/user/org/ |
+
+| Placeholder  | Description              | Example Output              |
+| ------------ | ------------------------ | --------------------------- |
+| `%filename`  | Current buffer filename  | project.org                 |
+| `%filepath`  | Current buffer full path | /Users/user/org/project.org |
+| `%directory` | Current buffer directory | /Users/user/org/            |
 
 ##### 🔗 Node Context Placeholders
-| Placeholder | Description | Example Output |
-|--------|------|----------|
-| `%current-node-title` | Current node title | Project Management System |
-| `%current-node-id` | Current node ID | a1b2c3d4-e5f6-7890 |
-| `%current-tags` | Current node tag list | project, important |
+
+| Placeholder           | Description           | Example Output            |
+| --------------------- | --------------------- | ------------------------- |
+| `%current-node-title` | Current node title    | Project Management System |
+| `%current-node-id`    | Current node ID       | a1b2c3d4-e5f6-7890        |
+| `%current-tags`       | Current node tag list | project, important        |
 
 ##### 🛠️ Utility Placeholders
-| Placeholder | Description | Example Output |
-|--------|------|----------|
-| `%clipboard` | Clipboard content | [Text in clipboard] |
-| `%random` | Random 4-digit number | 1234 |
-| `%uuid` | Newly generated UUID | f47ac10b-58cc-4372 |
+
+| Placeholder  | Description           | Example Output      |
+| ------------ | --------------------- | ------------------- |
+| `%clipboard` | Clipboard content     | [Text in clipboard] |
+| `%random`    | Random 4-digit number | 1234                |
+| `%uuid`      | Newly generated UUID  | f47ac10b-58cc-4372  |
 
 Example usage:
+
 ```elisp
 ;; Create template with multiple information
 (:part :body :get (:template-string "Report date: %date\nReporter: %fullname\nHostname: %hostname\nContent:\n%clipboard"))
@@ -223,8 +235,9 @@ Field specifications are used to automatically set tag field values for nodes.
 ```
 
 Field specification format:
+
 - `:tag` - Tag ID
-- `:field` - Field name  
+- `:field` - Field name
 - `:value` - Field value (static)
 - `:get` - Field value generator (dynamic)
 
@@ -243,6 +256,7 @@ Field specification format:
 ```
 
 Usage:
+
 1. `M-x supertag-capture-with-template RET t RET`
 2. Enter task name: "Fix login page bug"
 3. System automatically generates structured task node
@@ -262,6 +276,7 @@ Usage:
 ```
 
 Usage:
+
 1. Copy learning material to clipboard
 2. `M-x supertag-capture-with-template RET l RET`
 3. Enter learning topic and related information
@@ -285,7 +300,7 @@ Usage:
 
 ```elisp
 ("p" "Project Planning"
- :file "~/org/projects.org" 
+ :file "~/org/projects.org"
  :node-spec
  ((:part :title :get (:prompt "Project Name: "))
   (:part :tags  :get (:static ("project" "planning")))
@@ -294,16 +309,33 @@ Usage:
                                  (:tag "project" :field "owner" :get (:prompt "Owner: "))))))))
 ```
 
-### Idea Capture Template
+### Flexible File Selection Templates
+
+Templates can work without specifying a target file, allowing users to choose the destination dynamically:
 
 ```elisp
-("i" "Idea Inspiration"
- :file "~/org/ideas.org"
+;; Template without fixed file - user selects destination
+("f" "Flexible Task"
  :node-spec
- ((:part :title :get (:prompt "Idea Title: "))
-  (:part :tags  :get (:prompt "Category Tags: " :initial-input "idea,"))
-  (:part :body  :get (:template-string "Record Time: %date\n\nDetailed Description:\n%clipboard\n\nRelated Thoughts:\n"))))
+ ((:part :title :get (:prompt "Task: "))
+  (:part :tags  :get (:static ("task")))
+  (:part :body  :get (:template-string "Created: %date\nStatus: To Start\n"))))
 ```
+
+Usage:
+
+1. `M-x supertag-capture-with-template RET f RET`
+2. Enter task name: "Review project proposal"
+3. Select target file from file browser
+4. Choose insertion position (file top, file end, under heading, or after heading)
+5. System creates node at selected location
+
+This approach is ideal for:
+
+- Ad-hoc task creation
+- Flexible content organization
+- Multi-project workflows
+- Dynamic file selection based on context
 
 ## ⚙️ Advanced Features
 
@@ -329,11 +361,16 @@ After capture is complete, users can continue to add field values:
 
 ### Smart Position Selection
 
-Provides four insertion options:
-- **File Top**: Insert at the beginning of the file
-- **File End**: Insert at the end of the file  
-- **Under Heading**: Insert as a sub-item of the selected heading
-- **After Heading**: Insert at the same level as the selected heading
+When templates don't specify a target file, the system provides flexible position selection:
+
+1. **File Selection**: Choose any existing Org file from the file browser
+2. **Position Options**:
+   - **File Top**: Insert at the beginning of the file
+   - **File End**: Insert at the end of the file
+   - **Under Heading**: Insert as a sub-item of the selected heading
+   - **After Heading**: Insert at the same level as the selected heading
+
+This gives users complete control over where their captured content is placed, making the system highly flexible for different organizational needs.
 
 ## 🔧 Configuration and Extension
 
@@ -350,7 +387,7 @@ Provides four insertion options:
          ((:part :title :get (:prompt "Task: "))
           (:part :tags  :get (:static ("task")))
           (:part :body  :get (:template-string "Created: %date\nStatus: To Start\n"))))
-        
+
         ;; Learning notes
         ("l" "Learning Notes"
          :file "~/org/learning.org"
@@ -360,7 +397,7 @@ Provides four insertion options:
           (:part :body  :get (:region-or-clipboard))
           (:part :fields :get (:static (((:tag "learning" :field "difficulty" :get (:prompt "Difficulty (1-5): "))
                                          (:tag "learning" :field "source" :get (:prompt "Learning Source: "))))))))
-        
+
         ;; Meeting record
         ("m" "Meeting Record"
          :file "~/org/meetings.org"
@@ -369,7 +406,14 @@ Provides four insertion options:
           (:part :tags  :get (:static ("meeting")))
           (:part :body  :get (:template-string "Time: %date\nParticipants: \n\nAgenda:\n\nDiscussion Points:\n\nAction Items:\n"))
           (:part :fields :get (:static (((:tag "meeting" :field "type" :get (:prompt "Meeting Type: "))
-                                         (:tag "meeting" :field "status" :value "completed")))))))))
+                                         (:tag "meeting" :field "status" :value "completed")))))))
+
+        ;; Flexible task (no fixed file)
+        ("f" "Flexible Task"
+         :node-spec
+         ((:part :title :get (:prompt "Task: "))
+          (:part :tags  :get (:static ("task")))
+          (:part :body  :get (:template-string "Created: %date\nStatus: To Start\n"))))))
 ```
 
 ### Custom Content Generators
@@ -400,33 +444,33 @@ Template string processors can be extended to support more placeholders:
 
 ### User Commands
 
-| Command | Description | Usage |
-|------|------|----------|
-| `supertag-capture` | Independent capture command | `M-x supertag-capture` |
-| `supertag-capture-with-template` | Template-based capture command | `M-x supertag-capture-with-template` |
-| `supertag-capture-enrich-node` | Interactive node field enrichment | `M-x supertag-capture-enrich-node RET node-id` |
+| Command                          | Description                       | Usage                                          |
+| -------------------------------- | --------------------------------- | ---------------------------------------------- |
+| `supertag-capture`               | Independent capture command       | `M-x supertag-capture`                         |
+| `supertag-capture-with-template` | Template-based capture command    | `M-x supertag-capture-with-template`           |
+| `supertag-capture-enrich-node`   | Interactive node field enrichment | `M-x supertag-capture-enrich-node RET node-id` |
 
 ### Content Generator Functions
 
-| Function | Description |
-|------|------|
-| `supertag-capture--get-from-static (args)` | Static value generator |
-| `supertag-capture--get-from-prompt (args)` | Interactive prompt generator |
-| `supertag-capture--get-from-clipboard ()` | Clipboard content generator |
-| `supertag-capture--get-from-region ()` | Region content generator |
-| `supertag-capture--get-from-region-or-clipboard ()` | Region or clipboard generator |
-| `supertag-capture--get-from-template-string (args)` | Template string processor |
-| `supertag-capture--get-from-function (args)` | Custom function call generator |
+| Function                                            | Description                    |
+| --------------------------------------------------- | ------------------------------ |
+| `supertag-capture--get-from-static (args)`          | Static value generator         |
+| `supertag-capture--get-from-prompt (args)`          | Interactive prompt generator   |
+| `supertag-capture--get-from-clipboard ()`           | Clipboard content generator    |
+| `supertag-capture--get-from-region ()`              | Region content generator       |
+| `supertag-capture--get-from-region-or-clipboard ()` | Region or clipboard generator  |
+| `supertag-capture--get-from-template-string (args)` | Template string processor      |
+| `supertag-capture--get-from-function (args)`        | Custom function call generator |
 
 ## 🆚 Comparison with Org-Capture
 
-| Feature | Org-Capture | Supertag-Capture |
-|------|-------------|------------------|
-| Template Configuration | Static string templates | Dynamic content generators |
-| Tag Support | Manual input | Interactive selection + auto-completion |
-| Field Management | Property drawers | Database field system |
-| Content Sources | Fixed format | Multiple generators |
-| Extensibility | Limited | Highly extensible |
+| Feature                | Org-Capture             | Supertag-Capture                        |
+| ---------------------- | ----------------------- | --------------------------------------- |
+| Template Configuration | Static string templates | Dynamic content generators              |
+| Tag Support            | Manual input            | Interactive selection + auto-completion |
+| Field Management       | Property drawers        | Database field system                   |
+| Content Sources        | Fixed format            | Multiple generators                     |
+| Extensibility          | Limited                 | Highly extensible                       |
 
 ## 🐛 Troubleshooting
 
@@ -450,4 +494,4 @@ Template string processors can be extended to support more placeholders:
 
 ---
 
-*This document describes the complete functionality and usage of the Org-Supertag v2.0 Capture System.*
+_This document describes the complete functionality and usage of the Org-Supertag v2.0 Capture System._

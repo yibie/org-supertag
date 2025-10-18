@@ -131,15 +131,6 @@ When EMIT-EVENT-P is non-nil, emit :store-changed notification."
            (let ((table (ht-create)))
              (dolist (cell value table)
                (puthash (car cell) (cdr cell) table))))
-          ;; Flat key/value list with string or symbol keys: (id1 plist1 id2 plist2 ...)
-          ((and (listp value) (zerop (% (length value) 2)))
-           (let ((table (ht-create))
-                 (cursor value))
-             (while cursor
-               (let ((entry-key (pop cursor))
-                     (entry-val (pop cursor)))
-                 (puthash entry-key entry-val table)))
-             table))
           (t
            (let ((table (ht-create)))
              (puthash :value value table)

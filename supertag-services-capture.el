@@ -237,6 +237,14 @@ Supported placeholders:
     (setq template (replace-regexp-in-string "%random" (format "%04d" (random 10000)) template t t))
     (setq template (replace-regexp-in-string "%uuid" (org-id-new) template t t))
     
+    ;; Interactively fill placeholders like %^{Prompt}
+    (while (string-match "%^{\\([^}]*\\)}" template)
+      (let* ((prompt (match-string 1 template))
+             (user-input (read-string (concat prompt " "))))
+        (setq template (replace-match user-input t t template 0))))
+
+    ;; Handle cursor position marker %? by removing it
+    (setq template (replace-regexp-in-string "%\\?" "" template t t))
     template))
 
 (defun supertag-capture--get-from-tags-prompt (args)
@@ -255,7 +263,35 @@ ARGS is a list containing the function symbol."
         (funcall func)
       (error "Template function not found: %S" func))))
 
+(defun supertag-capture--generate-get-spec (text)
+  "From a TEXT string, generate the appropriate ':get' spec.
+- If it's a pure prompt, generate '(:prompt ...)'.
+- If it contains any placeholders, generate '(:template-string ...)'.
+- Otherwise, generate '(:static ...)'. "
+  (let ((prompt-only-re "^%^{\\([^}]*\\)}$"))
+    (cond
+     ;; Case 1: Pure prompt, e.g., "%^{Task Title}"
+     ((string-match prompt-only-re text)
+      `(:prompt ,(match-string 1 text)))
+     ;; Case 2: Contains any placeholder, e.g., "Task for %date"
+     ((string-match "%" text)
+      `(:template-string ,text))
+     ;; Case 3: Just a static string
+     (t `(:static ,text)))))
+
 ;; --- Dispatcher ---
+
+(defun supertag-capture--get-from-static-grouped (args)
+  "Generator: Process statically grouped fields.
+ARGS is a list of (TAG-NAME (FIELD-SPEC...)).
+Expands it into a flat list of full field specifications."
+  (cl-loop for group in (car args)
+           for tag-name = (car group)
+           for field-specs = (cdr group)
+           append (mapcar (lambda (spec)
+                            ;; spec is like '(:field "status" :value "todo")
+                            (append `(:tag ,tag-name) spec))
+                          field-specs)))
 
 (defun supertag-capture--get-content (get-spec)
   "Dispatch to the correct generator based on GET-SPEC."
@@ -270,7 +306,53 @@ ARGS is a list containing the function symbol."
       (:template-string (supertag-capture--get-from-template-string args))
       (:function (supertag-capture--get-from-function args))
       (:tags-prompt (supertag-capture--get-from-tags-prompt args))
+      (:static-grouped (supertag-capture--get-from-static-grouped args))
+      ;; The :template keyword is a special form that gets pre-parsed.
+      ;; It shouldn't be dispatched here, but we handle it for safety.
+      (:template (supertag-capture--process-spec (supertag-capture--parse-template-string (car args))))
       (_ (error "Unknown capture generator type: %S" type)))))
+
+;; --- Template String Parser ---
+
+(defun supertag-capture--parse-template-string (template-string)
+  "Parse a template string into a structured node-spec list (kernel IR)."
+  (let* ((lines (split-string template-string "\n" t)) ; Don't keep empty lines from string end
+         (headline (car lines))
+         (rest-lines (cdr lines))
+         (title-spec nil)
+         (tags-spec nil)
+         (fields '())
+         (body-lines '())
+         (tags '()))
+
+    ;; 1. Parse Headline and Tags from the first line
+    (when (string-match "^\\*+ \\(.*\\)" headline)
+      (let* ((headline-content (string-trim (match-string 1 headline)))
+             (raw-title-template (replace-regexp-in-string "\\s-?#\\w[-_[:alnum:]]*" "" headline-content)))
+        (setq tags (supertag-transform-extract-inline-tags headline-content))
+        (setq title-spec `(:part :title :get ,(supertag-capture--generate-get-spec (string-trim raw-title-template))))
+        (when tags
+          (setq tags-spec `(:part :tags :get (:static ,tags))))))
+
+    ;; 2. Parse Fields and Body from the rest of the lines
+    (dolist (line rest-lines)
+      (if (string-match "^\\s-*- \\([^:]+\\):\\s-*\\(.*\\)" line)
+          (let* ((key (match-string 1 line))
+                 (value-template (match-string 2 line)))
+            (push `(:field ,(string-trim key) :get ,(supertag-capture--generate-get-spec (string-trim value-template))) fields))
+        (push line body-lines)))
+
+    ;; 3. Assemble the final spec list
+    (let* ((body-template (string-join (nreverse body-lines) "\n"))
+           (spec (list title-spec tags-spec)))
+      (when fields
+        (let ((first-tag (car tags)))
+          (when first-tag
+            (push `(:part :fields :get (:static-grouped ((,first-tag ,@(nreverse fields)))))
+                  spec))))
+      (unless (string-blank-p body-template)
+        (push `(:part :body :get ,(supertag-capture--generate-get-spec body-template)) spec))
+      (delq nil spec))))
 
 ;; --- Processor & Executor ---
 
