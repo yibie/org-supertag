@@ -34,9 +34,7 @@ Returns a plist with :headline string and :tags list."
   (let* ((title (read-string "Node title: "))
          (all-tags (mapcar #'car (supertag-query :tags)))
          (selected-tags (completing-read-multiple "Select tags (comma separated, optional): " all-tags)))
-    (list :headline (if selected-tags
-                        (format "%s %s" title (mapconcat (lambda (tag) (concat "#" tag)) selected-tags " "))
-                      title)
+    (list :headline title
           :tags selected-tags)))
 
 ;;; --- Node Enrichment Functions ---
@@ -381,13 +379,20 @@ Prioritizes title prompts over body content for better UX."
 
 (defun supertag-capture--normalize-tag-position (position)
   "Normalize POSITION for tag placement within a captured headline.
-Accepts user-facing values like 'beginning/'end as well as internal
-keywords such as :before-title. Returns values compatible with
-`supertag--render-org-headline'."
-  (pcase position
-    ((or 'beginning :before-title) :before-title)
-    ((or 'end :after-title (pred null)) nil)
-    (_ position)))
+Accepts user-facing values like 'beginning/'end or string equivalents, as
+well as internal keywords such as :before-title. Returns a keyword that is
+compatible with `supertag--render-org-headline'."
+  (let* ((normalized (if (stringp position) (downcase (string-trim position)) nil))
+         (pos (cond
+               ((stringp position)
+                (intern (if (and normalized (string-prefix-p ":" normalized))
+                            normalized
+                          normalized)))
+               (t position))))
+    (cond
+     ((memq pos '(beginning before-title :before-title)) :before-title)
+     ((or (null pos) (memq pos '(end after-title :after-title))) nil)
+     (t pos))))
 
 (defun supertag-capture--process-spec (node-spec)
   "Process a NODE-SPEC list and return a plist of generated data."
@@ -435,6 +440,7 @@ TAG-POSITION determines where tags are placed in the headline."
       ;; 1. Insert headline with dynamic tag positioning
       (insert (supertag--render-org-headline
                level title tags (buffer-file-name buffer) nil
+               nil
                (supertag-capture--normalize-tag-position tag-position)))
       ;; 2. Insert properties drawer (must come immediately after headline)
       (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
