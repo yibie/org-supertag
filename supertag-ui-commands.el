@@ -31,6 +31,14 @@
                  (const :tag "Beginning of heading" beginning))
   :group 'org-supertag)
 
+(defcustom supertag-capture-tag-position 'end
+  "Where to place tags when creating a headline via capture.
+- 'end: Keep tags after the title (default, preserves current behavior).
+- 'beginning: Insert tags immediately after the leading stars/TODO keyword."
+  :type '(choice (const :tag "End of headline" end)
+                 (const :tag "Beginning of headline" beginning))
+  :group 'org-supertag)
+
 (defun supertag-set-child (parent-tag child-tags)
   "Set CHILD-TAGS to extend a PARENT-TAG using interactive completion.
 When invoked interactively, allows selecting multiple child tags." 
@@ -877,9 +885,7 @@ HEADLINE is optional headline text."
          (body (read-string "Body (optional, RET to skip): "))
          (insert-info (supertag-ui-select-insert-position target-file))
          (insert-pos (plist-get insert-info :position))
-         (insert-level (plist-get insert-info :level))
-         ;; Derive a title without inline #tags (since renderer adds them)
-         (title-only (string-trim (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" full-title))))
+         (insert-level (plist-get insert-info :level)))
     
     (unless insert-info
       (user-error "No valid insert position selected"))
@@ -888,13 +894,14 @@ HEADLINE is optional headline text."
     (let ((new-node-id (org-id-new)))
       (supertag-capture--insert-node-into-buffer
        (find-file-noselect target-file)
-       insert-pos insert-level title-only selected-tags body new-node-id)
+       insert-pos insert-level full-title selected-tags body new-node-id
+       supertag-capture-tag-position)
 
       ;; Phase 3: Sync and enrich
       (let ((node-id new-node-id))
         (when node-id
           (supertag-node-create (list :id node-id
-                                      :title title-only
+                                      :title full-title
                                       :tags selected-tags
                                       :file target-file))
           (message "Node %s created in %s" node-id (file-name-nondirectory target-file))
@@ -951,8 +958,10 @@ If TEMPLATE-KEY is not provided, prompts for one."
             (unless (file-exists-p target-file)
               (user-error "Target file does not exist: %s" target-file))
             ;; Process spec into data and execute
-            (let ((processed-data (supertag-capture--process-spec node-spec)))
-              (supertag-capture--execute target-file processed-data)))
+            (let* ((processed-data (supertag-capture--process-spec node-spec))
+                   (tag-position (or (plist-get processed-data :tag-position)
+                                     supertag-capture-tag-position)))
+              (supertag-capture--execute target-file processed-data tag-position)))
         ;; Case 2: No :file specified - use move-node style selection
         (let* ((processed-data (supertag-capture--process-spec node-spec))
                (title (plist-get processed-data :title))
@@ -967,10 +976,12 @@ If TEMPLATE-KEY is not provided, prompts for one."
           (unless insert-info
             (user-error "No valid insert position selected"))
           ;; Create node directly at selected location
-          (let ((new-node-id (org-id-new)))
+          (let* ((tag-position (or (plist-get processed-data :tag-position)
+                                   supertag-capture-tag-position))
+                 (new-node-id (org-id-new)))
             (supertag-capture--insert-node-into-buffer
              (find-file-noselect selected-file)
-             insert-pos insert-level title tags body new-node-id)
+             insert-pos insert-level title tags body new-node-id tag-position)
             ;; Create database record and set fields
             (supertag-node-create (list :id new-node-id
                                         :title title

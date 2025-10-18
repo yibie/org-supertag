@@ -379,6 +379,16 @@ Prioritizes title prompts over body content for better UX."
 
 ;; --- Processor & Executor ---
 
+(defun supertag-capture--normalize-tag-position (position)
+  "Normalize POSITION for tag placement within a captured headline.
+Accepts user-facing values like 'beginning/'end as well as internal
+keywords such as :before-title. Returns values compatible with
+`supertag--render-org-headline'."
+  (pcase position
+    ((or 'beginning :before-title) :before-title)
+    ((or 'end :after-title (pred null)) nil)
+    (_ position)))
+
 (defun supertag-capture--process-spec (node-spec)
   "Process a NODE-SPEC list and return a plist of generated data."
   (let ((title "") (tags '()) (body "") (fields '()) (tag-position nil))
@@ -423,7 +433,9 @@ TAG-POSITION determines where tags are placed in the headline."
       (goto-char position)
       (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) ; Ensure blank line before
       ;; 1. Insert headline with dynamic tag positioning
-      (insert (supertag--render-org-headline level title tags (buffer-file-name buffer) nil tag-position))
+      (insert (supertag--render-org-headline
+               level title tags (buffer-file-name buffer) nil
+               (supertag-capture--normalize-tag-position tag-position)))
       ;; 2. Insert properties drawer (must come immediately after headline)
       (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
       ;; 3. Insert body content after the properties drawer
@@ -431,7 +443,7 @@ TAG-POSITION determines where tags are placed in the headline."
         (insert "\n" body))
       (save-buffer))))
 
-(defun supertag-capture--execute (target-file processed-data)
+(defun supertag-capture--execute (target-file processed-data &optional tag-position-override)
   "Execute the capture by writing data to file and syncing.
 TARGET-FILE is the path to the destination file.
 PROCESSED-DATA is the plist from --process-spec."
@@ -444,7 +456,9 @@ PROCESSED-DATA is the plist from --process-spec."
            (tags (plist-get processed-data :tags))
            (body (plist-get processed-data :body))
            (field-settings (plist-get processed-data :fields))
-           (tag-position (plist-get processed-data :tag-position))
+           (raw-tag-position (or (plist-get processed-data :tag-position)
+                                 tag-position-override))
+           (tag-position (supertag-capture--normalize-tag-position raw-tag-position))
            ;; Get location
            (insert-info (supertag-ui-select-insert-position target-file))
            (insert-pos (plist-get insert-info :position))
