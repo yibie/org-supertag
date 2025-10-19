@@ -151,6 +151,15 @@ Returns the node ID, creating one if it doesn't exist."
       (when (org-back-to-heading t)
         (org-id-get-create)))))
 
+(defun supertag-ui--ensure-node-synced (node-id)
+  "Ensure NODE-ID exists in the store by syncing the heading if necessary."
+  (when node-id
+    (unless (supertag-node-get node-id)
+      (when-let ((marker (org-id-find node-id 'marker)))
+        (org-with-point-at marker
+          (when (org-at-heading-p)
+            (supertag-node-sync-at-point)))))))
+
 (defun supertag-view-kanban ()
   "Create an interactive Kanban board view based on a tag's field."
   (interactive)
@@ -451,13 +460,67 @@ current file and inserted into the target file at a chosen position."
 
 
 ;; --- Node Commands: Add, Remove Reference
-    
+
+(defun supertag-ui--insert-link-under-node (target-node-id link-node-id &optional link-title)
+  "Insert a reciprocal Org link under TARGET-NODE-ID pointing to LINK-NODE-ID.
+When LINK-TITLE is nil, try to resolve it from the linked node's metadata."
+  (unless (equal target-node-id link-node-id)
+    (when-let* ((target-node (supertag-node-get target-node-id))
+                (target-file (plist-get target-node :file))
+                (target-pos (plist-get target-node :position)))
+      (let* ((link-node (supertag-node-get link-node-id))
+             (resolved-title (or link-title
+                                 (plist-get link-node :raw-value)
+                                 (plist-get link-node :title)
+                                 "Untitled Node"))
+             (link-text (format "[[id:%s][%s]]" link-node-id resolved-title)))
+        (with-current-buffer (find-file-noselect target-file)
+          (org-with-wide-buffer
+            (save-excursion
+              (goto-char target-pos)
+              (org-back-to-heading t)
+              (let* ((insert-point (progn
+                                     (org-end-of-meta-data t)
+                                     (point)))
+                     (entry-end (save-excursion (org-end-of-subtree t t))))
+                (unless (save-excursion
+                          (goto-char insert-point)
+                          (search-forward link-text entry-end t))
+                  (goto-char insert-point)
+                  (unless (bolp)
+                    (insert "\n"))
+                  (insert link-text)
+                  (unless (looking-at "\n")
+                    (insert "\n")))))))))))
+
+(defun supertag-ui--remove-link-under-node (target-node-id link-node-id)
+  "Remove the Org link referencing LINK-NODE-ID from TARGET-NODE-ID's entry."
+  (when-let* ((target-node (supertag-node-get target-node-id))
+              (target-file (plist-get target-node :file))
+              (target-pos (plist-get target-node :position)))
+    (with-current-buffer (find-file-noselect target-file)
+      (org-with-wide-buffer
+        (save-excursion
+          (goto-char target-pos)
+          (org-back-to-heading t)
+          (let* ((content-start (progn
+                                  (org-end-of-meta-data t)
+                                  (point)))
+                 (entry-end (save-excursion (org-end-of-subtree t t)))
+                 (pattern (format "\\[\\[id:%s\\]" (regexp-quote link-node-id))))
+            (goto-char content-start)
+            (when (re-search-forward pattern entry-end t)
+              (let ((line-start (line-beginning-position))
+                    (line-end (min (point-max) (1+ (line-end-position)))))
+                (delete-region line-start line-end)))))))))
+
 (defun supertag-add-reference ()
   "Add a reference from the current node to another selected node."
   (interactive)
-  (let ((from-id (org-id-get)))
+  (let ((from-id (supertag-ui--get-containing-node-at-point)))
     (unless from-id
-      (user-error "Current heading does not have an ID. Cannot add reference."))
+      (user-error "Point must be inside an Org heading to add a reference."))
+    (supertag-ui--ensure-node-synced from-id)
 
     (let ((to-id (supertag-ui-select-node "Add reference to node: " t))) ; Use cache for better performance
       (when to-id
@@ -468,8 +531,17 @@ current file and inserted into the target file at a chosen position."
         ;; 2. Insert the org-link into the buffer
         (let* ((target-node-props (supertag-store-get-entity :nodes to-id))
                (target-title (plist-get target-node-props :raw-value))
+               (from-node (supertag-node-get from-id))
+               (from-title (or (plist-get from-node :raw-value)
+                               (plist-get from-node :title)
+                               (ignore-errors
+                                 (save-excursion
+                                   (org-back-to-heading t)
+                                   (org-get-heading t t t t)))
+                               "Untitled Node"))
                (link-text (format "[[id:%s][%s]]" to-id (or target-title "Untitled Node"))))
-          (insert link-text))
+          (insert link-text)
+          (supertag-ui--insert-link-under-node to-id from-id from-title))
 
         (message "Reference added to node %s" to-id))))) 
 
@@ -511,10 +583,20 @@ current file and inserted into the target file at a chosen position."
              :level ,insert-level)) 
 
           ;; 4. Create the relationship in the database
-          (let ((from-id (org-id-get)))
+          (let ((from-id (supertag-ui--get-containing-node-at-point)))
             (when from-id
+              (supertag-ui--ensure-node-synced from-id)
               (supertag-relation-create
-               `(:type :reference :from ,from-id :to ,new-node-id))))
+               `(:type :reference :from ,from-id :to ,new-node-id))
+              (let* ((from-node (supertag-node-get from-id))
+                     (from-title (or (plist-get from-node :raw-value)
+                                     (plist-get from-node :title)
+                                     (ignore-errors
+                                       (save-excursion
+                                         (org-back-to-heading t)
+                                         (org-get-heading t t t t)))
+                                     "Untitled Node")))
+                (supertag-ui--insert-link-under-node new-node-id from-id from-title))))
 
           ;; 5. Replace original text with a link 
           (delete-region beg end) 
@@ -525,9 +607,10 @@ current file and inserted into the target file at a chosen position."
 (defun supertag-remove-reference () 
   "Interactively remove a reference from the current node." 
   (interactive)
-  (let ((from-id (org-id-get)))
+  (let ((from-id (supertag-ui--get-containing-node-at-point)))
     (unless from-id
-      (user-error "Current heading does not have an ID. Cannot remove reference."))
+      (user-error "Point must be inside an Org heading to remove a reference."))
+    (supertag-ui--ensure-node-synced from-id)
 
     (let ((to-id (supertag-ui-select-reference-to-remove from-id)))
       (when to-id
@@ -547,6 +630,9 @@ current file and inserted into the target file at a chosen position."
                          (string= (org-element-property :path link) to-id))
                 (delete-region (org-element-property :begin link)
                                (org-element-property :end link))))))
+
+        ;; 3. Remove reciprocal link from the target node, if present
+        (supertag-ui--remove-link-under-node to-id from-id)
 
         (message "Reference to node %s removed." to-id)))))
 
