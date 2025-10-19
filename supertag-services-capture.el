@@ -34,9 +34,7 @@ Returns a plist with :headline string and :tags list."
   (let* ((title (read-string "Node title: "))
          (all-tags (mapcar #'car (supertag-query :tags)))
          (selected-tags (completing-read-multiple "Select tags (comma separated, optional): " all-tags)))
-    (list :headline (if selected-tags
-                        (format "%s %s" title (mapconcat (lambda (tag) (concat "#" tag)) selected-tags " "))
-                      title)
+    (list :headline title
           :tags selected-tags)))
 
 ;;; --- Node Enrichment Functions ---
@@ -138,8 +136,13 @@ Example:
 ;; --- Generator Implementations ---
 
 (defun supertag-capture--get-from-static (args)
-  "Generator: Return the static value from ARGS."
-  (car args))
+  "Generator: Return the static value from ARGS.
+Special case: when ARGS contains tags and position, return both."
+  (if (and (cadr args) (memq (cadr args) '(:before-title :after-title)))
+      ;; Special case: (tags position) for tag positioning
+      args
+    ;; Normal case: just return the static value
+    (car args)))
 
 (defun supertag-capture--get-from-prompt (args)
   "Generator: Prompt user for input.
@@ -241,7 +244,12 @@ Supported placeholders:
     (while (string-match "%^{\\([^}]*\\)}" template)
       (let* ((prompt (match-string 1 template))
              (user-input (read-string (concat prompt " "))))
-        (setq template (replace-match user-input t t template 0))))
+        ;; Use replace-regexp-in-string instead of replace-match for better handling of Unicode
+        (setq template (replace-regexp-in-string (concat "%^{\\(" (regexp-quote prompt) "\\)}")
+                                               user-input
+                                               template
+                                               t
+                                               t))))
 
     ;; Handle cursor position marker %? by removing it
     (setq template (replace-regexp-in-string "%\\?" "" template t t))
@@ -315,24 +323,37 @@ Expands it into a flat list of full field specifications."
 ;; --- Template String Parser ---
 
 (defun supertag-capture--parse-template-string (template-string)
-  "Parse a template string into a structured node-spec list (kernel IR)."
+  "Parse a template string into a structured node-spec list (kernel IR).
+Prioritizes title prompts over body content for better UX."
   (let* ((lines (split-string template-string "\n" t)) ; Don't keep empty lines from string end
          (headline (car lines))
          (rest-lines (cdr lines))
          (title-spec nil)
          (tags-spec nil)
+         (tag-position nil)  ; Track tag position: :before-title, :after-title, or nil
          (fields '())
          (body-lines '())
          (tags '()))
 
     ;; 1. Parse Headline and Tags from the first line
     (when (string-match "^\\*+ \\(.*\\)" headline)
-      (let* ((headline-content (string-trim (match-string 1 headline)))
-             (raw-title-template (replace-regexp-in-string "\\s-?#\\w[-_[:alnum:]]*" "" headline-content)))
+      (let* ((headline-content (string-trim (match-string 1 headline))))
+        ;; Extract tags and determine their position
         (setq tags (supertag-transform-extract-inline-tags headline-content))
-        (setq title-spec `(:part :title :get ,(supertag-capture--generate-get-spec (string-trim raw-title-template))))
+
+        ;; Determine tag position by checking if tags appear at the beginning
         (when tags
-          (setq tags-spec `(:part :tags :get (:static ,tags))))))
+          (let ((cleaned-headline (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" headline-content)))
+            (setq tag-position (if (string-match-p "^\\s-+#[^[:space:]]+" cleaned-headline)
+                                  :after-title
+                                :before-title))))
+
+        ;; Extract title template by removing tags
+        (let* ((raw-title-template (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" headline-content))
+               (clean-title-template (string-trim raw-title-template)))
+          (setq title-spec `(:part :title :get ,(supertag-capture--generate-get-spec clean-title-template)))
+          (when tags
+            (setq tags-spec `(:part :tags :get (:static ,tags ,tag-position)))))))
 
     ;; 2. Parse Fields and Body from the rest of the lines
     (dolist (line rest-lines)
@@ -342,7 +363,7 @@ Expands it into a flat list of full field specifications."
             (push `(:field ,(string-trim key) :get ,(supertag-capture--generate-get-spec (string-trim value-template))) fields))
         (push line body-lines)))
 
-    ;; 3. Assemble the final spec list
+    ;; 3. Assemble the final spec list with priority order
     (let* ((body-template (string-join (nreverse body-lines) "\n"))
            (spec (list title-spec tags-spec)))
       (when fields
@@ -356,9 +377,26 @@ Expands it into a flat list of full field specifications."
 
 ;; --- Processor & Executor ---
 
+(defun supertag-capture--normalize-tag-position (position)
+  "Normalize POSITION for tag placement within a captured headline.
+Accepts user-facing values like 'beginning/'end or string equivalents, as
+well as internal keywords such as :before-title. Returns a keyword that is
+compatible with `supertag--render-org-headline'."
+  (let* ((normalized (if (stringp position) (downcase (string-trim position)) nil))
+         (pos (cond
+               ((stringp position)
+                (intern (if (and normalized (string-prefix-p ":" normalized))
+                            normalized
+                          normalized)))
+               (t position))))
+    (cond
+     ((memq pos '(beginning before-title :before-title)) :before-title)
+     ((or (null pos) (memq pos '(end after-title :after-title))) nil)
+     (t pos))))
+
 (defun supertag-capture--process-spec (node-spec)
   "Process a NODE-SPEC list and return a plist of generated data."
-  (let ((title "") (tags '()) (body "") (fields '()))
+  (let ((title "") (tags '()) (body "") (fields '()) (tag-position nil))
     (dolist (spec node-spec)
       (let ((part-type (plist-get spec :part))
             (get-spec (plist-get spec :get)))
@@ -369,11 +407,16 @@ Expands it into a flat list of full field specifications."
            (message "DEBUG: Got title: %S" title))
           (:tags
            (message "DEBUG: Matched :tags. Calling get-content...")
-           (setq tags (let ((tags-val (supertag-capture--get-content get-spec)))
-                        (if (listp tags-val)
-                            tags-val
-                          (split-string tags-val "[,;]" t "[ \t\n\r]+"))))
-           (message "DEBUG: Got tags: %S" tags))
+           (let ((tags-result (supertag-capture--get-content get-spec)))
+             (setq tags (if (listp tags-result)
+                           (car tags-result)  ; Extract tags list from (tags position)
+                         tags-result))
+             (setq tag-position (when (listp tags-result)
+                                  (cadr tags-result)))  ; Extract position from (tags position)
+             (when (and (stringp tags-result) (not (listp tags-result)))
+               ;; Handle case where tags might be a string from old format
+               (setq tags (split-string tags-result "[,;]" t "[ \t\n\r]+")))
+             (message "DEBUG: Got tags: %S, position: %S" tags tag-position)))
           (:body
            (message "DEBUG: Matched :body. Calling get-content...")
            (setq body (supertag-capture--get-content get-spec))
@@ -384,17 +427,21 @@ Expands it into a flat list of full field specifications."
            (message "DEBUG: Got fields: %S" fields)))
         (message "DEBUG: Finished processing one spec item.")))
     (message "DEBUG: --- Exiting process-spec ---")
-    `(:title ,title :tags ,tags :body ,body :fields ,fields)))
+    `(:title ,title :tags ,tags :body ,body :fields ,fields :tag-position ,tag-position)))
 
-(defun supertag-capture--insert-node-into-buffer (buffer position level title tags body new-node-id)
+(defun supertag-capture--insert-node-into-buffer (buffer position level title tags body new-node-id &optional tag-position)
   "Correctly insert a new Org node into BUFFER at POSITION.
-This function enforces the correct order: headline, properties, body."
+This function enforces the correct order: headline, properties, body.
+TAG-POSITION determines where tags are placed in the headline."
   (with-current-buffer buffer
     (save-excursion
       (goto-char position)
       (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) ; Ensure blank line before
-      ;; 1. Insert headline
-      (insert (supertag--render-org-headline level title tags (buffer-file-name buffer) nil))
+      ;; 1. Insert headline with dynamic tag positioning
+      (insert (supertag--render-org-headline
+               level title tags (buffer-file-name buffer) nil
+               nil
+               (supertag-capture--normalize-tag-position tag-position)))
       ;; 2. Insert properties drawer (must come immediately after headline)
       (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
       ;; 3. Insert body content after the properties drawer
@@ -402,7 +449,7 @@ This function enforces the correct order: headline, properties, body."
         (insert "\n" body))
       (save-buffer))))
 
-(defun supertag-capture--execute (target-file processed-data)
+(defun supertag-capture--execute (target-file processed-data &optional tag-position-override)
   "Execute the capture by writing data to file and syncing.
 TARGET-FILE is the path to the destination file.
 PROCESSED-DATA is the plist from --process-spec."
@@ -415,6 +462,9 @@ PROCESSED-DATA is the plist from --process-spec."
            (tags (plist-get processed-data :tags))
            (body (plist-get processed-data :body))
            (field-settings (plist-get processed-data :fields))
+           (raw-tag-position (or (plist-get processed-data :tag-position)
+                                 tag-position-override))
+           (tag-position (supertag-capture--normalize-tag-position raw-tag-position))
            ;; Get location
            (insert-info (supertag-ui-select-insert-position target-file))
            (insert-pos (plist-get insert-info :position))
@@ -426,7 +476,7 @@ PROCESSED-DATA is the plist from --process-spec."
       (let ((new-node-id (org-id-new)))
         (supertag-capture--insert-node-into-buffer
          (find-file-noselect target-file)
-         insert-pos insert-level title tags body new-node-id)
+         insert-pos insert-level title tags body new-node-id tag-position)
 
       ;; Side Effect 2:  Sync and Enrich
       (let ((node-id new-node-id))

@@ -215,12 +215,88 @@ For details, see [Automation System Guide](doc/AUTOMATION-SYSTEM-GUIDE.md)
 
 #### 📸 Capture System (Capture System)
 
-Version 5.0 introduces a brand new capture system that supports dynamic templates and content generators:
+Version 5.0 introduces a brand new capture system with more natural template syntax:
 
-- ✅ **Template-Driven** - Quickly create structured nodes using predefined templates
-- ✅ **Smart Filling** - Automatically populate node fields from various sources
-- ✅ **Smart Tagging** - Interactive tag selection and auto-completion
-- ✅ **Field Enrichment** - Automatically set tag field values
+- ✅ **Intuitive Template Syntax** - Write templates directly like org-capture
+- ✅ **Automatic Parsing** - Automatically recognize titles, tags, fields, and content
+- ✅ **Smart Filling** - Support interactive prompts and placeholders
+- ✅ **Flexible Configuration** - Specify files or let users choose
+
+##### Configuring Capture Templates
+
+Define templates using the `supertag-capture-templates` variable:
+
+```emacs-lisp
+(setq supertag-capture-templates
+      '(
+        ;; Quick task
+        ("t" "Quick Task"
+         :file "~/Documents/notes/plan.org"
+         :node-spec
+         (:template
+          "* %^{Task:} #task
+   - status: todo
+   - priority: medium
+   - create-at: %datetime
+
+  %?"))
+
+        ;; Question record
+        ("q" "Question"
+         :node-spec
+         (:template
+          "* #question %^{Question:}
+
+  %^{Detailed Content:}
+
+  %?"))
+
+        ;; Meeting record
+        ("m" "Meeting Record"
+         :file "~/org/meetings.org"
+         :node-spec
+         (:template
+          "* %^{Meeting Topic:} #meeting
+   - type: %^{Meeting Type:}
+   - status: completed
+   - location: %^{Location:}
+
+  Time: %date
+  Participants:
+
+  Agenda:
+
+  Discussion Points:
+
+  Action Items:
+
+  %?"))))
+```
+
+##### Template Syntax
+
+**Basic Structure:**
+- First line: Title and inline tags `* Title #tag1 #tag2`
+- Field lines: `- field_name: value`
+- After empty line: Body content
+
+**Interactive Prompts:**
+- `%^{Prompt Text}` - Prompt user for input
+
+**Placeholders:**
+- `%date` - Current date (YYYY-MM-DD)
+- `%datetime` - Date and time (YYYY-MM-DD HH:MM)
+- `%time` - Current time
+- `%?` - Set cursor position
+
+**Configuration Options:**
+- `:file` - Target file (optional, prompts user if not specified)
+- `:node-spec` - Node specification containing `:template` string
+
+##### Usage
+
+1. **Template Capture**: `M-x org-supertag-capture-template`, select template
+2. **Direct Capture**: `M-x org-supertag-capture-direct`, use default template
 
 For details, see [Capture Guide](doc/CAPTURE-GUIDE.md)
 

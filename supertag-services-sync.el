@@ -485,6 +485,17 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
                       (supertag-node-hash new-node))))
     (not (string= old-hash new-hash))))
 
+(defun supertag--merge-node-properties (new-props old-props)
+  "Merge NEW-PROPS from file with OLD-PROPS from database.
+NEW-PROPS is the source of truth for file-based properties.
+OLD-PROPS is the source of truth for database-only fields."
+  (let ((merged-props (copy-sequence new-props))
+        (standard-keys '(:id :title :raw-value :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type)))
+    (cl-loop for (key value) on old-props by #'cddr
+             do (unless (member key standard-keys)
+                  (plist-put merged-props key value)))
+    merged-props))
+
 (defun supertag-sync--process-single-file (file counters)
      "Process a single FILE for synchronization.
    COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
@@ -514,7 +525,8 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
              ;;          id
              ;;          (or (plist-get old-node-props :hash) (supertag-node-hash old-node-props))
              ;;          (supertag-node-hash new-node-props))
-             (supertag-db-add-with-hash id new-node-props counters)
+             (let ((merged-props (supertag--merge-node-properties new-node-props old-node-props)))
+               (supertag-db-add-with-hash id merged-props counters))
              (setf (plist-get counters :nodes-updated) (1+ (or (plist-get counters :nodes-updated) 0))))
             (t
              ;; (message "DEBUG-PROCESS: Node %s NOT changed. Old hash: %s, New hash: %s"
@@ -894,13 +906,20 @@ Result includes a leading space when non-empty, else an empty string."
                   (t "")))
         (_ (if inline-part (concat " " inline-part) "")))))
 
-  (defun supertag--render-org-headline (level title tags file node &optional style)
+  (defun supertag--render-org-headline (level title tags file node &optional style tag-position)
     "Render an Org headline line given LEVEL, TITLE and TAGS.
-Returns a single line string ending with a newline."
+Returns a single line string ending with a newline.
+TAG-POSITION can be :before-title, :after-title, or nil (default after title)."
     (let* ((resolved (or style (supertag--resolve-tag-style node file)))
            (stars (make-string (max 1 (or level 1)) ?*))
-           (tags-part (supertag--format-tags-by-style tags resolved)))
-      (format "%s %s%s\n" stars title tags-part)))
+           (tags-part (when tags (supertag--format-tags-by-style tags resolved))))
+      (cond
+       ;; Tags before title: * #tag1 #tag2 Title
+       ((eq tag-position :before-title)
+        (format "%s%s %s\n" stars (or tags-part "") title))
+       ;; Tags after title (default): * Title #tag1 #tag2
+       (t
+        (format "%s %s%s\n" stars title (or tags-part ""))))))
 
   (defun supertag--apply-legacy-tags-policy (buffer beg end tags)
     "Apply legacy tags policy within BUFFER on region [BEG, END].

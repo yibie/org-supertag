@@ -211,12 +211,88 @@ git clone https://github.com/yibie/org-supertag.git ~/org-supertag
 
 #### 📸 捕获系统 (Capture System)
 
-5.0 版本引入了全新的捕获系统，支持动态模板和内容生成器：
+5.0 版本引入了全新的捕获系统，采用更自然的模板语法：
 
-- ✅ **模板驱动** - 使用预定义模板快速创建结构化节点
-- ✅ **智能填充** - 自动从剪贴板、选区或函数获取内容
-- ✅ **标签智能** - 交互式标签选择和自动完成
-- ✅ **字段丰富** - 自动设置标签字段值
+- ✅ **直观的模板语法** - 类似 org-capture，直接编写模板字符串
+- ✅ **自动解析** - 自动识别标题、标签、字段和内容
+- ✅ **智能填充** - 支持交互式提示和占位符
+- ✅ **灵活配置** - 可指定文件或让用户选择
+
+##### 配置捕获模板
+
+通过配置 `supertag-capture-templates` 变量来定义模板：
+
+```emacs-lisp
+(setq supertag-capture-templates
+      '(
+        ;; 快速任务
+        ("t" "快速任务"
+         :file "~/Documents/notes/plan.org"
+         :node-spec
+         (:template
+          "* %^{任务描述:} #task
+   - status: todo
+   - priority: medium
+   - create-at: %datetime
+
+  %?"))
+
+        ;; 问题记录
+        ("q" "问题记录"
+         :node-spec
+         (:template
+          "* #question %^{问题:}
+
+  %^{详细内容:}
+
+  %?"))
+
+        ;; 会议记录
+        ("m" "会议记录"
+         :file "~/org/meetings.org"
+         :node-spec
+         (:template
+          "* %^{会议主题:} #meeting
+   - type: %^{会议类型:}
+   - status: completed
+   - location: %^{地点:}
+
+  时间: %date
+  参会人员:
+
+  议程:
+
+  讨论要点:
+
+  行动项:
+
+  %?"))))
+```
+
+##### 模板语法说明
+
+**基本结构：**
+- 第一行：标题和内联标签 `* 标题 #tag1 #tag2`
+- 字段行：`- 字段名: 值`
+- 空行后：正文内容
+
+**交互式提示：**
+- `%^{提示文本}` - 提示用户输入
+
+**占位符：**
+- `%date` - 当前日期 (YYYY-MM-DD)
+- `%datetime` - 日期时间 (YYYY-MM-DD HH:MM)
+- `%time` - 当前时间
+- `%?` - 设置光标位置
+
+**配置选项：**
+- `:file` - 指定目标文件（可选，不指定则提示用户选择）
+- `:node-spec` - 节点规格，包含 `:template` 字符串
+
+##### 使用方法
+
+1. **模板捕获**：`M-x org-supertag-capture-template`，选择模板
+2. **直接捕获**：`M-x org-supertag-capture-direct`，使用默认模板
 
 详情请查看 [Capture Guide](doc/CAPTURE-GUIDE_cn.md)
 
