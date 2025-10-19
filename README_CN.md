@@ -78,7 +78,7 @@ Org-SuperTag 5.0 版本进行了重大的架构重构，带来了显著的改进
 #### 📝 智能标签输入
 **注意**：补全功能暂时不可用，因此我修改了例子。
 ```org
-* 学习机器学习 （此时 M-x org-supertag-inline-add）
+* 学习机器学习 （此时 M-x supertag-add-tag）
               
 候选标签：
 project 
@@ -89,19 +89,19 @@ research
 - 输入一个新的标签，直接回车则在数据库中自动记录新标签，并将该标签添加到节点中。
 
 #### 🗂️ 结构化字段管理
-使用 `M-x org-supertag-view-node` 打开节点视图，将光标移动到 `#project` 标签下方的 `Fields` 字段，然后按照说明来编辑。
+使用 `M-x supertag-view-node` 打开节点视图，将光标移动到 `#project` 标签下方的 `Fields` 字段，然后按照说明来编辑。
 
 ![结构化字段管理](./picture/figure16.png)
 
 #### 🔍 强大的查询系统
-使用 `M-x org-supertag-query` 打开查询视图，输入查询条件，然后 `C-c C-c` 执行。
+使用 `M-x supertag-search` 打开查询视图，输入查询条件，然后 `C-c C-c` 执行。
 
 ![强大的查询系统](./picture/figure17.gif)
 
 ### 🎨 多样化视图系统
 
 #### 📊 看板视图
-使用 `M-x org-supertag-view-kanban` 打开看板视图，然后按照说明来操作。
+使用 `M-x supertag-view-kanban` 打开看板视图，然后按照说明来操作。
 
 ![看板视图](./picture/figure19.gif)
 
@@ -110,7 +110,7 @@ research
 该视图在 5.0 新版中暂时移除。
 
 #### 💬 AI对话视图
-使用 `M-x org-supertag-view-chat-open` 打开AI对话视图，然后按照说明来操作。
+使用 `M-x supertag-chat` 打开AI对话视图，然后按照说明来操作。
 
 ```org
 你: 帮我总结一下所有进行中的项目
@@ -164,10 +164,10 @@ git clone https://github.com/yibie/org-supertag.git ~/org-supertag
 
 #### 第三步：探索强大功能
 
-- `M-x org-supertag-view-node` - 查看节点详情（包含AI标签建议）
-- `M-x org-supertag-query` - 智能搜索
-- `M-x org-supertag-view-kanban` - 看板视图
-- `M-x org-supertag-view-chat-open` - AI对话
+- `M-x supertag-view-node` - 查看节点详情（包含AI标签建议）
+- `M-x supertag-search` - 智能搜索
+- `M-x supertag-view-kanban` - 看板视图
+- `M-x supertag-chat` - AI对话
 
 ### 🎯 使用场景
 
@@ -291,48 +291,101 @@ git clone https://github.com/yibie/org-supertag.git ~/org-supertag
 
 ##### 使用方法
 
-1. **模板捕获**：`M-x org-supertag-capture-template`，选择模板
-2. **直接捕获**：`M-x org-supertag-capture-direct`，使用默认模板
+1. **模板捕获**：`M-x supertag-capture-with-template`，选择模板
+2. **直接捕获**：`M-x supertag-capture`，使用默认模板
 
 详情请查看 [Capture Guide](doc/CAPTURE-GUIDE_cn.md)
 
 ### ⌨️ 键盘快捷键
 
-Org-SuperTag 提供了一套全面的键盘快捷键，可通过 `C-c s` 前缀键访问。按下 `C-c s` 后，您可以使用以下快捷键：
+Org-SuperTag 不再默认安装全局快捷键。若想恢复经典的 `C-c s` 前缀，可以在加载 `org-supertag` 之后加入下面的配置示例：
+
+```emacs-lisp
+(with-eval-after-load 'org-supertag
+  (define-prefix-command 'supertag-prefix-map)
+  (define-key org-mode-map (kbd "C-c s") 'supertag-prefix-map)
+
+  ;; 捕获
+  (define-key supertag-prefix-map (kbd "C") #'supertag-capture)
+  (define-key supertag-prefix-map (kbd "t") #'supertag-capture-with-template)
+
+  ;; 标签管理
+  (define-key supertag-prefix-map (kbd "a") #'supertag-add-tag)
+  (define-key supertag-prefix-map (kbd "r") #'supertag-remove-tag-from-node)
+  (define-key supertag-prefix-map (kbd "n") #'supertag-rename-tag)
+  (define-key supertag-prefix-map (kbd "d") #'supertag-delete-tag-everywhere)
+  (define-key supertag-prefix-map (kbd "c") #'supertag-change-tag-at-point)
+  (define-key supertag-prefix-map (kbd "x") #'supertag-set-child)
+  (define-key supertag-prefix-map (kbd "X") #'supertag-clear-parent)
+
+  ;; 节点与引用
+  (define-key supertag-prefix-map (kbd "m") #'supertag-move-node-and-link)
+  (define-key supertag-prefix-map (kbd "l") #'supertag-add-reference)
+  (define-key supertag-prefix-map (kbd "L") #'supertag-add-reference-and-create)
+  (define-key supertag-prefix-map (kbd "R") #'supertag-remove-reference)
+  (define-key supertag-prefix-map (kbd "h") #'supertag-back-to-heading)
+  (define-key supertag-prefix-map (kbd "N") #'supertag-create-node)
+  (define-key supertag-prefix-map (kbd "D") #'supertag-delete-node)
+  (define-key supertag-prefix-map (kbd "f") #'supertag-find-node)
+  (define-key supertag-prefix-map (kbd "o") #'supertag-find-node-other-window)
+  (define-key supertag-prefix-map (kbd "M") #'supertag-move-node)
+  (define-key supertag-prefix-map (kbd "u") #'supertag-update-node-at-point)
+
+  ;; 查询与视图
+  (define-key supertag-prefix-map (kbd "i") #'supertag-insert-query-block)
+  (define-key supertag-prefix-map (kbd "s") #'supertag-search)
+  (define-key supertag-prefix-map (kbd "e") #'supertag-search-export-results-to-file)
+  (define-key supertag-prefix-map (kbd "E") #'supertag-search-export-results-to-new-file)
+  (define-key supertag-prefix-map (kbd "I") #'supertag-search-insert-at-point)
+  (define-key supertag-prefix-map (kbd "g") #'supertag-chat)
+  (define-key supertag-prefix-map (kbd "v") #'supertag-view-node)
+  (define-key supertag-prefix-map (kbd "T") #'supertag-view-table)
+  (define-key supertag-prefix-map (kbd "k") #'supertag-view-kanban)
+
+  ;; 嵌入与维护
+  (define-key supertag-prefix-map (kbd "b") #'supertag-insert-embed)
+  (define-key supertag-prefix-map (kbd "B") #'supertag-convert-link-to-embed)
+  (define-key supertag-prefix-map (kbd "C-r") #'supertag-services-embed-refresh-all)
+  (define-key supertag-prefix-map (kbd "C-c") #'supertag-sync-cleanup-database))
+```
 
 | 按键 | 命令 | 描述 |
 |------|------|------|
-| `C-c s a` | org-supertag-inline-add | 为当前节点添加标签 |
-| `C-c s r` | org-supertag-inline-remove | 从当前节点删除标签 |
-| `C-c s n` | org-supertag-inline-rename | 重命名标签 |
-| `C-c s d` | org-supertag-inline-delete-all | 在所有地方删除标签 |
-| `C-c s c` | org-supertag-inline-change-tag | 更改光标处的标签 |
-| `C-c s C` | org-supertag-capture-direct | 直接捕获 |
-| `C-c s t` | org-supertag-capture-template | 使用模板捕获 |
-| `C-c s i` | org-supertag-insert-query-block | 插入查询块 |
-| `C-c s m` | org-supertag-move-node-and-link | 移动节点并链接 |
-| `C-c s l` | org-supertag-node-add-reference | 为节点添加引用 |
-| `C-c s L` | org-supertag-reference-and-create | 添加引用并在不存在时创建节点 |
-| `C-c s R` | org-supertag-node-remove-reference | 从节点删除引用 |
-| `C-c s h` | org-supertag-node-back-to-heading | 返回标题 |
-| `C-c s N` | org-supertag-node-create | 创建新节点 |
-| `C-c s D` | org-supertag-node-delete | 删除节点 |
-| `C-c s f` | org-supertag-node-find | 查找节点 |
-| `C-c s o` | org-supertag-node-find-other-window | 在其他窗口查找节点 |
-| `C-c s M` | org-supertag-node-move | 移动节点 |
-| `C-c s u` | org-supertag-node-update | 更新光标处的节点 |
-| `C-c s s` | org-supertag-query | 打开查询界面 |
-| `C-c s e` | org-supertag-query-export-results-to-file | 导出查询结果到文件 |
-| `C-c s E` | org-supertag-query-export-results-to-new-file | 导出查询结果到新文件 |
-| `C-c s I` | org-supertag-query-insert-at-point | 在光标处插入查询 |
-| `C-c s x` | org-supertag-tag-set-extends | 设置标签扩展 |
-| `C-c s g` | org-supertag-view-chat-open | 打开聊天视图 |
-| `C-c s v` | org-supertag-view-node | 查看节点详情 |
-| `C-c s T` | org-supertag-view-table | 打开表格视图 |
-| `C-c s k` | org-supertag-view-kanban | 打开看板视图 |
-| `C-c s C-c` | org-supertag-clean-database | 清理数据库 |
+| `C-c s C` | supertag-capture | 直接捕获 |
+| `C-c s t` | supertag-capture-with-template | 使用模板捕获 |
+| `C-c s a` | supertag-add-tag | 为当前节点添加标签 |
+| `C-c s r` | supertag-remove-tag-from-node | 从当前节点删除标签 |
+| `C-c s n` | supertag-rename-tag | 重命名标签 |
+| `C-c s d` | supertag-delete-tag-everywhere | 在所有地方删除标签 |
+| `C-c s c` | supertag-change-tag-at-point | 更改光标处的标签 |
+| `C-c s x` | supertag-set-child | 设置子标签 |
+| `C-c s X` | supertag-clear-parent | 清除标签父级 |
+| `C-c s m` | supertag-move-node-and-link | 移动节点并留下引用 |
+| `C-c s l` | supertag-add-reference | 为节点添加引用 |
+| `C-c s L` | supertag-add-reference-and-create | 添加引用并在不存在时创建节点 |
+| `C-c s R` | supertag-remove-reference | 从节点删除引用 |
+| `C-c s h` | supertag-back-to-heading | 返回标题 |
+| `C-c s N` | supertag-create-node | 创建新节点 |
+| `C-c s D` | supertag-delete-node | 删除节点 |
+| `C-c s f` | supertag-find-node | 查找节点 |
+| `C-c s o` | supertag-find-node-other-window | 在其他窗口查找节点 |
+| `C-c s M` | supertag-move-node | 移动节点 |
+| `C-c s u` | supertag-update-node-at-point | 更新光标处节点 |
+| `C-c s i` | supertag-insert-query-block | 插入查询块 |
+| `C-c s s` | supertag-search | 打开查询界面 |
+| `C-c s e` | supertag-search-export-results-to-file | 导出查询结果到文件 |
+| `C-c s E` | supertag-search-export-results-to-new-file | 导出查询结果到新文件 |
+| `C-c s I` | supertag-search-insert-at-point | 在光标处插入查询结果 |
+| `C-c s g` | supertag-chat | 打开聊天视图 |
+| `C-c s v` | supertag-view-node | 查看节点详情 |
+| `C-c s T` | supertag-view-table | 打开表格视图 |
+| `C-c s k` | supertag-view-kanban | 打开看板视图 |
+| `C-c s b` | supertag-insert-embed | 插入嵌入块 |
+| `C-c s B` | supertag-convert-link-to-embed | 将链接转换为嵌入 |
+| `C-c s C-r` | supertag-services-embed-refresh-all | 刷新全部嵌入 |
+| `C-c s C-c` | supertag-sync-cleanup-database | 清理数据库 |
 
-所有快捷键都可通过 `C-c s` 前缀访问，使您能够轻松记住并高效使用 Org-SuperTag 的功能。
+以上快捷键仅作参考，可根据自己的工作流进行增删。
 
 ### 🔧 配置指南
 
@@ -361,7 +414,7 @@ Org-SuperTag 提供了一套全面的键盘快捷键，可通过 `C-c s` 前缀�
 (defun my-urgent-projects ()
   "查找所有紧急项目"
   (interactive)
-  (org-supertag-query '(and (tag "project") (tag "urgent"))))
+  (supertag-search '(and (tag "project") (tag "urgent"))))
 ```
 
 ### 🆚 对比其他工具
@@ -387,7 +440,7 @@ Org-SuperTag 提供了一套全面的键盘快捷键，可通过 `C-c s` 前缀�
 #### 🆘 常见问题
 
 ##### Q: 数据库损坏怎么办？
-A: 使用 =M-x org-supertag-recovery-full-suite= 进行完整恢复。
+A: 使用 =M-x supertag-sync-cleanup-database= 进行完整恢复。
 
 ##### Q: 如何备份数据？
 A: Org-SuperTag 提供了自动每日备份功能：
@@ -415,7 +468,7 @@ A: Org-SuperTag 提供了自动每日备份功能：
 ```
 
 ##### Q: 如何获取AI标签建议？
-A: 在节点视图（=M-x org-supertag-view-node=）中，点击"💡 Get AI Tag Suggestions"或按 =s= 键。这是手动触发的，不会干扰你的工作流程。
+A: 在节点视图（=M-x supertag-view-node=）中，点击"💡 Get AI Tag Suggestions"或按 =s= 键。这是手动触发的，不会干扰你的工作流程。
 
 ##### Q: AI功能需要什么配置？
 A: AI功能使用默认的Ollama配置，无需额外设置。所有AI功能都集成在现有的视图系统中，使用简单直观。

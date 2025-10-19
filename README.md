@@ -82,7 +82,7 @@ When you type =#project=, Org-SuperTag automatically:
 #### 📝 Smart Tag Input
 **Note**: Auto-completion is temporarily unavailable, so I've modified the example.
 ```org
-* Learning Machine Learning (At this point M-x org-supertag-inline-add)
+* Learning Machine Learning (At this point M-x supertag-add-tag)
               
 Candidate tags:
 project 
@@ -93,19 +93,19 @@ research
 - Enter a new tag and press Enter to automatically record the new tag in the database and add it to the node.
 
 #### 🗂️ Structured Field Management
-Use `M-x org-supertag-view-node` to open the node view, move the cursor to the `Fields` field below the `#project` tag, and follow the instructions to edit.
+Use `M-x supertag-view-node` to open the node view, move the cursor to the `Fields` field below the `#project` tag, and follow the instructions to edit.
 
 ![Structured Field Management](./picture/figure16.png)
 
 #### 🔍 Powerful Query System
-Use `M-x org-supertag-query` to open the query view, enter query conditions, then press `C-c C-c` to execute.
+Use `M-x supertag-search` to open the query view, enter query conditions, then press `C-c C-c` to execute.
 
 ![Powerful Query System](./picture/figure17.gif)
 
 ### 🎨 Diverse View System
 
 #### 📊 Kanban View
-Use `M-x org-supertag-view-kanban` to open the kanban view, then follow the instructions to operate.
+Use `M-x supertag-view-kanban` to open the kanban view, then follow the instructions to operate.
 
 ![Kanban View](./picture/figure19.gif)
 
@@ -114,7 +114,7 @@ Use `M-x org-supertag-view-kanban` to open the kanban view, then follow the inst
 This view is temporarily removed in the 5.0 new version.
 
 #### 💬 AI Chat View
-Use `M-x org-supertag-view-chat-open` to open the AI chat view, then follow the instructions to operate.
+Use `M-x supertag-chat` to open the AI chat view, then follow the instructions to operate.
 
 ```org
 You: Help me summarize all ongoing projects
@@ -168,10 +168,10 @@ git clone https://github.com/yibie/org-supertag.git ~/org-supertag
 
 #### Step 3: Explore Powerful Features
 
-- `M-x org-supertag-view-node` - View node details (including AI tag suggestions)
-- `M-x org-supertag-query` - Smart search
-- `M-x org-supertag-view-kanban` - Kanban view
-- `M-x org-supertag-view-chat-open` - AI chat
+- `M-x supertag-view-node` - View node details (including AI tag suggestions)
+- `M-x supertag-search` - Smart search
+- `M-x supertag-view-kanban` - Kanban view
+- `M-x supertag-chat` - AI chat
 
 ### 🎯 Use Cases
 
@@ -295,48 +295,101 @@ Define templates using the `supertag-capture-templates` variable:
 
 ##### Usage
 
-1. **Template Capture**: `M-x org-supertag-capture-template`, select template
-2. **Direct Capture**: `M-x org-supertag-capture-direct`, use default template
+1. **Template Capture**: `M-x supertag-capture-with-template`, select template
+2. **Direct Capture**: `M-x supertag-capture`, use default template
 
 For details, see [Capture Guide](doc/CAPTURE-GUIDE.md)
 
 ### ⌨️ Keyboard Shortcuts
 
-Org-SuperTag provides a comprehensive set of keyboard shortcuts accessible through the `C-c s` prefix key. After pressing `C-c s`, you can use the following shortcuts:
+Org-SuperTag no longer installs global keybindings automatically. To recreate the classic `C-c s` prefix, add the snippet below to your init file (after loading `org-supertag`):
+
+```emacs-lisp
+(with-eval-after-load 'org-supertag
+  (define-prefix-command 'supertag-prefix-map)
+  (define-key org-mode-map (kbd "C-c s") 'supertag-prefix-map)
+
+  ;; Capture
+  (define-key supertag-prefix-map (kbd "C") #'supertag-capture)
+  (define-key supertag-prefix-map (kbd "t") #'supertag-capture-with-template)
+
+  ;; Tag management
+  (define-key supertag-prefix-map (kbd "a") #'supertag-add-tag)
+  (define-key supertag-prefix-map (kbd "r") #'supertag-remove-tag-from-node)
+  (define-key supertag-prefix-map (kbd "n") #'supertag-rename-tag)
+  (define-key supertag-prefix-map (kbd "d") #'supertag-delete-tag-everywhere)
+  (define-key supertag-prefix-map (kbd "c") #'supertag-change-tag-at-point)
+  (define-key supertag-prefix-map (kbd "x") #'supertag-set-child)
+  (define-key supertag-prefix-map (kbd "X") #'supertag-clear-parent)
+
+  ;; Node + reference management
+  (define-key supertag-prefix-map (kbd "m") #'supertag-move-node-and-link)
+  (define-key supertag-prefix-map (kbd "l") #'supertag-add-reference)
+  (define-key supertag-prefix-map (kbd "L") #'supertag-add-reference-and-create)
+  (define-key supertag-prefix-map (kbd "R") #'supertag-remove-reference)
+  (define-key supertag-prefix-map (kbd "h") #'supertag-back-to-heading)
+  (define-key supertag-prefix-map (kbd "N") #'supertag-create-node)
+  (define-key supertag-prefix-map (kbd "D") #'supertag-delete-node)
+  (define-key supertag-prefix-map (kbd "f") #'supertag-find-node)
+  (define-key supertag-prefix-map (kbd "o") #'supertag-find-node-other-window)
+  (define-key supertag-prefix-map (kbd "M") #'supertag-move-node)
+  (define-key supertag-prefix-map (kbd "u") #'supertag-update-node-at-point)
+
+  ;; Query & views
+  (define-key supertag-prefix-map (kbd "i") #'supertag-insert-query-block)
+  (define-key supertag-prefix-map (kbd "s") #'supertag-search)
+  (define-key supertag-prefix-map (kbd "e") #'supertag-search-export-results-to-file)
+  (define-key supertag-prefix-map (kbd "E") #'supertag-search-export-results-to-new-file)
+  (define-key supertag-prefix-map (kbd "I") #'supertag-search-insert-at-point)
+  (define-key supertag-prefix-map (kbd "g") #'supertag-chat)
+  (define-key supertag-prefix-map (kbd "v") #'supertag-view-node)
+  (define-key supertag-prefix-map (kbd "T") #'supertag-view-table)
+  (define-key supertag-prefix-map (kbd "k") #'supertag-view-kanban)
+
+  ;; Embeds & maintenance
+  (define-key supertag-prefix-map (kbd "b") #'supertag-insert-embed)
+  (define-key supertag-prefix-map (kbd "B") #'supertag-convert-link-to-embed)
+  (define-key supertag-prefix-map (kbd "C-r") #'supertag-services-embed-refresh-all)
+  (define-key supertag-prefix-map (kbd "C-c") #'supertag-sync-cleanup-database))
+```
 
 | Key | Command | Description |
 |-----|---------|-------------|
-| `C-c s a` | org-supertag-inline-add | Add a tag to the current node |
-| `C-c s r` | org-supertag-inline-remove | Remove a tag from the current node |
-| `C-c s n` | org-supertag-inline-rename | Rename a tag |
-| `C-c s d` | org-supertag-inline-delete-all | Delete a tag everywhere |
-| `C-c s c` | org-supertag-inline-change-tag | Change tag at point |
-| `C-c s C` | org-supertag-capture-direct | Direct capture |
-| `C-c s t` | org-supertag-capture-template | Capture with template |
-| `C-c s i` | org-supertag-insert-query-block | Insert query block |
-| `C-c s m` | org-supertag-move-node-and-link | Move node and link |
-| `C-c s l` | org-supertag-node-add-reference | Add reference to node |
-| `C-c s L` | org-supertag-reference-and-create | Add reference and create node if not exists |
-| `C-c s R` | org-supertag-node-remove-reference | Remove reference from node |
-| `C-c s h` | org-supertag-node-back-to-heading | Back to heading |
-| `C-c s N` | org-supertag-node-create | Create new node |
-| `C-c s D` | org-supertag-node-delete | Delete node |
-| `C-c s f` | org-supertag-node-find | Find node |
-| `C-c s o` | org-supertag-node-find-other-window | Find node in other window |
-| `C-c s M` | org-supertag-node-move | Move node |
-| `C-c s u` | org-supertag-node-update | Update node at point |
-| `C-c s s` | org-supertag-query | Open query interface |
-| `C-c s e` | org-supertag-query-export-results-to-file | Export query results to file |
-| `C-c s E` | org-supertag-query-export-results-to-new-file | Export query results to new file |
-| `C-c s I` | org-supertag-query-insert-at-point | Insert query at point |
-| `C-c s x` | org-supertag-tag-set-extends | Set tag extends |
-| `C-c s g` | org-supertag-view-chat-open | Open chat view |
-| `C-c s v` | org-supertag-view-node | View node details |
-| `C-c s T` | org-supertag-view-table | Open table view |
-| `C-c s k` | org-supertag-view-kanban | Open kanban view |
-| `C-c s C-c` | org-supertag-clean-database | Clean database |
+| `C-c s C` | supertag-capture | Direct capture |
+| `C-c s t` | supertag-capture-with-template | Capture with template |
+| `C-c s a` | supertag-add-tag | Add a tag to the current node |
+| `C-c s r` | supertag-remove-tag-from-node | Remove a tag from the current node |
+| `C-c s n` | supertag-rename-tag | Rename a tag |
+| `C-c s d` | supertag-delete-tag-everywhere | Delete a tag everywhere |
+| `C-c s c` | supertag-change-tag-at-point | Change tag at point |
+| `C-c s x` | supertag-set-child | Assign child tags |
+| `C-c s X` | supertag-clear-parent | Clear tag parent |
+| `C-c s m` | supertag-move-node-and-link | Move node and leave backlink |
+| `C-c s l` | supertag-add-reference | Add reference to node |
+| `C-c s L` | supertag-add-reference-and-create | Add reference and create node if missing |
+| `C-c s R` | supertag-remove-reference | Remove reference from node |
+| `C-c s h` | supertag-back-to-heading | Back to heading |
+| `C-c s N` | supertag-create-node | Create new node |
+| `C-c s D` | supertag-delete-node | Delete node |
+| `C-c s f` | supertag-find-node | Find node |
+| `C-c s o` | supertag-find-node-other-window | Find node in other window |
+| `C-c s M` | supertag-move-node | Move node |
+| `C-c s u` | supertag-update-node-at-point | Update node at point |
+| `C-c s i` | supertag-insert-query-block | Insert query block |
+| `C-c s s` | supertag-search | Open query interface |
+| `C-c s e` | supertag-search-export-results-to-file | Export query results to file |
+| `C-c s E` | supertag-search-export-results-to-new-file | Export query results to new file |
+| `C-c s I` | supertag-search-insert-at-point | Insert query results at point |
+| `C-c s g` | supertag-chat | Open chat view |
+| `C-c s v` | supertag-view-node | View node details |
+| `C-c s T` | supertag-view-table | Open table view |
+| `C-c s k` | supertag-view-kanban | Open kanban view |
+| `C-c s b` | supertag-insert-embed | Insert embed |
+| `C-c s B` | supertag-convert-link-to-embed | Convert link to embed |
+| `C-c s C-r` | supertag-services-embed-refresh-all | Refresh all embeds |
+| `C-c s C-c` | supertag-sync-cleanup-database | Clean database |
 
-All shortcuts are accessible through the `C-c s` prefix, making it easy to remember and use Org-SuperTag features efficiently.
+These bindings are optional—adapt or trim them to fit your workflow.
 
 ### 🔧 Configuration Guide
 
@@ -365,7 +418,7 @@ All shortcuts are accessible through the `C-c s` prefix, making it easy to remem
 (defun my-urgent-projects ()
   "Find all urgent projects"
   (interactive)
-  (org-supertag-query '(and (tag "project") (tag "urgent"))))
+  (supertag-search '(and (tag "project") (tag "urgent"))))
 ```
 
 ### 🆚 Comparison with Other Tools
@@ -391,7 +444,7 @@ See [CHANGELOG](./CHANGELOG.org).
 #### 🆘 Frequently Asked Questions
 
 ##### Q: What if the database gets corrupted?
-A: Use =M-x org-supertag-recovery-full-suite= for complete recovery.
+A: Use =M-x supertag-sync-cleanup-database= for complete recovery.
 
 ##### Q: How do I backup my data?
 A: Org-SuperTag provides automatic daily backup functionality:
@@ -419,7 +472,7 @@ A: Org-SuperTag provides automatic daily backup functionality:
 ```
 
 ##### Q: How do I get AI tag suggestions?
-A: In the node view (=M-x org-supertag-view-node=), click "💡 Get AI Tag Suggestions" or press =s=. This is manually triggered and won't interfere with your workflow.
+A: In the node view (=M-x supertag-view-node=), click "💡 Get AI Tag Suggestions" or press =s=. This is manually triggered and won't interfere with your workflow.
 
 ##### Q: What configuration is needed for AI features?
 A: AI features use the default Ollama configuration, no additional setup required. All AI features are integrated into the existing view system, making them simple and intuitive to use.
