@@ -324,24 +324,28 @@ current file and inserted into the target file at a chosen position."
             ;; 2. First pass: collect all node data before any modifications
             ;;    Read directly from current buffer to avoid database dependency
             (dolist (node-id node-ids)
-              (let* ((marker (org-id-find node-id 'marker)))
+              (let ((marker (org-id-find node-id 'marker)))
                 (when marker
                   (with-current-buffer (marker-buffer marker)
-                    (goto-char (marker-position marker))
-                    (when (org-at-heading-p)
-                      (let* ((element (org-element-at-point))
-                             (begin (org-element-property :begin element))
-                             (end (org-element-property :end element))
-                             (original-level (org-element-property :level element))
-                             (content (buffer-substring-no-properties begin end))
-                             (node-file (buffer-file-name)))
-                        (push (list :id node-id
-                                   :file node-file
-                                   :begin begin
-                                   :end end
-                                   :level original-level
-                                   :content content)
-                              nodes-to-move)))))))
+                    (save-restriction
+                      (widen)
+                      (save-excursion
+                        (goto-char (marker-position marker))
+                        (org-back-to-heading t)
+                        (when (org-at-heading-p)
+                          (let* ((element (org-element-at-point))
+                                 (begin (org-element-property :begin element))
+                                 (end (org-element-property :end element))
+                                 (original-level (org-element-property :level element))
+                                 (content (buffer-substring-no-properties begin end))
+                                 (node-file (buffer-file-name)))
+                            (push (list :id node-id
+                                        :file node-file
+                                        :begin begin
+                                        :end end
+                                        :level original-level
+                                        :content content)
+                                  nodes-to-move)))))))))
             
             (setq nodes-to-move (nreverse nodes-to-move))
             
@@ -361,10 +365,12 @@ current file and inserted into the target file at a chosen position."
                                             (> (plist-get a :begin)
                                                (plist-get b :begin))))))
                    (with-current-buffer (find-file-noselect file)
-                     (dolist (node-info sorted-nodes)
-                       (let ((begin (plist-get node-info :begin))
-                             (end (plist-get node-info :end)))
-                         (delete-region begin end)))
+                     (save-restriction
+                       (widen)
+                       (dolist (node-info sorted-nodes)
+                         (let ((begin (plist-get node-info :begin))
+                               (end (plist-get node-info :end)))
+                           (delete-region begin end))))
                      (save-buffer))))
                nodes-by-file))
             
@@ -377,13 +383,15 @@ current file and inserted into the target file at a chosen position."
                      (node-start-pos nil))
                 
                 (with-current-buffer (find-file-noselect target-file)
-                  (goto-char current-target-pos)
-                  (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-                  ;; Record the position where the node starts
-                  (setq node-start-pos (point))
-                  (insert adjusted-content)
-                  ;; Update position for next node (after current insertion)
-                  (setq current-target-pos (point))
+                  (save-restriction
+                    (widen)
+                    (goto-char current-target-pos)
+                    (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+                    ;; Record the position where the node starts
+                    (setq node-start-pos (point))
+                    (insert adjusted-content)
+                    ;; Update position for next node (after current insertion)
+                    (setq current-target-pos (point)))
                   (save-buffer))
                 
                 ;; Update the database with the new location (use node start position)
