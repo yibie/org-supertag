@@ -69,7 +69,7 @@ Returns a list containing two items: the children-by-id map and the list of root
                  (let* ((tag-plist (gethash id tags-by-id))
                         (child-ids (sort (gethash id children-by-id) #'string<))
                         (children (mapcar #'build-node child-ids)))
-                   (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
+                   ;; (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
                    (plist-put (cl-copy-list tag-plist) :children children))))
     (let ((sorted-roots (sort root-ids #'string<)))
       (message "SCHEMA-DEBUG (3/4): Building tree from %d sorted root nodes..." (length sorted-roots))
