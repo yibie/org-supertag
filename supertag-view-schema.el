@@ -221,7 +221,7 @@ Returns a list containing two items: the children-by-id map and the list of root
   "A list of context plists for marked items in the schema view.")
 
 ;;;###autoload
-(defun supertag-schema-view ()
+(defun supertag-view-schema ()
   "Create and display a buffer showing the entire tag and field schema."
   (interactive)
   (let ((buffer (get-buffer-create "*Supertag Schema*")))

@@ -146,23 +146,9 @@ When EMIT-EVENT-P is non-nil, emit :store-changed notification."
 (defun supertag-store-normalize! (&optional data)
   "Normalize DATA (or the live store) into canonical hash-table/plist layout.
 Returns the normalized hash table and updates `supertag--store' when DATA is nil."
-  (let* ((raw (or data supertag--store))
-         (table (supertag--coerce-store-table raw)))
-    (maphash
-     (lambda (collection value)
-       (when (memq collection supertag--store-collections)
-         (puthash collection
-                  (supertag--normalize-collection-value collection value)
-                  table)))
-     table)
-    (dolist (collection supertag--store-collections)
-      (unless (gethash collection table)
-        (puthash collection
-                 (supertag--normalize-collection-value collection nil)
-                 table)))
-    (when (null data)
-      (setq supertag--store table))
-    table))
+  ;; This function is deprecated due to its complexity and potential for data corruption.
+  ;; It now acts as a pass-through to maintain API compatibility while preventing issues.
+  (or data supertag--store))
 
 ;; Direct storage is now the default and only mode for optimal performance
 ;; This hybrid architecture combines old system performance with new system features

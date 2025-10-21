@@ -167,12 +167,11 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
         (let ((print-escape-nonascii t)  ; 正确处理非ASCII字符
               (print-length nil)         ; 不限制打印长度
               (print-level nil))         ; 不限制打印层级
-          (let ((normalized-store (supertag-store-normalize!)))
-            (prin1 normalized-store (current-buffer)))))
+          (prin1 supertag--store (current-buffer)))))
       (supertag-clear-dirty)
       ;; Check if daily backup is needed after successful save
       (supertag-check-daily-backup)
-      (message "Org-Supertag data saved to: %s" file-to-save))))
+      (message "Org-Supertag data saved to: %s" file-to-save)))
 
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
@@ -195,7 +194,7 @@ FILE is the optional file path. Defaults to supertag-db-file."
                 (unless (hash-table-p loaded-data)
                   (message "Warning: Legacy data format detected in %s, coercing to canonical store."
                            file-to-load))
-                (setq supertag--store (supertag-store-normalize! loaded-data))
+                (setq supertag--store loaded-data)
                 ;; --- 数据版本检查和自动迁移 ---
                 (supertag--run-migrations supertag--store)
 
