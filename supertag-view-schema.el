@@ -146,6 +146,7 @@ Returns a list containing two items: the children-by-id map and the list of root
       (supertag-view-helper-insert-simple-footer
        "Tag: [a] Add Field | [e] Set Parent | [d] Delete"
        "Field: [r] Rename | [d] Delete | [M-↑/↓] Move"
+       "Batch: [m] Mark | [u] Unmark | [U] Clear Marks | [D] Delete Marked | [E] Extend Marked"
        "Global: [A] Add Tag | [g] Refresh | [q] Quit")
       (goto-char (point-min)))))
 
