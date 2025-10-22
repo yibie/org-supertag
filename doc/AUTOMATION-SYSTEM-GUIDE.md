@@ -306,6 +306,7 @@ Each action is a `plist` in the format `(:action :action-type :params (...))`.
 | **`:remove-tag`** | `(:tag "tag-name")` | Remove a tag from the current node. |
 | **`:call-function`** | `(:function #'your-function)` | Call an Emacs Lisp function you've defined yourself. This is the "ultimate weapon" for implementing complex logic. The function will receive `(node-id context)` as two parameters. |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | Create a completely new node. |
+| **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | Resolve a value (`:on`) and execute the first matching branch. Each branch can use `:equals`, `:in`, `:match` (regexp/function), or `:test` to match, and runs its own nested `:actions`. Provide `:default t` for a fallback branch. |
 
 ---
 
@@ -371,6 +372,37 @@ This example will demonstrate some features that are difficult or impossible to 
     *   **Before Operation**: "Task A" and "Task B" are both `#task`. "Task B" depends on "Task A" through the `depends_on` relationship, and "Task B"'s `:status:` is `Waiting`.
     *   **Operation**: Change "Task A"'s `:status:` to `Done`.
     *   **After Operation**: "Task B"'s `:status:` automatically changes from `Waiting` to `Todo`.
+
+### Example: Tier-Based Mapping with `:case`
+
+Use the `:case` action when you want to map one field value to another without creating multiple rules or helper functions. The rule below watches the `层级` field on `#contact` nodes and adjusts `联系频率` accordingly. A default branch keeps data in a sane state if the tier is unexpected.
+
+```elisp
+(supertag-automation-create
+ '(:name "contact-tier-frequency"
+   :trigger :on-field-change
+   :condition '(and (has-tag "contact")
+                    (property-changed "层级"))
+   :actions
+   '((:action :case
+      :params
+      (:on (:field "层级")
+       :branches
+       ((:equals "20"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "30d"))))
+        (:equals "50"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "90d"))))
+        (:equals "150"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "180d"))))
+        (:default t
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "90d"))))))))))
+```
+
+Because each branch contains its own `:actions` list, you can chain more logic—for example, adding a notification tag, updating properties, or calling functions—once the correct branch has been selected.
 
 ### Example 2: Project-Task Integration
 

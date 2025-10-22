@@ -306,6 +306,7 @@ graph LR
 | **`:remove-tag`** | `(:tag "tag-name")` | 从当前节点移除一个标签。 |
 | **`:call-function`** | `(:function #'your-function)` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context)` 两个参数。 |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | 创建一个全新的节点。 |
+| **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | 根据 `:on` 解析出的值执行首个匹配分支。每个分支可使用 `:equals`、`:in`、`:match`（正则/函数）或 `:test` 进行匹配，并包含自己的 `:actions` 列表。通过 `:default t` 指定兜底分支。 |
 
 ---
 
@@ -371,6 +372,37 @@ graph LR
     *   **操作前**: “任务A”和“任务B”都是 `#task`。“任务B”通过 `depends_on` 关系依赖于“任务A”，且“任务B”的 `:status:` 为 `Waiting`。
     *   **操作**: 将“任务A”的 `:status:` 修改为 `Done`。
     *   **操作后**: “任务B”的 `:status:` 自动从 `Waiting` 变为 `Todo`。
+
+### 示例：使用 `:case` 做层级映射
+
+当您需要把某个字段的取值映射成另一字段时，不必再写多条规则或自定义函数。下面的规则监控 `#contact` 节点的“层级”字段，根据取值自动设置推荐的“联系频率”。如果遇到意料之外的层级，默认分支会给出兜底值，保证数据保持一致。
+
+```elisp
+(supertag-automation-create
+ '(:name "contact-tier-frequency"
+   :trigger :on-field-change
+   :condition '(and (has-tag "contact")
+                    (property-changed "层级"))
+   :actions
+   '((:action :case
+      :params
+      (:on (:field "层级")
+       :branches
+       ((:equals "20"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "30d"))))
+        (:equals "50"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "90d"))))
+        (:equals "150"
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "180d"))))
+        (:default t
+         :actions ((:action :update-field
+                            :params (:tag "contact" :field "联系频率" :value "90d"))))))))))
+```
+
+每个分支内都是独立的 `:actions` 列表，因而还能继续追加更多动作（例如加标签、更新属性或调用函数），从而把复杂分支逻辑收敛到单条自动化规则中。
 
 ### 示例2：项目与任务联动
 

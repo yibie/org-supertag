@@ -492,13 +492,21 @@ This is called by the automation engine when a rule matches an event."
         (message "Executing rule %s on node %s" rule-id node-id)
         (unwind-protect
             (progn
-              (dolist (action-spec actions)
-                (let ((action-type (plist-get action-spec :action))
-                      (params (plist-get action-spec :params)))
-                  (supertag-automation-execute-action action-type node-id params context)))
+              (supertag-automation--execute-actions actions node-id context)
               (supertag-automation-log-execution rule-id node-id (plist-get (car actions) :action)))
           ;; Always clear the executing flag
           (setq supertag-automation--executing nil))))))
+
+(defun supertag-automation--execute-actions (actions node-id context)
+  "Execute ACTIONS sequentially for NODE-ID with CONTEXT.
+ACTIONS should be a list of plists, each containing :action and
+optionally :params."
+  (dolist (action-spec actions)
+    (let ((action-type (plist-get action-spec :action))
+          (params (plist-get action-spec :params)))
+      (if action-type
+          (supertag-automation-execute-action action-type node-id params context)
+        (message "Automation Warning: Invalid action spec (missing :action): %S" action-spec)))))
 
 (defun supertag-automation-execute-action (action-type node-id params context)
   "Execute a specific action type.
@@ -527,9 +535,89 @@ CONTEXT provides execution context"
         
     (:call-function
      (supertag-automation-action-call-function node-id params context))
+
+    (:case
+     (supertag-automation-action-case node-id params context))
     
     (_
      (message "Unknown action type: %s" action-type))))
+
+(defun supertag-automation--case-resolve (spec node-data context)
+  "Resolve SPEC to a value for CASE evaluation using NODE-DATA and CONTEXT."
+  (pcase spec
+    (`(:field ,field-name)
+     (let ((tags (plist-get node-data :tags)))
+       (supertag-automation--get-field-value (plist-get node-data :id) tags field-name)))
+    (`(:property ,prop)
+     (let ((props (plist-get node-data :properties)))
+       (plist-get props prop)))
+    (`(:value ,value) value)
+    (`(:literal ,value) value)
+    (`(:context ,key)
+     (plist-get context key))
+    (`(:function ,fn)
+     (when (functionp fn)
+       (funcall fn node-data context)))
+    (`(:eval ,fn)
+     (when (functionp fn)
+       (funcall fn node-data context)))
+    (_ spec)))
+
+(defun supertag-automation--case-branch-match-p (branch value node-data context)
+  "Return non-nil when BRANCH matches VALUE.
+BRANCH can specify :equals (single value or list), :in (list),
+:match (regexp), or :test (function)."
+  (cond
+   ((plist-get branch :default) nil)
+   ((plist-member branch :equals)
+    (let ((expected (plist-get branch :equals)))
+      (if (listp expected)
+          (cl-some (lambda (item) (equal item value)) expected)
+        (equal expected value))))
+   ((plist-member branch :in)
+    (let ((collection (plist-get branch :in)))
+      (and (listp collection)
+           (cl-some (lambda (item) (equal item value)) collection))))
+   ((plist-member branch :match)
+    (let ((pattern (plist-get branch :match)))
+      (cond
+       ((and (stringp pattern) (stringp value))
+        (string-match-p pattern value))
+       ((functionp pattern)
+        (funcall pattern value node-data context))
+       (t nil))))
+   ((plist-member branch :test)
+    (let ((fn (plist-get branch :test)))
+      (when (functionp fn)
+        (funcall fn value node-data context))))
+   (t nil)))
+
+(defun supertag-automation-action-case (node-id params context)
+  "Evaluate CASE action described by PARAMS for NODE-ID with CONTEXT."
+  (let* ((node-data (or (supertag-node-get node-id)
+                        (list :id node-id :tags nil :properties nil)))
+         (on-spec (plist-get params :on))
+         (branches (plist-get params :branches))
+         (value (supertag-automation--case-resolve on-spec node-data context))
+         (matched nil)
+         (default-actions nil))
+    (unless (listp branches)
+      (message "Automation Warning: CASE branches must be a list, got %S" branches)
+      (setq branches nil))
+    (dolist (branch branches)
+      (let ((actions (or (plist-get branch :actions)
+                         (plist-get branch :do)
+                         (plist-get branch :then))))
+        (cond
+         ((plist-get branch :default)
+          (setq default-actions actions))
+         ((and (not matched)
+               (supertag-automation--case-branch-match-p branch value node-data context))
+          (setq matched t)
+          (when actions
+            (supertag-automation--execute-actions actions node-id context))))))
+    (when (and (not matched) default-actions)
+      (supertag-automation--execute-actions default-actions node-id context))))
 
 (defun supertag-automation-action-update-property (node-id params)
   "Update an Org-mode property on the node.

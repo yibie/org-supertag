@@ -81,6 +81,13 @@
     (supertag-ops-schema--detect-cycles parent-map)
     parent-map))
 
+(defun supertag-ops-schema--merge-field-definitions (base override)
+  "Merge OVERRIDE plist onto BASE plist and return a fresh copy."
+  (let ((result (copy-tree base)))
+    (cl-loop for (key val) on override by #'cddr
+             do (setq result (plist-put result key val)))
+    result))
+
 (defun supertag-ops-schema--resolve-fields-for-tag (tag-id parent-map raw-tags)
   "Resolve final fields for TAG-ID using PARENT-MAP and RAW-TAGS."
   (let ((chain '())
@@ -89,27 +96,20 @@
       (push current chain)
       (setq current (gethash current parent-map)))
     ;; (message "[SCHEMA-DEBUG] resolve-fields: Inheritance chain for %s: %S" tag-id chain)
-    (let ((final-fields (make-hash-table :test 'equal)))
-      (dolist (tid chain)
-        (let* ((tag-data (gethash tid raw-tags))
-               (fields (copy-tree (plist-get tag-data :fields))))
-          ;; (message "[SCHEMA-DEBUG] resolve-fields: Processing %s in chain. Own fields: %S" tid fields)
-          (dolist (field (or fields '()))
+    (let ((ordered-fields '()))
+      (dolist (tid (nreverse chain))
+        (let ((tag-data (gethash tid raw-tags)))
+          (dolist (field (or (plist-get tag-data :fields) '()))
             (let ((name (plist-get field :name)))
               (when name
-                (let ((existing-def (gethash name final-fields)))
-                  (if existing-def
-                      ;; Merge: child properties override parent properties
-                      (let ((merged-def (copy-tree existing-def)))
-                        (cl-loop for (key val) on field by #'cddr
-                                 do (setq merged-def (plist-put merged-def key val)))
-                        (puthash name merged-def final-fields))
-                    ;; No existing field, just add it
-                    (puthash name field final-fields))))))))
-      (let (result)
-        (maphash (lambda (_k v) (push v result)) final-fields)
-        ;; (message "[SCHEMA-DEBUG] resolve-fields: Final merged fields for %s: %S" tag-id result)
-        result))))
+                (let ((existing (cl-assoc name ordered-fields :test #'equal)))
+                  (if existing
+                      ;; Merge: child properties override parent properties while preserving position.
+                      (setcdr existing (supertag-ops-schema--merge-field-definitions (cdr existing) field))
+                    ;; Append new field, preserving declared order.
+                    (setq ordered-fields
+                          (append ordered-fields (list (cons name (copy-tree field))))))))))))
+      (mapcar #'cdr ordered-fields))))
 
 (defun supertag-ops-schema--materialize-all ()
   "Populate `supertag-ops-schema--resolved-cache' with materialized schemas."

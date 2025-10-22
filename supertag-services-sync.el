@@ -638,11 +638,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       ;; 2. Scan for New Files
       (let ((new-files (supertag-scan-sync-directories)))
         (when new-files
-          (setq state-changed t) ; Remove debug message
-          (dolist (file new-files)
-            (supertag-sync-update-state file))))
-      (when state-changed
-        (supertag-sync-save-state))
+          (setq modified-files
+                (cl-union modified-files new-files :test #'string=))))
 
       ;; 3. Process Modified Files
       (when modified-files
@@ -653,6 +650,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                                      (file-attribute-modification-time (file-attributes b)))))))
           (dolist (file sorted-files)
             (supertag-sync--process-single-file file counters)
+            (setq state-changed t)
             ;; Mark this file as processed
             (puthash file t processed-files))))
 
@@ -1190,6 +1188,60 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
     (setq supertag-sync--timer nil)
     (message "Auto-sync stopped"))
   (supertag-sync--cancel-idle-dispatch))
+
+;;;###autoload
+(defun supertag-sync-full-rescan ()
+  "Force a full rescan of every file currently managed by Supertag sync.
+When called interactively, display a summary report and return a plist
+describing the work that was performed."
+  (interactive)
+  (let* ((state-table (supertag-sync--get-state-table))
+         (files (cl-delete-duplicates
+                 (append (supertag-scan-sync-directories t)
+                         (let (state-files)
+                           (when (hash-table-p state-table)
+                             (maphash (lambda (file _)
+                                        (push file state-files))
+                                      state-table))
+                           state-files))
+                 :test #'string-equal))
+         (files (cl-remove-if-not
+                 (lambda (file)
+                   (and (stringp file)
+                        (file-regular-p file)
+                        (supertag-sync--in-sync-scope-p file)))
+                 files))
+         (processed 0)
+         (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
+                     :references-created 0 :references-deleted 0)))
+    (supertag-with-transaction
+      (dolist (file files)
+        (condition-case err
+            (progn
+              (supertag-sync--process-single-file file counters)
+              (cl-incf processed))
+          (error
+           (message "Supertag rescan skipped %s: %s" file (error-message-string err)))))
+      (supertag-sync-validate-nodes counters))
+    (supertag-sync-save-state)
+    (let* ((gc-count (supertag-sync-garbage-collect-orphaned-nodes))
+           (result (list :files-processed processed
+                         :nodes-created (plist-get counters :nodes-created)
+                         :nodes-updated (plist-get counters :nodes-updated)
+                         :nodes-deleted (plist-get counters :nodes-deleted)
+                         :references-created (plist-get counters :references-created)
+                         :references-deleted (plist-get counters :references-deleted)
+                         :garbage-collected gc-count)))
+      (when (called-interactively-p 'interactive)
+        (message "Supertag rescan: %d files processed, %d created, %d updated, %d deleted, %d refs created, %d refs deleted, %d GC."
+                 processed
+                 (plist-get counters :nodes-created)
+                 (plist-get counters :nodes-updated)
+                 (plist-get counters :nodes-deleted)
+                 (plist-get counters :references-created)
+                 (plist-get counters :references-deleted)
+                 gc-count))
+      result)))
 
 ;;;-------------------------------------------------------------------
 ;;; Database Cleanup

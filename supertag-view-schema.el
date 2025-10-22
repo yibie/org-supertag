@@ -69,7 +69,7 @@ Returns a list containing two items: the children-by-id map and the list of root
                  (let* ((tag-plist (gethash id tags-by-id))
                         (child-ids (sort (gethash id children-by-id) #'string<))
                         (children (mapcar #'build-node child-ids)))
-                   (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
+                   ;; (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
                    (plist-put (cl-copy-list tag-plist) :children children))))
     (let ((sorted-roots (sort root-ids #'string<)))
       (message "SCHEMA-DEBUG (3/4): Building tree from %d sorted root nodes..." (length sorted-roots))
@@ -146,6 +146,7 @@ Returns a list containing two items: the children-by-id map and the list of root
       (supertag-view-helper-insert-simple-footer
        "Tag: [a] Add Field | [e] Set Parent | [d] Delete"
        "Field: [r] Rename | [d] Delete | [M-↑/↓] Move"
+       "Batch: [m] Mark | [u] Unmark | [U] Clear Marks | [D] Delete Marked | [E] Extend Marked"
        "Global: [A] Add Tag | [g] Refresh | [q] Quit")
       (goto-char (point-min)))))
 
@@ -221,7 +222,7 @@ Returns a list containing two items: the children-by-id map and the list of root
   "A list of context plists for marked items in the schema view.")
 
 ;;;###autoload
-(defun supertag-schema-view ()
+(defun supertag-view-schema ()
   "Create and display a buffer showing the entire tag and field schema."
   (interactive)
   (let ((buffer (get-buffer-create "*Supertag Schema*")))
