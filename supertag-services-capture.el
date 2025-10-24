@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-capture)
 (require 'org-id)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
@@ -64,14 +65,14 @@ This function correctly uses the Tag -> Field -> Value data model."
     (let ((node-tags (plist-get (supertag-node-get node-id) :tags)))
       (unless node-tags
         (message "Node has no tags to provide fields.")
-        (return-from supertag-capture-enrich-node))
+        (cl-return-from supertag-capture-enrich-node))
 
       (while t
         (let ((tag-id (completing-read "Select a tag to add field from (or empty to finish): "
                                        (cons "" node-tags) nil t)))
           (when (string-empty-p tag-id)
             (message "Node enrichment complete for %s" node-id)
-            (return-from supertag-capture-enrich-node))
+            (cl-return-from supertag-capture-enrich-node))
 
           (let* ((fields (supertag-tag-get-all-fields tag-id))
                  (field-names (mapcar #'(lambda (f) (plist-get f :name)) fields))
@@ -341,16 +342,17 @@ Prioritizes title prompts over body content for better UX."
         ;; Extract tags and determine their position
         (setq tags (supertag-transform-extract-inline-tags headline-content))
 
-        ;; Determine tag position by checking if tags appear at the beginning
-        (when tags
-          (let ((cleaned-headline (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" headline-content)))
-            (setq tag-position (if (string-match-p "^\\s-+#[^[:space:]]+" cleaned-headline)
-                                  :after-title
-                                :before-title))))
+        ;; Determine tag position based on where tags occur
+        (setq tag-position (when tags
+                             (if (string-match-p "\\`#\\w" headline-content)
+                                 :before-title
+                               :after-title)))
 
         ;; Extract title template by removing tags
-        (let* ((raw-title-template (replace-regexp-in-string "\\s-+#\\w[-_[:alnum:]]*" "" headline-content))
-               (clean-title-template (string-trim raw-title-template)))
+        (let* ((raw-title-template
+                (replace-regexp-in-string "\\(?:^\\|\\s-\\)#\\w[-_[:alnum:]]*" "" headline-content))
+               (clean-title-template
+                (string-trim (replace-regexp-in-string "\\s-\\{2,\\}" " " raw-title-template))))
           (setq title-spec `(:part :title :get ,(supertag-capture--generate-get-spec clean-title-template)))
           (when tags
             (setq tags-spec `(:part :tags :get (:static ,tags ,tag-position)))))))
@@ -429,79 +431,204 @@ compatible with `supertag--render-org-headline'."
     (message "DEBUG: --- Exiting process-spec ---")
     `(:title ,title :tags ,tags :body ,body :fields ,fields :tag-position ,tag-position)))
 
+;;; --- NEW: Target Resolution Engine ---
+
+(defun supertag-capture--select-headline-interactively (file)
+  "Interactively select a headline from FILE and return its end position.
+This function provides a completing-read interface for choosing a target."
+  (unless (file-exists-p file)
+    (user-error "Target file for interactive selection does not exist: %s" file))
+  (with-current-buffer (find-file-noselect file)
+    (let* ((headlines (org-map-entries (lambda () (cons (org-get-heading t t) (point))) t))
+           (choice (completing-read "Select target headline: " headlines nil t)))
+      (when-let ((marker (cdr (assoc choice headlines))))
+        (goto-char marker)
+        (org-end-of-subtree)
+        (point)))))
+
+(defun supertag-capture--resolve-target-location (plist)
+  "Resolve a capture PLIST and return (list BUFFER POSITION LEVEL).
+Handles various org-capture-style targets using information from PLIST."
+  (let* ((target-spec (plist-get plist :target))
+         (file-fallback (plist-get plist :file))
+         (spec (or target-spec (when file-fallback `(file+interactive ,file-fallback))))
+         (type (car spec))
+         (args (cdr spec))
+         (file (car args)))
+    (unless spec
+      (user-error "Capture template has no :target or :file defined"))
+
+    ;; Derive file for targets that don't specify one directly.
+    (cond
+     ((eq type 'here)
+      (setq file (or file (buffer-file-name))))
+     ((eq type 'id)
+      (setq file (org-id-find-id-file (car args)))
+      (unless file
+        (user-error "Cannot resolve ID %s to a file" (car args)))))
+
+    (unless (or (not file) (file-exists-p file))
+      (user-error "Target file does not exist: %s" file))
+
+    (let ((buffer (if file (find-file-noselect file) (current-buffer))))
+      (with-current-buffer buffer
+        (pcase type
+          ('file+headline
+           (let ((headline (cadr args)))
+             (goto-char (point-min))
+             (unless (org-find-exact-headline-in-buffer headline)
+               (user-error "Headline not found: %s" headline))
+             (org-end-of-subtree)
+             (list buffer (point) (1+ (org-outline-level)))))
+
+          ('file+olp+datetree
+           (let* ((olp (cadr args))
+                  (tree-type (plist-get plist :tree-type 'day)))
+             (goto-char (point-min))
+             (when (and olp (not (org-find-olp olp)))
+               (user-error "Outline path not found: %s" olp))
+             (let ((pos (org-datetree-find-capture-location tree-type)))
+               (goto-char pos)
+               (list buffer pos (org-outline-level)))))
+
+          ('file+interactive
+           (let* ((info (supertag-ui-select-insert-position file))
+                  (pos (plist-get info :position))
+                  (level (or (plist-get info :level) (org-outline-level))))
+             (unless info
+               (user-error "Insert position selection cancelled"))
+             (goto-char pos)
+             (list buffer pos level)))
+
+          ('id
+           (let* ((id (car args))
+                  (marker (org-id-find id 'marker)))
+             (unless marker
+               (user-error "Cannot find entry with ID: %s" id))
+             (org-with-point-at marker
+               (org-end-of-subtree)
+               (list (current-buffer) (point) (1+ (org-outline-level))))))
+
+          ('here
+           (list buffer (point) (org-outline-level)))
+
+          (_ (user-error "Unsupported :target type: %S" type)))))))
+
 (defun supertag-capture--insert-node-into-buffer (buffer position level title tags body new-node-id &optional tag-position)
-  "Correctly insert a new Org node into BUFFER at POSITION.
+  "Insert a new Org node into BUFFER at POSITION and return metadata.
 This function enforces the correct order: headline, properties, body.
 TAG-POSITION determines where tags are placed in the headline."
   (with-current-buffer buffer
     (save-excursion
       (goto-char position)
-      (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) ; Ensure blank line before
-      ;; 1. Insert headline with dynamic tag positioning
-      (insert (supertag--render-org-headline
-               level title tags (buffer-file-name buffer) nil
-               nil
-               (supertag-capture--normalize-tag-position tag-position)))
-      ;; 2. Insert properties drawer (must come immediately after headline)
-      (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
-      ;; 3. Insert body content after the properties drawer
-      (unless (string-empty-p body)
-        (insert "\n" body))
-      (save-buffer))))
-
-(defun supertag-capture--execute (target-file processed-data &optional tag-position-override)
-  "Execute the capture by writing data to file and syncing.
-TARGET-FILE is the path to the destination file.
-PROCESSED-DATA is the plist from --process-spec."
-  (message "DEBUG: Entering supertag-capture--execute")
-  (unless target-file
-    (user-error "TARGET-FILE cannot be nil"))
-  (unless (file-exists-p target-file)
-    (user-error "Target file does not exist: %s" target-file))
-    (let* ((title (plist-get processed-data :title))
-           (tags (plist-get processed-data :tags))
-           (body (plist-get processed-data :body))
-           (field-settings (plist-get processed-data :fields))
-           (raw-tag-position (or (plist-get processed-data :tag-position)
-                                 tag-position-override))
-           (tag-position (supertag-capture--normalize-tag-position raw-tag-position))
-           ;; Get location
-           (insert-info (supertag-ui-select-insert-position target-file))
-           (insert-pos (plist-get insert-info :position))
-           (insert-level (plist-get insert-info :level)))
-    (unless insert-info
-      (user-error "No valid insert position selected"))
-
-    ;; Side Effect 1: Write to file
-      (let ((new-node-id (org-id-new)))
-        (supertag-capture--insert-node-into-buffer
-         (find-file-noselect target-file)
-         insert-pos insert-level title tags body new-node-id tag-position)
-
-      ;; Side Effect 2:  Sync and Enrich
-      (let ((node-id new-node-id))
-      (when node-id
-        ;; Instead of a full, heavy-weight sync, perform a direct,
-        ;; surgical creation of the node in the database. This is much
-        ;; more efficient and avoids confusing logs.
-        (supertag-node-create (list :id node-id
-                                    :title title
-                                    :tags tags
-                                    :file target-file))
-        (message "Node %s created in %s" node-id (file-name-nondirectory target-file))
-
-        ;; Set field values from template
-        (when field-settings
-          (dolist (f-spec field-settings)
-            (let* ((f-tag (plist-get f-spec :tag))
-                   (f-field (plist-get f-spec :field))
-                   (f-get (plist-get f-spec :get))
-                   (f-value (if f-get
-                                (supertag-capture--get-content f-get)
-                              (plist-get f-spec :value))))
-              (when (and f-tag f-field f-value) (supertag-field-set node-id f-tag f-field f-value) (message "Set field: %s/%s -> %s" f-tag f-field f-value))))))))))
+      (unless (or (bobp) (looking-back "\n" 1))
+        (insert "\n"))
+      (let* ((headline-start (point))
+             (normalized-tag-pos (supertag-capture--normalize-tag-position tag-position))
+             marker)
+        ;; 1. Insert headline with dynamic tag positioning
+        (insert (supertag--render-org-headline
+                 level title tags (buffer-file-name buffer) nil
+                 nil normalized-tag-pos))
+        ;; Create a marker that points to the start of the new headline
+        (setq marker (copy-marker headline-start t))
+        ;; 2. Insert properties drawer (must come immediately after headline)
+        (insert ":PROPERTIES:\n:ID: " new-node-id "\n:END:\n")
+        ;; 3. Insert body content after the properties drawer
+        (unless (string-empty-p body)
+          (insert "\n" body))
+        (save-buffer)
+        (list :id new-node-id :marker marker)))))
 
 
+;;; --- REWRITTEN: Main Workflow ---
+
+;;;###autoload
+(defun supertag-capture-with-template (&optional template-key)
+  "A self-contained capture system with advanced targeting and dynamic templates."
+  (interactive)
+  (unless supertag-capture-templates
+    (user-error "No templates defined. Please set `supertag-capture-templates'"))
+  (let* ((template (if template-key
+                       (assoc template-key supertag-capture-templates)
+                     (let* ((completion-alist
+                             (mapcar (lambda (tpl)
+                                       (cons (format "%s - %s" (car tpl) (cadr tpl)) tpl))
+                                     supertag-capture-templates))
+                            (selected-display (completing-read "Choose template: "
+                                                               (mapcar #'car completion-alist)
+                                                               nil t)))
+                       (cdr (assoc selected-display completion-alist))))))
+    (unless template
+      (user-error "Template not found"))
+    (pcase-let* ((`(,key ,description . ,plist) template)
+                 (raw-node-spec (plist-get plist :node-spec))
+                 (node-spec (if (and (consp raw-node-spec)
+                                     (eq (car raw-node-spec) :template))
+                                (supertag-capture--parse-template-string (cadr raw-node-spec))
+                              raw-node-spec)))
+      (unless node-spec
+        (user-error "Template '%s' has no :node-spec" description))
+      (ignore key) ; keep API parity even if KEY is unused for now
+    ;; 1. Resolve target location using the enhanced engine
+      ;; 1. Gather user input before choosing insertion target
+      (let* ((processed-data (supertag-capture--process-spec node-spec))
+             (title (plist-get processed-data :title))
+             (tags (plist-get processed-data :tags))
+             (body (plist-get processed-data :body))
+             (field-settings (plist-get processed-data :fields))
+             (tag-position (plist-get processed-data :tag-position))
+             ;; 2. Resolve target location after prompts are complete
+             (location-info (supertag-capture--resolve-target-location plist))
+             (buffer (nth 0 location-info))
+             (position (nth 1 location-info))
+             (level (nth 2 location-info))
+             (new-node-id (org-id-new))
+             (insert-result (supertag-capture--insert-node-into-buffer
+                             buffer position level title tags body new-node-id tag-position))
+               (node-marker (plist-get insert-result :marker))
+               (resolved-fields
+                (when field-settings
+                  (cl-loop for f-spec in field-settings append
+                           (let* ((tag-id (plist-get f-spec :tag))
+                                  (field-name (plist-get f-spec :field))
+                                  (getter (plist-get f-spec :get))
+                                  (explicit-specified (plist-member f-spec :value))
+                                  (explicit (plist-get f-spec :value))
+                                  (value nil)
+                                  (provided nil))
+                             (cond
+                              (getter
+                               (setq value (supertag-capture--get-content getter))
+                               (setq provided t))
+                              (explicit-specified
+                               (setq value explicit)
+                               (setq provided t)))
+                             (cond
+                              ((and provided
+                                    (listp value)
+                                    (not (stringp value))
+                                    (cl-every (lambda (item)
+                                                (and (plist-get item :tag)
+                                                     (plist-get item :field)))
+                                              value))
+                               (cl-loop for nested in value
+                                        for n-tag = (plist-get nested :tag)
+                                        for n-field = (plist-get nested :field)
+                                        for n-value = (plist-get nested :value)
+                                        when (and n-tag n-field
+                                                  (not (and (stringp n-value)
+                                                            (string-empty-p n-value))))
+                                        collect (list :tag n-tag :field n-field :value n-value)))
+                              ((and provided tag-id field-name
+                                    (not (and (stringp value) (string-empty-p value))))
+                               (list (list :tag tag-id :field field-name :value value)))
+                              (t nil)))))))
+          (org-with-point-at node-marker
+            (supertag-node-sync-at-point))
+          (when resolved-fields
+            (supertag-field-set-many new-node-id resolved-fields))
+          (message "Capture successful for template: %s" description)))))
 
 (provide 'supertag-services-capture)
 

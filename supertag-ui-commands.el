@@ -110,25 +110,26 @@ Only includes headings whose starting position is within [BEG, END)."
   "Extract node properties from the current Org heading at point.
 Returns a plist of properties suitable for node creation/update."
   (when (org-at-heading-p)
-    (let* ((element (org-element-at-point))
-           (id (org-id-get)) ; Get existing ID if any
-           (title (org-element-property :raw-value element))
-           (level (org-element-property :level element))
-           (file (buffer-file-name))
-           (pos (point))
-           (content (save-excursion
+    (when (fboundp 'org-element-at-point)
+      (let* ((element (org-element-at-point))
+             (id (org-id-get)) ; Get existing ID if any
+             (title (org-element-property :raw-value element))
+             (level (org-element-property :level element))
+             (file (buffer-file-name))
+             (pos (point))
+             (content (save-excursion
                        (org-end-of-meta-data t)
                        (buffer-substring-no-properties (point) (save-excursion (org-end-of-subtree t t) (point)))))
-           (headline-tags (supertag-transform-extract-inline-tags title))
-           (content-tags (supertag-transform-extract-inline-tags content))
-           (all-tags (cl-union headline-tags content-tags :test 'equal)))
-      (list :id id
-            :title title
-            :tags all-tags
-            :level level
-            :file file
-            :position pos
-            :content content))))
+             (headline-tags (supertag-transform-extract-inline-tags title))
+             (content-tags (supertag-transform-extract-inline-tags content))
+             (all-tags (cl-union headline-tags content-tags :test 'equal)))
+        (list :id id
+              :title title
+              :tags all-tags
+              :level level
+              :file file
+              :position pos
+              :content content)))))
 
 ;;; --- User Commands ---
 
@@ -253,13 +254,14 @@ Jumps to the selected node in another window."
       (supertag-node-delete node-id)
       ;; 2. Delete the headline from the Org buffer
       (org-back-to-heading t)
-      (let* ((element (org-element-at-point))
-             (begin (org-element-property :begin element))
-             (end (org-element-property :end element)))
-        (delete-region begin end)
-        ;; Also delete the newline after the heading if it exists
-        (when (looking-at "\n")
-          (delete-char 1)))
+      (when (fboundp 'org-element-at-point)
+        (let* ((element (org-element-at-point))
+               (begin (org-element-property :begin element))
+               (end (org-element-property :end element)))
+          (delete-region begin end)
+          ;; Also delete the newline after the heading if it exists
+          (when (looking-at "\n")
+            (delete-char 1))))
       ;; 3. Save the buffer to persist the deletion from the file
       (save-buffer)
       (message "Node %s deleted." node-id))))
@@ -342,14 +344,15 @@ current file and inserted into the target file at a chosen position."
                         (goto-char (marker-position marker))
                         (org-back-to-heading t)
                         (when (org-at-heading-p)
-                          (let* ((element (org-element-at-point))
-                                 (begin (org-element-property :begin element))
-                                 (end (org-element-property :end element))
-                                 (original-level (org-element-property :level element))
-                                 (content (buffer-substring-no-properties begin end))
-                                 (node-file (buffer-file-name)))
-                            (push (list :id node-id
-                                        :file node-file
+                          (when (fboundp 'org-element-at-point)
+                            (let* ((element (org-element-at-point))
+                                   (begin (org-element-property :begin element))
+                                   (end (org-element-property :end element))
+                                   (original-level (org-element-property :level element))
+                                   (content (buffer-substring-no-properties begin end))
+                                   (node-file (buffer-file-name)))
+                              (push (list :id node-id
+                                          :file node-file
                                         :begin begin
                                         :end end
                                         :level original-level
@@ -408,7 +411,7 @@ current file and inserted into the target file at a chosen position."
             
             (message "%d node(s) successfully moved to %s."
                      (length nodes-to-move)
-                     (file-name-nondirectory target-file))))))))
+                     (file-name-nondirectory target-file)))))))))
 
 (defun supertag-move-node-and-link ()
     "Move the node at point to another file, leaving a link behind."
@@ -431,7 +434,8 @@ current file and inserted into the target file at a chosen position."
 
         (when (yes-or-no-p (format "Really move node %s and leave a link? " node-id))
           ;; 2. Get node content and original properties
-          (let* ((element (org-element-at-point))
+          (when (fboundp 'org-element-at-point)
+            (let* ((element (org-element-at-point))
                  (begin (org-element-property :begin element))
                  (end (org-element-property :end element))
                  (original-level (org-element-property :level element))
@@ -456,7 +460,7 @@ current file and inserted into the target file at a chosen position."
                     (format "[[id:%s][%s]]\n" node-id title))
             (save-buffer)
 
-            (message "Node %s moved and link created." node-id))))))
+            (message "Node %s moved and link created." node-id)))))))
 
 
 ;; --- Node Commands: Add, Remove Reference
@@ -848,51 +852,14 @@ Can be used both at headings and within node content areas."
   "Interactively rename a tag across all files."
   (interactive)
   (let* ((all-tags (mapcar #'car (supertag-query :tags)))
-         (old-name (completing-read "Tag to rename: " all-tags nil t))
-         (new-name (read-string (format "New name for '%s': " old-name))))
-    (when (and (not (string-empty-p old-name))
-               (not (string-empty-p new-name)))
-      (let ((sanitized-new-name (supertag-sanitize-tag-name new-name)))
-        (when (yes-or-no-p (format "Rename tag '%s' to '%s'? This will affect all files." old-name sanitized-new-name))
-          ;; 1. Check if new tag name already exists
-          (when (supertag-tag-get sanitized-new-name)
-            (user-error "Tag '%s' already exists. Cannot rename to existing tag." sanitized-new-name))
-          
-          ;; 2. Get nodes with this tag before renaming
-          (let* ((nodes-with-tag (supertag-find-nodes-by-tag old-name))
-                 (files (delete-dups (mapcar (lambda (node-pair)
-                                               (let ((node (cdr node-pair)))
-                                                 (plist-get node :file)))
-                                             nodes-with-tag))))
-            
-            ;; 3. Create new tag with same properties but new name
-            (let ((old-tag (supertag-tag-get old-name)))
-              (when old-tag
-                (let ((new-tag-props (plist-put (copy-sequence old-tag) :name sanitized-new-name)))
-                  (supertag-tag-create (plist-put new-tag-props :id sanitized-new-name)))))
-            
-            ;; 4. Update all node-tag relationships and node tags lists
-            (dolist (node-pair nodes-with-tag)
-              (let ((node-id (car node-pair)))
-                ;; Remove old relationship
-                (let ((old-relations (supertag-relation-find-between node-id old-name :node-tag)))
-                  (dolist (rel old-relations)
-                    (supertag-relation-delete (plist-get rel :id))))
-                ;; Remove old tag from node's tags list
-                (supertag-node-remove-tag node-id old-name)
-                ;; Create new relationship
-                (supertag-relation-create `(:type :node-tag :from ,node-id :to ,sanitized-new-name))
-                ;; Add new tag to node's tags list
-                (supertag-node-add-tag node-id sanitized-new-name)))
-            
-            ;; 5. Delete old tag using proper API
-            (supertag-tag-delete old-name)
-            
-            ;; 6. Update text in all relevant files using helper component
-            (require 'supertag-view-helper)
-            (let ((total-renamed (supertag-view-helper-rename-tag-text-in-files old-name sanitized-new-name files)))
-              (message "Tag renamed from '%s' to '%s' (%d total instances)." 
-                       old-name sanitized-new-name total-renamed))))))))
+         (old-id (completing-read "Tag to rename: " all-tags nil t))
+         (new-id (when (and old-id (not (string-empty-p old-id)))
+                   (read-string (format "New name for '%s': " old-id)))))
+    (when (and old-id (not (string-empty-p old-id))
+               new-id (not (string-empty-p new-id)))
+      (when (yes-or-no-p (format "Rename tag '%s' to '%s'? This will affect all files." old-id new-id))
+        ;; Call the single, authoritative backend function
+        (supertag-tag-rename old-id new-id)))))
 
 (defun supertag-delete-tag-everywhere ()
   "Interactively delete a tag definition and all its instances.
@@ -1003,97 +970,23 @@ HEADLINE is optional headline text."
           ;; Phase 4: Auto field enrichment for tags with fields
           (when selected-tags
             (let ((fields (supertag-capture--get-fields-for-tags selected-tags)))
-              (when fields
-                (let ((field-values (supertag-capture--prompt-for-field-values fields)))
-                  (dolist (fv field-values)
-                    ;; Use field operations to set field values properly
-                    (dolist (tag-id selected-tags) (supertag-field-set node-id tag-id (car fv) (cdr fv))))))))
+               (when fields
+                 (let* ((field-values (supertag-capture--prompt-for-field-values fields))
+                        (batch-entries (cl-loop for fv in field-values append
+                                                (cl-loop for tag-id in selected-tags
+                                                         collect (list :tag tag-id
+                                                                       :field (car fv)
+                                                                       :value (cdr fv)))))))
+                   (when batch-entries
+                     (supertag-field-set-many node-id batch-entries)))))))
           
           ;; Phase 5: Optional manual field enrichment
           (when (y-or-n-p "Add additional properties to this node? ")
             (supertag-capture-enrich-node node-id))
           
-          node-id)))))
+          node-id)))
 
-(defun supertag-capture-with-template (&optional template-key)
-  "Capture using a dynamic template.
-If TEMPLATE-KEY is not provided, prompts for one."
-  (interactive)
-  (unless supertag-capture-templates
-    (user-error "No templates defined. Please set `supertag-capture-templates'"))
 
-  ;; 1. Select Template
-  (let* ((template-alist supertag-capture-templates)
-         ;; Create an alist of ("KEY - DESCRIPTION" . TEMPLATE-DATA) for completion.
-         (completion-alist (mapcar (lambda (template)
-                                     (cons (format "%s - %s" (car template) (cadr template))
-                                           template))
-                                   template-alist))
-         (selected-display (completing-read "Template: " (mapcar #'car completion-alist) nil t))
-         (selected-template (cdr (assoc selected-display completion-alist)))
-         (key (car selected-template))
-         ;; The rest of the template is the plist part.
-         (template-data (cddr selected-template)))
-    (unless template-data
-      (user-error "Template doesn't exist: %s" key))
-    
-    (let* ((target-file (plist-get template-data :file))
-           (raw-node-spec (plist-get template-data :node-spec))
-           ;; Check if the node-spec is a :template string and parse it.
-           (node-spec (if (and (consp raw-node-spec) (eq (car raw-node-spec) :template))
-                          (supertag-capture--parse-template-string (cadr raw-node-spec))
-                        raw-node-spec)))
-      ;; If no target file specified, use move-node logic to select target
-      (if target-file
-          ;; Case 1: Template has :file - use it directly
-          (progn
-            ;; Expand the file path to handle ~ and relative paths
-            (setq target-file (expand-file-name target-file))
-            (unless (file-exists-p target-file)
-              (user-error "Target file does not exist: %s" target-file))
-            ;; Process spec into data and execute
-            (let* ((processed-data (supertag-capture--process-spec node-spec))
-                   (tag-position (or (plist-get processed-data :tag-position)
-                                     supertag-capture-tag-position)))
-              (supertag-capture--execute target-file processed-data tag-position)))
-        ;; Case 2: No :file specified - use move-node style selection
-        (let* ((processed-data (supertag-capture--process-spec node-spec))
-               (title (plist-get processed-data :title))
-               (tags (plist-get processed-data :tags))
-               (body (plist-get processed-data :body))
-               (field-settings (plist-get processed-data :fields))
-               ;; Use move-node style file selection
-               (selected-file (read-file-name "Capture node to file: " nil nil t))
-               (insert-info (supertag-ui-select-insert-position selected-file))
-               (insert-pos (plist-get insert-info :position))
-               (insert-level (plist-get insert-info :level)))
-          (unless insert-info
-            (user-error "No valid insert position selected"))
-          ;; Create node directly at selected location
-          (let* ((tag-position (or (plist-get processed-data :tag-position)
-                                   supertag-capture-tag-position))
-                 (new-node-id (org-id-new)))
-            (supertag-capture--insert-node-into-buffer
-             (find-file-noselect selected-file)
-             insert-pos insert-level title tags body new-node-id tag-position)
-            ;; Create database record and set fields
-            (supertag-node-create (list :id new-node-id
-                                        :title title
-                                        :tags tags
-                                        :file selected-file))
-            (message "Node %s created in %s" new-node-id (file-name-nondirectory selected-file))
-            ;; Set field values from template
-            (when field-settings
-              (dolist (f-spec field-settings)
-                (let* ((f-tag (plist-get f-spec :tag))
-                       (f-field (plist-get f-spec :field))
-                       (f-get (plist-get f-spec :get))
-                       (f-value (if f-get
-                                    (supertag-capture--get-content f-get)
-                                  (plist-get f-spec :value))))
-                  (when (and f-tag f-field f-value)
-                    (supertag-field-set new-node-id f-tag f-field f-value)
-                    (message "Set field: %s/%s -> %s" f-tag f-field f-value)))))))))))
 
 ;;; --- Sync Commands ---
 

@@ -8,11 +8,17 @@
 
 (require 'cl-lib)
 (require 'ht)
+(require 'subr-x)
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
 (require 'supertag-core-scan)
 (require 'supertag-ops-tag)
+
+(declare-function supertag-ui-select-node "supertag-services-ui"
+                  (&optional prompt use-cache with-preview))
+(declare-function supertag-ui-select-multiple-nodes "supertag-services-ui"
+                  (&optional prompt use-cache initial with-preview))
 
 (defcustom supertag-debug-log-field-events nil
   "When non-nil, log detailed field mutation events and automation processing.
@@ -148,6 +154,42 @@ Returns the updated field value."
                                  node-id tag-id field-name old-value value))
                       event-new))))
         value)))
+
+(defun supertag-field-set-many (node-id specs)
+  "Set multiple tag fields for NODE-ID in a single commit.
+SPECS should be a list of plists containing :tag, :field, and :value."
+  (let ((entries (cl-loop for spec in specs
+                          for tag-id = (plist-get spec :tag)
+                          for field-name = (plist-get spec :field)
+                          for value = (plist-get spec :value)
+                          when (and tag-id field-name)
+                          collect (list :tag tag-id :field field-name :value value))))
+    (when entries
+      (let* ((previous (cl-loop for entry in entries
+                                for tag-id = (plist-get entry :tag)
+                                for field-name = (plist-get entry :field)
+                                for old-raw = (supertag-field-get node-id tag-id field-name supertag-field--missing)
+                                unless (eq old-raw supertag-field--missing)
+                                collect (list :tag tag-id :field field-name :value old-raw))))
+        (supertag-ops-commit
+         :operation :field-set-many
+         :collection :fields
+         :id node-id
+         :previous previous
+         :new entries
+         :context (list :node-id node-id :count (length entries))
+         :perform (lambda ()
+                    (let ((node-table (supertag-field--ensure-node-table node-id t)))
+                      (dolist (entry entries)
+                        (let* ((tag-id (plist-get entry :tag))
+                               (field-name (plist-get entry :field))
+                               (value (plist-get entry :value))
+                               (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
+                          (puthash field-name value tag-table)
+                          (when supertag-debug-log-field-events
+                            (message "supertag-field-set-many WRITE %s/%s/%s -> %S"
+                                     node-id tag-id field-name value))))
+                      entries)))))))
 
 (defun supertag-field-get (node-id tag-id field-name &optional default)
   "Get the value of a tag field for a node.
@@ -403,33 +445,65 @@ For timestamp fields, usually auto-generation is preferred."
       (read-string "Enter timestamp (formats: now, 2024-01-15 14:30): "))
      (t choice))))
 
+(defun supertag-field-normalize-node-reference-list (value)
+  "Return VALUE as a list of node reference IDs.
+VALUE can be nil, a string, or a list of strings. Filters out empty entries."
+  (let* ((candidates (cond
+                      ((null value) '())
+                      ((and (listp value) (not (stringp value))) value)
+                      ((stringp value) (list value))
+                      (t (list (format "%s" value)))))
+         (cleaned (cl-remove-if
+                   (lambda (item)
+                     (or (null item)
+                         (and (stringp item) (string-empty-p item))))
+                   (mapcar (lambda (item)
+                             (cond
+                              ((null item) nil)
+                              ((stringp item) item)
+                              (t (format "%s" item))))
+                           candidates))))
+    cleaned))
+
+(defun supertag-field-pack-node-reference-value (values)
+  "Pack VALUES (list of node IDs) back into stored field form.
+Returns nil for empty list, the single element when only one node is present,
+or the original list when multiple nodes are selected."
+  (let ((normalized (supertag-field-normalize-node-reference-list values)))
+    (pcase normalized
+      ('() nil)
+      (`(,single) single)
+      (_ normalized))))
+
 (defun supertag-field-read-type-with-options (current-type)
-  "Interactively read a field type and options for :options type.
-CURRENT-TYPE is the current type of the field (used as default).
+  "Interactively read a field type and options when needed.
+CURRENT-TYPE is used to preselect the existing type.
 Returns a cons cell (TYPE . OPTIONS) where OPTIONS is a list for
-:options type or nil for other types."
-  (let* ((type-descriptions '((:string . "string - Plain text")
-                              (:number . "number - Numeric value")
-                              (:integer . "integer - Whole number")
-                              (:boolean . "boolean - True/False")
-                              (:date . "date - User-input date (supports: 2024-01-15, today, +3 days)")
-                              (:timestamp . "timestamp - Auto-generated timestamp (created/modified time)")
-                              (:options . "options - Multiple choice")
-                              (:url . "url - Web address")
-                              (:email . "email - Email address")
-                              (:tag . "tag - Tag reference(s)")))
-         (type-choices (mapcar (lambda (type)
-                                 (let ((desc (alist-get type type-descriptions)))
-                                   (or desc (symbol-name type))))
-                               supertag-field-types))
-         (current-type-desc (alist-get current-type type-descriptions))
-         (type-str-selected (completing-read "Field type: " type-choices nil t current-type-desc))
-         ;; Extract the actual type symbol from the selection
-         (new-type (or (car (rassoc type-str-selected type-descriptions))
-                       (cl-find-if (lambda (type-sym)
-                                     (string= (symbol-name type-sym) type-str-selected))
-                                   supertag-field-types)
-                       current-type))) ; fallback to current type
+:options type, or nil for other types."
+  (let* ((builtin-descriptions '((:string . "string - Plain text")
+                                 (:number . "number - Numeric value")
+                                 (:integer . "integer - Whole number")
+                                 (:boolean . "boolean - True/False")
+                                 (:date . "date - User-input date (supports: 2024-01-15, today, +3 days)")
+                                 (:timestamp . "timestamp - Auto-generated timestamp (created/modified time)")
+                                 (:options . "options - Multiple choice")
+                                 (:url . "url - Web address")
+                                 (:email . "email - Email address")
+                                 (:tag . "tag - Tag reference(s)")
+                                 (:node-reference . "node - Reference to another node")))
+         (type-pairs (mapcar (lambda (type)
+                               (cons type (or (alist-get type builtin-descriptions)
+                                              (symbol-name type))))
+                             supertag-field-types))
+         (current-desc (or (alist-get current-type type-pairs)
+                           (symbol-name (or current-type :string))))
+         (selection (completing-read "Field type: "
+                                     (mapcar #'cdr type-pairs)
+                                     nil t current-desc))
+         (new-type (car (cl-find-if (lambda (pair)
+                                      (string= (cdr pair) selection))
+                                    type-pairs))))
+    (setq new-type (or new-type current-type :string))
     (if (eq new-type :options)
         (let* ((options-input (read-string "Options (comma separated): "))
                (options-list (split-string options-input "," t "[ \t\n\r]+")))
@@ -447,6 +521,13 @@ Returns the user input appropriate for the field type."
       (:timestamp (supertag-field-read-timestamp-value prompt))
       (:boolean (if (y-or-n-p (or prompt "Enable this option? ")) "true" "false"))
       (:date (supertag-field-read-date-value prompt))
+      (:node-reference
+       (let* ((initial (supertag-field-normalize-node-reference-list current-value))
+              (selected (supertag-ui-select-multiple-nodes
+                         (or prompt "Select node (RET to finish): ")
+                         t
+                         initial)))
+         (supertag-field-pack-node-reference-value selected)))
       (:options (read-string prompt current-value)) ; Could be enhanced further
       (:integer (read-string prompt (if current-value (format "%s" current-value) "")))
       (:number (read-string prompt (if current-value (format "%s" current-value) "")))
