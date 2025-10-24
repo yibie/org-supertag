@@ -55,9 +55,10 @@ This is a safe wrapper around org-in-src-block-p."
        ;; Use org-in-src-block-p if available
        ((fboundp 'org-in-src-block-p)
         (org-in-src-block-p))
-       ;; Fallback implementation
+       ;; Fallback implementation - only if in org-mode and org-element-at-point is available
        (t
-        (when (eq major-mode 'org-mode)
+        (when (and (eq major-mode 'org-mode)
+                   (fboundp 'org-element-at-point))
           (let ((element (org-element-at-point)))
             (memq (org-element-type element) '(src-block example-block)))))))))
 
@@ -71,9 +72,10 @@ This is a safe wrapper around org-at-table-p."
        ;; Use org-at-table-p if available
        ((fboundp 'org-at-table-p)
         (org-at-table-p))
-       ;; Fallback implementation
+       ;; Fallback implementation - only if in org-mode and org-element-at-point is available
        (t
-        (when (eq major-mode 'org-mode)
+        (when (and (eq major-mode 'org-mode)
+                   (fboundp 'org-element-at-point))
           (let ((element (org-element-at-point)))
             (eq (org-element-type element) 'table))))))))
 
@@ -641,7 +643,8 @@ Returns the position where tags should be inserted."
 
 (defun supertag-view-helper--find-drawer-end ()
   "Find the end position of the current node's drawer."
-  (when (eq major-mode 'org-mode)
+  (when (and (eq major-mode 'org-mode)
+             (fboundp 'org-element-at-point))
     (save-excursion
       (org-back-to-heading t)
       (forward-line 1)
@@ -886,9 +889,10 @@ Returns the total number of instances renamed."
               (when (> renamed-count 0)
                 (save-buffer)
                 (setq total-renamed (+ total-renamed renamed-count))
-                (message "Renamed %d instances from #%s to #%s in %s" 
-                         renamed-count old-tag-name new-tag-name (file-name-nondirectory file))))))
-    total-renamed)))) 
+                (message "Renamed %s instances from #%s to #%s in %s" 
+                         renamed-count old-tag-name new-tag-name (file-name-nondirectory file)))))))
+    ;; Ensure we always return a number, never nil
+    (or total-renamed 0))))
 
 ;;;----------------------------------------------------------------------
 ;;; Display Buffer Management

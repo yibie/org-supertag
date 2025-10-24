@@ -267,6 +267,59 @@ Returns the updated tag data."
                                        fields-list)))
               (plist-put tag :fields new-fields))))))))
 
+(defun supertag-tag-rename (old-id new-id)
+  "Rename a tag from OLD-ID to NEW-ID across the entire system.
+This is a complex operation that updates the tag definition,
+all child tags that extend it, all node-tag relationships,
+and the tag text in all relevant Org files."
+  (interactive "sRename tag from: \nsRename tag to: ")
+  (let ((sanitized-new-id (supertag-sanitize-tag-name new-id)))
+    (when (supertag-tag-get sanitized-new-id)
+      (error "Tag '%s' already exists. Cannot rename." sanitized-new-id))
+
+    ;; 0. Find all affected nodes and files BEFORE any changes
+    (let* ((nodes-with-tag (supertag-find-nodes-by-tag old-id))
+           (files (delete-dups (mapcar (lambda (node-pair)
+                                         (let ((node (cdr node-pair)))
+                                           (plist-get node :file)))
+                                       nodes-with-tag))))
+
+      ;; 1. Get old tag data and create the new one
+      (let ((old-tag-data (supertag-tag-get old-id)))
+        (unless old-tag-data
+          (error "Tag '%s' not found." old-id))
+        (let ((new-tag-props (copy-tree (supertag--ensure-plist old-tag-data))))
+          (setq new-tag-props (plist-put new-tag-props :id sanitized-new-id))
+          (setq new-tag-props (plist-put new-tag-props :name sanitized-new-id))
+          (supertag-tag-create new-tag-props)))
+
+      ;; 2. Update all child tags that extend the old tag
+      (let ((all-tags (mapcar #'cdr (supertag-query :tags))))
+        (dolist (tag-data all-tags)
+          (let* ((tag-plist (supertag--ensure-plist tag-data))
+                 (parent-id (plist-get tag-plist :extends)))
+            (when (equal parent-id old-id)
+              (supertag--set-parent (plist-get tag-plist :id) sanitized-new-id)))))
+
+      ;; 3. Update all node-tag relations
+      (let ((relations-to-update (supertag-relation-find-by-to old-id :node-tag)))
+        (dolist (rel relations-to-update)
+          (supertag-relation-update (plist-get rel :id)
+            (lambda (r) (plist-put r :to sanitized-new-id)))))
+
+      ;; 4. Delete the old tag definition
+      (supertag-tag-delete old-id)
+
+      ;; 5. Update the text in all relevant Org files
+      (require 'supertag-view-helper)
+      (let ((total-renamed (supertag-view-helper-rename-tag-text-in-files old-id sanitized-new-id files)))
+        (message "Tag renamed from '%s' to '%s' (%s total instances)." 
+                 old-id sanitized-new-id total-renamed))
+
+      ;; 6. Rebuild schema cache to reflect all changes
+      (supertag-ops-schema-rebuild-cache)
+      sanitized-new-id)))
+
 (defun supertag--set-parent (child-id parent-id)
   "Set CHILD-ID to extend PARENT-ID, rebuilding schema cache."
   (let ((child (supertag-tag-get child-id))
@@ -314,10 +367,9 @@ Returns the updated tag data."
                (field-index (cl-position field-name fields-list :key (lambda (f) (plist-get f :name)) :test 'equal)))
           (if (and field-index (> field-index 0))
               ;; Move field up by swapping with the previous field
-              (let ((new-fields (copy-sequence fields-list)))
-                (let ((temp (nth field-index new-fields)))
-                  (setf (nth field-index new-fields) (nth (1- field-index) new-fields))
-                  (setf (nth (1- field-index) new-fields) temp))
+              (let* ((new-fields (copy-sequence fields-list))
+                     (prev-index (1- field-index)))
+                (cl-rotatef (nth prev-index new-fields) (nth field-index new-fields))
                 (plist-put tag :fields new-fields))
             ;; If field is not found or already at the top, return unchanged
             tag))))))
@@ -334,10 +386,9 @@ Returns the updated tag data."
                (field-index (cl-position field-name fields-list :key (lambda (f) (plist-get f :name)) :test 'equal)))
           (if (and field-index (< field-index (1- (length fields-list))))
               ;; Move field down by swapping with the next field
-              (let ((new-fields (copy-sequence fields-list)))
-                (let ((temp (nth field-index new-fields)))
-                  (setf (nth field-index new-fields) (nth (1+ field-index) new-fields))
-                  (setf (nth (1+ field-index) new-fields) temp))
+              (let* ((new-fields (copy-sequence fields-list))
+                     (next-index (1+ field-index)))
+                (cl-rotatef (nth field-index new-fields) (nth next-index new-fields))
                 (plist-put tag :fields new-fields))
             ;; If field is not found or already at the bottom, return unchanged
             tag))))))

@@ -2,10 +2,13 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-id)
+(require 'subr-x)
 (require 'supertag-services-query)
 (require 'supertag-core-store)
 (require 'supertag-ops-node)
 (require 'supertag-ops-field)  ; For type-specific field input assistance
+(require 'supertag-services-sync) ; For supertag-node-sync-at-point
 
 
 (defun supertag-ui--adjust-content-level (content from-level to-level)
@@ -124,20 +127,24 @@ For completion framework integration, e.g., live previews.")
     (maphash
      (lambda (id node-data)
        (when node-data
-         (let* ((raw-title (or (plist-get node-data :raw-value)
-                               (plist-get node-data :title)
-                               "Untitled"))
-                (olp (plist-get node-data :olp))
-                (file (plist-get node-data :file))
-                (display-path (if olp
-                                  (concat (mapconcat #'identity olp " / ") " / " raw-title)
-                                raw-title))
-                (display-str (if file
-                                 (format "%s  (in %s)" display-path (file-name-nondirectory file))
-                               (format "%s  [orphaned]" display-path))))
-           (push (cons display-str id) candidates))))
+         (let ((display (supertag-ui--format-node-display node-data)))
+           (push (cons display id) candidates))))
      nodes-hash)
     (sort candidates (lambda (a b) (string< (car a) (car b))))))
+
+(defun supertag-ui--format-node-display (node-data)
+  "Return a human-readable display string for NODE-DATA."
+  (let* ((raw-title (or (plist-get node-data :raw-value)
+                        (plist-get node-data :title)
+                        "Untitled"))
+         (olp (plist-get node-data :olp))
+         (file (plist-get node-data :file))
+         (display-path (if (and (listp olp) olp)
+                           (concat (string-join olp " / ") " / " raw-title)
+                         raw-title)))
+    (if file
+        (format "%s  (in %s)" display-path (file-name-nondirectory file))
+      (format "%s  [orphaned]" display-path))))
 
 (defun supertag-ui-select-node (&optional prompt use-cache with-preview)
   "Interactively prompt user to select a node.
@@ -180,10 +187,123 @@ Returns the selected node's ID, or nil."
                   (setq selection (completing-read prompt-str candidates nil t)))
               (remove-hook 'vertico-selection-hook preview-hook))
             (when selection (cdr (assoc selection candidates)))))
-         (t
-          (message "Live preview supported with Ivy or Vertico. Falling back to default.")
-          (let ((selected (completing-read prompt-str candidates nil t)))
-            (when selected (cdr (assoc selected candidates))))))))))
+          (t
+           (message "Live preview supported with Ivy or Vertico. Falling back to default.")
+           (let ((selected (completing-read prompt-str candidates nil t)))
+             (when selected (cdr (assoc selected candidates))))))))))
+
+(defun supertag-ui-select-multiple-nodes (&optional prompt use-cache initial with-preview)
+  "Interactively select zero or more nodes and return their IDs.
+PROMPT customizes the base prompt, USE-CACHE mirrors `supertag-ui-select-node'
+for candidate retrieval, INITIAL is a pre-selected list (or single ID),
+and WITH-PREVIEW is reserved for future live preview support."
+  (ignore with-preview)
+  (let* ((prompt-base (or prompt "Select nodes"))
+         (candidates (if use-cache
+                         (supertag-ui--get-cached-nodes)
+                       (supertag-ui--build-node-candidates)))
+         (id->display (let ((table (make-hash-table :test 'equal)))
+                        (dolist (pair candidates table)
+                          (puthash (cdr pair) (car pair) table))
+                        table))
+         (selection (copy-sequence (supertag-field-normalize-node-reference-list initial))))
+    (cl-labels ((format-id (id)
+                           (or (gethash id id->display) id))
+                (refresh-candidates ()
+                  (when use-cache
+                    (supertag-ui--clear-node-cache))
+                  (setq candidates (if use-cache
+                                       (supertag-ui--get-cached-nodes)
+                                     (supertag-ui--build-node-candidates)))
+                  (setq id->display (let ((table (make-hash-table :test 'equal)))
+                                      (dolist (pair candidates table)
+                                        (puthash (cdr pair) (car pair) table))
+                                      table)))
+                (selection-summary ()
+                                    (if selection
+                                        (string-join (mapcar #'format-id selection) ", ")
+                                      "none")))
+      (catch 'done
+        (while t
+          (let* ((actions (append '("Add node..." "Create node...")
+                                  (when selection '("Remove node..."))
+                                  '("Done")))
+                 (action (completing-read
+                          (format "%s [%s]" prompt-base (selection-summary))
+                          actions nil t nil nil "Done")))
+            (pcase action
+              ("Done"
+               (throw 'done (copy-sequence selection)))
+              ("Add node..."
+               (let* ((available (cl-remove-if
+                                  (lambda (pair) (member (cdr pair) selection))
+                                  candidates)))
+                 (if (null available)
+                     (message "All nodes are already selected")
+                   (let* ((choice (completing-read "Add node: "
+                                                   (mapcar #'car available) nil t))
+                          (match (assoc choice candidates)))
+                     (when match
+                       (let ((node-id (cdr match)))
+                         (unless (member node-id selection)
+                           (setq selection (append selection (list node-id))))))))))
+              ("Create node..."
+               (condition-case err
+                   (let ((new-node-id (supertag-node-reference-and-create)))
+                     (when new-node-id
+                       (refresh-candidates)
+                       (let* ((node-data (supertag-node-get new-node-id))
+                              (display (and node-data (supertag-ui--format-node-display node-data))))
+                         (when display
+                           (puthash new-node-id display id->display)))
+                       (unless (member new-node-id selection)
+                         (setq selection (append selection (list new-node-id))))))
+                 (quit (signal 'quit nil))
+                 (error (message "%s" (error-message-string err)))))
+              ("Remove node..."
+               (if (null selection)
+                   (message "No nodes to remove")
+                 (let* ((choices (mapcar (lambda (id)
+                                            (cons (format-id id) id))
+                                          selection))
+                        (choice (completing-read "Remove node: "
+                                                 (mapcar #'car choices) nil t))
+                        (match (assoc choice choices)))
+                   (when match
+                     (setq selection (delete (cdr match) selection))))))
+              (_ (user-error "Unsupported action: %s" action)))))))))
+
+(defun supertag-node-reference-and-create ()
+  "Create a new node for use in node-reference fields and return its ID.
+Prompts for a title, destination file, and insert position."
+  (interactive)
+  (let* ((title-input (read-string "New node title: "))
+         (title (string-trim title-input)))
+    (when (string-empty-p title)
+      (user-error "Node title cannot be empty"))
+    (let* ((target-file (read-file-name "Store node in file: " nil nil t))
+           (insert-info (supertag-ui-select-insert-position target-file)))
+      (unless insert-info
+        (user-error "No valid insert position selected"))
+      (let* ((insert-pos (plist-get insert-info :position))
+             (insert-level (max 1 (or (plist-get insert-info :level) 1)))
+             (node-id (org-id-new)))
+        (with-current-buffer (find-file-noselect target-file)
+          (org-with-wide-buffer
+           (goto-char insert-pos)
+           (unless (bolp)
+             (insert "\n"))
+           (let ((heading-start (point)))
+             (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:END:\n\n"
+                             (make-string insert-level ?*)
+                             title
+                             node-id))
+             (goto-char heading-start)
+             (supertag-node-sync-at-point))
+           (save-buffer)))
+        (supertag-ui--clear-node-cache)
+        (message "Node '%s' created." title)
+        node-id))))
 
 
 (defun supertag-ui-select-reference-to-remove (from-node-id)
@@ -220,6 +340,14 @@ Returns the new value entered by the user."
     (pcase field-type
       (:options (completing-read prompt options nil t nil))
       (:tag (supertag-ui--read-tag-field current-value))
+      (:node-reference
+       (let* ((initial (supertag-field-normalize-node-reference-list current-value))
+              (selected (supertag-ui-select-multiple-nodes
+                         (format "Edit links for %s" field-name)
+                         t
+                         initial))
+              (packed (supertag-field-pack-node-reference-value selected)))
+         packed))
       (:date (supertag-field-read-date-value prompt))
       (:timestamp (supertag-field-read-timestamp-value prompt))
       (:boolean (if (y-or-n-p (format "%s: " (replace-regexp-in-string ": $" "" prompt))) "true" "false"))

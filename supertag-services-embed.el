@@ -50,18 +50,19 @@ Uses find-file-noselect with minimal side effects."
                 (when props-end
                   ;; Find the end of this node's content (before next heading or end of buffer)
                   (org-back-to-heading t)
-                  (let* ((element (org-element-at-point))
-                         (node-end (org-element-property :end element))
-                         (new-content (plist-get node-data :content)))
-                    ;; Delete old content (from end of properties to end of node)
-                    (delete-region props-end node-end)
-                    ;; Insert new content
-                    (goto-char props-end)
-                    (when (and new-content (not (string-empty-p new-content)))
-                      (insert new-content)
-                      (unless (string-suffix-p "\n" new-content)
-                        (insert "\n")))
-                    (save-buffer))))))))))))
+                  (when (fboundp 'org-element-at-point)
+                    (let* ((element (org-element-at-point))
+                           (node-end (org-element-property :end element))
+                           (new-content (plist-get node-data :content)))
+                      ;; Delete old content (from end of properties to end of node)
+                      (delete-region props-end node-end)
+                      ;; Insert new content
+                      (goto-char props-end)
+                      (when (and new-content (not (string-empty-p new-content)))
+                        (insert new-content)
+                        (unless (string-suffix-p "\n" new-content)
+                          (insert "\n")))
+                      (save-buffer)))))))))))))
 
 (defun supertag-embed-sync-modified-blocks ()
   "Sync all modified embed blocks in current buffer back to their sources.

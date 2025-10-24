@@ -7,11 +7,13 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'supertag-core-store)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
 (require 'supertag-ops-relation)
+(require 'supertag-ui-commands) ; For backlink helpers
 (require 'supertag-view-helper)
 (require 'supertag-services-ui)
 
@@ -68,13 +70,8 @@ You can customize this list to match your org-mode TODO keywords."
     (define-key map (kbd "M-<") 'beginning-of-buffer)
     (define-key map (kbd "M->") 'end-of-buffer)
     
-    ;; Field editing
+    ;; Field value editing
     (define-key map (kbd "RET") 'supertag-view-node-edit-at-point)
-    (define-key map (kbd "E") 'supertag-view-node-edit-field-definition-at-point)
-    (define-key map (kbd "a") 'supertag-view-node-add-field)
-    (define-key map (kbd "d") 'supertag-view-node-remove-field-at-point)
-    (define-key map (kbd "M-<up>") 'supertag-view-node-move-field-up)
-    (define-key map (kbd "M-<down>") 'supertag-view-node-move-field-down)
     
     ;; Utility
     (define-key map (kbd "g") 'supertag-view-node-refresh)
@@ -94,10 +91,8 @@ Key Bindings:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📝 Field Operations:
-  RET     - Edit field value at point
-  E       - Edit field definition (name, type) at point
-  a       - Add new field to tag
-  d       - Delete field at point
+  RET     - Edit field value at point. All schema changes (adding, deleting,
+            or reordering fields) should be done in the Schema View (M-x supertag-view-schema).
 
 🧭 Navigation:
   j/k     - Move up/down by line (also n/p)
@@ -111,10 +106,6 @@ Key Bindings:
   g       - Refresh the view
   h       - Show this help (describe-mode)
   q       - Quit and close window
-
-📋 Field Reordering (Future):
-  M-↑     - Move field up
-  M-↓     - Move field down
 
 💡 Tips:
   - Click on any field value or name to edit it
@@ -374,81 +365,26 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
     (message "Debug: pos=%d, tag-id=%s, field-name=%s, node-id=%s, context=%s, type=%s"
              pos tag-id field-name node-id context type)))
 
-(defun supertag-view-node--get-field-info-at-point ()
-  "Return plist of field info at point, or nil."
-  (let* ((pos (point))
-         (fallback-pos (max (point-min) (1- pos)))
-         (tag-id     (or (get-text-property pos 'tag-id)
-                         (get-text-property fallback-pos 'tag-id)))
-         (field-name (or (get-text-property pos 'field-name)
-                         (get-text-property fallback-pos 'field-name)))
-         (node-id supertag-view-node--current-node-id))
-    (when (and tag-id field-name node-id)
-         (let* ((field-def (supertag-tag-get-field tag-id field-name))
-                (value (when field-def
-                         (supertag-field-get-with-default node-id tag-id field-name))))
-        (list :node-id   node-id
-              :tag-id    tag-id
-              :field-name field-name
-              :field-def field-def
-              :value     value)))))
+
+
+(defun supertag-view-node--disallow-definition-edit ()
+  "Signal that field definition edits are not available in node view."
+  (user-error "Field definitions are read-only here; use `supertag-view-schema' instead."))
 
 (defun supertag-view-node-edit-field-definition-at-point ()
   "Edit the field definition at the current point."
   (interactive)
-  (let ((field-info (supertag-view-node--get-field-info-at-point)))
-    (if field-info
-        (let* ((tag-id (plist-get field-info :tag-id))
-               (field-name (plist-get field-info :field-name))
-               (field-def (plist-get field-info :field-def)))
-          (when (and tag-id field-name field-def)
-            (let* ((current-type (plist-get field-def :type))
-                   (action (completing-read "Edit: " '("Name" "Type") nil t)))
-              (cond
-               ((string= action "Name")
-                (let ((new-name (read-string (format "New name for field '%s': " field-name) nil nil field-name)))
-                  (when (and new-name (not (string-empty-p new-name)) (not (string= new-name field-name)))
-                    (supertag-tag-rename-field tag-id field-name new-name)
-                    (supertag-view-node-refresh)
-                    (message "✓ Field renamed from '%s' to '%s'" field-name new-name))))
-               ((string= action "Type")
-                (let* ((type-and-options (supertag-field-read-type-with-options current-type))
-                       (new-type (car type-and-options))
-                       (options (cdr type-and-options))
-                       (new-field-def (list :name field-name :type new-type)))
-                  ;; Add options for :options type
-                  (when (eq new-type :options)
-                    (setq new-field-def (plist-put new-field-def :options options)))
-                  (when (supertag-tag-add-field tag-id new-field-def)  ; This will update the existing field
-                    (supertag-view-node-refresh))))))
-          (message "Field info: tag-id=%s, field-name=%s" tag-id field-name))
-      (message "No field found at point. Please position cursor on a field.")))))
+  (supertag-view-node--disallow-definition-edit))
 
 (defun supertag-view-node-move-field-up ()
   "Move the field at point up in its tag's field list."
   (interactive)
-  (let ((context (supertag-view-node--get-field-info-at-point)))
-    (when (and context
-               (plist-get context :tag-id)
-               (plist-get context :field-name))
-      (let ((tag-id (plist-get context :tag-id))
-            (field-name (plist-get context :field-name)))
-        (supertag-tag-move-field-up tag-id field-name)
-        (supertag-view-node-refresh)
-        (message "Field '%s' moved up in tag '%s'." field-name tag-id)))))
+  (supertag-view-node--disallow-definition-edit))
 
 (defun supertag-view-node-move-field-down ()
   "Move the field at point down in its tag's field list."
   (interactive)
-  (let ((context (supertag-view-node--get-field-info-at-point)))
-    (when (and context
-               (plist-get context :tag-id)
-               (plist-get context :field-name))
-      (let ((tag-id (plist-get context :tag-id))
-            (field-name (plist-get context :field-name)))
-        (supertag-tag-move-field-down tag-id field-name)
-        (supertag-view-node-refresh)
-        (message "Field '%s' moved down in tag '%s'." field-name tag-id)))))
+  (supertag-view-node--disallow-definition-edit))
 
 (defun supertag-view-node--render (node-id)
   "Render a simple, clean view for NODE-ID."
@@ -468,7 +404,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
       
       ;; Complete footer with all available shortcuts
       (supertag-view-helper-insert-simple-footer
-       "⌨️ Field: [RET] Edit Value | [E] Edit Definition | [a] Add | [d] Delete"
+       "⌨️ Field: [RET] Edit Value"
        "📍 Navigation: [j/k] Move | [SPC] Page Down | [S-SPC] Page Up | [M-</>] Start/End"
        "🔧 Actions: [g] Refresh | [h] Help | [q] Quit")
 
@@ -501,11 +437,15 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
 
 (defun supertag-view-node--get-context-at-point ()
   "Return a plist of supertag context at point, or nil."
-  (when (get-text-property (point) 'supertag-context)
-    (list :type (get-text-property (point) 'type)
-          :tag-id (get-text-property (point) 'tag-id)
-          :field-name (get-text-property (point) 'field-name)
-          :id (get-text-property (point) 'id))))
+  (let ((pos (point)))
+    ;; Check current point first, then fallback to point before it.
+    (unless (get-text-property pos 'supertag-context)
+      (setq pos (max (point-min) (1- pos))))
+    (when (get-text-property pos 'supertag-context)
+      (list :type (get-text-property pos 'type)
+            :tag-id (get-text-property pos 'tag-id)
+            :field-name (get-text-property pos 'field-name)
+            :id (get-text-property pos 'id)))))
 
 (defun supertag-view-node-edit-at-point ()
   "Dispatch edit action based on the context at point."
@@ -518,46 +458,56 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
         (_ (message "No edit action defined for this context."))))))
 
 (defun supertag-view-node--edit-field-value (context)
-  "Handle the logic to edit a field's value with enhanced UI feedback."
+  "Handle the logic to edit a field's value with enhanced UI feedback.
+Handles special logic for :node-reference fields."
   (let* ((node-id supertag-view-node--current-node-id)
          (tag-id (plist-get context :tag-id))
          (field-name (plist-get context :field-name))
-         (field-def (supertag-tag-get-field tag-id field-name))
-         (current-value (supertag-field-get-with-default node-id tag-id field-name)))
+         (field-def (supertag-tag-get-field tag-id field-name)))
     (when field-def
-      (let ((new-value (supertag-ui-read-field-value field-def current-value)))
-        ;; We don't check for nil, allowing user to clear a value
+      (let* ((field-type (plist-get field-def :type))
+             (current-value (supertag-field-get-with-default node-id tag-id field-name))
+             (new-value (supertag-ui-read-field-value field-def current-value)))
+
+        ;; Handle :node-reference side effects
+        (when (eq field-type :node-reference)
+          (let* ((current-targets (supertag-field-normalize-node-reference-list current-value))
+                 (new-targets (supertag-field-normalize-node-reference-list new-value))
+                 (removed (cl-set-difference current-targets new-targets :test #'string=))
+                 (added (cl-set-difference new-targets current-targets :test #'string=)))
+            ;; Remove stale relations and backlinks
+            (dolist (target removed)
+              (dolist (rel (supertag-relation-find-between node-id target :field-reference))
+                (when (and (equal (plist-get rel :tag-id) tag-id)
+                           (equal (plist-get rel :field-name) field-name))
+                  (supertag-relation-delete (plist-get rel :id))))
+              (supertag-ui--remove-link-under-node target node-id))
+            ;; Add new relations and backlinks
+            (when added
+              (let ((from-node-title (plist-get (supertag-node-get node-id) :title)))
+                (dolist (target added)
+                  (supertag-relation-create `(:type :field-reference
+                                              :from ,node-id
+                                              :to ,target
+                                              :tag-id ,tag-id
+                                              :field-name ,field-name))
+                  (supertag-ui--insert-link-under-node target node-id from-node-title)))))))
+
+        ;; Set the field value (for all types)
         (supertag-field-set node-id tag-id field-name new-value)
         (supertag-view-node-refresh)
-        (message "✓ Field '%s' updated successfully!" field-name)))))
+        (message "✓ Field '%s' updated successfully!" field-name))))
 
 (defun supertag-view-node-add-field ()
   "Add a new field definition to a tag on the current node."
   (interactive)
-  (let* ((node-id supertag-view-node--current-node-id)
-         (tag-id (supertag-ui-select-tag-on-node node-id)))
-    (when tag-id
-      (let ((field-def (supertag-ui-create-field-definition)))
-        (when field-def
-          (supertag-tag-add-field tag-id field-def)
-          (supertag-view-node-refresh)
-          (message "Field '%s' added to tag '%s'." (plist-get field-def :name) tag-id)))))) 
+  (supertag-view-node--disallow-definition-edit))
 
 
 (defun supertag-view-node-remove-field-at-point ()
   "Remove the field definition at the current point from its tag."
   (interactive)
-  (let ((context (supertag-view-node--get-context-at-point)))
-    (when (and context
-               (or (eq (plist-get context :type) :field-key)
-                   (eq (plist-get context :type) :field-value))
-               (plist-get context :tag-id)
-               (plist-get context :field-name))
-      (let ((tag-id (plist-get context :tag-id))
-            (field-name (plist-get context :field-name)))
-        (when (yes-or-no-p (format "Remove field '%s' from tag '%s'?" field-name tag-id))
-          (supertag-tag-remove-field tag-id field-name)
-          (supertag-view-node-refresh))))))
+  (supertag-view-node--disallow-definition-edit))
 
 
 ;;; --- Commands ---

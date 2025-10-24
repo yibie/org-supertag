@@ -30,7 +30,7 @@ This function also defensively ensures that the plist data for each
 tag contains its own ID, ensuring consistency for later processing."
   (let ((tags-by-id (make-hash-table :test 'equal))
         (all-tags-alist (supertag-query :tags)))
-    (message "SCHEMA-DEBUG (1/4): Found %d total tag entries from query." (length all-tags-alist))
+    ;;(message "SCHEMA-DEBUG (1/4): Found %d total tag entries from query." (length all-tags-alist))
     (dolist (pair all-tags-alist)
       (let* ((id (car pair))
              (data (cdr pair))
@@ -38,8 +38,9 @@ tag contains its own ID, ensuring consistency for later processing."
              (plist-data (plist-put (supertag-schema--ensure-plist data) :id id)))
         (when id
           (puthash id plist-data tags-by-id)
-          (message "SCHEMA-DEBUG (1/4): Ingested tag '%s'." id))))
-    (message "SCHEMA-DEBUG (1/4): Finished. Prepared map with %d tags." (hash-table-count tags-by-id))
+          ;;(message "SCHEMA-DEBUG (1/4): Ingested tag '%s'." id)
+          )))
+    ;;(message "SCHEMA-DEBUG (1/4): Finished. Prepared map with %d tags." (hash-table-count tags-by-id))
     tags-by-id))
 
 (defun supertag-schema--calculate-hierarchy (tags-by-id)
@@ -47,20 +48,20 @@ tag contains its own ID, ensuring consistency for later processing."
 Returns a list containing two items: the children-by-id map and the list of root IDs."
   (let ((children-by-id (make-hash-table :test 'equal))
         (root-ids '()))
-    (message "SCHEMA-DEBUG (2/4): Calculating hierarchy for %d tags..." (hash-table-count tags-by-id))
+    ;;(message "SCHEMA-DEBUG (2/4): Calculating hierarchy for %d tags..." (hash-table-count tags-by-id))
     (maphash
      (lambda (id tag-plist)
        (let ((parent-id (plist-get tag-plist :extends)))
          (if (and parent-id (gethash parent-id tags-by-id))
              (progn
-               (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-id)
+               ;; (message "SCHEMA-DEBUG (2/4): Tag '%s' extends %s." id parent-id)
                (push id (gethash parent-id children-by-id)))
            (progn
-             (message "SCHEMA-DEBUG (2/4): Tag '%s' is a root." id)
+             ;;(message "SCHEMA-DEBUG (2/4): Tag '%s' is a root." id)
              (push id root-ids)))))
      tags-by-id)
     (let ((unique-roots (cl-delete-duplicates root-ids :test #'equal)))
-      (message "SCHEMA-DEBUG (2/4): Finished. Found %d root tags." (length unique-roots))
+      ;;(message "SCHEMA-DEBUG (2/4): Finished. Found %d root tags." (length unique-roots))
       (list children-by-id unique-roots))))
 
 (defun supertag-schema--build-tree-from-maps (tags-by-id children-by-id root-ids)
@@ -72,48 +73,49 @@ Returns a list containing two items: the children-by-id map and the list of root
                    ;; (message "SCHEMA-DEBUG (3/4): Building node for '%s', found %d children." id (length children))
                    (plist-put (cl-copy-list tag-plist) :children children))))
     (let ((sorted-roots (sort root-ids #'string<)))
-      (message "SCHEMA-DEBUG (3/4): Building tree from %d sorted root nodes..." (length sorted-roots))
+      ;;(message "SCHEMA-DEBUG (3/4): Building tree from %d sorted root nodes..." (length sorted-roots))
       (mapcar #'build-node sorted-roots))))
 
 (defun supertag-schema--build-tree ()
   "Build a hierarchical tree of all tags by composing smaller helper functions."
-  (message "SCHEMA-DEBUG: Starting to build schema tree...")
+  (message "Starting to build schema tree...")
   (let* ((tags-by-id (supertag-schema--get-all-tags-by-id))
          (hierarchy (supertag-schema--calculate-hierarchy tags-by-id))
          (children-by-id (car hierarchy))
          (root-ids (cadr hierarchy))
          (tree (supertag-schema--build-tree-from-maps tags-by-id children-by-id root-ids)))
-    (message "SCHEMA-DEBUG: Finished building schema tree. Result has %d root nodes." (length tree))
+    (message "Finished building schema tree. Result has %d root nodes." (length tree))
     tree))
 
 
 ;;; --- Interactive Helpers ---
 
 (defun supertag-schema--get-context-at-point ()
-  "Parse the buffer to find the tag or field at point from the simplified view."
-  (save-excursion
-    (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
-      (cond
-       ;; Check for field: "  - field-name ..."
-       ((string-match "^\\s-*- \\([[:graph:]]+\\)" line)
-        (let ((field-name (match-string 1 line))
-              (tag-id nil)
-              (original-indent (current-indentation)))
-          ;; Search backwards for the parent tag line, which must have less indentation
-          (save-excursion
-            (while (and (not tag-id) (> (line-beginning-position) (point-min)))
-              (previous-line 1)
-              (when (< (current-indentation) original-indent)
-                (let ((parent-line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
-                  (when (string-match "^\\s-*\\([[:graph:]]+\\)" parent-line)
-                    (setq tag-id (match-string 1 parent-line)))))))
-          (when tag-id
-            `(:type :field :field-name ,field-name :tag-id ,tag-id))))
-       ;; Check for tag: "tag-name ..."
-       ((string-match "^\\s-*\\([[:graph:]]+\\)" line)
-        (let ((tag-id (match-string 1 line)))
-          `(:type :tag :tag-id ,tag-id)))
-       (t nil)))))
+  "Get context directly from text properties. This is robust."
+  (or (get-text-property (point) 'supertag-context)
+      ;; Fallback for when cursor is at the very end of the line
+      (get-text-property (1- (point)) 'supertag-context)))
+
+(defun supertag-schema--rename-tag-at-point ()
+  "Interactively rename the tag at the current line. Internal helper."
+  (let* ((context (supertag-schema--get-context-at-point))
+         (old-name (plist-get context :tag-id))
+         (new-name (read-string (format "Rename tag '%s' to: " old-name) nil nil old-name)))
+    (if (and new-name (not (string-empty-p new-name)) (not (string= old-name new-name)))
+        (progn
+          (supertag-tag-rename old-name new-name)
+          (message "Tag '%s' renamed to '%s'. Refreshing view..." old-name new-name)
+          (supertag-schema-refresh))
+      (message "Tag rename cancelled."))))
+
+(defun supertag-schema--rename-at-point ()
+  "Rename the item (tag or field) at the current point."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (pcase (plist-get context :type)
+      (:tag (supertag-schema--rename-tag-at-point))
+      (:field (supertag-schema--rename-field-at-point))
+      (_ (message "Not on a valid tag or field line.")))))
 
 (defun supertag-schema--rename-field-at-point ()
   "Interactively rename the field at the current line."
@@ -131,6 +133,31 @@ Returns a list containing two items: the children-by-id map and the list of root
             (message "Field rename cancelled.")))
       (message "Not on a valid field line."))))
 
+(defun supertag-schema--edit-field-definition-at-point ()
+  "Interactively edit the definition (name, type, options) of the field at point."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (not (and context (eq (plist-get context :type) :field)))
+        (message "Not on a valid field line.")
+      (let* ((tag-id (plist-get context :tag-id))
+             (field-name (plist-get context :field-name))
+             (field-def (supertag-tag-get-field tag-id field-name))
+             (action (completing-read "Edit Field: " '("Name" "Type/Options") nil t nil nil "Name")))
+        (cond
+         ((string= action "Name")
+          (supertag-schema--rename-field-at-point))
+         ((string= action "Type/Options")
+          (let* ((current-type (plist-get field-def :type))
+                 (type-and-options (supertag-field-read-type-with-options current-type))
+                 (new-type (car type-and-options))
+                 (options (cdr type-and-options))
+                 (new-field-def (plist-put (list :name field-name) :type new-type)))
+            (when (eq new-type :options)
+              (setq new-field-def (plist-put new-field-def :options options)))
+            (supertag-tag-add-field tag-id new-field-def)
+            (message "Field '%s' updated. Refreshing..." field-name)
+            (supertag-schema-refresh))))))))
+
 ;;; --- Rendering ---
 
 (defun supertag-schema--render ()
@@ -144,10 +171,10 @@ Returns a list containing two items: the children-by-id map and the list of root
       (dolist (root-tag tag-tree)
         (supertag-schema--render-tag-node root-tag))
       (supertag-view-helper-insert-simple-footer
-       "Tag: [a] Add Field | [e] Set Parent | [d] Delete"
-       "Field: [r] Rename | [d] Delete | [M-↑/↓] Move"
+       "Add:   [a f] Field | [a t] Child Tag | [a r] Root Tag"
+       "Item:  [r] Rename | [d] Delete | [e] Set Parent | [C-e] Edit Field | [M-↑/↓] Move Field"
        "Batch: [m] Mark | [u] Unmark | [U] Clear Marks | [D] Delete Marked | [E] Extend Marked"
-       "Global: [A] Add Tag | [g] Refresh | [q] Quit")
+       "Global: [g] Refresh | [q] Quit")
       (goto-char (point-min)))))
 
 (defun supertag-schema--render-tag-node (tag-node &optional level)
@@ -160,15 +187,22 @@ Returns a list containing two items: the children-by-id map and the list of root
          (parent-id (plist-get tag-node :extends))
          (children (plist-get tag-node :children)))
     ;; Render the tag itself
-    (insert (format "%s%s" indent tag-id))
-    (when parent-id
-      (insert (propertize (format " -> %s" parent-id) 'face 'font-lock-comment-face)))
-    (insert "\n")
+    (let ((start (point)))
+      (insert (format "%s%s" indent tag-id))
+      (when parent-id
+        (insert (propertize (format " -> %s" parent-id) 'face 'font-lock-comment-face)))
+      (insert "\n")
+      (add-text-properties start (1- (point))
+                           `(supertag-context (:type :tag :tag-id ,tag-id))))
 
     ;; Render fields if any
     (when fields
-      (dolist (field fields)
-        (insert (format "%s  %s\n" indent (supertag-schema--format-field field)))))
+      (dolist (field-def fields)
+        (let ((start (point))
+              (field-name (plist-get field-def :name)))
+          (insert (format "%s  %s\n" indent (supertag-schema--format-field field-def)))
+          (add-text-properties start (1- (point))
+                               `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name))))))
 
     ;; Render children recursively
     (dolist (child children)
@@ -190,6 +224,12 @@ Returns a list containing two items: the children-by-id map and the list of root
   "A major mode for viewing the Org-Supertag schema."
   (setq-local buffer-read-only t)
   (let ((map (make-sparse-keymap)))
+    ;; Create a prefix map for 'add' commands
+    (let ((add-map (make-sparse-keymap "Add...")))
+      (define-key add-map "f" #'supertag-schema--add-field-at-point)
+      (define-key add-map "t" #'supertag-schema--add-child-tag-at-point)
+      (define-key add-map "r" #'supertag-schema--add-new-tag)
+      (define-key map "a" add-map))
     ;; Marking
     (define-key map "m" #'supertag-schema--mark-item)
     (define-key map "u" #'supertag-schema--unmark-item)
@@ -198,11 +238,10 @@ Returns a list containing two items: the children-by-id map and the list of root
     (define-key map "D" #'supertag-schema--batch-delete-marked-items)
     (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
     ;; Single-item Actions
-    (define-key map "r" #'supertag-schema--rename-field-at-point)
+    (define-key map "r" #'supertag-schema--rename-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
-    (define-key map "a" #'supertag-schema--add-field-at-point) ; 'a' for add field
-    (define-key map "A" #'supertag-schema--add-new-tag)      ; 'A' for add tag
     (define-key map "e" #'supertag-view-schema-set-extends)
+    (define-key map (kbd "C-e") #'supertag-schema--edit-field-definition-at-point) ; C-e to edit field
     (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
     (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
     (define-key map "g" #'supertag-schema-refresh)
@@ -269,6 +308,21 @@ Returns a list containing two items: the children-by-id map and the list of root
           (message "Set '%s' to extend '%s'. Refreshing..." child-id parent-id)
           (supertag-schema-refresh)))))))
 
+(defun supertag-schema--add-child-tag-at-point ()
+  "Interactively create a new tag that extends the tag at point."
+  (interactive)
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (not (and context (eq (plist-get context :type) :tag)))
+        (message "Not on a valid tag line to add a child to.")
+      (let* ((parent-id (plist-get context :tag-id))
+             (child-name (read-string (format "New child tag name for '%s': " parent-id))))
+        (if (and child-name (not (string-empty-p child-name)))
+            (progn
+              (supertag-tag-create `(:name ,child-name :extends ,parent-id))
+              (message "Child tag '%s' created under '%s'. Refreshing..." child-name parent-id)
+              (supertag-schema-refresh))
+          (message "Tag creation cancelled."))))))
+
 (defun supertag-schema--add-field-at-point ()
   "Interactively add a new field to the tag at the current line."
   (interactive)
@@ -313,9 +367,10 @@ Dispatches to the correct deletion logic based on context."
     (if (and context (eq (plist-get context :type) :field))
         (let ((tag-id (plist-get context :tag-id))
               (field-name (plist-get context :field-name)))
-          (supertag-tag-move-field-up tag-id field-name)
-          (message "Moved field '%s' up. Refreshing..." field-name)
-          (supertag-schema-refresh))
+          (when (supertag-tag-move-field-up tag-id field-name)
+            (supertag-schema-refresh)
+            (when (supertag-schema--goto-context context)
+              (message "Field '%s' moved up." field-name))))
       (message "Not on a valid field line."))))
 
 (defun supertag-schema--move-field-down ()
@@ -325,9 +380,10 @@ Dispatches to the correct deletion logic based on context."
     (if (and context (eq (plist-get context :type) :field))
         (let ((tag-id (plist-get context :tag-id))
               (field-name (plist-get context :field-name)))
-          (supertag-tag-move-field-down tag-id field-name)
-          (message "Moved field '%s' down. Refreshing..." field-name)
-          (supertag-schema-refresh))
+          (when (supertag-tag-move-field-down tag-id field-name)
+            (supertag-schema-refresh)
+            (when (supertag-schema--goto-context context)
+              (message "Field '%s' moved down." field-name))))
       (message "Not on a valid field line."))))
 
 (defun supertag-schema-refresh ()

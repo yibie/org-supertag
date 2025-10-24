@@ -103,10 +103,12 @@ Supported values:
 Supported values:
 - 'read-only   => Read and import to DB, do not modify files (default).
 - 'lazy-convert => When touching a headline, convert :tag: to inline #tags.
-- 'preserve    => Always preserve :tag: in files."
+- 'preserve    => Always preserve :tag: in files.
+- 'ignore      => Do not read or import :tag: into the database."
   :type '(choice (const :tag "Read only" read-only)
                  (const :tag "Lazy convert on edit" lazy-convert)
-                 (const :tag "Preserve in files" preserve))
+                 (const :tag "Preserve in files" preserve)
+                 (const :tag "Ignore" ignore))
   :group 'supertag-sync)
 
 ;;; Variables
@@ -122,6 +124,10 @@ Key: file path (absolute)
 Value: timestamp of last internal modification.
 This is used to distinguish internal modifications (by automation/UI) from
 external modifications (by user/other tools), preventing unnecessary re-sync.")
+
+(defvar supertag-sync--is-full-rescan-p nil
+  "Dynamically bound to t during a full rescan.
+This allows special behavior, like one-time import of legacy tags.")
 
 ;;; Helper functions for accessing sync state data
 
@@ -193,9 +199,28 @@ If no directories are configured, returns t for all org files."
                                     (string-prefix-p expanded-dir file-dir)))
                                 org-supertag-sync-directories)
                       t)))
-      (and included
-           (not excluded)
-           (string-match-p supertag-sync-file-pattern file)))))
+      (let ((result (and included
+                         (not excluded)
+                         (string-match-p supertag-sync-file-pattern file))))
+        ;; Enhanced debug logging for troubleshooting
+        (when (not result)
+          (message "DEBUG-SCOPE: File %s REJECTED - exists: %s, included: %s, excluded: %s, pattern-match: %s"
+                   file
+                   (file-exists-p file)
+                   included
+                   excluded
+                   (string-match-p supertag-sync-file-pattern file))
+          (message "DEBUG-SCOPE: expanded-file: %s" expanded-file)
+          (message "DEBUG-SCOPE: file-dir: %s" file-dir)
+          (message "DEBUG-SCOPE: sync-directories: %S" org-supertag-sync-directories)
+          (when org-supertag-sync-directories
+            (dolist (dir org-supertag-sync-directories)
+              (let ((expanded-dir (expand-file-name dir)))
+                (message "DEBUG-SCOPE: Checking dir %s (expanded: %s) - prefix match: %s"
+                         dir
+                         expanded-dir
+                         (string-prefix-p expanded-dir file-dir))))))
+        result))))
 
 (defun supertag-scan-sync-directories (&optional all-files-p)
   "Scan sync directories for org files.
@@ -203,16 +228,18 @@ If ALL-FILES-P is non-nil, return all files in scope.
 Otherwise, returns a list of new files that are not yet in sync state."
   (let ((files nil)
         (state-table (supertag-sync--get-state-table)))
-    (dolist (dir org-supertag-sync-directories)
-      (when (file-exists-p dir)
-        (let ((dir-files (directory-files-recursively
-                         dir supertag-sync-file-pattern t)))
-          (dolist (file dir-files)
-            (when (and (file-regular-p file)
-                       (supertag-sync--in-sync-scope-p file)
-                       (or all-files-p
-                           (not (gethash file state-table))))
-              (push file files))))))
+    (if (not org-supertag-sync-directories)
+        (message "WARNING: org-supertag-sync-directories is not configured. No files will be synced.")
+      (dolist (dir org-supertag-sync-directories)
+        (when (file-exists-p dir)
+          (let ((dir-files (directory-files-recursively
+                           dir supertag-sync-file-pattern t)))
+            (dolist (file dir-files)
+              (when (and (file-regular-p file)
+                         (supertag-sync--in-sync-scope-p file)
+                         (or all-files-p
+                             (not (gethash file state-table))))
+                (push file files)))))))
     files))
 
 (defun supertag-sync-update-state (file)
@@ -314,31 +341,46 @@ Respects `supertag-tag-style` configuration for tag formatting."
   "Load sync state from file.
 If file doesn't exist, initialize empty state.
 Returns the loaded or initialized sync state."
-  (let ((result
-         (if (file-exists-p supertag-sync-state-file)
-             (with-temp-buffer
-               (message "Loading sync state from file: %s" supertag-sync-state-file)
-               (insert-file-contents supertag-sync-state-file)
-               (setq supertag-sync--state
-                     (read (current-buffer)))
-               (message "Loaded sync state with %d entries" 
-                        (if (hash-table-p supertag-sync--state)
-                            (hash-table-count supertag-sync--state)
-                          0))
-               ;; Ensure the loaded state is in the correct format
-               (supertag-sync--ensure-state-format)
-               ;; Return the loaded state
-               supertag-sync--state)
-           ;; Initialize empty state if file doesn't exist
-           (progn
-             (message "Sync state file does not exist, initializing empty state")
-             (setq supertag-sync--state (make-hash-table :test 'equal))
-             ;; Save the initial state
-             (supertag-sync-save-state)
-             ;; Return the initialized state
-             supertag-sync--state))))
-    ;; Return the result
-    result))
+  (condition-case err
+      (let ((result
+             (if (file-exists-p supertag-sync-state-file)
+                 (with-temp-buffer
+                   (message "Loading sync state from file: %s" supertag-sync-state-file)
+                   (insert-file-contents supertag-sync-state-file)
+                   (goto-char (point-min))
+                   ;; Check if file is empty
+                   (if (= (point-min) (point-max))
+                       (progn
+                         (message "Warning: Sync state file is empty, initializing new state")
+                         (setq supertag-sync--state (make-hash-table :test 'equal)))
+                     (condition-case read-err
+                         (progn
+                           (setq supertag-sync--state (read (current-buffer)))
+                           (message "Loaded sync state with %d entries"
+                                    (if (hash-table-p supertag-sync--state)
+                                        (hash-table-count supertag-sync--state)
+                                      0))
+                           ;; Ensure the loaded state is in the correct format
+                           (supertag-sync--ensure-state-format)
+                           supertag-sync--state)
+                       (error
+                        (message "Error reading sync state: %s" (error-message-string read-err))
+                        (message "Initializing new sync state")
+                        (setq supertag-sync--state (make-hash-table :test 'equal))
+                        supertag-sync--state))))
+               ;; Initialize empty state if file doesn't exist
+               (progn
+                 (message "Sync state file does not exist, initializing empty state")
+                 (setq supertag-sync--state (make-hash-table :test 'equal))
+                 ;; Save the initial state
+                 (supertag-sync-save-state)
+                 supertag-sync--state))))
+        result)
+    (error
+     (message "Critical error loading sync state: %s" (error-message-string err))
+     (message "Initializing fresh sync state")
+     (setq supertag-sync--state (make-hash-table :test 'equal))
+     supertag-sync--state)))
 
 ;; --- Check and sync ---
 
@@ -557,15 +599,74 @@ This function checks if nodes associated with FILE still exist in the file.
 If a node exists in the database but not in the file, it's marked as orphaned.
 FILE is the file path to verify.
 COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
-  ;;(message "DEBUG: Verifying nodes for file: %s" file)
-  (let* ((current-nodes-in-file (make-hash-table :test 'equal))
-         (nodes-from-file (when (file-exists-p file)
-                           (supertag--parse-org-nodes file)))
+  (message "DEBUG-VERIFY-ENTRY: Called with file: %s" file)
+  (message "DEBUG-VERIFY-ENTRY: file type: %s, length: %d" (type-of file) (length file))
+  (let* ((file-exists-result (file-exists-p file))
+         (file-exists file-exists-result)
+         (current-nodes-in-file (make-hash-table :test 'equal))
+         (nodes-from-file (when file-exists
+                            (supertag--parse-org-nodes file)))
          (existing-nodes-in-store (supertag-find-nodes-by-file file)))
+    (message "DEBUG-VERIFY-ENTRY: file-exists-p returned: %S (type: %s)"
+             file-exists-result (type-of file-exists-result))
+    (message "DEBUG-VERIFY-ENTRY: existing-nodes-in-store count: %d" (length existing-nodes-in-store))
 
-    ;; If file doesn't exist, mark all its nodes as orphaned
-    (unless (file-exists-p file)
-      (message "DEBUG: File %s no longer exists, marking all its nodes as orphaned" file)
+    ;; ENHANCED DEBUG: Log file existence check with more details
+    (unless file-exists
+      (message "DEBUG-VERIFY: file-exists-p returned nil for: %s" file)
+      (message "DEBUG-VERIFY: file type: %s" (type-of file))
+      (message "DEBUG-VERIFY: file length: %d" (length file))
+      (message "DEBUG-VERIFY: file string: %S" file)
+      (message "DEBUG-VERIFY: expanded path: %s" (expand-file-name file))
+      (message "DEBUG-VERIFY: expanded exists: %s" (file-exists-p (expand-file-name file)))
+      (message "DEBUG-VERIFY: file-readable-p: %s" (file-readable-p file))
+      (message "DEBUG-VERIFY: file-directory-p: %s" (file-directory-p file))
+      (message "DEBUG-VERIFY: file-regular-p: %s" (file-regular-p file))
+      ;; Check if there are any invisible characters
+      (let ((has-invisible nil))
+        (dotimes (i (length file))
+          (let ((char (aref file i)))
+            (when (or (< char 32) (> char 126))
+              (setq has-invisible t)
+              (message "DEBUG-VERIFY: Found non-printable char at pos %d: %d (0x%x)" i char char))))
+        (unless has-invisible
+          (message "DEBUG-VERIFY: No non-printable characters found")))
+      ;; Try to list parent directory
+      (let ((parent-dir (file-name-directory file)))
+        (message "DEBUG-VERIFY: parent directory: %s" parent-dir)
+        (message "DEBUG-VERIFY: parent exists: %s" (file-directory-p parent-dir))
+        (when (file-directory-p parent-dir)
+          (let ((files-in-parent (directory-files parent-dir nil (file-name-nondirectory file))))
+            (message "DEBUG-VERIFY: matching files in parent: %S" files-in-parent)))))
+
+    (message "DEBUG-VERIFY-BRANCH: About to check if file-exists, value: %S" file-exists)
+    (if file-exists
+        (progn
+          (message "DEBUG-VERIFY-BRANCH: Entered TRUE branch (file exists)")
+          ;; Populate current-nodes-in-file hash table for quick lookup
+          (dolist (node-props nodes-from-file)
+            (puthash (plist-get node-props :id) node-props current-nodes-in-file))
+
+          ;; Process existing nodes in store for this file
+          (dolist (existing-node-pair existing-nodes-in-store)
+            (let* ((id (car existing-node-pair))
+                   (old-node-props (cdr existing-node-pair))
+                   (new-node-props (gethash id current-nodes-in-file)))
+              ;; If node exists in store but not in file, mark it as orphaned
+              (when (null new-node-props)
+                (let ((db-node (supertag-node-get id)))
+                  (when (and db-node
+                             (let ((db-node-file (plist-get db-node :file)))
+                               (and db-node-file
+                                    (string= db-node-file file))))
+                    (supertag-node-mark-deleted-from-file id)
+                    (setf (plist-get counters :nodes-deleted)
+                          (1+ (plist-get counters :nodes-deleted))))))))
+          (message "DEBUG-VERIFY-BRANCH: Finished TRUE branch processing"))
+      ;; File doesn't exist: mark all its nodes as orphaned
+      (message "DEBUG-VERIFY-BRANCH: Entered FALSE branch (file doesn't exist)")
+      (message "DEBUG: File %s no longer exists, marking all its nodes as orphaned"
+               file)
       (dolist (existing-node-pair existing-nodes-in-store)
         (let* ((id (car existing-node-pair))
                (db-node (supertag-node-get id)))
@@ -573,38 +674,31 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                      (let ((db-node-file (plist-get db-node :file)))
                        (and db-node-file
                             (string= db-node-file file))))
-            ;;(message "DEBUG: Marking node %s as orphaned because file %s no longer exists" id file)
             (supertag-node-mark-deleted-from-file id)
-            (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))
-      (return-from supertag-sync--verify-file-nodes))
-
-    ;; Populate current-nodes-in-file hash table for quick lookup
-    (dolist (node-props nodes-from-file)
-      (puthash (plist-get node-props :id) node-props current-nodes-in-file))
-
-    ;; Process existing nodes in store for this file
-    (dolist (existing-node-pair existing-nodes-in-store)
-      (let* ((id (car existing-node-pair))
-             (old-node-props (cdr existing-node-pair))
-             (new-node-props (gethash id current-nodes-in-file)))
-        ;; If node exists in store but not in file, mark it as orphaned
-        (when (null new-node-props)
-          (let ((db-node (supertag-node-get id)))
-            ;;(message "DEBUG: supertag-sync--verify-file-nodes: Node %s exists in DB but not in file %s. DB node file: %S" id file (plist-get db-node :file))
-            (when (and db-node
-                       (let ((db-node-file (plist-get db-node :file)))
-                         (and db-node-file
-                              (string= db-node-file file))))
-              ;;(message "DEBUG: Node %s deleted from file %s. Marking as orphaned." id file)
-              (supertag-node-mark-deleted-from-file id)
-              (setf (plist-get counters :nodes-deleted)
-		    (1+ (plist-get counters :nodes-deleted))))))))))
+            (setf (plist-get counters :nodes-deleted)
+                  (1+ (plist-get counters :nodes-deleted)))))))))
 
 
 (defun supertag-sync--check-and-sync ()
   "Check and synchronize modified files.
   This is the main sync function called periodically."
   ;;(message "DEBUG: supertag-sync--check-and-sync function called at %s" (current-time))
+  
+  ;; Pre-check: Warn if sync directories are not configured
+  (unless org-supertag-sync-directories
+    (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
+    (cl-return-from supertag-sync--check-and-sync nil))
+  
+  ;; CRITICAL FIX: Check if database is empty but sync-state has files
+  ;; This indicates data loss - warn user and suggest recovery
+  (let* ((nodes-table (supertag-store-get-collection :nodes))
+         (db-empty (= (hash-table-count nodes-table) 0))
+         (state-table (supertag-sync--get-state-table))
+         (state-count (hash-table-count state-table)))
+    (when (and db-empty (> state-count 0))
+      (message "WARNING: Database is empty but %d files are tracked in sync-state." state-count)
+      (message "This suggests data was lost. Please run: M-x supertag-sync-full-rescan")))
+  
   (supertag-with-transaction
     (let ((files-to-remove nil)
           (state-changed nil)
@@ -617,23 +711,40 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       ;; (message "DEBUG: Modified files found: %S" modified-files)
       ;; (message "DEBUG: Sync state hash table size: %d" (hash-table-count supertag-sync--state))
       ;; 1. Cleanup Sync State - Remove files that are no longer in scope
-      (let ((state-table (supertag-sync--get-state-table)))
-        (maphash (lambda (file _state)
-                   (when (or (not (file-exists-p file))
-                             (not (supertag-sync--in-sync-scope-p file)))
-                     (push file files-to-remove)))
-                 state-table))
+      ;; CRITICAL FIX: Only clean up files if sync directories are configured
+      ;; If not configured, skip cleanup to prevent accidental data loss
+      (when org-supertag-sync-directories
+        (let ((state-table (supertag-sync--get-state-table)))
+          (maphash (lambda (file _state)
+                     (let ((file-exists (file-exists-p file))
+                           (in-scope (supertag-sync--in-sync-scope-p file)))
+                       (message "DEBUG-CLEANUP: Checking file: %s, exists: %s, in-scope: %s" file file-exists in-scope)
+                       (when (or (not file-exists)
+                                 (not in-scope))
+                         (message "DEBUG-CLEANUP: Marking file for removal: %s (exists: %s, in-scope: %s)" file file-exists in-scope)
+                         (push file files-to-remove))))
+                   state-table)))
 
       (when files-to-remove
         (setq state-changed t)
         (let ((state-table (supertag-sync--get-state-table)))
           (dolist (file files-to-remove)
-            (message "Removing file from sync state (file %s or out of scope): %s"
-                     (if (file-exists-p file) "exists but out of scope" "doesn't exist")
-                     file)
-            (remhash file state-table)
-            ;; Also clean up any nodes associated with these files
-            (supertag-sync--verify-file-nodes file counters))))
+            (let ((file-exists-before (file-exists-p file)))
+              (message "DEBUG-REMOVE: Removing file from sync state: %s" file)
+              (message "DEBUG-REMOVE: file-exists-p BEFORE remhash: %s" file-exists-before)
+              (message "DEBUG-REMOVE: Reason: %s"
+                       (cond
+                        ((not file-exists-before) "file doesn't exist")
+                        ((not (supertag-sync--in-sync-scope-p file)) "file out of scope")
+                        (t "unknown")))
+              (remhash file state-table)
+              (message "DEBUG-REMOVE: file-exists-p AFTER remhash: %s" (file-exists-p file))
+              ;; If file is out of scope but still exists, we just untrack it.
+              ;; We DO NOT delete its nodes. They become "unmanaged".
+              ;; If the file truly doesn't exist, then we can clean up its nodes.
+              (unless (file-exists-p file)
+                (message "File %s does not exist. Cleaning up its nodes." file)
+                (supertag-sync--verify-file-nodes file counters))))))
 
       ;; 2. Scan for New Files
       (let ((new-files (supertag-scan-sync-directories)))
@@ -675,15 +786,23 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       ;; This is the robust check inspired by the old system.
       (supertag-sync-validate-nodes counters)
 
-      ;; Report results ; Remove debug message
+      ;; Report results with enhanced diagnostics
       (let ((refs-created (or (plist-get counters :references-created) 0))
-            (refs-deleted (or (plist-get counters :references-deleted) 0)))
+            (refs-deleted (or (plist-get counters :references-deleted) 0))
+            (total-changes (+ (plist-get counters :nodes-created)
+                             (plist-get counters :nodes-updated)
+                             (plist-get counters :nodes-deleted))))
         (message "File Sync Completed: %d nodes created, %d updated, %d deleted, %d refs created, %d refs deleted."
                  (plist-get counters :nodes-created)
                  (plist-get counters :nodes-updated)
                  (plist-get counters :nodes-deleted)
                  refs-created
-                 refs-deleted)))
+                 refs-deleted)
+        
+        ;; Provide diagnostic hints if no changes were detected
+        (when (and (= total-changes 0)
+                   (not modified-files))
+          (supertag--diagnose-empty-sync))))
 
     ;; Run garbage collection outside of transaction to ensure immediate persistence
     (supertag-sync-garbage-collect-orphaned-nodes)))
@@ -794,10 +913,11 @@ COUNTERS is a plist for tracking changes."
   (message "DEBUG: Starting deep validation of all nodes against files...")
   (supertag-traverse-nodes
    (lambda (id node)
-     (let ((file (plist-get node :file)))
-       ;; Only check nodes that are supposed to be in a file.
+     (let ((file (plist-get node :file))
+           (type (plist-get node :type)))
+       ;; Only check nodes that are supposed to be in a file, and are of type :node.
        ;; If :file is already nil, it's already an orphan.
-       (when file
+       (when (and file (eq type :node))
          (unless (supertag-sync--id-exists-in-file-p id file)
            (message "DEBUG: Validation found zombie node! ID: %s, File: %s" id file)
            (supertag-node-mark-deleted-from-file id)
@@ -1048,10 +1168,11 @@ Returns a string containing only the node's own content."
         ;; Extract content from contents-begin to the adjusted content-end
         (buffer-substring-no-properties contents-begin content-end)))))
 
-  (defun supertag--convert-element-to-node-plist (headline file)
+  (defun supertag--convert-element-to-node-plist (headline file &optional migration-mode)
   "Convert a headline ELEMENT from org-element into a node plist.
 This is the core reusable parser for a single headline.
-NOTE: This function only parses data, it does NOT create tag entities or relations."
+NOTE: This function only parses data, it does NOT create tag entities or relations.
+MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generation)."
   (let* ((id (org-element-property :ID headline))
          (contents-begin (org-element-property :contents-begin headline))
          (contents-end (org-element-property :contents-end headline))
@@ -1070,7 +1191,9 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
                         title-after-cleaning))
          (headline-tags (supertag--extract-inline-tags original-raw-title))
          (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
-         (org-native-tags (or (supertag--extract-org-headline-tags headline) '()))
+         (org-native-tags (if supertag-sync--is-full-rescan-p
+                              (or (supertag--extract-org-headline-tags headline) '())
+                            '()))
          (all-tags (supertag--merge-and-sanitize-tags
                    (cl-union headline-tags content-tags :test #'equal)
                      org-native-tags))
@@ -1078,14 +1201,18 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
          (refs-to (supertag--extract-refs
                    (when contents-begin
                      (org-element-contents headline)))))
-    ;; Generate ID only if auto-create is enabled and no ID exists
-    (let ((final-id (or id
-                        (when supertag-sync-auto-create-node
-                          (org-id-new)))))
-      ;; Only create node if we have a valid ID (either existing or auto-generated)
+    ;; Handle ID generation based on mode
+    (let ((final-id (if migration-mode
+                        ;; Migration mode: only use existing IDs
+                        id
+                      ;; Normal mode: generate ID if auto-create is enabled
+                      (or id (when supertag-sync-auto-create-node
+                               (org-id-new))))))
+      ;; Only create node if we have a valid ID
       (when final-id
-        ;; NOTE: 标签创建和关系建立移到了 supertag--process-node-tags 函数中
-        ;; 这样只有在节点真正需要创建或更新时才会执行标签操作
+        ;; NOTE: Tag creation and relationship establishment have been moved to the
+        ;; supertag--process-node-tags function, so these actions are only performed
+        ;; when a node actually needs to be created or updated.
 
         (list :id final-id
              :title (or final-title "Untitled Node")
@@ -1111,20 +1238,22 @@ NOTE: This function only parses data, it does NOT create tag entities or relatio
            :position (org-element-property :begin headline)
            :pos (org-element-property :begin headline))))))
 
-(defun supertag--map-headlines (parsed-ast file)
-  "Map over headlines in PARSED-AST and parse them into nodes."
+(defun supertag--map-headlines (parsed-ast file &optional migration-mode)
+  "Map over headlines in PARSED-AST and parse them into nodes.
+MIGRATION-MODE when t, only processes nodes with existing IDs."
   (let (nodes)
     (org-element-map parsed-ast 'headline
       (lambda (headline)
-        (let ((node (supertag--convert-element-to-node-plist headline file)))
+        (let ((node (supertag--convert-element-to-node-plist headline file migration-mode)))
           (when node (push node nodes)))))
     (nreverse nodes)))
 
 ;;;###autoload
-(defun supertag--parse-org-nodes (file)
+(defun supertag--parse-org-nodes (file &optional migration-mode)
   "Parse the org file and return a list of nodes. Entry point.
 This function IGNORES content inside #+begin_embed blocks.
-Uses a temporary buffer with minimal side effects to avoid interfering with other packages."
+Uses a temporary buffer with minimal side effects to avoid interfering with other packages.
+MIGRATION-MODE when t, only processes nodes with existing IDs."
   (unless (file-exists-p file)
     (error "File does not exist: %s" file))
   (with-temp-buffer
@@ -1145,7 +1274,7 @@ Uses a temporary buffer with minimal side effects to avoid interfering with othe
       (goto-char (point-min))
       ;; Parse without triggering org-mode initialization
       (let ((parsed-ast (org-element-parse-buffer)))
-        (supertag--map-headlines parsed-ast file)))))
+        (supertag--map-headlines parsed-ast file migration-mode)))))
 
 ;;;------------------------------------------------------------------
 ;;; Supertag Sync Auto Star or Stop
@@ -1213,7 +1342,8 @@ describing the work that was performed."
                  files))
          (processed 0)
          (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
-                     :references-created 0 :references-deleted 0)))
+                     :references-created 0 :references-deleted 0))
+         (supertag-sync--is-full-rescan-p t))
     (supertag-with-transaction
       (dolist (file files)
         (condition-case err
@@ -1345,5 +1475,143 @@ Parses the current state of the headline and updates the store."
     (let ((props (supertag--parse-node-at-point)))
       (when props
         (supertag-node-create props)))))
+
+;;;###autoload
+(defun supertag-migrate-org-files-to-database (path &optional counters allow-no-id)
+  "One-time migration function to import nodes and tags from Org files 
+into the database.
+PATH can be a file or a directory path. If it is a directory, all .org files 
+will be processed recursively.
+
+COUNTERS is an optional plist for tracking migration statistics.
+ALLOW-NO-ID when t, also processes nodes without existing IDs (generates temporary IDs).
+Returns a plist containing summary information.
+
+This is a one-time operation for initializing user data when first using org-supertag.
+It will create entities of type :node and :tag, and establish relations between them."
+  (let* ((counters (or counters (list :files-processed 0
+                                     :nodes-created 0
+                                     :tags-created 0
+                                     :relations-created 0
+                                     :errors 0)))
+         (org-files (if (file-directory-p path)
+                        (supertag--find-org-files path)
+                      (list path)))
+         (all-nodes '())
+         (all-tags '()))
+    
+    (message "Migrating org files to database...")
+    (message "Found %d org files" (length org-files))
+    
+    ;; First phase: Parse all files, collect nodes and tags
+    (dolist (file org-files)
+      (condition-case err
+          (progn
+            (message "Parsing file: %s" file)
+            (let ((nodes (supertag--parse-org-nodes file (not allow-no-id)))) ; migration-mode = not allow-no-id
+              ;; When allow-no-id is nil: only nodes with existing IDs are returned
+              ;; When allow-no-id is t: all nodes are returned (including auto-generated IDs)
+              (setq all-nodes (append all-nodes nodes))
+              ;; Collect tags from valid nodes
+              (dolist (node nodes)
+                (let ((node-tags (plist-get node :tags)))
+                  (when node-tags
+                    (setq all-tags (append all-tags node-tags))))))
+            (setf (plist-get counters :files-processed)
+                  (1+ (plist-get counters :files-processed)))))
+        (error
+         (message "Failed to parse file %s: %s" file (error-message-string err))
+         (setf (plist-get counters :errors)
+               (1+ (plist-get counters :errors))))))
+    
+    ;; Remove duplicate tags
+    (setq all-tags (cl-delete-duplicates all-tags :test #'equal))
+    
+    (message "Parsing completed: %d nodes, %d unique tags" 
+             (length all-nodes) (length all-tags))
+    
+    ;; Second phase: Create tag entities
+    (message "Creating tag entities...")
+    (let ((tag-ids (supertag--create-tag-entities all-tags)))
+      (setf (plist-get counters :tags-created) (length tag-ids)))
+    
+    ;; Third phase: Create node entities and relations
+    (message "Creating node entities and relations...")
+    (dolist (node all-nodes)
+      (condition-case err
+          (progn
+            ;; Create node
+            (supertag-node-create node)
+            (setf (plist-get counters :nodes-created)
+                  (1+ (plist-get counters :nodes-created)))
+            
+            ;; Create node-tag relations
+            (let ((node-id (plist-get node :id))
+                  (node-tags (plist-get node :tags)))
+              (when (and node-id node-tags)
+                (let ((tag-ids (mapcar #'supertag-sanitize-tag-name node-tags)))
+                  (supertag--create-node-tag-relations node-id tag-ids)
+                  (setf (plist-get counters :relations-created)
+                        (+ (plist-get counters :relations-created)
+                           (length tag-ids)))))))
+        (error
+         (message "Failed to create node %s: %s" (plist-get node :id) (error-message-string err))
+         (setf (plist-get counters :errors)
+               (1+ (plist-get counters :errors))))))
+    
+    ;; Return statistics
+    (message "Migration completed!")
+    (message "Statistics: files=%d, nodes=%d, tags=%d, relations=%d, errors=%d"
+             (plist-get counters :files-processed)
+             (plist-get counters :nodes-created)
+             (plist-get counters :tags-created)
+             (plist-get counters :relations-created)
+             (plist-get counters :errors))
+    
+    counters)
+
+(defun supertag--find-org-files (directory)
+  "Recursively find all .org files in DIRECTORY.
+DIRECTORY is the directory path to search.
+Returns a list of .org file paths."
+  (let ((org-files '()))
+    (dolist (file (directory-files-recursively directory "\\.org$"))
+      (when (file-readable-p file)
+        (push file org-files)))
+    (nreverse org-files)))
+    
+(defun supertag--diagnose-empty-sync ()
+  "Diagnose why sync found no files to process.
+Provides helpful hints to the user about configuration issues."
+  (let ((sync-dirs org-supertag-sync-directories)
+        (state-table (supertag-sync--get-state-table))
+        (state-count (if (hash-table-p (supertag-sync--get-state-table))
+                         (hash-table-count (supertag-sync--get-state-table))
+                       0)))
+    
+    (cond
+     ;; Case 1: No sync directories configured
+     ((null sync-dirs)
+      (message "DIAGNOSTIC: No sync directories configured. Set org-supertag-sync-directories."))
+     
+     ;; Case 2: Sync directories don't exist
+     ((not (cl-some #'file-directory-p sync-dirs))
+      (message "DIAGNOSTIC: None of the configured sync directories exist:")
+      (dolist (dir sync-dirs)
+        (message "  - %s [%s]" dir (if (file-exists-p dir) "exists but not a directory" "does not exist"))))
+     
+     ;; Case 3: Directories exist but contain no matching files
+     ((= state-count 0)
+      (message "DIAGNOSTIC: Sync directories exist but no .org files found or tracked:")
+      (dolist (dir sync-dirs)
+        (when (file-directory-p dir)
+          (let ((org-files (directory-files-recursively dir "\\.org$" nil)))
+            (message "  - %s: %d .org files found" dir (length org-files))
+            (when (= (length org-files) 0)
+              (message "    Hint: Check if directory contains .org files"))))))
+     
+     ;; Case 4: Files tracked but all up-to-date
+     (t
+      (message "DIAGNOSTIC: %d files tracked, all up-to-date. This is normal." state-count)))))
 
 (provide 'supertag-services-sync)

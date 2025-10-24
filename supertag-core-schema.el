@@ -46,16 +46,17 @@
 ;;; --- Field Types ---
 
 (defconst supertag-field-types
-  '(:string   ; String type
-    :number   ; Numeric type
-    :integer  ; Integer type
-    :boolean  ; Boolean type
-    :date     ; Date type
+  '(:string    ; String type
+    :number    ; Numeric type
+    :integer   ; Integer type
+    :boolean   ; Boolean type
+    :date      ; Date type
     :timestamp ; Timestamp type
-    :options  ; Options type
-    :url      ; URL type
-    :email    ; Email type
-    :tag)     ; Tag reference type
+    :options   ; Options type
+    :url       ; URL type
+    :email     ; Email type
+    :tag       ; Tag reference type
+    :node-reference) ; Node reference type
   "List of supported field types.")
 
 ;;; --- Relation Types ---

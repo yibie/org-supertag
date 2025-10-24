@@ -202,13 +202,21 @@ FILE is the optional file path. Defaults to supertag-db-file."
                 (let* ((nodes-table (supertag-store-get-collection :nodes))
                        (keys-to-remove '())
                        (purged-count 0)
-                       (migrated-count 0))
+                       (migrated-count 0)
+                       (initial-count (hash-table-count nodes-table)))
+                  (message "DEBUG-PURGE: Initial node count before purge: %d" initial-count)
                   (maphash
                    (lambda (key value)
-                     (unless (and value (plist-get value :type))
-                       (push key keys-to-remove)))
+                     (let ((has-value (not (null value)))
+                           (has-type (and value (plist-get value :type))))
+                       (unless (and value (plist-get value :type))
+                         (message "DEBUG-PURGE: Removing node %s - has-value: %s, has-type: %s, value: %S"
+                                  key has-value has-type value)
+                         (push key keys-to-remove))))
                    nodes-table)
                   (when keys-to-remove
+                    (message "DEBUG-PURGE: Found %d nodes to purge (out of %d total)"
+                             (length keys-to-remove) initial-count)
                     (dolist (key keys-to-remove)
                       (supertag-store-remove-entity :nodes key)
                       (cl-incf purged-count))
@@ -408,6 +416,75 @@ initialized: it will treat that case as an empty collection and exit cleanly."
             (supertag-save-store)
             (message "Database saved. %d entries remain." (hash-table-count (supertag-store-get-collection :nodes))))
         (message "No invalid entries found. Database is clean.")))))
+
+(defun supertag-db-inspect-file ()
+  "Inspect the database file and report its structure.
+Useful for diagnosing why nodes aren't loading properly."
+  (interactive)
+  (if (not (file-exists-p supertag-db-file))
+      (message "Database file does not exist: %s" supertag-db-file)
+    (with-temp-buffer
+      (insert-file-contents supertag-db-file)
+      (goto-char (point-min))
+      (condition-case err
+          (let* ((data (read (current-buffer)))
+                 (is-hash (hash-table-p data))
+                 (nodes-key (if is-hash (gethash :nodes data) nil))
+                 (nodes-count (if (hash-table-p nodes-key)
+                                  (hash-table-count nodes-key)
+                                0))
+                 (sample-nodes '())
+                 (nodes-without-type 0)
+                 (nodes-with-type 0))
+            
+            (with-output-to-temp-buffer "*Supertag DB Inspection*"
+              (princ "=== Database File Inspection ===\n\n")
+              (princ (format "File: %s\n" supertag-db-file))
+              (princ (format "File size: %d bytes\n" (file-attribute-size (file-attributes supertag-db-file))))
+              (princ (format "Data is hash-table: %s\n" is-hash))
+              (princ (format "Nodes collection exists: %s\n" (if nodes-key "YES" "NO")))
+              (princ (format "Nodes collection is hash-table: %s\n" (hash-table-p nodes-key)))
+              (princ (format "Node count in file: %d\n\n" nodes-count))
+              
+              (when (hash-table-p nodes-key)
+                (princ "=== Node Analysis ===\n")
+                (maphash (lambda (id node-data)
+                           (if (plist-get node-data :type)
+                               (cl-incf nodes-with-type)
+                             (cl-incf nodes-without-type))
+                           (when (< (length sample-nodes) 3)
+                             (push (cons id node-data) sample-nodes)))
+                         nodes-key)
+                
+                (princ (format "Nodes with :type property: %d\n" nodes-with-type))
+                (princ (format "Nodes WITHOUT :type property: %d\n\n" nodes-without-type))
+                
+                (when sample-nodes
+                  (princ "=== Sample Nodes ===\n")
+                  (dolist (sample (reverse sample-nodes))
+                    (let ((id (car sample))
+                          (data (cdr sample)))
+                      (princ (format "\nNode ID: %s\n" id))
+                      (princ (format "Has :type: %s\n" (if (plist-get data :type) "YES" "NO")))
+                      (princ (format "Has :title: %s\n" (if (plist-get data :title) "YES" "NO")))
+                      (princ (format "Has :file: %s\n" (if (plist-get data :file) "YES" "NO")))
+                      (princ (format "Properties: %S\n" (let ((props '()))
+                                                           (cl-loop for (k v) on data by #'cddr
+                                                                    do (push k props))
+                                                           (nreverse props)))))))
+                
+                (when (> nodes-without-type 0)
+                  (princ "\n=== WARNING ===\n")
+                  (princ (format "%d nodes are missing the :type property!\n" nodes-without-type))
+                  (princ "These nodes will be automatically purged during load.\n")
+                  (princ "This may be why your database appears empty after loading.\n\n")
+                  (princ "Possible causes:\n")
+                  (princ "1. Data was created with an older version\n")
+                  (princ "2. Manual editing of the database file\n")
+                  (princ "3. Incomplete migration\n\n")
+                  (princ "Solution: Run M-x supertag-sync-full-rescan to rebuild the database.\n")))))
+        (error
+         (message "Error reading database file: %s" (error-message-string err)))))))
 
 ;;; --- Time Format Standardization ---
 
