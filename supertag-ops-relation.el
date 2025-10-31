@@ -179,7 +179,58 @@ Returns the deleted relation data."
                       (supertag--relation-update-node-references from-id to-id 'remove)))
                   nil)))))
 
-;; 5.2 Relation Query Operations
+;; 5.2 Reference Service
+
+(defun supertag-reference-service-add (from-id to-id)
+  "Create a reference from FROM-ID to TO-ID.
+
+This involves:
+1. Creating the relation in the database.
+2. Inserting a reciprocal link in the TO-ID node's file.
+
+Returns t on success, nil on failure."
+  (require 'org)
+  ;; 1. Create relation in DB
+  (let ((relation-result (supertag-relation-create `(:type :reference :from ,from-id :to ,to-id))))
+    (when relation-result
+      ;; 2. DB write succeeded, now insert reciprocal link.
+      (let* ((from-node (supertag-node-get from-id))
+             (to-node (supertag-node-get to-id))
+             ;; Use raw-value first, then title as fallback
+             (from-title (or (plist-get from-node :raw-value)
+                             (plist-get from-node :title)
+                             from-id))
+             (to-file (plist-get to-node :file))
+             (to-pos (plist-get to-node :position)))
+        (when (and to-file to-pos (file-exists-p to-file))
+          (with-current-buffer (find-file-noselect to-file)
+            (org-with-wide-buffer
+              (save-excursion
+                (goto-char to-pos)
+                ;; Move to the heading containing this position
+                (org-back-to-heading t)
+                ;; Make sure we are at a heading
+                (when (org-at-heading-p)
+                  ;; Skip metadata and go to the end of content (before any child nodes)
+                  (org-end-of-meta-data t)
+                  ;; Find the first child node's position (if any)
+                  (let ((content-end (save-excursion
+                                       (if (re-search-forward org-outline-regexp nil t)
+                                           (match-beginning 0)
+                                         ;; No child node found, use end of subtree
+                                         (org-end-of-subtree t t)
+                                         (point)))))
+                    ;; Go to the end of content (before children)
+                    (goto-char content-end)
+                    ;; Insert the backlink
+                    (unless (bolp) (insert "\n"))
+                    (insert (format "[[id:%s][%s]]\n" from-id from-title))))))
+            ;; Save the buffer to persist the changes
+            (save-buffer))))
+      ;; 3. Return t for success
+      t)))
+
+;; 5.3 Relation Query Operations
 
 (defun supertag-relation-find-by-from (from-id &optional type)
   "Find all relations originating from a specific entity.
