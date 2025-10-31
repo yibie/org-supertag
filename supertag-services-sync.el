@@ -1148,6 +1148,38 @@ COUNTERS is a plist for tracking relation statistics."
           (setf (plist-get counters :references-deleted)
                 (1+ (or (plist-get counters :references-deleted) 0))))))))
 
+(defun supertag--extract-outline-path (headline)
+  "Extract the outline path (olp) for HEADLINE.
+Returns a list of ancestor titles from root to current headline (inclusive).
+For example: (\"Top Level\" \"Second Level\" \"Current Headline\")
+The titles preserve #tags but remove TODO keywords and org :tags:."
+  (let ((path '())
+        (current headline))
+    ;; Traverse up the hierarchy collecting titles
+    (while current
+      (when (eq (org-element-type current) 'headline)
+        (let* ((raw-title (org-element-property :raw-value current))
+               (todo-keyword (org-element-property :todo-keyword current))
+               ;; Clean title: remove TODO keyword and org :tags: but keep #tags
+               (cleaned-title (let ((title raw-title))
+                               (when (and title todo-keyword)
+                                 (setq title (replace-regexp-in-string
+                                            (concat "^" (regexp-quote todo-keyword) "\\s-+")
+                                            "" title)))
+                               (when title
+                                 ;; Remove org native :tags: at the end
+                                 (setq title (replace-regexp-in-string "[ \t]+:[[:alnum:]_@#%:]+:[ \t]*$" "" title))
+                                 (string-trim title)))))
+          (when cleaned-title
+            (push cleaned-title path))))
+      ;; Move to parent element
+      (setq current (org-element-property :parent current))
+      ;; Stop if we've reached the document root
+      (when (or (not current)
+                (eq (org-element-type current) 'org-data))
+        (setq current nil)))
+    path))
+
 (defun supertag--extract-node-own-content (headline contents-begin contents-end)
   "Extract only the content that belongs to HEADLINE, excluding sub-headlines.
 HEADLINE is the org-element headline object.
@@ -1179,16 +1211,14 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
          (original-raw-title (org-element-property :raw-value headline))
          (todo-keyword (org-element-property :todo-keyword headline))
          ;; Clean title: remove TODO keyword and :tags: but keep #tags
-         (title-without-todo (if todo-keyword
-                                 (string-trim (replace-regexp-in-string
-                                              (concat "^" (regexp-quote todo-keyword) "\\s-+")
-                                              "" original-raw-title))
-                               original-raw-title))
-         (title-after-cleaning (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title-without-todo)))
-         ;; If cleaning results in an empty string (title was only org tags), use the original.
-         (final-title (if (string-empty-p title-after-cleaning)
-                          original-raw-title
-                        title-after-cleaning))
+         (cleaned-title (let ((title original-raw-title))
+                          (when todo-keyword (setq title (replace-regexp-in-string (concat "^" (regexp-quote todo-keyword) "\\s-+") "" title)))
+                          (setq title (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title))
+                          (setq title (replace-regexp-in-string "#[^ \t\n\r]+\\s*" "" title))
+                          (string-trim title)))
+         (final-title (if (string-empty-p cleaned-title) original-raw-title cleaned-title))
+         ;; Extract outline path (olp) - list of ancestor titles from root to current
+         (olp (supertag--extract-outline-path headline))
          (headline-tags (supertag--extract-inline-tags original-raw-title))
          (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
          (org-native-tags (if supertag-sync--is-full-rescan-p
@@ -1221,6 +1251,7 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
              :properties properties
              :ref-to (cl-delete-duplicates refs-to :test #'equal)
             :file file
+            :olp olp ;; Add outline path
             :content (let ((raw-content (if (and contents-begin contents-end)
                                              ;; Extract only content up to first child headline
                                              (supertag--extract-node-own-content headline contents-begin contents-end)

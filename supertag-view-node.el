@@ -231,7 +231,18 @@ NEW-VALUE is the value after change (nil for deletions)."
 
 (defun supertag-view-node--format-display-value (value field-def)
   "Format VALUE for display with enhanced styling based on FIELD-DEF."
-  (supertag-view-helper-format-field-value field-def value))
+  (message "DEBUG supertag-view-node: Formatting field '%s', type: '%s'"
+           (plist-get field-def :name)
+           (plist-get field-def :type))
+  (if (eq (plist-get field-def :type) :node-reference)
+      (let ((ids (if (listp value) value (if (and (stringp value) (> (length value) 0)) (list value) '()))))
+        (mapconcat
+         (lambda (id)
+           (if-let ((node (supertag-node-get id)))
+               (format "[[id:%s][%s]]" id (or (plist-get node :title) "[Untitled]"))
+             (format "[[id:%s][Not Found]]" id)))
+         ids ", "))
+    (supertag-view-helper-format-field-value field-def value)))
 
 ;;; --- Modern Rendering Functions ---
 
@@ -329,10 +340,9 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-to) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-to)
-          (when-let* ((node (supertag-node-get ref-id))
-                      (title (plist-get node :title)))
-                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+              (when-let* ((node (supertag-node-get ref-id))
+                      (title (or (plist-get node :title) "[Untitled]")))
+                (insert (format "    📄 [[id:%s][%s]]\n" ref-id title)))))
 
           ;; Referenced By
           (when (and refs-from (> (length refs-from) 0))
@@ -341,10 +351,9 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-from) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-from)
-          (when-let* ((node (supertag-node-get ref-id))
-                      (title (plist-get node :title)))
-                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+              (when-let* ((node (supertag-node-get ref-id))
+                      (title (or (plist-get node :title) "[Untitled]")))
+                (insert (format "    📄 [[id:%s][%s]]\n" ref-id title)))))
           (insert "\n"))
       ;; Else, show empty state
       (supertag-view-helper-insert-simple-empty-state "No references found."))))
@@ -491,12 +500,12 @@ Handles special logic for :node-reference fields."
                                               :to ,target
                                               :tag-id ,tag-id
                                               :field-name ,field-name))
-                  (supertag-ui--insert-link-under-node target node-id from-node-title)))))))
+                  (supertag-ui--insert-link-under-node target node-id from-node-title))))))
 
         ;; Set the field value (for all types)
         (supertag-field-set node-id tag-id field-name new-value)
         (supertag-view-node-refresh)
-        (message "✓ Field '%s' updated successfully!" field-name))))
+        (message "✓ Field '%s' updated successfully!" field-name)))))
 
 (defun supertag-view-node-add-field ()
   "Add a new field definition to a tag on the current node."

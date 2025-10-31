@@ -107,29 +107,13 @@ Only includes headings whose starting position is within [BEG, END)."
     (nreverse node-ids)))
 
 (defun supertag--get-node-props-at-point ()
-  "Extract node properties from the current Org heading at point.
-Returns a plist of properties suitable for node creation/update."
+  "Extract node properties from the current Org heading at point."
   (when (org-at-heading-p)
     (when (fboundp 'org-element-at-point)
-      (let* ((element (org-element-at-point))
-             (id (org-id-get)) ; Get existing ID if any
-             (title (org-element-property :raw-value element))
-             (level (org-element-property :level element))
-             (file (buffer-file-name))
-             (pos (point))
-             (content (save-excursion
-                       (org-end-of-meta-data t)
-                       (buffer-substring-no-properties (point) (save-excursion (org-end-of-subtree t t) (point)))))
-             (headline-tags (supertag-transform-extract-inline-tags title))
-             (content-tags (supertag-transform-extract-inline-tags content))
-             (all-tags (cl-union headline-tags content-tags :test 'equal)))
-        (list :id id
-              :title title
-              :tags all-tags
-              :level level
-              :file file
-              :position pos
-              :content content)))))
+      (let ((element (org-element-at-point))
+            (file (buffer-file-name)))
+        ;; Delegate parsing to the authoritative function in the sync service.
+        (supertag--convert-element-to-node-plist element file)))))
 
 ;;; --- User Commands ---
 
@@ -465,37 +449,6 @@ current file and inserted into the target file at a chosen position."
 
 ;; --- Node Commands: Add, Remove Reference
 
-(defun supertag-ui--insert-link-under-node (target-node-id link-node-id &optional link-title)
-  "Insert a reciprocal Org link under TARGET-NODE-ID pointing to LINK-NODE-ID.
-When LINK-TITLE is nil, try to resolve it from the linked node's metadata."
-  (unless (equal target-node-id link-node-id)
-    (when-let* ((target-node (supertag-node-get target-node-id))
-                (target-file (plist-get target-node :file))
-                (target-pos (plist-get target-node :position)))
-      (let* ((link-node (supertag-node-get link-node-id))
-             (resolved-title (or link-title
-                                 (plist-get link-node :raw-value)
-                                 (plist-get link-node :title)
-                                 "Untitled Node"))
-             (link-text (format "[[id:%s][%s]]" link-node-id resolved-title)))
-        (with-current-buffer (find-file-noselect target-file)
-          (org-with-wide-buffer
-            (save-excursion
-              (goto-char target-pos)
-              (org-back-to-heading t)
-              (let* ((insert-point (progn
-                                     (org-end-of-meta-data t)
-                                     (point)))
-                     (entry-end (save-excursion (org-end-of-subtree t t))))
-                (unless (save-excursion
-                          (goto-char insert-point)
-                          (search-forward link-text entry-end t))
-                  (goto-char insert-point)
-                  (unless (bolp)
-                    (insert "\n"))
-                  (insert link-text)
-                  (unless (looking-at "\n")
-                    (insert "\n")))))))))))
 
 (defun supertag-ui--remove-link-under-node (target-node-id link-node-id)
   "Remove the Org link referencing LINK-NODE-ID from TARGET-NODE-ID's entry."
@@ -521,92 +474,70 @@ When LINK-TITLE is nil, try to resolve it from the linked node's metadata."
 (defun supertag-add-reference ()
   "Add a reference from the current node to another selected node."
   (interactive)
-  (let ((from-id (supertag-ui--get-containing-node-at-point)))
+  (let* ((from-id (supertag-ui--get-containing-node-at-point))
+         (to-id nil))
     (unless from-id
-      (user-error "Point must be inside an Org heading to add a reference."))
+      (user-error "Point must be inside an Org heading or its content."))
+    
     (supertag-ui--ensure-node-synced from-id)
 
-    (let ((to-id (supertag-ui-select-node "Add reference to node: " t))) ; Use cache for better performance
-      (when to-id
-        ;; 1. Create the relationship in the database
-        (supertag-relation-create
-         `(:type :reference :from ,from-id :to ,to-id))
+    (setq to-id (supertag-ui-select-node "Add reference to: " t))
 
-        ;; 2. Insert the org-link into the buffer
-        (let* ((target-node-props (supertag-store-get-entity :nodes to-id))
-               (target-title (plist-get target-node-props :raw-value))
-               (from-node (supertag-node-get from-id))
-               (from-title (or (plist-get from-node :raw-value)
-                               (plist-get from-node :title)
-                               (ignore-errors
-                                 (save-excursion
-                                   (org-back-to-heading t)
-                                   (org-get-heading t t t t)))
-                               "Untitled Node"))
-               (link-text (format "[[id:%s][%s]]" to-id (or target-title "Untitled Node"))))
-          (insert link-text)
-          (supertag-ui--insert-link-under-node to-id from-id from-title))
+    (when (and from-id to-id)
+      ;; 1. Call the service to handle DB and reciprocal link.
+      (if (supertag-reference-service-add from-id to-id)
+          (progn
+            ;; 2. Service succeeded, now insert the forward link here.
+            (let* ((to-node (supertag-node-get to-id))
+                   (to-title (or (plist-get to-node :title) to-id)))
+              (insert (format "[[id:%s][%s]]" to-id to-title)))
+            (message "Reference added."))
+        (user-error "Failed to add reference to database.")))))
 
-        (message "Reference added to node %s" to-id))))) 
-
-(defun supertag-add-reference-and-create (beg end) 
-  "Create a new node from the selected region and replace it with a link. 
-  Interactively asks for a target location to save the new node." 
-  (interactive "r") 
-  (let* ((title (buffer-substring-no-properties beg end))) 
-    (if (or (null title) (string-empty-p title)) 
-        (user-error "Region is empty. Cannot create a node.") 
-      ;; 1. Get target location from user 
-      (let* ((target-file (read-file-name "Create node in file: " nil nil t)) 
-             (insert-info (when (and target-file (file-exists-p target-file)) 
-                            (supertag-ui-select-insert-position target-file))) 
-             (insert-pos (plist-get insert-info :position)) 
-             (insert-level (plist-get insert-info :level))) 
-
-        (unless insert-info 
-          (user-error "No valid insert position selected. Aborting.")) 
-
-        (let ((new-node-id (org-id-new))) 
-          ;; 2. Create the node in the target file (physical insertion) 
-          (with-current-buffer (find-file-noselect target-file) 
-            (goto-char insert-pos) 
-            ;; Ensure we are on a new line before inserting 
-            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n")) 
-            (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:END:\n" 
-                            (make-string insert-level ?*) 
-                            title 
-                            new-node-id)) 
-            (save-buffer)) 
-
-          ;; 3. Create the node in the database (logical creation) 
-          (supertag-node-create 
-           `(:id ,new-node-id 
-             :title ,title 
-             :file ,target-file 
-             :position ,insert-pos 
-             :level ,insert-level)) 
-
-          ;; 4. Create the relationship in the database
-          (let ((from-id (supertag-ui--get-containing-node-at-point)))
-            (when from-id
-              (supertag-ui--ensure-node-synced from-id)
-              (supertag-relation-create
-               `(:type :reference :from ,from-id :to ,new-node-id))
-              (let* ((from-node (supertag-node-get from-id))
-                     (from-title (or (plist-get from-node :raw-value)
-                                     (plist-get from-node :title)
-                                     (ignore-errors
-                                       (save-excursion
-                                         (org-back-to-heading t)
-                                         (org-get-heading t t t t)))
-                                     "Untitled Node")))
-                (supertag-ui--insert-link-under-node new-node-id from-id from-title))))
-
-          ;; 5. Replace original text with a link 
-          (delete-region beg end) 
-          (insert (format "[[id:%s][%s]]" new-node-id title)) 
-
-          (message "Node '%s' created and linked." title)))))) 
+(defun supertag-add-reference-and-create (beg end)
+  "Create a new node from the selected region and replace it with a link.
+Interactively asks for a target location to save the new node."
+  (interactive "r")
+  (let* ((title (buffer-substring-no-properties beg end))
+         ;; Get from-id BEFORE creating the new node
+         (from-id (supertag-ui--get-containing-node-at-point)))
+    (if (or (null title) (string-empty-p title))
+        (user-error "Region is empty. Cannot create a node.")
+      ;; 1. Get target location from user
+      (let* ((target-file (read-file-name "Create node in file: " nil nil t))
+             (insert-info (when (and target-file (file-exists-p target-file))
+                            (supertag-ui-select-insert-position target-file)))
+             (insert-pos (plist-get insert-info :position))
+             (insert-level (plist-get insert-info :level)))
+        (unless insert-info
+          (user-error "No valid insert position selected. Aborting."))
+        (let ((new-node-id (org-id-new)))
+          ;; 2. Create the node in the target file (physical insertion)
+          (with-current-buffer (find-file-noselect target-file)
+            (goto-char insert-pos)
+            ;; Ensure we are on a new line before inserting
+            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+            (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:END:\n"
+                            (make-string insert-level ?*)
+                            title
+                            new-node-id))
+            (save-buffer))
+          ;; 3. Create the node in the database (logical creation)
+          (supertag-node-create
+           `(:id ,new-node-id
+             :title ,title
+             :file ,target-file
+             :position ,insert-pos
+             :level ,insert-level))
+          ;; 4. Create the relationship in the database using the service
+          (when from-id
+            (supertag-ui--ensure-node-synced from-id)
+            (unless (supertag-reference-service-add from-id new-node-id)
+              (user-error "Failed to create reference in database")))
+          ;; 5. Replace original text with a link
+          (delete-region beg end)
+          (insert (format "[[id:%s][%s]]" new-node-id title))
+          (message "Node '%s' created and linked." title))))))
 
 (defun supertag-remove-reference () 
   "Interactively remove a reference from the current node." 
@@ -826,7 +757,7 @@ new tag name, bypassing fuzzy completion matching."
                               (goto-char current-point)
                               (supertag-view-helper-insert-tag-text tag-id))
                             (save-buffer)))))))
-                (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))))))))))
+                  (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))))))))))
 
 (defun supertag-remove-tag-from-node ()
   "Interactively remove a tag from the current node.

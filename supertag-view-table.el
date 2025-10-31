@@ -650,6 +650,12 @@ Uses improved styling from old version."
    ((eq type :timestamp) (supertag-view-table--format-timestamp value))
    ((eq type :options) (supertag-view-table--format-options value))
    ((eq type :boolean) (supertag-view-table--format-boolean value))
+   ((eq type :node-reference)
+    (if (string-empty-p value)
+        ""
+      (let* ((node (supertag-node-get value))
+             (title (plist-get node :title)))
+        (format "[[id:%s][%s]]" value (or title "No Title")))))
    (t (format "%s" value))))
 
 (defun supertag-view-table--format-date (value)
