@@ -75,23 +75,24 @@ Returns the created tag data."
           (message "Tag '%s' already exists, returning existing tag." id)
           existing-tag)
       ;; If tag does not exist, create it
-      (let* ((final-props (plist-put props :id id))
-             (final-props (plist-put final-props :type :tag))
-             (final-props (plist-put final-props :extends extends))
-             (final-props (plist-put final-props :fields (or (plist-get props :fields) '())))
-             (final-props (plist-put final-props :created-at (current-time)))
-             (final-props (plist-put final-props :modified-at (current-time)))
-             (final-props (supertag--normalize-tag-extends final-props)))
+      (let* ((final-props `(:id ,id
+                             :name ,name
+                             :type :tag
+                             :extends ,extends
+                             :fields ,(or (plist-get props :fields) '())
+                             :created-at ,(current-time)
+                             :modified-at ,(current-time)))
+             (normalized-props (supertag--normalize-tag-extends final-props)))
         ;; Use unified commit system
         (supertag-ops-commit
          :operation :create
          :collection :tags
          :id id
-         :new final-props
+         :new normalized-props
          :perform (lambda ()
-                    (supertag-store-put-entity :tags id final-props)
+                    (supertag-store-put-entity :tags id normalized-props)
                     (supertag-ops-schema-rebuild-cache)
-                    final-props))))))
+                    normalized-props))))))
 
 (defun supertag-tag-get (id)
   "Get tag data.
