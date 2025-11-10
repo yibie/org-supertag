@@ -248,6 +248,39 @@ Returns the updated tag data."
                (new-fields (cl-remove field-name fields-list :key (lambda (f) (plist-get f :name)) :test 'equal)))
           (plist-put tag :fields new-fields))))))
 
+(defun supertag-tag-list-missing-fields ()
+  "List all tags that have nil :fields or :extends properties.
+Returns a list of tag IDs that may have lost their field definitions."
+  (interactive)
+  (let ((tags-table (supertag-store-get-collection :tags))
+        (missing-fields '())
+        (missing-extends '())
+        (total-tags 0))
+    (maphash
+     (lambda (tag-id tag-data)
+       (cl-incf total-tags)
+       (let ((fields (plist-get tag-data :fields))
+             (extends (plist-get tag-data :extends)))
+         (when (null fields)
+           (push tag-id missing-fields))
+         (when (null extends)
+           (push tag-id missing-extends))))
+     tags-table)
+    
+    (let ((report (format "=== Tag Field Status Report ===\nTotal tags: %d\nTags with nil :fields: %d\nTags with nil :extends: %d\n\nTags missing :fields:\n%s\n"
+                         total-tags
+                         (length missing-fields)
+                         (length missing-extends)
+                         (mapconcat #'identity (nreverse missing-fields) "\n"))))
+      (message "%s" report)
+      (with-current-buffer (get-buffer-create "*Supertag Missing Fields*")
+        (erase-buffer)
+        (insert report)
+        (goto-char (point-min))
+        (display-buffer (current-buffer)))
+      (list :missing-fields missing-fields
+            :missing-extends missing-extends))))
+
 (defun supertag-tag-rename-field (tag-id old-name new-name)
   "Rename a field definition in a tag.
 TAG-ID is the unique identifier of the tag.
@@ -300,7 +333,7 @@ and the tag text in all relevant Org files."
           (let* ((tag-plist (supertag--ensure-plist tag-data))
                  (parent-id (plist-get tag-plist :extends)))
             (when (equal parent-id old-id)
-              (supertag--set-parent (plist-get tag-plist :id) sanitized-new-id)))))
+              (supertag--set-tag-parent (plist-get tag-plist :id) sanitized-new-id)))))
 
       ;; 3. Update all node-tag relations
       (let ((relations-to-update (supertag-relation-find-by-to old-id :node-tag)))
@@ -321,7 +354,7 @@ and the tag text in all relevant Org files."
       (supertag-ops-schema-rebuild-cache)
       sanitized-new-id)))
 
-(defun supertag--set-parent (child-id parent-id)
+(defun supertag--set-tag-parent (child-id parent-id)
   "Set CHILD-ID to extend PARENT-ID, rebuilding schema cache."
   (let ((child (supertag-tag-get child-id))
         (parent (supertag-tag-get parent-id)))

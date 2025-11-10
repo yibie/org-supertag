@@ -113,15 +113,9 @@ Returns the created relation data."
     ;; Check if relation already exists
     (let ((existing-relations (supertag-relation-find-between from to type)))
       (if existing-relations
-          (progn
-            (message "DEBUG: Relation (%s -> %s [%s]) already exists, reusing existing relation."
-                     from to type)
-            ;; Return the first existing relation
-            (car existing-relations))
+          ;; Return the first existing relation
+          (car existing-relations)
         ;; Create new relation if none exists
-        (message "DEBUG: Creating new relation (%s -> %s [%s]) with ID: %s"
-                 from to type rel-id)
-
         ;; Use unified commit system
         (supertag-ops-commit
          :operation :create
@@ -196,9 +190,9 @@ Returns t on success, nil on failure."
       ;; 2. DB write succeeded, now insert reciprocal link.
       (let* ((from-node (supertag-node-get from-id))
              (to-node (supertag-node-get to-id))
-             ;; Use raw-value first, then title as fallback
-             (from-title (or (plist-get from-node :raw-value)
-                             (plist-get from-node :title)
+             ;; Prioritize the clean :title, fallback to :raw-value
+             (from-title (or (plist-get from-node :title)
+                             (plist-get from-node :raw-value)
                              from-id))
              (to-file (plist-get to-node :file))
              (to-pos (plist-get to-node :position)))

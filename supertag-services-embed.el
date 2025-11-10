@@ -151,8 +151,7 @@ This function runs OUTSIDE of inhibit-modification-hooks to allow buffer updates
   ;; This hook now handles the DB update and write-back to source file.
   (add-hook 'after-save-hook #'supertag-embed-sync-modified-blocks)
   ;; This hook handles refreshing embeds when a source file is saved directly.
-  (add-hook 'after-save-hook #'supertag-services-embed-on-source-save)
-  (message "DB-driven embed services initialized"))
+  (add-hook 'after-save-hook #'supertag-services-embed-on-source-save))
 
 (defun supertag-services-embed-cleanup ()
   "Cleanup embed services."

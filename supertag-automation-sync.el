@@ -361,8 +361,7 @@ Preserves all existing node data including tags and other properties."
 (defun supertag-automation-sync--register-commit-hooks ()
   "Register automation handlers with the commit system."
   (interactive)
-  (add-hook 'supertag-after-operation-hook #'supertag-automation-sync--handle-commit-result)
-  (message "Automation sync handlers registered with commit system"))
+  (add-hook 'supertag-after-operation-hook #'supertag-automation-sync--handle-commit-result))
 
 (defun supertag-automation-sync--unregister-commit-hooks ()
   "Unregister automation handlers from the commit system."

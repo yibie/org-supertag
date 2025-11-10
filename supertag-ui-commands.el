@@ -39,8 +39,9 @@
                  (const :tag "Beginning of headline" beginning))
   :group 'org-supertag)
 
-(defun supertag-set-child (parent-tag child-tags)
-  "Set CHILD-TAGS to extend a PARENT-TAG using interactive completion.
+(defun supertag-set-tag-parent (parent-tag child-tags)
+  "Set one or more CHILD-TAGS to extend a PARENT-TAG.
+This command modifies the `:extends` property of the child tags.
 When invoked interactively, allows selecting multiple child tags." 
   (interactive
    (let* ((tags (mapcar #'car (supertag-query :tags))))
@@ -57,7 +58,7 @@ When invoked interactively, allows selecting multiple child tags."
   (let ((children (if (listp child-tags) child-tags (list child-tags))))
     (dolist (child children)
       (when (and child (not (string-empty-p child)))
-        (supertag--set-parent child parent-tag)))
+        (supertag--set-tag-parent child parent-tag)))
     (when (called-interactively-p 'interactive)
       (message "Tags %s now extend %s"
                (mapconcat #'identity children ", ") parent-tag))
@@ -852,9 +853,17 @@ This command reads the authoritative list of tags from the database."
           
           (message "Tag changed from '%s' to '%s'." current-tag new-tag))))))
 
-;;; --- Tag Inheritance Commands (REMOVED) ---
-;; Note: Tag inheritance functionality has been removed for simplicity
-;; and better data consistency. Tags no longer support extends relationships.
+;;; --- Tag Inheritance Model ---
+;; `org-supertag' implements a schematic inheritance model for tags, which is
+;; distinct from Org-mode's default structural inheritance.
+;;
+;; - Inheritance is defined via the `:extends` property in a tag's definition,
+;;   creating a parent-child relationship between tag schemas.
+;; - A tag inherits the *fields* from its parent tag(s).
+;; - This model is based on the tag definitions stored in the database, not on
+;;   the headline structure of an Org file.
+;; - The commands `supertag-set-child` and `supertag-clear-parent` are used
+;;   to manage these `:extends` relationships.
 
 ;;; --- Capture Commands ---
 

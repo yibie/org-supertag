@@ -297,10 +297,14 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                                                (when (and (stringp tag-name) (not (string-empty-p tag-name)))
                                                  (let ((sanitized-tag (supertag-migrate--sanitize-tag-name tag-name)))
                                                    ;; CRITICAL: Ensure a corresponding tag definition exists in the central registry.
-                                                   ;; If not, create a minimal one on-demand.
+                                                   ;; If not, create a minimal one on-demand, preserving any existing fields.
                                                    (unless (gethash sanitized-tag tags-ht)
                                                      (puthash sanitized-tag
-                                                              `(:id ,sanitized-tag :name ,tag-name :type :tag)
+                                                              `(:id ,sanitized-tag 
+                                                                :name ,tag-name 
+                                                                :type :tag
+                                                                :fields nil
+                                                                :extends nil)
                                                               tags-ht))
                                                    sanitized-tag)))
                                              old-tags))))
@@ -315,8 +319,18 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                 ;; Convert old tag-id to semantic name format
                 (let* ((tag-name (or (plist-get cleaned-props :name) id))
                        (new-tag-id (supertag-migrate--sanitize-tag-name tag-name))
-                       (final-props (plist-put cleaned-props :id new-tag-id)))
-                  (message "Migrating tag: %s -> %s" id new-tag-id)
+                       ;; Preserve existing fields and extends, or set to nil if not present
+                       (fields (plist-get cleaned-props :fields))
+                       (extends (plist-get cleaned-props :extends))
+                       (final-props (plist-put 
+                                    (plist-put 
+                                     (plist-put cleaned-props :id new-tag-id)
+                                     :fields (or fields nil))
+                                    :extends (or extends nil))))
+                  (message "Migrating tag: %s -> %s (fields: %s, extends: %s)" 
+                          id new-tag-id 
+                          (if fields "yes" "no")
+                          (if extends "yes" "no"))
                   (puthash new-tag-id final-props tags-ht)
                   ;; Store mapping for updating relations later
                   (puthash id new-tag-id id-mapping)))

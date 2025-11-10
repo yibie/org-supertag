@@ -9,6 +9,7 @@
 
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'ht)
 (require 'org-element) ; For parsing Org files
 (require 'org-id)     ; For generating Org IDs
@@ -82,6 +83,58 @@ Note: This can interfere with embed block synchronization, so it's disabled by d
 Only headings at this level or deeper will be considered for node creation."
   :type 'integer
   :group 'supertag-sync)
+
+;; Safety guards against accidental mass-deletion/data loss
+(defcustom supertag-sync-orphan-grace-seconds 3600
+  "Grace period in seconds before deleting orphaned nodes.
+A node must remain orphaned (its :file property nil) for at least this long
+before garbage collection can remove it."
+  :type 'integer
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-max-delete-ratio 0.5
+  "Maximum allowed ratio of nodes to delete in a single GC pass.
+If the fraction of candidate orphan deletions exceeds this ratio of total nodes,
+the deletion pass is aborted to prevent accidental mass deletion."
+  :type 'number
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-max-delete-count 1000
+  "Maximum number of nodes allowed to be deleted in a single GC pass.
+If candidate deletions exceed this number, the deletion pass is aborted."
+  :type 'integer
+  :group 'supertag-sync)
+
+;;; Auto-start configuration (safer defaults to reduce user setup)
+
+(defcustom supertag-sync-auto-start t
+  "Automatically start Org-Supertag auto-sync after Emacs startup.
+Start is delayed and retried until sync directories are available
+to avoid race conditions at early startup."
+  :type 'boolean
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-auto-start-initial-delay 3
+  "Seconds to wait after startup before the first auto-start attempt."
+  :type 'integer
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-auto-start-retry-interval 5
+  "Seconds between auto-start retry attempts when directories are not yet available."
+  :type 'integer
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-auto-start-max-retries 24
+  "Maximum number of auto-start retries before giving up.
+With the default interval, this caps retries to about 2 minutes."
+  :type 'integer
+  :group 'supertag-sync)
+
+(defvar supertag-sync--auto-start-timer nil
+  "Internal timer used for deferred auto-start of the sync worker.")
+
+(defvar supertag-sync--auto-start-retries-left 0
+  "Internal counter for remaining auto-start retries.")
 
 ;; Tag write style for rendering headlines
 (defcustom supertag-tag-style 'inline
@@ -345,7 +398,6 @@ Returns the loaded or initialized sync state."
       (let ((result
              (if (file-exists-p supertag-sync-state-file)
                  (with-temp-buffer
-                   (message "Loading sync state from file: %s" supertag-sync-state-file)
                    (insert-file-contents supertag-sync-state-file)
                    (goto-char (point-min))
                    ;; Check if file is empty
@@ -415,6 +467,46 @@ Returns the loaded or initialized sync state."
   (setq supertag-sync--idle-dispatch nil)
   (when (fboundp 'supertag-sync--check-and-sync)
     (supertag-sync--check-and-sync)))
+
+;;; Auto-start manager -------------------------------------------------
+
+(defun supertag-sync--dirs-ready-p ()
+  "Return non-nil when all configured sync directories exist and are accessible."
+  (and org-supertag-sync-directories
+       (cl-every #'file-directory-p org-supertag-sync-directories)))
+
+(defun supertag-sync--cancel-auto-start ()
+  "Cancel any pending auto-start timer."
+  (when (timerp supertag-sync--auto-start-timer)
+    (cancel-timer supertag-sync--auto-start-timer))
+  (setq supertag-sync--auto-start-timer nil)
+  (setq supertag-sync--auto-start-retries-left 0))
+
+(defun supertag-sync--auto-start-tick ()
+  "Auto-start attempt: start sync when directories are ready, otherwise retry."
+  (cond
+   ((not supertag-sync-auto-start)
+    (supertag-sync--cancel-auto-start))
+   ((supertag-sync--dirs-ready-p)
+    (supertag-sync--cancel-auto-start)
+    (message "Supertag: directories ready; starting auto-sync")
+    (supertag-sync-start-auto-sync))
+   ((<= supertag-sync--auto-start-retries-left 0)
+    (supertag-sync--cancel-auto-start)
+    (message "Supertag: auto-sync not started; directories unavailable"))
+   (t
+    (setq supertag-sync--auto-start-retries-left (1- supertag-sync--auto-start-retries-left)))))
+
+(defun supertag-sync-schedule-auto-start ()
+  "Schedule deferred auto-start of auto-sync with retries until directories are ready."
+  (when supertag-sync-auto-start
+    (supertag-sync--cancel-auto-start)
+    (setq supertag-sync--auto-start-retries-left supertag-sync-auto-start-max-retries)
+    (setq supertag-sync--auto-start-timer
+          (run-with-timer
+           (max 0 supertag-sync-auto-start-initial-delay)
+           (max 1 supertag-sync-auto-start-retry-interval)
+           #'supertag-sync--auto-start-tick))))
 
 
 ;; (defun supertag-sync-emergency-recovery ()
@@ -496,7 +588,9 @@ This does not remove the node from the store immediately."
    (lambda (node)
      (when node
        (let ((modified (copy-sequence node)))
-         (plist-put modified :file nil))))))
+         (plist-put modified :file nil)
+         ;; Record when the node first became orphaned to allow a grace period
+         (plist-put modified :orphaned-at (supertag-current-time)))))))
 
 (defun supertag-db-add-with-hash (id props &optional counters)
   "Add node with ID and PROPS to database, including hash value.
@@ -516,6 +610,9 @@ COUNTERS is an optional plist for tracking statistics."
           (supertag--cleanup-orphaned-references id current-refs counters)
           ;; Then process current references
           (supertag--process-node-references node-props counters)))
+      ;; If this node comes from a file (i.e., has :file), clear any orphan marker
+      (when (plist-get node-props :file)
+        (setq node-props (plist-put node-props :orphaned-at nil)))
       (supertag-node-create node-props))))
 
 (defun supertag-node-changed-p (old-node new-node)
@@ -593,56 +690,21 @@ OLD-PROPS is the source of truth for database-only fields."
        ;; (message "DEBUG-PROCESS: Finished processing file: %s" file)
        ))
 
+
 (defun supertag-sync--verify-file-nodes (file counters)
   "Verify that nodes in the database still exist in the file.
 This function checks if nodes associated with FILE still exist in the file.
 If a node exists in the database but not in the file, it's marked as orphaned.
 FILE is the file path to verify.
 COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
-  (message "DEBUG-VERIFY-ENTRY: Called with file: %s" file)
-  (message "DEBUG-VERIFY-ENTRY: file type: %s, length: %d" (type-of file) (length file))
-  (let* ((file-exists-result (file-exists-p file))
-         (file-exists file-exists-result)
+  (let* ((file-exists (file-exists-p file))
          (current-nodes-in-file (make-hash-table :test 'equal))
          (nodes-from-file (when file-exists
                             (supertag--parse-org-nodes file)))
          (existing-nodes-in-store (supertag-find-nodes-by-file file)))
-    (message "DEBUG-VERIFY-ENTRY: file-exists-p returned: %S (type: %s)"
-             file-exists-result (type-of file-exists-result))
-    (message "DEBUG-VERIFY-ENTRY: existing-nodes-in-store count: %d" (length existing-nodes-in-store))
 
-    ;; ENHANCED DEBUG: Log file existence check with more details
-    (unless file-exists
-      (message "DEBUG-VERIFY: file-exists-p returned nil for: %s" file)
-      (message "DEBUG-VERIFY: file type: %s" (type-of file))
-      (message "DEBUG-VERIFY: file length: %d" (length file))
-      (message "DEBUG-VERIFY: file string: %S" file)
-      (message "DEBUG-VERIFY: expanded path: %s" (expand-file-name file))
-      (message "DEBUG-VERIFY: expanded exists: %s" (file-exists-p (expand-file-name file)))
-      (message "DEBUG-VERIFY: file-readable-p: %s" (file-readable-p file))
-      (message "DEBUG-VERIFY: file-directory-p: %s" (file-directory-p file))
-      (message "DEBUG-VERIFY: file-regular-p: %s" (file-regular-p file))
-      ;; Check if there are any invisible characters
-      (let ((has-invisible nil))
-        (dotimes (i (length file))
-          (let ((char (aref file i)))
-            (when (or (< char 32) (> char 126))
-              (setq has-invisible t)
-              (message "DEBUG-VERIFY: Found non-printable char at pos %d: %d (0x%x)" i char char))))
-        (unless has-invisible
-          (message "DEBUG-VERIFY: No non-printable characters found")))
-      ;; Try to list parent directory
-      (let ((parent-dir (file-name-directory file)))
-        (message "DEBUG-VERIFY: parent directory: %s" parent-dir)
-        (message "DEBUG-VERIFY: parent exists: %s" (file-directory-p parent-dir))
-        (when (file-directory-p parent-dir)
-          (let ((files-in-parent (directory-files parent-dir nil (file-name-nondirectory file))))
-            (message "DEBUG-VERIFY: matching files in parent: %S" files-in-parent)))))
-
-    (message "DEBUG-VERIFY-BRANCH: About to check if file-exists, value: %S" file-exists)
     (if file-exists
         (progn
-          (message "DEBUG-VERIFY-BRANCH: Entered TRUE branch (file exists)")
           ;; Populate current-nodes-in-file hash table for quick lookup
           (dolist (node-props nodes-from-file)
             (puthash (plist-get node-props :id) node-props current-nodes-in-file))
@@ -661,12 +723,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                                     (string= db-node-file file))))
                     (supertag-node-mark-deleted-from-file id)
                     (setf (plist-get counters :nodes-deleted)
-                          (1+ (plist-get counters :nodes-deleted))))))))
-          (message "DEBUG-VERIFY-BRANCH: Finished TRUE branch processing"))
+                          (1+ (plist-get counters :nodes-deleted)))))))))
       ;; File doesn't exist: mark all its nodes as orphaned
-      (message "DEBUG-VERIFY-BRANCH: Entered FALSE branch (file doesn't exist)")
-      (message "DEBUG: File %s no longer exists, marking all its nodes as orphaned"
-               file)
       (dolist (existing-node-pair existing-nodes-in-store)
         (let* ((id (car existing-node-pair))
                (db-node (supertag-node-get id)))
@@ -718,10 +776,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
           (maphash (lambda (file _state)
                      (let ((file-exists (file-exists-p file))
                            (in-scope (supertag-sync--in-sync-scope-p file)))
-                       (message "DEBUG-CLEANUP: Checking file: %s, exists: %s, in-scope: %s" file file-exists in-scope)
                        (when (or (not file-exists)
                                  (not in-scope))
-                         (message "DEBUG-CLEANUP: Marking file for removal: %s (exists: %s, in-scope: %s)" file file-exists in-scope)
                          (push file files-to-remove))))
                    state-table)))
 
@@ -730,20 +786,11 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
         (let ((state-table (supertag-sync--get-state-table)))
           (dolist (file files-to-remove)
             (let ((file-exists-before (file-exists-p file)))
-              (message "DEBUG-REMOVE: Removing file from sync state: %s" file)
-              (message "DEBUG-REMOVE: file-exists-p BEFORE remhash: %s" file-exists-before)
-              (message "DEBUG-REMOVE: Reason: %s"
-                       (cond
-                        ((not file-exists-before) "file doesn't exist")
-                        ((not (supertag-sync--in-sync-scope-p file)) "file out of scope")
-                        (t "unknown")))
               (remhash file state-table)
-              (message "DEBUG-REMOVE: file-exists-p AFTER remhash: %s" (file-exists-p file))
               ;; If file is out of scope but still exists, we just untrack it.
               ;; We DO NOT delete its nodes. They become "unmanaged".
               ;; If the file truly doesn't exist, then we can clean up its nodes.
               (unless (file-exists-p file)
-                (message "File %s does not exist. Cleaning up its nodes." file)
                 (supertag-sync--verify-file-nodes file counters))))))
 
       ;; 2. Scan for New Files
@@ -851,45 +898,56 @@ Returns a list of (id . node-data) pairs."
        (cons id node-data)))))
 
 (defun supertag-sync-garbage-collect-orphaned-nodes ()
-  "Scan the store for nodes marked as orphaned (:file nil) and delete them.
-This function performs the actual deletion of orphaned nodes."
-  (let ((orphaned-ids nil)
+  "Scan the store for nodes marked as orphaned (:file nil) and delete them safely.
+Applies a grace period and mass-deletion guardrails to prevent accidental data loss."
+  (let ((candidate-ids '())
         (deleted-count 0)
         (total-nodes 0)
         (nodes-with-file 0)
-        (nodes-without-file 0))
-    ;; Collect IDs of orphaned nodes using enhanced traversal
-    (setq orphaned-ids
-          (supertag-traverse-nodes
-           (lambda (id node)
-             (cl-incf total-nodes)
-             (let ((file-prop (plist-get node :file)))
-               (if file-prop
-                   (cl-incf nodes-with-file)
-                 (cl-incf nodes-without-file))
-               (when (and (eq (plist-get node :type) :node)
-                          (null (plist-get node :file))
-                          (stringp id)
-                          (not (string= id "")))
-                 id)))))
+        (nodes-without-file 0)
+        (now (current-time)))
+    ;; Collect IDs of orphaned nodes that exceeded grace period
+    (supertag-traverse-nodes
+     (lambda (id node)
+       (cl-incf total-nodes)
+       (let ((file-prop (plist-get node :file)))
+         (if file-prop
+             (cl-incf nodes-with-file)
+           (cl-incf nodes-without-file)))
+       (when (and (eq (plist-get node :type) :node)
+                  (null (plist-get node :file))
+                  (stringp id)
+                  (not (string= id "")))
+         (let* ((orphaned-at (plist-get node :orphaned-at))
+                (age (and (timep orphaned-at)
+                          (float-time (time-subtract now orphaned-at)))))
+           (when (and age (>= age (or supertag-sync-orphan-grace-seconds 0)))
+             (push id candidate-ids))))))
 
-    ;; Delete orphaned nodes outside of transaction to ensure immediate persistence
-    (when orphaned-ids
-      (dolist (id orphaned-ids)
-        (let ((node (supertag-node-get id)))
-          (when node
-            ;; Double-check that this is indeed an orphaned node
-            (when (and (eq (plist-get node :type) :node)
-                       (null (plist-get node :file)))
-              (supertag-node-delete id)
-              (cl-incf deleted-count))))))
+    ;; Mass-deletion guardrails
+    (let* ((candidate-count (length candidate-ids))
+           (ratio (if (> total-nodes 0)
+                      (/ (float candidate-count) (float total-nodes))
+                    0.0))
+           (ratio-cap (or supertag-sync-max-delete-ratio 1.0))
+           (count-cap (or supertag-sync-max-delete-count most-positive-fixnum)))
+      (when (and (> candidate-count 0)
+                 (or (> ratio ratio-cap)
+                     (> candidate-count count-cap)))
+        (message (concat "GC aborted: candidate orphan deletions (%d/%d, %.2f%%) exceed safety caps. "
+                         "Adjust `supertag-sync-max-delete-ratio`/`supertag-sync-max-delete-count` if intentional.")
+                 candidate-count total-nodes (* ratio 100))
+        (setq candidate-ids '())))
 
-    ;; Force immediate save after garbage collection
+    ;; Delete eligible orphaned nodes outside of transaction for immediacy
+    (dolist (id candidate-ids)
+      (let ((node (supertag-node-get id)))
+        (when (and node (null (plist-get node :file)))
+          (supertag-node-delete id)
+          (cl-incf deleted-count))))
+
     (when (> deleted-count 0)
       (supertag-save-store))
-
-    ;; (message "Orphaned node garbage collection complete. %d nodes deleted." deleted-count)
-
     deleted-count))
 
 (defun supertag-sync--id-exists-in-file-p (id file)
@@ -910,7 +968,6 @@ This function iterates through all nodes in the store and checks if they
 still exist in their corresponding files. If not, they are marked as
 orphaned (by setting :file to nil) to be garbage collected later.
 COUNTERS is a plist for tracking changes."
-  (message "DEBUG: Starting deep validation of all nodes against files...")
   (supertag-traverse-nodes
    (lambda (id node)
      (let ((file (plist-get node :file))
@@ -919,7 +976,6 @@ COUNTERS is a plist for tracking changes."
        ;; If :file is already nil, it's already an orphan.
        (when (and file (eq type :node))
          (unless (supertag-sync--id-exists-in-file-p id file)
-           (message "DEBUG: Validation found zombie node! ID: %s, File: %s" id file)
            (supertag-node-mark-deleted-from-file id)
            (when counters
              (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))))))
@@ -960,6 +1016,17 @@ COUNTERS is a plist for tracking changes."
         (while (re-search-forward "#\\([a-zA-Z0-9][-_a-zA-Z0-9]*\\)" nil t)
              (push (match-string 1) tags))))
     (nreverse tags)))
+
+(defun supertag--strip-inline-tags (title)
+  "Remove inline #tags from TITLE while preserving surrounding text.
+Collapses extra spaces produced by tag removal and trims leading/trailing
+whitespace."
+  (when title
+    (let* ((without-tags (replace-regexp-in-string
+                          "#[a-zA-Z0-9][-_a-zA-Z0-9]*\\(?:[ \t]+\\)?"
+                          "" title))
+           (collapsed (replace-regexp-in-string "[ \t]+" " " without-tags)))
+      (string-trim collapsed))))
 
   (defun supertag--extract-inline-tags (elements)
   "Extract all tags from org ELEMENTS.
@@ -1063,19 +1130,20 @@ Returns non-nil when a modification was performed."
                   (setq changed t))
                 changed)))))))
 
+
 (defun supertag--create-tag-entities (tag-names)
   "Create tag entities for TAG-NAMES and return their IDs.
-Ensures tags are created only once and returns existing tag IDs."
+Ensures tags are created only once and returns existing tag IDs.
+IMPORTANT: This function NEVER modifies existing tags - it only creates new ones."
   (let ((tag-ids '()))
     (dolist (tag-name tag-names)
       (let* ((sanitized-name (supertag-sanitize-tag-name tag-name))
              (tag-id sanitized-name) 
              (existing-tag (supertag-tag-get tag-id)))
-        (if existing-tag
-            (message "DEBUG: Tag '%s' already exists, reusing." tag-id)
-          (progn
-            (message "DEBUG: Creating new tag '%s'." tag-id)
-            (supertag-tag-create (list :id tag-id :name sanitized-name))))
+        ;; CRITICAL: Only create if tag doesn't exist
+        ;; Never modify existing tags to preserve their field definitions
+        (unless existing-tag
+          (supertag-tag-create (list :id tag-id :name sanitized-name)))
         (push tag-id tag-ids)))
     (nreverse tag-ids)))
 
@@ -1102,6 +1170,7 @@ This function is called only when a node is actually being created or updated."
         ;; Create node-tag relations only if they don't exist
         (supertag--create-node-tag-relations node-id tag-ids)))))
 
+
 (defun supertag--process-node-references (node-data counters)
   "Process reference relations for a node, creating reference relations as needed.
 NODE-DATA is the node plist containing reference information.
@@ -1119,19 +1188,19 @@ This function is called only when a node is actually being created or updated."
                 (progn
                   ;; Create reference relation (supertag-relation-create handles duplicates)
                   (let ((existing-relations (supertag-relation-find-between node-id target-id :reference)))
-                    (if existing-relations
-                        (message "DEBUG: Reference relation (%s -> %s) already exists, skipping." node-id target-id)
-                      (progn
-                        (message "DEBUG: Creating new reference relation (%s -> %s)." node-id target-id)
-                        (supertag-relation-create
-                         (list :type :reference
-                               :from node-id
-                               :to target-id
-                               :created-at (current-time)))
-                        (setf (plist-get counters :references-created)
-                              (1+ (or (plist-get counters :references-created) 0)))))))
+                    (unless existing-relations
+                      ;; (message "DEBUG: Reference relation (%s -> %s) already exists, skipping." node-id target-id)
+                      ;; (message "DEBUG: Creating new reference relation (%s -> %s)." node-id target-id)
+                      (supertag-relation-create
+                       (list :type :reference
+                             :from node-id
+                             :to target-id
+                             :created-at (current-time)))
+                      (setf (plist-get counters :references-created)
+                            (1+ (or (plist-get counters :references-created) 0))))))
               ;; Target node doesn't exist yet - this is normal during batch sync
-              (message "DEBUG: Target node %s not found yet, reference relation will be created when target is processed." target-id))))))))
+              ;; (message "DEBUG: Target node %s not found yet, reference relation will be created when target is processed." target-id)
+              )))))))
 
 (defun supertag--cleanup-orphaned-references (node-id current-refs counters)
   "Clean up orphaned reference relations for a node.
@@ -1152,7 +1221,7 @@ COUNTERS is a plist for tracking relation statistics."
   "Extract the outline path (olp) for HEADLINE.
 Returns a list of ancestor titles from root to current headline (inclusive).
 For example: (\"Top Level\" \"Second Level\" \"Current Headline\")
-The titles preserve #tags but remove TODO keywords and org :tags:."
+The titles remove inline #tags as well as TODO keywords and org :tags:."
   (let ((path '())
         (current headline))
     ;; Traverse up the hierarchy collecting titles
@@ -1160,18 +1229,18 @@ The titles preserve #tags but remove TODO keywords and org :tags:."
       (when (eq (org-element-type current) 'headline)
         (let* ((raw-title (org-element-property :raw-value current))
                (todo-keyword (org-element-property :todo-keyword current))
-               ;; Clean title: remove TODO keyword and org :tags: but keep #tags
-               (cleaned-title (let ((title raw-title))
-                               (when (and title todo-keyword)
-                                 (setq title (replace-regexp-in-string
-                                            (concat "^" (regexp-quote todo-keyword) "\\s-+")
-                                            "" title)))
-                               (when title
-                                 ;; Remove org native :tags: at the end
-                                 (setq title (replace-regexp-in-string "[ \t]+:[[:alnum:]_@#%:]+:[ \t]*$" "" title))
-                                 (string-trim title)))))
-          (when cleaned-title
-            (push cleaned-title path))))
+               ;; Clean title: remove TODO keyword, org :tags:, and inline #tags
+               (cleaned-title
+                (when raw-title
+                  (let ((title raw-title))
+                    (when todo-keyword
+                      (setq title (replace-regexp-in-string
+                                   (concat "^" (regexp-quote todo-keyword) "\\s-+")
+                                   "" title)))
+                    ;; Remove org native :tags: at the end
+                    (setq title (replace-regexp-in-string "[ \t]+:[[:alnum:]_@#%:]+:[ \t]*$" "" title))
+                    (supertag--strip-inline-tags title)))))
+          (when cleaned-title (push cleaned-title path))))
       ;; Move to parent element
       (setq current (org-element-property :parent current))
       ;; Stop if we've reached the document root
@@ -1210,13 +1279,20 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
          (contents-end (org-element-property :contents-end headline))
          (original-raw-title (org-element-property :raw-value headline))
          (todo-keyword (org-element-property :todo-keyword headline))
-         ;; Clean title: remove TODO keyword and :tags: but keep #tags
-         (cleaned-title (let ((title original-raw-title))
-                          (when todo-keyword (setq title (replace-regexp-in-string (concat "^" (regexp-quote todo-keyword) "\\s-+") "" title)))
-                          (setq title (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title))
-                          (setq title (replace-regexp-in-string "#[^ \t\n\r]+\\s*" "" title))
-                          (string-trim title)))
-         (final-title (if (string-empty-p cleaned-title) original-raw-title cleaned-title))
+         ;; Clean title: remove TODO keyword, :tags:, and inline #tags while keeping display text
+         (cleaned-title
+          (when original-raw-title
+            (let ((title original-raw-title))
+              (when todo-keyword
+                (setq title (replace-regexp-in-string
+                             (concat "^" (regexp-quote todo-keyword) "\\s-+")
+                             "" title)))
+              (setq title (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title))
+              (setq title (supertag--strip-inline-tags title))
+              (string-trim title))))
+         (final-title (if (or (null cleaned-title) (string-empty-p cleaned-title))
+                          original-raw-title
+                        cleaned-title))
          ;; Extract outline path (olp) - list of ancestor titles from root to current
          (olp (supertag--extract-outline-path headline))
          (headline-tags (supertag--extract-inline-tags original-raw-title))
@@ -1310,6 +1386,7 @@ MIGRATION-MODE when t, only processes nodes with existing IDs."
 ;;;------------------------------------------------------------------
 ;;; Supertag Sync Auto Star or Stop
 ;;;------------------------------------------------------------------
+;;;###autoload
 (defun supertag-sync-start-auto-sync (&optional interval)
   "Start automatic synchronization with INTERVAL seconds.
 If INTERVAL is nil, use `supertag-sync-auto-interval`."
@@ -1643,6 +1720,6 @@ Provides helpful hints to the user about configuration issues."
      
      ;; Case 4: Files tracked but all up-to-date
      (t
-      (message "DIAGNOSTIC: %d files tracked, all up-to-date. This is normal." state-count)))))
+      (message "DIAGNOSTIC: %d files tracked." state-count)))))
 
 (provide 'supertag-services-sync)

@@ -112,8 +112,7 @@ Should be called once during Supertag initialization."
     (setq supertag-scheduler--master-timer
           (run-with-timer 0
                           supertag-scheduler-check-interval
-                          #'supertag-scheduler--check-tasks))
-    (message "Supertag Scheduler started.")))
+                          #'supertag-scheduler--check-tasks))))
 
 (defun supertag-scheduler-stop ()
   "Stop the master scheduler timer."

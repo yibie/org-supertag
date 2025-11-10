@@ -149,9 +149,9 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
      ;; Fast index-based lookups below
      ((eq ast-type 'tag)
       (let ((tag-value (plist-get ast :value)))
-        (message "Supertag Query Debug: Looking up nodes with tag '%s'" tag-value)
+        ;;(message "Supertag Query Debug: Looking up nodes with tag '%s'" tag-value)
         (let ((result (supertag-index-get-nodes-by-tag tag-value)))
-          (message "Supertag Query Debug: Tag lookup returned %d nodes: %s" (length result) result)
+          ;;(message "Supertag Query Debug: Tag lookup returned %d nodes: %s" (length result) result)
           result)))
      
      ((eq ast-type 'field)
@@ -160,7 +160,7 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
      ((eq ast-type 'after)
       (let ((query-time (supertag-query--resolve-date-string (plist-get ast :date))))
         (unless query-time (error "Invalid date format for 'after': %s" (plist-get ast :date)))
-        (message "Supertag Query Debug: After query - resolved time: %s, current time: %s" query-time (current-time))
+        ;;(message "Supertag Query Debug: After query - resolved time: %s, current time: %s" query-time (current-time))
         (supertag-index-get-nodes-by-date-range query-time nil)))
 
      ((eq ast-type 'before)
