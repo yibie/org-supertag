@@ -82,9 +82,7 @@ Returns t if backup was created, nil if not needed."
   (let* ((today (format-time-string "%Y-%m-%d"))
          (backup-file (supertag-get-backup-filename today)))
     (if (file-exists-p backup-file)
-        (progn
-          (message "Daily backup already exists: %s" backup-file)
-          nil)
+        nil
       (when (file-exists-p supertag-db-file)
         (supertag-persistence-ensure-data-directory)
         (copy-file supertag-db-file backup-file)
@@ -154,6 +152,54 @@ This function can be called interactively by users."
 
 ;;; --- Persistence Functions ---
 
+(defun supertag--normalize-fields-collection ()
+  "Normalize the :fields collection to ensure proper nested hash table structure.
+The :fields collection has a three-level structure:
+  :fields -> node-id -> tag-id -> field-name -> value
+This function ensures all levels are proper hash tables."
+  (let* ((fields-root (supertag-store-get-collection :fields))
+         (normalized-count 0))
+    (when (hash-table-p fields-root)
+      (maphash
+       (lambda (node-id node-data)
+         ;; Ensure node-level is a hash table
+         (unless (hash-table-p node-data)
+           (let ((node-table (ht-create)))
+             ;; Convert node-data to hash table if it's a list
+             (when (listp node-data)
+               (let ((cursor node-data))
+                 (while cursor
+                   (let ((tag-id (pop cursor))
+                         (tag-data (pop cursor)))
+                     (when tag-id
+                       (puthash tag-id tag-data node-table))))))
+             (puthash node-id node-table fields-root)
+             (setq node-data node-table)
+             (cl-incf normalized-count)))
+         
+         ;; Ensure tag-level is a hash table
+         (when (hash-table-p node-data)
+           (maphash
+            (lambda (tag-id tag-data)
+              (unless (hash-table-p tag-data)
+                (let ((tag-table (ht-create)))
+                  ;; Convert tag-data to hash table if it's a list
+                  (when (listp tag-data)
+                    (let ((cursor tag-data))
+                      (while cursor
+                        (let ((field-name (pop cursor))
+                              (field-value (pop cursor)))
+                          (when field-name
+                            (puthash field-name field-value tag-table))))))
+                  (puthash tag-id tag-table node-data)
+                  (cl-incf normalized-count))))
+            node-data)))
+       fields-root)
+      (when (> normalized-count 0)
+        (message "Normalized %d field structures in :fields collection." normalized-count)
+        (supertag-mark-dirty)))))
+
+
 (defun supertag-save-store (&optional file)
   "Save the current `supertag--store` to a file.
 FILE is the optional file path. Defaults to `supertag-db-file`."
@@ -161,27 +207,111 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
   (let ((file-to-save (or file supertag-db-file)))
     (supertag-persistence-ensure-data-directory) ; Ensure directory exists before saving
     (when (supertag-dirty-p) ; Only save if dirty
-      (message "Saving Org-Supertag data to: %s..." file-to-save)
+      ;; Safety guard: avoid overwriting a non-trivial on-disk DB with an empty in-memory store
+      (let* ((nodes-table (ignore-errors (supertag-store-get-collection :nodes)))
+             (live-node-count (and (hash-table-p nodes-table)
+                                   (hash-table-count nodes-table)))
+             (existing-file-p (file-exists-p file-to-save))
+             (existing-size (when existing-file-p (file-attribute-size (file-attributes file-to-save))))
+             ;; Treat DB file larger than 1KB as "non-trivial" by default
+             (non-trivial-file (and existing-size (> existing-size 1024))))
+        (when (and non-trivial-file
+                   (numberp live-node-count)
+                   (= live-node-count 0))
+          (message "Protective skip: Live DB has 0 nodes while on-disk DB looks non-trivial (%s bytes). Skipping save to avoid data loss."
+                   existing-size)
+          (cl-return-from supertag-save-store nil)))
       (with-temp-file file-to-save
-        (set-buffer-file-coding-system 'utf-8-unix) ; 确保UTF-8编码
-        (let ((print-escape-nonascii t)  ; 正确处理非ASCII字符
-              (print-length nil)         ; 不限制打印长度
-              (print-level nil))         ; 不限制打印层级
+        (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
+        (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
+              (print-length nil)         ; Unlimited print length 
+              (print-level nil)          ; No limit print level
+              (print-circle t))          ; Handle circular structures
           (prin1 supertag--store (current-buffer)))))
       (supertag-clear-dirty)
       ;; Check if daily backup is needed after successful save
-      (supertag-check-daily-backup)
-      (message "Org-Supertag data saved to: %s" file-to-save)))
+      (supertag-check-daily-backup)))
+
+(defun supertag-db-migrate-and-normalize ()
+  "Run all data migrations and normalizations on the loaded store.
+This includes version migrations, field structure normalization,
+and legacy field name migrations. This function should be called
+manually after loading a database from an older version or when
+data corruption is suspected."
+  (interactive)
+  (unless (hash-table-p supertag--store)
+    (message "Database not loaded. Please load the database first.")
+    (cl-return-from supertag-db-migrate-and-normalize))
+
+  (message "Starting database migration and normalization...")
+
+  ;; --- Data version check and automatic migration ---
+  (supertag--run-migrations supertag--store)
+
+  ;; --- Normalize :fields collection structure ---
+  (supertag--normalize-fields-collection)
+
+  ;; --- Automatic Purge of Invalid Nodes (example, kept commented) ---
+  ;; (let* ((nodes-table (supertag-store-get-collection :nodes))
+  ;;        (keys-to-remove '())
+  ;;        (purged-count 0)
+  ;;        (initial-count (hash-table-count nodes-table)))
+  ;;   (maphash
+  ;;    (lambda (key value)
+  ;;      (unless (and value (plist-get value :type))
+  ;;        (push key keys-to-remove))))
+  ;;    nodes-table)
+  ;;   (when keys-to-remove
+  ;;     (dolist (key keys-to-remove)
+  ;;       (supertag-store-remove-entity :nodes key)
+  ;;       (cl-incf purged-count))
+  ;;     (message "Purged %d invalid/ghost entries from database." purged-count)
+  ;;     (supertag-mark-dirty)))
+
+  ;; --- Automatic Field Migration ---
+  (let* ((nodes-table (supertag-store-get-collection :nodes))
+         (migrated-count 0))
+    (maphash
+     (lambda (key value)
+       (when (and value (eq (plist-get value :type) :node))
+         (let ((needs-migration nil)
+               (migrated-value (copy-sequence value)))
+           ;; Migrate :file-path to :file
+           (when (and (plist-get value :file-path)
+                      (not (plist-get value :file)))
+             (setq migrated-value (plist-put migrated-value :file (plist-get value :file-path)))
+             (setq needs-migration t))
+           ;; Migrate :pos to :position
+           (when (and (plist-get value :pos)
+                      (not (plist-get value :position)))
+             (setq migrated-value (plist-put migrated-value :position (plist-get value :pos)))
+             (setq needs-migration t))
+           ;; Update if migration was needed
+           (when needs-migration
+             (supertag-store-put-entity :nodes key migrated-value t)
+             (cl-incf migrated-count)))))
+     nodes-table)
+    (when (> migrated-count 0)
+      (message "Migrated %d nodes with legacy field names (:file-path -> :file, :pos -> :position)."
+               migrated-count)
+      (supertag-mark-dirty)))
+
+  (message "Database migration and normalization complete.")
+  (when (supertag-dirty-p)
+    (message "Changes were made. Saving database...")
+    (supertag-save-store)))
 
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
+This function ONLY loads data and does not perform any migration
+or normalization. For data migration, use the command
+`supertag-db-migrate-and-normalize` after loading.
 FILE is the optional file path. Defaults to supertag-db-file."
   (interactive)
   (let ((file-to-load (or file supertag-db-file)))
     (supertag-persistence-ensure-data-directory) ; Ensure directory exists before loading
     (if (file-exists-p file-to-load)
         (progn
-          (message "Loading Org-Supertag data from: %s..." file-to-load)
           (with-temp-buffer
             (insert-file-contents file-to-load)
             (goto-char (point-min))
@@ -190,76 +320,21 @@ FILE is the optional file path. Defaults to supertag-db-file."
                 (progn
                   (message "Warning: Database file %s is empty, initializing new store" file-to-load)
                   (setq supertag--store (ht-create)))
-              (let ((loaded-data (read (current-buffer))))
-                (unless (hash-table-p loaded-data)
-                  (message "Warning: Legacy data format detected in %s, coercing to canonical store."
-                           file-to-load))
-                (setq supertag--store loaded-data)
-                ;; --- 数据版本检查和自动迁移 ---
-                (supertag--run-migrations supertag--store)
-
-                ;; --- Automatic Purge of Invalid Nodes ---
-                (let* ((nodes-table (supertag-store-get-collection :nodes))
-                       (keys-to-remove '())
-                       (purged-count 0)
-                       (migrated-count 0)
-                       (initial-count (hash-table-count nodes-table)))
-                  (message "DEBUG-PURGE: Initial node count before purge: %d" initial-count)
-                  (maphash
-                   (lambda (key value)
-                     (let ((has-value (not (null value)))
-                           (has-type (and value (plist-get value :type))))
-                       (unless (and value (plist-get value :type))
-                         (message "DEBUG-PURGE: Removing node %s - has-value: %s, has-type: %s, value: %S"
-                                  key has-value has-type value)
-                         (push key keys-to-remove))))
-                   nodes-table)
-                  (when keys-to-remove
-                    (message "DEBUG-PURGE: Found %d nodes to purge (out of %d total)"
-                             (length keys-to-remove) initial-count)
-                    (dolist (key keys-to-remove)
-                      (supertag-store-remove-entity :nodes key)
-                      (cl-incf purged-count))
-                    (message "Purged %d invalid/ghost entries from database during load." purged-count)
-                    (supertag-mark-dirty))
-                  ;; --- Automatic Field Migration ---
-                  (maphash
-                   (lambda (key value)
-                     (when (and value (eq (plist-get value :type) :node))
-                       (let ((needs-migration nil)
-                             (migrated-value (copy-sequence value)))
-                         ;; Migrate :file-path to :file
-                         (when (and (plist-get value :file-path)
-                                    (not (plist-get value :file)))
-                           (setq migrated-value (plist-put migrated-value :file (plist-get value :file-path)))
-                           (setq needs-migration t))
-                         ;; Migrate :pos to :position
-                         (when (and (plist-get value :pos)
-                                    (not (plist-get value :position)))
-                           (setq migrated-value (plist-put migrated-value :position (plist-get value :pos)))
-                           (setq needs-migration t))
-                         ;; Update if migration was needed
-                         (when needs-migration
-                           (supertag-store-put-entity :nodes key migrated-value t)
-                           (cl-incf migrated-count)))))
-                   nodes-table)
-                  (when (> migrated-count 0)
-                    (message "Migrated %d nodes with legacy field names (:file-path -> :file, :pos -> :position)."
-                             migrated-count)
-                    (supertag-mark-dirty))
-                  ;; --- ADD THIS DEBUG PROBE ---
-                  (message "DEBUG-LOAD: Nodes table loaded. Type: %s, Count: %s"
-                           (type-of nodes-table)
-                           (hash-table-count nodes-table))))
-                (message "Org-Supertag data loaded from: %s" file-to-load))))
+              (condition-case err
+                  (let ((loaded-data (read (current-buffer))))
+                    (unless (hash-table-p loaded-data)
+                      (message "Warning: Legacy data format detected in %s. Coercing to hash-table."
+                               file-to-load))
+                    (setq supertag--store loaded-data))
+                (error
+                 (message "Error reading database file %s: %s. Initializing empty store."
+                          file-to-load (error-message-string err))
+                 (setq supertag--store (ht-create))))))
           (supertag-clear-dirty)
-          ;; Rebuild indexes after loading data
-          (when (hash-table-p supertag--store)
-            ;; Placeholder for index rebuild or hooks, if any
-            ))
+          (message "Database loaded. For data migration, run M-x supertag-db-migrate-and-normalize."))
       (unless (hash-table-p supertag--store)
         (setq supertag--store (ht-create))
-        (message "Initialized empty Org-Supertag store."))))
+        (message "Initialized empty Org-Supertag store.")))))
 
 (defun supertag-schedule-save ()
   "Schedule a delayed save.
@@ -530,30 +605,31 @@ VERSION is the version string to set."
 (defun supertag--run-migrations (data)
   "Run data migrations based on version number.
 DATA is the data store to migrate.
-Automatically detects version and executes necessary migration steps."
+Automatically detects version and executes necessary migration steps.
+Returns t if migration was performed, nil otherwise."
   (let ((current-version (supertag--get-data-version data)))
     (unless (string= current-version supertag-data-version)
-      (message "Migrating data from version %s to %s" current-version supertag-data-version)
-      
       ;; Execute version-specific migrations
       (cond
        ;; Migrate from 4.x to 5.0.0
        ((string-prefix-p "4." current-version)
-        (supertag--migrate-4x-to-5x data))
+        (message "Migrating data from version %s to %s..." current-version supertag-data-version)
+        (supertag--migrate-4x-to-5x data)
+        (message "Data migration completed to version %s" supertag-data-version))
        
        ;; Other version migrations can be added here
        (t
-        (message "No migration path defined for version %s" current-version)))
+        (when (not (string= current-version supertag-data-version))
+          (message "Warning: Unknown data version %s, setting to current version %s" 
+                   current-version supertag-data-version))))
       
       ;; Update version number
       (supertag--set-data-version data supertag-data-version)
-      (message "Data migration completed to version %s" supertag-data-version))))
+      t)))
       
 (defun supertag--migrate-4x-to-5x (data)
   "Migrate from version 4.x to 5.0.0.
 Main changes include data format standardization and field name normalization."
-  (message "Executing 4.x to 5.0.0 migration...")
-  
   ;; Specific migration steps can be added here
   ;; For example, field renaming, data format conversion, etc.
   
@@ -570,9 +646,7 @@ Main changes include data format standardization and field name normalization."
                    
                    ;; Update node data
                    (puthash node-id node-data nodes-table)))
-               nodes-table)))
-  
-  (message "4.x to 5.0.0 migration completed"))
+               nodes-table))))
 
 ;;; --- Data Backup and Transaction Safety Mechanisms ---
 
@@ -648,3 +722,5 @@ Returns t if all references are valid, otherwise returns nil."
     valid-p))
 
 (provide 'supertag-core-persistence)
+
+;;; supertag-core-persistence.el ends here

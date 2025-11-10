@@ -139,8 +139,10 @@ For completion framework integration, e.g., live previews.")
                         "Untitled"))
          (olp (plist-get node-data :olp))
          (file (plist-get node-data :file))
-         (display-path (if (and (listp olp) olp)
-                           (concat (string-join olp " / ") " / " raw-title)
+         (display-path (if (and (listp olp) (> (length olp) 1))
+                           ;; Node has parents, show "Parent / Child"
+                           (concat (string-join (butlast olp) " / ") " / " raw-title)
+                         ;; Node is top-level, just show its title
                          raw-title)))
     (if file
         (format "%s  (in %s)" display-path (file-name-nondirectory file))
@@ -358,20 +360,24 @@ Returns the new value entered by the user."
 (defun supertag-ui-create-field-definition ()
   "Interactively create a new field definition.
 Returns a field definition plist, or nil if cancelled."
-  (message "DEBUG: supertag-field-types is %S" supertag-field-types)
   (let* ((name (read-string "Field name: ")))
     (when (and name (not (string-empty-p name)))
-      (let* ((type-and-options (supertag-field-read-type-with-options :string))
-             (type (car type-and-options))
-             (options (cdr type-and-options))
-             (default (read-string "Default value (optional): "))
-             (field-def (list :name name :type type)))
-        (unless (string-empty-p default)
-          (setq field-def (plist-put field-def :default default)))
-        ;; Add options for :options type
-        (when (eq type :options)
-          (setq field-def (plist-put field-def :options options)))
-        field-def))))
+      (let* ((type-keywords (mapcar #'symbol-name supertag-field-types))
+             (type-str (completing-read "Field type: " type-keywords nil t))
+             (type (when type-str (intern (concat ":" type-str))))
+             (options nil))
+        (when type
+          (if (eq type :options)
+              (let* ((options-input (read-string "Options (comma separated): "))
+                     (options-list (split-string options-input "," t "[ \t\n\r]+")))
+                (setq options options-list)))
+          (let ((default (read-string "Default value (optional): " "")))
+            (let ((field-def (list :name name :type type)))
+              (unless (string-empty-p default)
+                (setq field-def (plist-put field-def :default default)))
+              (when (eq type :options)
+                (setq field-def (plist-put field-def :options options)))
+              field-def)))))))
 
 (defun supertag-ui-select-tag-on-node (node-id)
   "Interactively select a tag that is present on NODE-ID.

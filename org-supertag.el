@@ -112,7 +112,6 @@
  "Initialize the Org-Supertag system.
 This function loads all necessary components and sets up the environment."
     (interactive)
-    (message "Initializing Org-Supertag system...")
     
     ;; Step 1: Ensure data directories exist
     (supertag-persistence-ensure-data-directory)
@@ -135,11 +134,10 @@ This function loads all necessary components and sets up the environment."
     ;; Step 7: Set up auto-save and daily backup timers
     (supertag-setup-all-timers)
     
-    ;; Step 8: Start auto-sync (only if directories are configured)
-    ;; DISABLED: Do not start sync automatically to prevent race conditions.
-    ;; User should start it manually via emacs-startup-hook.
-    ;; (when org-supertag-sync-directories
-    ;;   (supertag-sync-start-auto-sync))
+    ;; Step 8: Schedule safe auto-start for sync (optional, guarded)
+    (when (and (boundp 'supertag-sync-auto-start)
+               supertag-sync-auto-start)
+      (supertag-sync-schedule-auto-start))
     
     ;; Step 9: Initialize embed services
     (when (fboundp 'supertag-services-embed-init)
@@ -155,9 +153,7 @@ This function loads all necessary components and sets up the environment."
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (derived-mode-p 'org-mode)
-          (supertag-ui-completion-mode 1))))
-    
-    (message "Org-Supertag system initialized."))
+          (supertag-ui-completion-mode 1)))))
 
 (defun supertag--check-critical-config ()
   "Check critical configuration before initialization.
@@ -182,7 +178,10 @@ Please check your org-supertag-sync-directories configuration." dir)
 
 (defun supertag--validate-initialization ()
   "Validate initialization state and provide helpful diagnostics."
-  (let* ((nodes-table (supertag-store-get-collection :nodes))
+  (let* ((store-is-valid (and (hash-table-p supertag--store)
+                              (> (hash-table-count supertag--store) 0)))
+         (nodes-table (when store-is-valid
+                        (gethash :nodes supertag--store)))
          (node-count (if (hash-table-p nodes-table)
                          (hash-table-count nodes-table)
                        0))
@@ -197,8 +196,10 @@ Please check your org-supertag-sync-directories configuration." dir)
              node-count)
     
     ;; Warn if database is empty but should have data
+    ;; Only warn if store itself is invalid or truly empty (no collections at all)
     (when (and db-exists
                (> db-size 100)  ; Non-trivial file size
+               (not store-is-valid)  ; Store is invalid or empty
                (= node-count 0))
       (display-warning 'org-supertag
                        (format "Database file exists but contains no nodes!\n\

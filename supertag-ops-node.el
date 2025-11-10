@@ -56,8 +56,9 @@ Returns the created node data."
                                  (or (plist-get final-props :created-at) (supertag-current-time))))
          (final-props (plist-put final-props :modified-at (supertag-current-time))))
 
-    (message "DEBUG: supertag-node-create: Creating node with ID: %S, file: %S"
-             id (plist-get final-props :file))
+
+    ;; (message "DEBUG: supertag-node-create: Creating node with ID: %S, file: %S"
+    ;;          id (plist-get final-props :file))
 
     ;; Use unified commit system
     (supertag-ops-commit
@@ -91,7 +92,8 @@ Returns the updated node data."
        :perform (lambda ()
                   (let* ((updated-node (funcall updater previous)))
                     (when updated-node
-                      (let* ((final-node (plist-put updated-node :modified-at (supertag-current-time))))
+                      (let* ((final-node (plist-put updated-node :modified-at (supertag-current-time)))
+                             (final-node (plist-put final-node :type (or (plist-get updated-node :type) (plist-get previous :type)))))
                         (supertag--validate-node-data final-node)
                         (supertag-store-put-entity :nodes id final-node)
                         final-node))))))))

@@ -57,7 +57,7 @@ commands/
 .continue/
 .kiro/
 dev-note/
-
+.qoder/
 .ruff_cache/
 IMPROVEMENT_PLAN.md
 AGENTS.md
@@ -72,5 +72,5 @@ commands/
 docs/
 hooks/
 logs/
-
+qoder/
 

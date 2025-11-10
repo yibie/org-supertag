@@ -190,8 +190,7 @@ the index is synchronized with the stored rules."
   (clrhash supertag--rule-index)
   (let ((all-rules (supertag-automation-list)))
     (dolist (rule all-rules)
-      (supertag--add-rule-to-index rule))
-    (message "Automation rule index rebuilt. %d rules indexed." (length all-rules))))
+      (supertag--add-rule-to-index rule))))
 
 (defun supertag--get-rules-from-index (event-path)
   "Get a list of relevant rule IDs from the index based on an EVENT-PATH.
@@ -333,7 +332,6 @@ Returns the created automation data with assigned ID."
         (when (fboundp 'supertag-notify)
           (supertag-notify :automation-created :automation-id id :data automation-plist))
         
-        (message "Created automation: %s (ID: %s)" name id)
         automation-plist))))
 
 (defun supertag-automation-get (id)
@@ -484,16 +482,14 @@ Returns automation data or nil if not found."
 This is called by the automation engine when a rule matches an event."
   (when (and rule (plist-get rule :enabled))
     ;; Prevent recursive automation during action execution
-    (if supertag-automation--executing
-        (message "SKIP: Automation already executing, preventing recursion for rule %s" (plist-get rule :id))
+    (unless supertag-automation--executing
       (let ((actions (plist-get rule :actions))
             (rule-id (plist-get rule :id))
             (supertag-automation--executing t))
         (message "Executing rule %s on node %s" rule-id node-id)
         (unwind-protect
             (progn
-              (supertag-automation--execute-actions actions node-id context)
-              (supertag-automation-log-execution rule-id node-id (plist-get (car actions) :action)))
+              (supertag-automation--execute-actions actions node-id context))
           ;; Always clear the executing flag
           (setq supertag-automation--executing nil))))))
 
@@ -1258,13 +1254,6 @@ This ensures all related entities have consistent field values."
     (message "Synced %d field synchronization relations" count)
     count))
 
-;;; --- Utility Functions ---
-
-(defun supertag-automation-log-execution (automation-id node-id action-type)
-  "Log automation execution for debugging and monitoring."
-  (message "Automation executed: %s on node %s (action: %s)"
-           automation-id node-id action-type))
-
 ;;; --- System Integration ---
 
 (defun supertag-automation-init ()
@@ -1288,9 +1277,7 @@ Sets up rule indexing and event handlers for the automation engine."
   (when (fboundp 'supertag-subscribe)
     (supertag-subscribe :store-changed #'supertag-automation--handle-entity-change))
   
-  (setq supertag-automation--enabled t)
-  (message "Unified automation system initialized with %d rules indexed."
-           (hash-table-count supertag--rule-index)))
+  (setq supertag-automation--enabled t))
 
 (defun supertag-automation-cleanup ()
   "Cleanup the unified automation system."

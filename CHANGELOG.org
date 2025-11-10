@@ -1,4 +1,16 @@
 * Changelog
+* [5.1.2] - 2025-11-02
+** Improvements
+*** Enhanced Tag Inheritance Management and UI Clarity
+- Clarified tag inheritance model: Explicitly defined `org-supertag`'s schematic field inheritance, distinct from Org-mode's structural inheritance.
+- Improved Schema View UI: `supertag-schema--render-tag-node` now visually groups fields by origin (own vs. inherited), making inheritance explicit.
+- Renamed functions for clarity: `supertag-set-child` to `supertag-set-tag-parent` (and `supertag--set-parent` to `supertag--set-tag-parent`) to better reflect tag inheritance management.
+- Simplified Field Editing Workflow:
+  - `supertag-schema--rename-field-at-point`: Prevents renaming inherited fields, guiding users to edit at the source.
+  - `supertag-schema--edit-field-definition-at-point`: For inherited fields, offers "Jump to definition" (via `supertag-schema--goto-tag`). For local fields, retains full editing.
+  - `supertag-schema--delete-at-point`: Prevents deleting inherited fields from child tags, guiding users to delete from the parent.
+  - Added `supertag-schema--goto-tag` helper for jumping to tag definitions.
+
 * [5.1.1] - 2025-09-12
 ** Improvements
 *** Enhanced Schema View User Experience
