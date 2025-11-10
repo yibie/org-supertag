@@ -367,7 +367,10 @@ TEXT can be any value convertible to string."
       (insert (propertize (concat " " (make-string dots-length ?.)) 
                           'face `(:foreground ,(supertag-view-helper-get-muted-color)))))
     (insert " ")
-    (insert formatted-value)
+    (let ((value-start (point)))
+      (insert formatted-value)
+      ;; Mark value column for precise cursor placement in views
+      (add-text-properties value-start (point) '(supertag-value-column t)))
     (insert "\n")
     ;; Add text properties for interactivity
     (when interactive-props
@@ -465,8 +468,10 @@ TEXT can be any value convertible to string."
     (let ((dots-length (max 2 (- 25 (length field-name)))))
       (insert (propertize (concat " " (make-string dots-length ?.)) 
                           'face `(:foreground ,(supertag-view-helper-get-muted-color)))))
-    ;; Field value
-    (insert " " formatted-value)
+    ;; Field value (mark the value region so views can place point directly here)
+    (let ((value-start (1+ (point)))) ; after the separating space
+      (insert " " formatted-value)
+      (add-text-properties value-start (point) '(supertag-value-column t)))
     ;; Right border and padding
     (let ((line-length (- (point) start-pos 2))
           (target-length 56))
