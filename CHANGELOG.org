@@ -1,4 +1,64 @@
 * Changelog
+* [5.1.4] - 2025-11-11
+** Improvements
+*** Enhanced Node View with Popup Interface and Evil Mode Support
+- Replaced side-window Node View with a stable popup child frame (posframe) for better focus management
+- Ensured proper cursor visibility and focus control in the popup window
+- Added Evil mode compatibility:
+  - Disabled evil-local-mode in the popup to prevent key conflicts
+  - Forced Emacs state when Evil is present
+  - Set initial state to emacs for consistent behavior
+- Improved editing workflow:
+  - Jump directly to first field's value column on open (not header or last line)
+  - After updating a field, restore cursor to the same field/value with preserved column offset
+  - On cancel (C-g), return focus to popup and restore cursor position
+- Enhanced field targeting with text properties (:type :field-value) for precise cursor placement
+- Added supertag-value-column property to rendered value segments for accurate positioning
+- Implemented fallback behavior: return to buffer start when no fields exist
+
+**** Implementation Details
+- Files modified: supertag-view-node.el, supertag-view-helper.el
+- posframe-show configured with override parameters for cursor visibility and focus acceptance
+- Focus/positioning fixes applied after popup window selection to avoid focus churn
+
+* [5.1.3] - 2025-11-11
+** Improvements
+*** Safe Auto-Start for Sync and Enhanced Data Protection
+- Implemented delayed and retry-based auto-start of sync service
+  - New defcustom: supertag-sync-auto-start (default: t)
+  - New defcustom: supertag-sync-auto-start-initial-delay (default: 3s)
+  - New defcustom: supertag-sync-auto-start-retry-interval (default: 5s)
+  - New defcustom: supertag-sync-auto-start-max-retries (default: 24)
+  - Waits for all org-supertag-sync-directories to exist before starting
+  - Prevents early-start races when directories (cloud drives, mounts) aren't ready yet
+
+*** Enhanced Persistence Protection
+- Added safeguard in supertag-save-store to prevent data loss
+- Skips saving when in-memory node count is 0 AND on-disk DB appears non-trivial (>1KB)
+- Logs protective skip message to alert users of potential issue
+- Prevents accidental overwrite of valuable on-disk data with empty in-memory state
+
+*** Orphan Node Garbage Collection Guardrails
+- New defcustom: supertag-sync-orphan-grace-seconds (default: 3600)
+  - Orphan nodes marked with :orphaned-at timestamp
+  - Only deleted after grace period expires
+  - :orphaned-at cleared when node reappears in a file
+- New defcustom: supertag-sync-max-delete-ratio (default: 0.5)
+  - Limits mass deletions to 50% of total nodes
+- New defcustom: supertag-sync-max-delete-count (default: 1000)
+  - Hard cap on number of nodes deleted in one GC operation
+- Garbage collector aborts with warning when limits exceeded
+
+**** Rationale
+- Prevents transient environment issues (unmounted drives, delayed cloud sync) from causing mass data loss
+- Protects against scenario where early sync misclassifies many nodes as orphans
+- Provides conservative, configurable guardrails for safe automated cleanup
+
+**** Backwards Compatibility
+- Auto-start enabled by default but safe with retry mechanism
+- All GC guardrails are configurable via defcustoms
+- No breaking API changes
+
 * [5.1.2] - 2025-11-02
 ** Improvements
 *** Enhanced Tag Inheritance Management and UI Clarity
