@@ -646,7 +646,8 @@ PARAMS should contain :state with the new TODO keyword (e.g., \"DONE\")."
 
 (defun supertag-automation-action-add-tag (node-id params)
   "Add a tag to the node.
-Uses the same data-first approach as UI commands for consistency."
+Restore original behavior: append inline #tag at end of headline line
+if not already present."
   (require 'supertag-ops-tag)
   (require 'supertag-view-helper)
   (when (and node-id)
@@ -655,13 +656,13 @@ Uses the same data-first approach as UI commands for consistency."
              (tags (plist-get node :tags)))
         (if (member tag-name tags)
             (message "SKIP(add-tag): tag '%s' already on node %s" tag-name node-id)
-          ;; 1. Update database first (same as UI command)
+          ;; 1) Update datastore first
           (supertag-ops-add-tag-to-node node-id tag-name :create-if-needed t)
-          ;; 2. Update file text
+          ;; 2) Update buffer text: end-of-line append if missing
           (supertag-service-org--with-node-buffer node-id
             (lambda ()
-              ;; Check if tag already exists in the line to avoid duplicates
-              (let ((line-content (buffer-substring (line-beginning-position) (line-end-position))))
+              (let ((line-content (buffer-substring (line-beginning-position)
+                                                    (line-end-position))))
                 (unless (string-match (concat "#" (regexp-quote tag-name) "\\b") line-content)
                   (end-of-line)
                   (insert (concat " #" tag-name))))

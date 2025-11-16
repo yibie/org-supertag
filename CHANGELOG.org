@@ -1,4 +1,42 @@
 * Changelog
+* [5.1.5] - 2025-11-15
+** Improvements
+*** Node View ergonomics and safety
+- Auto-focus: When switching to the Node View window, the cursor automatically jumps to the value column of the first Field, reducing extra movement.
+- Keybindings restored: j/k, n/p, and page navigation keys now use their defaults, and no longer force-align to the value column when moving.
+- More robust context detection: Only calls Org API inside Org buffers, avoiding errors like “Point must be at an Org heading.”
+- Docstring corrections: Removed unescaped quotes that could cause void-variable errors, preventing `Point` from being parsed as a variable.
+- Non-destructive cleanup: Rendering no longer incorrectly deletes :node-tag relations; if a tag is unavailable, a “Not found (skipped cleanup)” message is shown instead.
+*** Node/Table View unification and reference management
+- Unified reference creation entry point: `supertag-add-reference`, the `:node-reference` field in Node View, the `:node-reference` field in Table View, and sync-layer `:ref-to` parsing now all use `supertag-relation-add-reference` to create `:reference` relationships and automatically insert/deduplicate backlinks.
+- Shared data layer between Node View and Table View: Added `supertag-view-build-node-state` to construct a node's general view state (fields, references, etc.) for use by different layouts.
+- New `node-detail` layout in View Table: `supertag-view-table--build-node-detail-state` + `supertag-view-table--render-node-detail` now support rendering a single node card view through the table engine.
+- Node View rendering prefers delegating to the View Table’s `node-detail` layout; if View Table is not loaded, safely falls back to a local renderer, achieving the structure where "view-node depends on view-table, and view-table only optionally enhances view-node."
+*** Node reference field display improvements
+- In Node View, `:node-reference` fields now show the referenced node’s title(s) instead of just raw IDs (multiple references are comma-separated).
+- When the node-reference value is empty, shows a gray italic “[Empty]” prompt, consistent with other fields.
+*** References section is more readable and clickable
+- Each line uses text properties to bind RET/mouse click to jump to the corresponding node, implementing reference lists that “look like plain text but act like links.”
+
+** Data Integrity
+*** When cleaning tags, also clear field values (globally consistent)
+- When a node has a tag removed, automatically clears all field values under that tag on the node, preventing “old values” from being revived and re-triggering automations.
+- Changes: Field cleanup is now always done inside `supertag-node-remove-tag`; the `supertag-change-tag-at-point` path also does field cleanup (redundantly but safely).
+
+** Reliability
+*** Fixed recursive require error caused by cyclic dependency
+- Resolved: “Recursive ‘require’ for feature ‘supertag-core-scan’” error:
+  - Removed hard dependency of ops-node on ops-field, replaced with forward declaration, and read field definitions directly from the :tags set.
+  - Before calling field deletion, checks `fboundp` to avoid cycles due to load order.
+
+** Automation
+*** Add-tag insertion location returns to "append at end of line"
+- Automated add-tag actions revert to the original behavior: if the headline does not contain the tag, append ` #tag` to the end of the line and save.
+- Dropped use of view-helper’s "intelligent" insertion location logic to avoid experience differences.
+
+**** Implementation Notes
+- Files touched: `supertag-view-node.el`, `supertag-ops-node.el`, `supertag-ui-commands.el`, `supertag-automation.el`。
+- Added window focus hook: enabled on Emacs versions that support `window-selection-change-functions`, with graceful fallback on others.
 * [5.1.4] - 2025-11-11
 ** Improvements
 *** Enhanced Node View with Popup Interface and Evil Mode Support
@@ -824,4 +862,3 @@ maintaining control through customization options.
 - Enhanced query system with history management
 - Improved code organization and modularity
 - Enhanced documentation and examples
-

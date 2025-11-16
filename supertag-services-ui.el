@@ -8,6 +8,8 @@
 (require 'supertag-core-store)
 (require 'supertag-ops-node)
 (require 'supertag-ops-field)  ; For type-specific field input assistance
+(require 'supertag-ops-tag)
+(require 'supertag-ops-relation)
 (require 'supertag-services-sync) ; For supertag-node-sync-at-point
 
 
@@ -91,6 +93,75 @@ If OTHER-WINDOW is non-nil, open in another window."
                 (org-back-to-heading t)
                 (message "Jumped to node: %s" (or (plist-get node :raw-value) (plist-get node :title))))
             (message "Error: Could not find ID %s in file %s" node-id file)))))))
+
+;;; --- Shared Node View State Builder ---
+
+(defun supertag-view-build-node-state (node-id)
+  "Build a reusable view state plist for NODE-ID.
+
+The returned plist is data-only (no buffer operations) and is intended
+to be consumed by different UI layouts (node detail view, table-based
+detail panes, previews, etc.).
+
+Returned keys (current contract):
+- :id           — NODE-ID
+- :node         — Raw node plist from `supertag-node-get'
+- :tags         — List of tag IDs attached to this node
+- :fields       — List of field descriptors for this node:
+                  each element is a plist
+                  (:tag-id TAG-ID :field-def FIELD-DEF :value VALUE)
+- :refs-to      — List of node IDs this node references (:reference)
+- :refs-from    — List of node IDs that reference this node (:reference)
+- :field-count  — Total number of fields across all tags
+- :ref-count    — Total number of references (:refs-to + :refs-from)"
+  (when (and node-id (stringp node-id))
+    (let* ((node (supertag-node-get node-id)))
+      (when node
+        (let* (;; Tags via relations ensure we respect the store as source of truth.
+               (tag-relations (supertag-relation-find-by-from node-id :node-tag))
+               (tag-ids (mapcar (lambda (rel) (plist-get rel :to)) tag-relations))
+               (fields '()))
+          ;; Collect all fields for each tag on this node.
+          (dolist (tag-id tag-ids)
+            (let ((tag-fields (ignore-errors (supertag-tag-get-all-fields tag-id))))
+              (dolist (field-def tag-fields)
+                (let* ((fname (plist-get field-def :name))
+                       (value (and fname
+                                   (supertag-field-get-with-default node-id tag-id fname))))
+                  (push (list :tag-id tag-id
+                              :field-def field-def
+                              :value value)
+                        fields)))))
+          (setq fields (nreverse fields))
+          ;; Compute reference info from :reference relations.
+          (let* ((refs-to-rels   (supertag-relation-find-by-from node-id :reference))
+                 (refs-to        (mapcar (lambda (rel) (plist-get rel :to)) refs-to-rels))
+                 (all-relations  (supertag-store-get-collection :relations))
+                 (refs-from '()))
+            (when (hash-table-p all-relations)
+              (maphash
+               (lambda (_ rel-data)
+                 (let* ((rel (if (hash-table-p rel-data)
+                                 (let (plist)
+                                   (maphash (lambda (k v)
+                                              (setq plist (plist-put plist k v)))
+                                            rel-data)
+                                   plist)
+                               rel-data)))
+                   (when (and (eq (plist-get rel :type) :reference)
+                              (equal (plist-get rel :to) node-id))
+                     (push (plist-get rel :from) refs-from))))
+               all-relations))
+            (setq refs-from (nreverse refs-from))
+            ;; Build final state plist.
+            (list :id node-id
+                  :node node
+                  :tags tag-ids
+                  :fields fields
+                  :refs-to refs-to
+                  :refs-from refs-from
+                  :field-count (length fields)
+                  :ref-count (+ (length refs-to) (length refs-from)))))))))
 
 (defvar supertag-ui--node-cache nil
   "Cache for node selection candidates to improve performance.")

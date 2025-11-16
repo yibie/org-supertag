@@ -97,15 +97,16 @@ OPERATION can be 'add or 'remove."
   "Create a new relation using the unified commit system.
 RELATION-DATA is a plist of relation properties.
 Returns the created relation data."
-  (let* ((type (plist-get relation-data :type))
-         (from (plist-get relation-data :from))
-         (to   (plist-get relation-data :to))
+  (let* ((data (supertag-ops-relation--ensure-plist relation-data))
+         (type (plist-get data :type))
+         (from (plist-get data :from))
+         (to   (plist-get data :to))
          (rel-id (supertag-generate-relation-id from to type))
-         (relation-plist (list :id rel-id
-                               :type type
-                               :from from
-                               :to to
-                               :created-at (current-time))))
+         (relation-plist (plist-put data :id rel-id)))
+
+    ;; Ensure created-at exists but don't overwrite if caller provided it.
+    (unless (plist-get relation-plist :created-at)
+      (setq relation-plist (plist-put relation-plist :created-at (current-time))))
 
     ;; Strict validation
     (supertag--validate-relation-data relation-plist)
@@ -175,8 +176,8 @@ Returns the deleted relation data."
 
 ;; 5.2 Reference Service
 
-(defun supertag-reference-service-add (from-id to-id)
-  "Create a reference from FROM-ID to TO-ID.
+(defun supertag-relation-add-reference (from-id to-id)
+  "Create a reference from FROM-ID to TO-ID at relation layer.
 
 This involves:
 1. Creating the relation in the database.
@@ -184,46 +185,48 @@ This involves:
 
 Returns t on success, nil on failure."
   (require 'org)
+  (require 'org-id)
   ;; 1. Create relation in DB
   (let ((relation-result (supertag-relation-create `(:type :reference :from ,from-id :to ,to-id))))
     (when relation-result
       ;; 2. DB write succeeded, now insert reciprocal link.
       (let* ((from-node (supertag-node-get from-id))
-             (to-node (supertag-node-get to-id))
-             ;; Prioritize the clean :title, fallback to :raw-value
+             ;; Prefer a cleaned title, fallback to raw/title/ID
              (from-title (or (plist-get from-node :title)
                              (plist-get from-node :raw-value)
                              from-id))
-             (to-file (plist-get to-node :file))
-             (to-pos (plist-get to-node :position)))
-        (when (and to-file to-pos (file-exists-p to-file))
-          (with-current-buffer (find-file-noselect to-file)
+             (marker (org-id-find to-id 'marker)))
+        (when (and marker (marker-buffer marker))
+          (with-current-buffer (marker-buffer marker)
             (org-with-wide-buffer
               (save-excursion
-                (goto-char to-pos)
-                ;; Move to the heading containing this position
-                (org-back-to-heading t)
-                ;; Make sure we are at a heading
-                (when (org-at-heading-p)
-                  ;; Skip metadata and go to the end of content (before any child nodes)
-                  (org-end-of-meta-data t)
-                  ;; Find the first child node's position (if any)
-                  (let ((content-end (save-excursion
-                                       (if (re-search-forward org-outline-regexp nil t)
-                                           (match-beginning 0)
-                                         ;; No child node found, use end of subtree
-                                         (org-end-of-subtree t t)
-                                         (point)))))
-                    ;; Go to the end of content (before children)
-                    (goto-char content-end)
-                    ;; Insert the backlink
-                    (unless (bolp) (insert "\n"))
-                    (insert (format "[[id:%s][%s]]\n" from-id from-title))))))
-            ;; Save the buffer to persist the changes
-            (save-buffer))))
+                (goto-char marker)
+                (condition-case err
+                    (progn
+                      ;; Ensure we are on the heading for TO-ID
+                      (org-back-to-heading t)
+                      (when (org-at-heading-p)
+                        ;; Skip metadata and go to end of own content (before children)
+                        (org-end-of-meta-data t)
+                        (let* ((content-start (point))
+                               (content-end (save-excursion
+                                              (if (re-search-forward org-outline-regexp nil t)
+                                                  (match-beginning 0)
+                                                (org-end-of-subtree t t)
+                                                (point))))
+                               (pattern (format "\\[\\[id:%s\\]" (regexp-quote from-id))))
+                          ;; Avoid duplicate backlinks if one already exists
+                          (goto-char content-start)
+                          (unless (re-search-forward pattern content-end t)
+                            (goto-char content-end)
+                            (unless (bolp) (insert "\n"))
+                            (insert (format "[[id:%s][%s]]\n" from-id from-title)))))
+                      (save-buffer))
+                  (error
+                   (message "[org-supertag] Failed to insert backlink for reference %s -> %s: %s"
+                            from-id to-id (error-message-string err)))))))))
       ;; 3. Return t for success
       t)))
-
 ;; 5.3 Relation Query Operations
 
 (defun supertag-relation-find-by-from (from-id &optional type)

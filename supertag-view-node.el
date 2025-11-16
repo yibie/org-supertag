@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'org)
 (require 'posframe)
 (require 'subr-x)
 (require 'supertag-core-store)
@@ -31,6 +32,115 @@
 
 (defvar supertag-view-node--posframe-origin-window nil
   "Origin window that invoked the node view posframe.")
+
+;; Side-window presenter + follow support
+(defconst supertag-view-node--buffer-name "*Supertag Node*")
+(defvar supertag-view-node--enabled nil)
+(defvar supertag-view-node--last-entity-id nil)
+
+(defcustom supertag-view-node-side 'right
+  "Side where the Node View side window appears.
+One of 'right, 'left, 'bottom, or 'top."
+  :type '(choice (const right) (const left) (const bottom) (const top))
+  :group 'org-supertag)
+
+(defcustom supertag-view-node-side-size 0.33
+  "Default size of the Node View side window.
+For 'left/'right, interpreted as a fraction of frame width (0.0–1.0).
+For 'top/'bottom, interpreted as a number of lines (integer) or a fraction
+if your Emacs accepts fractional heights for side windows."
+  :type '(choice number integer)
+  :group 'org-supertag)
+
+(defcustom supertag-view-node-auto-show nil
+  "Whether to automatically show the Node View side window and follow context."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defun supertag-view-node--buffer ()
+  (let ((buf (get-buffer supertag-view-node--buffer-name)))
+    (and buf (buffer-live-p buf) buf)))
+
+(defun supertag-view-node--current-entity-id ()
+  "Detect current node id from context (org/table/UI) safely.
+Only query Org-specific helpers inside Org buffers to avoid errors like
+Point must be at an Org heading. when invoked from other modes."
+  (cond
+   ;; In org-mode, try heading property first, then UI helper (both safely)
+   ((derived-mode-p 'org-mode)
+    (or (ignore-errors (org-entry-get (point) "ID"))
+        (when (fboundp 'supertag-ui--get-node-at-point)
+          (ignore-errors (supertag-ui--get-node-at-point)))))
+   ;; In table view mode, extract cell coords
+   ((derived-mode-p 'supertag-view-table-mode)
+    (when (fboundp 'supertag-view-table--get-cell-coords)
+      (let* ((coords (ignore-errors (supertag-view-table--get-cell-coords))))
+        (and coords (plist-get coords :entity-id)))))
+   ;; Other modes: do not assume Org context; avoid calling Org-dependent helpers
+   (t nil)))
+
+(defun supertag-view-node--show-side (&optional node-id)
+  "Show node view as a side window and enable follow."
+  (setq supertag-view-node--enabled t)
+  (setq supertag-view-node--last-entity-id nil)
+  (let* ((buf (or (supertag-view-node--buffer) (get-buffer-create supertag-view-node--buffer-name)))
+         (target-id (or node-id (supertag-view-node--current-entity-id)))
+         (side supertag-view-node-side)
+         (size supertag-view-node-side-size)
+         (param (if (memq side '(left right))
+                    `((side . ,side) (slot . 0) (window-width . ,size))
+                  `((side . ,side) (slot . 0) (window-height . ,size)))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t)) (erase-buffer))
+      (supertag-view-node-mode)
+      (when (fboundp 'evil-local-mode) (ignore-errors (evil-local-mode -1)))
+      (when target-id (supertag-view-node--render target-id)))
+    (display-buffer-in-side-window buf param)
+    (add-hook 'post-command-hook #'supertag-view-node--post-command nil t)))
+
+(defun supertag-view-node--hide-side ()
+  "Hide the side window and disable follow."
+  (setq supertag-view-node--enabled nil)
+  (remove-hook 'post-command-hook #'supertag-view-node--post-command t)
+  (when-let ((buf (supertag-view-node--buffer)))
+    (dolist (win (get-buffer-window-list buf nil t))
+      (when (window-live-p win) (delete-window win)))))
+
+(defun supertag-view-node--post-command ()
+  "Auto-refresh when current entity changes."
+  (when (or supertag-view-node--enabled supertag-view-node-auto-show)
+    (let ((eid (supertag-view-node--current-entity-id)))
+      (unless (equal eid supertag-view-node--last-entity-id)
+        (setq supertag-view-node--last-entity-id eid)
+        (when eid
+          (when-let ((buf (supertag-view-node--buffer)))
+            (with-current-buffer buf
+              (let ((inhibit-read-only t)) (erase-buffer))
+              (supertag-view-node--render eid))))))))
+
+(defun supertag-view-node-ensure-shown ()
+  "Ensure the Node View side window is visible and following."
+  (when supertag-view-node-auto-show
+    (unless (get-buffer-window (supertag-view-node--buffer))
+      (let ((eid (supertag-view-node--current-entity-id)))
+        (if eid
+            (supertag-view-node--show-side eid)
+          (supertag-view-node--show-side nil))))
+    ;; Add global follow if not already
+    (unless (member #'supertag-view-node--post-command post-command-hook)
+      (add-hook 'post-command-hook #'supertag-view-node--post-command))))
+
+(defun supertag-view-node-toggle-auto-show ()
+  "Toggle automatic Node View side window following."
+  (interactive)
+  (setq supertag-view-node-auto-show (not supertag-view-node-auto-show))
+  (if supertag-view-node-auto-show
+      (progn
+        (supertag-view-node-ensure-shown)
+        (message "Node View auto-show: ON"))
+    (remove-hook 'post-command-hook #'supertag-view-node--post-command)
+    (supertag-view-node--hide-side)
+    (message "Node View auto-show: OFF")))
 
 (defcustom supertag-view-node-strip-todo-keywords t
   "Whether to strip TODO keywords from node titles in view buffers.
@@ -68,7 +178,7 @@ You can customize this list to match your org-mode TODO keywords."
 
 (defvar supertag-view-node-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; Navigation
+    ;; Navigation (snap cursor to Field value column when present)
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "p") 'previous-line)
     (define-key map (kbd "j") 'next-line)
@@ -298,14 +408,14 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
             (push tag-id valid-tags)
           (push tag-id deleted-tags))))
     
-    ;; Clean up relations for deleted tags
-    (when deleted-tags
-      (dolist (deleted-tag-id deleted-tags)
-        (let ((stale-relations (supertag-relation-find-by-from node-id :node-tag)))
-          (dolist (rel stale-relations)
-            (when (equal (plist-get rel :to) deleted-tag-id)
-              (supertag-relation-delete (plist-get rel :id))
-              (message "Cleaned up stale relation to deleted tag: %s" deleted-tag-id))))))
+    ;; IMPORTANT: Do not mutate datastore from view rendering.
+    ;; Previously, this section attempted to "clean up" relations to tags
+    ;; considered deleted (missing in the current store). However, during
+    ;; startup or file reloads, the store/tag cache may not be fully
+    ;; materialized yet, causing valid tags to appear missing and leading to
+    ;; unintended deletions. We keep a passive notice instead.
+    ;; If cleanup is needed, it should be performed by an explicit ops/migration
+    ;; command, not by a view.
     
     ;; Display content with simple styling
     (if (and (not valid-tags) (not deleted-tags))
@@ -320,12 +430,36 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
           ;; Defensively ensure `fields` is a list to prevent rendering errors.
           (supertag-view-helper-insert-tag-block tag-id (or fields '()) node-id)))
       
-      ;; Show cleaned up deleted tags if any
+      ;; Show a passive warning for tags currently not found (no deletion here)
       (when deleted-tags
-        (insert (propertize (format "🗑️ Cleaned up %d deleted tag%s\n\n" 
+        (insert (propertize (format "⚠️ %d tag%s not found (skipped cleanup)\n\n" 
                                     (length deleted-tags)
                                     (if (= (length deleted-tags) 1) "" "s"))
                             'face `(:foreground ,(supertag-view-helper-get-warning-color))))))))
+
+(defun supertag-view-node--insert-node-link-line (node-id)
+  "Insert a single clickable line for NODE-ID.
+The line looks like `📄 Title' and is clickable with RET/mouse-1."
+  (when-let* ((node (supertag-node-get node-id)))
+    (let* ((raw-title (or (plist-get node :raw-value)
+                          (plist-get node :title)
+                          "[Untitled]"))
+           (display-title (if (fboundp 'org-link-display-format)
+                              (org-link-display-format raw-title)
+                            raw-title))
+           (start (point))
+           (map (make-sparse-keymap))
+           (action `(lambda () (interactive) (supertag-goto-node ,node-id))))
+      (insert (format "    📄 %s\n" (string-trim display-title)))
+      (define-key map [mouse-1] action)
+      (define-key map (kbd "RET") action)
+      (add-text-properties
+       start (point)
+       `(supertag-node-id ,node-id
+                          face (:foreground ,(supertag-view-helper-get-muted-color))
+                          keymap ,map
+                          mouse-face highlight
+                          help-echo ,(format "Jump to node: %s" node-id))))))
 
 (defun supertag-view-node--insert-simple-references-section (node-id)
   "Insert a simple references section for NODE-ID, always showing the section."
@@ -344,10 +478,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-to) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-to)
-          (when-let* ((node (supertag-node-get ref-id))
-                      (title (plist-get node :title)))
-                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+              (supertag-view-node--insert-node-link-line ref-id)))
 
           ;; Referenced By
           (when (and refs-from (> (length refs-from) 0))
@@ -356,10 +487,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
                                        (if (= (length refs-from) 1) "" "s"))
                                'face `(:foreground ,(supertag-view-helper-get-accent-color))))
             (dolist (ref-id refs-from)
-          (when-let* ((node (supertag-node-get ref-id))
-                      (title (plist-get node :title)))
-                (insert (propertize (format "    📄 %s\n" (or title "[Untitled]"))
-                                   'face `(:foreground ,(supertag-view-helper-get-muted-color)))))))
+              (supertag-view-node--insert-node-link-line ref-id)))
           (insert "\n"))
       ;; Else, show empty state
       (supertag-view-helper-insert-simple-empty-state "No references found."))))
@@ -401,22 +529,24 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
   (interactive)
   (supertag-view-node--disallow-definition-edit))
 
-(defun supertag-view-node--render (node-id)
-  "Render a simple, clean view for NODE-ID."
-  (let ((node-data (supertag-node-get node-id))
-        (inhibit-read-only t))
+(defun supertag-view-node--render-from-state (state)
+  "Render a simple, clean view for NODE described by STATE.
+STATE 应由 `supertag-view-build-node-state' 构造，只包含数据，不做任何 buffer 操作。"
+  (let* ((node-id (plist-get state :id))
+         (node-data (plist-get state :node))
+         (inhibit-read-only t))
     (erase-buffer)
     (setq supertag-view-node--current-node-id node-id)
     (when node-data
       ;; Simple header
       (supertag-view-node--insert-simple-header node-data)
-      
+
       ;; Simple metadata section
       (supertag-view-node--insert-simple-metadata-section node-id)
-      
+
       ;; Simple references section
       (supertag-view-node--insert-simple-references-section node-id)
-      
+
       ;; Complete footer with all available shortcuts
       (supertag-view-helper-insert-simple-footer
        "⌨️ Field: [RET] Edit Value"
@@ -425,8 +555,26 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
 
       ;; Activate links in the entire buffer
       (supertag-view-node--activate-links-in-buffer))
-    
     (goto-char (point-min))))
+
+(defun supertag-view-node--render (node-id)
+  "Render a simple, clean view for NODE-ID."
+  (let ((state (supertag-view-build-node-state node-id)))
+    (if (not state)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (setq supertag-view-node--current-node-id nil)
+          (insert (format "Node %s not found." node-id))
+          (goto-char (point-min)))
+      ;; 首选：如果 View Table 的 node-detail layout 可用，则通过 layout 渲染。
+      (if (and (fboundp 'supertag-view-table--build-node-detail-state)
+               (fboundp 'supertag-view-table-render))
+          (let ((table-state (supertag-view-table--build-node-detail-state node-id)))
+            (if table-state
+                (supertag-view-table-render 'node-detail table-state)
+              (supertag-view-node--render-from-state state)))
+        ;; 回退方案：直接使用本地渲染函数。
+        (supertag-view-node--render-from-state state)))))
 
 ;;; --- Link Activation ---
 
@@ -492,29 +640,20 @@ Handles special logic for :node-reference fields."
                  (current-value (supertag-field-get-with-default node-id tag-id field-name))
                  (new-value (supertag-ui-read-field-value field-def current-value)))
 
-            ;; Handle :node-reference side effects
+            ;; Handle :node-reference side effects using unified :reference relations.
             (when (eq field-type :node-reference)
               (let* ((current-targets (supertag-field-normalize-node-reference-list current-value))
                      (new-targets (supertag-field-normalize-node-reference-list new-value))
                      (removed (cl-set-difference current-targets new-targets :test #'string=))
                      (added (cl-set-difference new-targets current-targets :test #'string=)))
-                ;; Remove stale relations and backlinks
+                ;; Remove stale references and associated backlinks.
                 (dolist (target removed)
-                  (dolist (rel (supertag-relation-find-between node-id target :field-reference))
-                    (when (and (equal (plist-get rel :tag-id) tag-id)
-                               (equal (plist-get rel :field-name) field-name))
-                      (supertag-relation-delete (plist-get rel :id))))
+                  (dolist (rel (supertag-relation-find-between node-id target :reference))
+                    (supertag-relation-delete (plist-get rel :id)))
                   (supertag-ui--remove-link-under-node target node-id))
-                ;; Add new relations and backlinks
-                (when added
-                  (let ((from-node-title (plist-get (supertag-node-get node-id) :title)))
-                    (dolist (target added)
-                      (supertag-relation-create `(:type :field-reference
-                                                  :from ,node-id
-                                                  :to ,target
-                                                  :tag-id ,tag-id
-                                                  :field-name ,field-name))
-                      (supertag-ui--insert-link-under-node target node-id from-node-title))))))
+                ;; Add new references via the relation service (creates DB edge + backlink).
+                (dolist (target added)
+                  (supertag-relation-add-reference node-id target))))
 
             ;; Set the field value (for all types)
             (supertag-field-set node-id tag-id field-name new-value)
@@ -530,7 +669,7 @@ Handles special logic for :node-reference fields."
                 (when (and vstart vend)
                   (let* ((vlen (max 0 (- vend vstart)))
                          (delta (min (max (or saved-offset 0) 0) vlen)))
-                    (goto-char (min (+ vstart delta) vend))))) )
+                    (goto-char (min (+ vstart delta) vend))))))
             (message "✓ Field '%s' updated successfully!" field-name))
         (quit
          ;; User cancelled (C-g): restore focus and caret to original field value
@@ -609,9 +748,8 @@ Falls back to beginning of buffer when no field is found."
 ;;; --- Posframe Management ---
 
 (defun supertag-view-node--posframe-buffer ()
-  "Return the live posframe buffer, or nil."
-  (let ((buffer (get-buffer supertag-view-node--posframe-buffer-name)))
-    (and buffer (buffer-live-p buffer) buffer)))
+  "Compatibility: return the side-window buffer."
+  (supertag-view-node--buffer))
 
 (defun supertag-view-node--focus-origin-window ()
   "Focus the window that opened the posframe when possible."
@@ -627,104 +765,70 @@ Falls back to beginning of buffer when no field is found."
         (select-frame-set-input-focus parent))))))
 
 (defun supertag-view-node--focus-posframe ()
-  "Focus the active posframe if it is alive."
-  (when (frame-live-p supertag-view-node--posframe-frame)
-    (select-frame-set-input-focus supertag-view-node--posframe-frame)
-    (with-selected-frame supertag-view-node--posframe-frame
-      (select-window (frame-selected-window supertag-view-node--posframe-frame))
-      ;; Ensure Evil does not capture this buffer when focusing
-      (when (featurep 'evil)
-        (when (fboundp 'evil-local-mode)
-          (ignore-errors (evil-local-mode -1)))
-        (when (fboundp 'evil-emacs-state)
-          (ignore-errors (evil-emacs-state)))))))
+  "Compatibility: focus the side-window buffer if visible."
+  (when-let* ((buf (supertag-view-node--buffer))
+              (win (get-buffer-window buf)))
+    (select-window win)
+    (when (featurep 'evil)
+      (when (fboundp 'evil-local-mode) (ignore-errors (evil-local-mode -1)))
+      (when (fboundp 'evil-emacs-state) (ignore-errors (evil-emacs-state))))))
 
 (defun supertag-view-node--posframe-hide ()
-  "Hide and clean up the posframe."
+  "Compatibility: hide the side-window presenter."
   (interactive)
-  (when-let ((buffer (supertag-view-node--posframe-buffer)))
-    (posframe-hide buffer)
-    (kill-buffer buffer))
-  (setq supertag-view-node--posframe-frame nil)
+  (supertag-view-node--hide-side)
   (supertag-view-node--focus-origin-window)
   (setq supertag-view-node--posframe-origin-window nil))
 
 (defun supertag-view-node--posframe-refresh ()
-  "Refresh contents of the active posframe."
-  (when-let ((buffer (supertag-view-node--posframe-buffer)))
-    (with-current-buffer buffer
-      (let* ((saved-context (supertag-view-node--get-context-at-point))
-             (saved-tag (plist-get saved-context :tag-id))
-             (saved-field (plist-get saved-context :field-name)))
-        (when supertag-view-node--current-node-id
-          (supertag-view-node--render supertag-view-node--current-node-id))
-        (unless (and saved-tag saved-field
-                     (supertag-view-node--goto-field-in-buffer buffer saved-tag saved-field))
-          (supertag-view-node--goto-field-in-buffer buffer nil nil))))))
+  "Compatibility: refresh side-window presenter."
+  (when-let ((buf (supertag-view-node--posframe-buffer)))
+    (let ((eid (or supertag-view-node--current-node-id
+                   (supertag-view-node--current-entity-id))))
+      (when eid
+        (with-current-buffer buf
+          (let* ((saved-context (supertag-view-node--get-context-at-point))
+                 (saved-tag (plist-get saved-context :tag-id))
+                 (saved-field (plist-get saved-context :field-name)))
+            (supertag-view-node--render eid)
+            (unless (and saved-tag saved-field
+                         (supertag-view-node--goto-field-in-buffer buf saved-tag saved-field))
+              (supertag-view-node--goto-first-field))))))))
 
 (defun supertag-view-node--posframe-show (node-id)
-  "Show or refresh the posframe for NODE-ID."
-  (unless node-id
-    (user-error "No node ID found at point"))
-  (let ((origin (selected-window))
-        (buffer (get-buffer-create supertag-view-node--posframe-buffer-name)))
-    (setq supertag-view-node--posframe-origin-window origin)
-    (with-current-buffer buffer
-      (supertag-view-node-mode)
-      (when (fboundp 'evil-local-mode)
-        (evil-local-mode -1))
-      (supertag-view-node--render node-id)
-      ;; Do not attempt to move point here; the posframe window is not selected yet.
-      )
-    (setq supertag-view-node--posframe-frame
-          (posframe-show buffer
-                         :position (point)
-                         :poshandler 'posframe-poshandler-point-bottom-left-corner
-                         :focus t
-                         :accept-focus t
-                         :border-width 1
-                         :border-color (supertag-view-helper-get-border-color)
-                         :respect-header-line t
-                         :override-parameters '((cursor-type . box)
-                                                (no-accept-focus . nil))))
-    (supertag-view-node--focus-posframe)
-    ;; Ensure we move point within the posframe's selected window
-  (when (frame-live-p supertag-view-node--posframe-frame)
-    (with-selected-frame supertag-view-node--posframe-frame
-      (let ((win (frame-selected-window)))
-        (when (window-live-p win)
-          (with-selected-window win
-            ;; Hard-disable Evil in the posframe window, and force Emacs state if Evil exists
-            (when (featurep 'evil)
-              (when (fboundp 'evil-local-mode)
-                (ignore-errors (evil-local-mode -1)))
-              (when (fboundp 'evil-emacs-state)
-                (ignore-errors (evil-emacs-state))))
-            (supertag-view-node--goto-first-field)
-            (recenter))))))))
+  "Compatibility: show side-window presenter for NODE-ID."
+  (unless node-id (user-error "No node ID found at point"))
+  (setq supertag-view-node--posframe-origin-window (selected-window))
+  (supertag-view-node--show-side node-id)
+  (supertag-view-node--focus-posframe)
+  (when-let ((buf (supertag-view-node--buffer)))
+    (with-current-buffer buf
+      (supertag-view-node--goto-first-field)
+      (recenter))))
 
 
 ;;; --- Commands ---
 
 (defun supertag-view-node-refresh ()
-  "Refresh the node view buffer."
+  "Refresh the node view buffer (side-window)."
   (interactive)
-  (if (supertag-view-node--posframe-buffer)
+  (if (supertag-view-node--buffer)
       (progn
         (supertag-view-node--posframe-refresh)
         (supertag-view-node--focus-posframe))
     (message "No active supertag node view.")))
 
 (defun supertag-view-node ()
-  "Display the Org-Supertag node view for the node at point."
+  "Toggle the Org-Supertag node view as a side window that follows context."
   (interactive)
-  (let ((node-id (supertag-ui--get-node-at-point)))
-    (if-let ((buffer (supertag-view-node--posframe-buffer)))
-        (let ((current-id (with-current-buffer buffer supertag-view-node--current-node-id)))
-          (if (equal node-id current-id)
-              (supertag-view-node--posframe-hide)
-            (supertag-view-node--posframe-show node-id)))
-      (supertag-view-node--posframe-show node-id))))
+  (let ((node-id (or (and (fboundp 'supertag-ui--get-node-at-point)
+                          (supertag-ui--get-node-at-point))
+                     (supertag-view-node--current-entity-id))))
+    (if supertag-view-node--enabled
+        (supertag-view-node--posframe-hide)
+      (if node-id
+          (supertag-view-node--posframe-show node-id)
+        (user-error "No node detected at point")))))
 
 ;; If Evil is installed, set an initial state that won't override this mode's keys.
 (with-eval-after-load 'evil
@@ -735,5 +839,26 @@ Falls back to beginning of buffer when no field is found."
     (add-to-list 'evil-emacs-state-modes 'supertag-view-node-mode)))
 
 (provide 'supertag-view-node)
+
+;;; --- Window Selection Integration ---
+
+;; When user switches focus into the node view window, place point directly on
+;; the first Field value column to reduce extra cursor movement.
+(defun supertag-view-node--on-window-selection-change (_frame)
+  "When node view buffer becomes selected, jump to a Field value column."
+  (when-let* ((win (selected-window))
+              (buf (and (window-live-p win) (window-buffer win))))
+    (with-current-buffer buf
+      (when (derived-mode-p 'supertag-view-node-mode)
+        (let* ((bol (line-beginning-position))
+               (eol (line-end-position))
+               (valpos (text-property-any bol eol 'supertag-value-column t)))
+          (if valpos
+              (goto-char valpos)
+            (ignore-errors (supertag-view-node--goto-first-field))))))))
+
+;; Register the hook if available (Emacs 27+)
+(when (boundp 'window-selection-change-functions)
+  (add-hook 'window-selection-change-functions #'supertag-view-node--on-window-selection-change))
 
 ;;; supertag-view-node.el ends here

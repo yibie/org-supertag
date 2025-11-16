@@ -918,9 +918,9 @@ Applies a grace period and mass-deletion guardrails to prevent accidental data l
                   (null (plist-get node :file))
                   (stringp id)
                   (not (string= id "")))
-         (let* ((orphaned-at (plist-get node :orphaned-at))
-                (age (and (timep orphaned-at)
-                          (float-time (time-subtract now orphaned-at)))))
+        (let* ((orphaned-at (plist-get node :orphaned-at))
+               ;; Compute age safely; if ORPHANED-AT is invalid, ignore-errors returns nil
+               (age (ignore-errors (float-time (time-subtract now orphaned-at)))))
            (when (and age (>= age (or supertag-sync-orphan-grace-seconds 0)))
              (push id candidate-ids))))))
 
@@ -1186,18 +1186,12 @@ This function is called only when a node is actually being created or updated."
           (let ((target-node (supertag-node-get target-id)))
             (if target-node
                 (progn
-                  ;; Create reference relation (supertag-relation-create handles duplicates)
+                  ;; Create reference relation using unified service (handles duplicates + backlinks)
                   (let ((existing-relations (supertag-relation-find-between node-id target-id :reference)))
                     (unless existing-relations
-                      ;; (message "DEBUG: Reference relation (%s -> %s) already exists, skipping." node-id target-id)
-                      ;; (message "DEBUG: Creating new reference relation (%s -> %s)." node-id target-id)
-                      (supertag-relation-create
-                       (list :type :reference
-                             :from node-id
-                             :to target-id
-                             :created-at (current-time)))
-                      (setf (plist-get counters :references-created)
-                            (1+ (or (plist-get counters :references-created) 0))))))
+                      (when (supertag-relation-add-reference node-id target-id)
+                        (setf (plist-get counters :references-created)
+                              (1+ (or (plist-get counters :references-created) 0)))))))
               ;; Target node doesn't exist yet - this is normal during batch sync
               ;; (message "DEBUG: Target node %s not found yet, reference relation will be created when target is processed." target-id)
               )))))))
