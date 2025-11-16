@@ -472,6 +472,39 @@ current file and inserted into the target file at a chosen position."
                     (line-end (min (point-max) (1+ (line-end-position)))))
                 (delete-region line-start line-end)))))))))
 
+(defun supertag-ui--insert-link-under-node (target-node-id link-node-id link-title)
+  "Insert an Org link to LINK-NODE-ID under TARGET-NODE-ID's entry.
+
+This is used for creating backlinks (for example from :node-reference
+fields). If a link to LINK-NODE-ID already exists in the entry's
+content region, this function does nothing."
+  (when-let* ((target-node (supertag-node-get target-node-id))
+              (target-file (plist-get target-node :file))
+              (target-pos (plist-get target-node :position)))
+    (with-current-buffer (find-file-noselect target-file)
+      (org-with-wide-buffer
+        (save-excursion
+          (goto-char target-pos)
+          (org-back-to-heading t)
+          (when (org-at-heading-p)
+            (org-end-of-meta-data t)
+            (let* ((content-start (point))
+                   (content-end (save-excursion
+                                  (if (re-search-forward org-outline-regexp nil t)
+                                      (match-beginning 0)
+                                    (org-end-of-subtree t t)
+                                    (point))))
+                   (pattern (format "\\[\\[id:%s\\]" (regexp-quote link-node-id))))
+              ;; Avoid inserting duplicate backlinks
+              (goto-char content-start)
+              (unless (re-search-forward pattern content-end t)
+                (goto-char content-end)
+                (unless (bolp) (insert "\n"))
+                (insert (format "[[id:%s][%s]]\n"
+                                link-node-id
+                                (or link-title link-node-id))))
+              (save-buffer)))))))) 
+
 (defun supertag-add-reference ()
   "Add a reference from the current node to another selected node."
   (interactive)
@@ -485,8 +518,8 @@ current file and inserted into the target file at a chosen position."
     (setq to-id (supertag-ui-select-node "Add reference to: " t))
 
     (when (and from-id to-id)
-      ;; 1. Call the service to handle DB and reciprocal link.
-      (if (supertag-reference-service-add from-id to-id)
+      ;; 1. Call relation-level service to handle DB and reciprocal link.
+      (if (supertag-relation-add-reference from-id to-id)
           (progn
             ;; 2. Service succeeded, now insert the forward link here.
             (let* ((to-node (supertag-node-get to-id))
@@ -530,10 +563,10 @@ Interactively asks for a target location to save the new node."
              :file ,target-file
              :position ,insert-pos
              :level ,insert-level))
-          ;; 4. Create the relationship in the database using the service
+          ;; 4. Create the relationship in the database using the relation service
           (when from-id
             (supertag-ui--ensure-node-synced from-id)
-            (unless (supertag-reference-service-add from-id new-node-id)
+            (unless (supertag-relation-add-reference from-id new-node-id)
               (user-error "Failed to create reference in database")))
           ;; 5. Replace original text with a link
           (delete-region beg end)
@@ -788,7 +821,7 @@ Can be used both at headings and within node content areas."
          (new-id (when (and old-id (not (string-empty-p old-id)))
                    (read-string (format "New name for '%s': " old-id)))))
     (when (and old-id (not (string-empty-p old-id))
-               new-id (not (string-empty-p new-id)))
+             new-id (not (string-empty-p new-id)))
       (when (yes-or-no-p (format "Rename tag '%s' to '%s'? This will affect all files." old-id new-id))
         ;; Call the single, authoritative backend function
         (supertag-tag-rename old-id new-id)))))
@@ -842,7 +875,14 @@ This command reads the authoritative list of tags from the database."
                 (supertag-relation-delete (plist-get old-relation :id))))
             ;; Remove old tag from node's list
             (supertag-node-remove-tag node-id current-tag)
-            
+
+            ;; Clear all field values associated with the removed tag to avoid
+            ;; stale values leaking into future tag re-adds and triggering automation.
+            (when-let ((old-fields (ignore-errors (supertag-tag-get-all-fields current-tag))))
+              (dolist (f old-fields)
+                (when-let ((fname (plist-get f :name)))
+                  (ignore-errors (supertag-field-remove node-id current-tag fname)))))
+
             ;; Add new relation
             (supertag-relation-create `(:type :node-tag :from ,node-id :to ,new-tag))
             ;; Add new tag to node's list

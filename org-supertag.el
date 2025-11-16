@@ -148,12 +148,18 @@ This function loads all necessary components and sets up the environment."
     
     ;; Step 11: Enable completion globally
     (global-supertag-ui-completion-mode 1)
-    
+
     ;; Step 12: Enable completion in already-open org buffers
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (derived-mode-p 'org-mode)
           (supertag-ui-completion-mode 1)))))
+
+  ;; Optionally auto-show Node View side window and follow context
+  (when (and (boundp 'supertag-view-node-auto-show)
+             supertag-view-node-auto-show
+             (fboundp 'supertag-view-node-ensure-shown))
+    (supertag-view-node-ensure-shown))
 
 (defun supertag--check-critical-config ()
   "Check critical configuration before initialization.

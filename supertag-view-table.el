@@ -19,6 +19,8 @@
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
+(require 'supertag-ops-relation)
+(require 'supertag-ui-commands) ; For backlink helpers
 (require 'supertag-services-formula)
 (require 'supertag-services-ui)
 (require 'supertag-view-helper)
@@ -49,6 +51,90 @@
 
 (defvar-local supertag-view-table--current-view-name nil
   "Name of the currently active view.")
+
+;;; --- Layout Registry and Render Dispatcher ---
+
+(defvar supertag-view-table--layout-registry (make-hash-table :test 'equal)
+  "Registry of layout renderers for view-table. Keys are symbols, values are functions.")
+
+(defun supertag-view-table-register-layout (layout fn)
+  "Register a renderer FN for LAYOUT symbol."
+  (puthash layout fn supertag-view-table--layout-registry))
+
+(defcustom supertag-view-table-default-layout 'table
+  "Default layout used by view-table renderer dispatcher."
+  :type '(choice (const table) (symbol))
+  :group 'supertag-view)
+
+(defun supertag-view-table-render (layout state)
+  "Render STATE using LAYOUT. STATE is a plist produced by `supertag-view-table--build-state'."
+  (let* ((lo (or layout supertag-view-table-default-layout 'table))
+         (fn (gethash lo supertag-view-table--layout-registry)))
+    (unless (functionp fn)
+      (error "No renderer registered for layout: %s" lo))
+    (funcall fn state)))
+
+;;; --- State Builder (data layer) ---
+
+(defun supertag-view-table--build-state ()
+  "Build a render-agnostic state plist for the current table buffer.
+Returns a plist with keys:
+  :columns  - column definitions (list of plists)
+  :rows     - rows as list of plists (:id and :values alist)
+  :meta     - additional info (view config, options)"
+  (let* ((columns supertag-view-table--columns)
+         (entity-ids supertag-view-table--entity-ids)
+         (rows (cl-loop for eid in entity-ids
+                        for data = (supertag-view-table--get-entity-data eid)
+                        when data
+                        collect (list :id eid
+                                      :values (cl-loop for col in columns
+                                                       for key = (plist-get col :key)
+                                                       collect (cons key (supertag-view-table--get-cell-value data key col))))))
+         (meta (list :view-config supertag-view-table--view-config
+                     :current-view-name supertag-view-table--current-view-name
+                     :query-obj (supertag-view-table--get-current-query-obj))))
+    (list :columns columns :rows rows :meta meta)))
+
+;;; --- Expanded Rows (Inline Details) ---
+
+(defvar-local supertag-view-table--expanded-rows (make-hash-table :test 'equal)
+  "Set of expanded row entity-ids for inline details.")
+
+(defun supertag-view-table--row-expanded-p (entity-id)
+  (and entity-id (gethash entity-id supertag-view-table--expanded-rows)))
+
+(defun supertag-view-table--expand-row (entity-id)
+  (when entity-id (puthash entity-id t supertag-view-table--expanded-rows)))
+
+(defun supertag-view-table--collapse-row (entity-id)
+  (when entity-id (remhash entity-id supertag-view-table--expanded-rows)))
+
+(defun supertag-view-table-toggle-row-details ()
+  "Toggle inline details under the current row."
+  (interactive)
+  (let* ((coords (supertag-view-table--get-cell-coords))
+         (entity-id (and coords (plist-get coords :entity-id))))
+    (if (not entity-id)
+        (message "No row selected")
+      (if (supertag-view-table--row-expanded-p entity-id)
+          (supertag-view-table--collapse-row entity-id)
+        (supertag-view-table--expand-row entity-id))
+      (supertag-view-table-refresh))))
+
+(defun supertag-view-table-expand-all-rows ()
+  "Expand inline details for all rows."
+  (interactive)
+  (clrhash supertag-view-table--expanded-rows)
+  (dolist (eid supertag-view-table--entity-ids)
+    (puthash eid t supertag-view-table--expanded-rows))
+  (supertag-view-table-refresh))
+
+(defun supertag-view-table-collapse-all-rows ()
+  "Collapse inline details for all rows."
+  (interactive)
+  (clrhash supertag-view-table--expanded-rows)
+  (supertag-view-table-refresh))
 
 (defcustom supertag-view-table-image-target-char-height 5
   "Image target display height in table cells (in character lines)."
@@ -166,8 +252,9 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
         ;; Subscribe to updates
         (supertag-view-table--subscribe-updates)
         
-        ;; Render initial grid
-        (supertag-view-table--render-grid entity-ids)
+        ;; Render initial grid via new dispatcher
+        (let ((state (supertag-view-table--build-state)))
+          (supertag-view-table-render supertag-view-table-default-layout state))
 
         ;; Move cursor to the first cell for better UX
         (supertag-view-table--goto-first-cell)
@@ -423,119 +510,99 @@ Automatically detects virtual databases and uses their database fields."
   "Return default column configuration."
   '((:name "Title" :key :title :width 40)))
 
-(defun supertag-view-table--render-grid (entity-ids)
-  "Render the grid for the given ENTITY-IDS with dynamic column widths.
-Uses improved table styling from old version with proper borders.
-Table information is displayed above the table, not inside it."
-  (let ((inhibit-read-only t))
+(defun supertag-view-table--render-table (state)
+  "Renderer for layout 'table'. Consumes STATE built by `supertag-view-table--build-state'."
+  (let* ((inhibit-read-only t)
+         (columns (plist-get state :columns))
+         (rows (plist-get state :rows))
+         (query-obj (supertag-view-table--get-current-query-obj)))
     (erase-buffer)
-    
-    ;; Calculate dynamic column widths
-    (let* ((headers (mapcar (lambda (col) (plist-get col :name)) supertag-view-table--columns))
-           (data-rows (mapcar (lambda (entity-id)
-                               (when-let* ((entity-data (supertag-view-table--get-entity-data entity-id)))
-                                 (mapcar (lambda (col)
-                                           (supertag-view-table--get-cell-value entity-data (plist-get col :key) col))
-                                         supertag-view-table--columns)))
-                             entity-ids))
+    ;; Calculate dynamic column widths from data
+    (let* ((headers (mapcar (lambda (col) (plist-get col :name)) columns))
+           (data-rows (mapcar (lambda (row)
+                                (mapcar (lambda (col)
+                                          (let* ((key (plist-get col :key))
+                                                 (pair (assoc key (plist-get row :values))))
+                                            (cdr pair)))
+                                        columns))
+                              rows))
            (calculated-widths (supertag-view-table--calculate-column-widths headers data-rows))
-           (query-obj (supertag-view-table--get-current-query-obj)))
-      (let* ((table-info (when query-obj
-                           (format "Table: %s (%d/%d)" 
-                                   (plist-get query-obj :value)
-                                   (1+ supertag-view-table--current-table-index)
-                                   (length supertag-view-table--query-objs))))
-             (view-info (if supertag-view-table--current-view-name
-                            (format "View: %s" supertag-view-table--current-view-name)
-                          "View: Default"))
-             (full-header (string-join (list table-info view-info) " | ")))
-
-        ;; Update column widths
-        (setq supertag-view-table--columns
-              (cl-loop for col in supertag-view-table--columns
-                       for width in calculated-widths
-                       collect (plist-put col :width width)))
-        
-        ;; Display table information above the table
-        (when full-header
-          (insert (propertize full-header 'face '(:weight bold :foreground "blue")) "\n\n"))
-        
-        ;; Render table with proper borders (from old version style)
-        (insert (supertag-view-table--draw-separator "┌" "┬" "┐") "\n")
-        
-        ;; Render header (without table info)
-        (let ((header-parts (cl-loop for col in supertag-view-table--columns
-                                   for width in (mapcar (lambda (c) (plist-get c :width)) supertag-view-table--columns)
-                                   collect (propertize 
-                                            (format " %s " (supertag-view-table--pad-string (plist-get col :name) width))
-                                            'face 'bold))))
-          (insert (format "│%s│" (string-join header-parts "│")) "\n"))
-        
-        ;; Render separator after header
-        (insert (supertag-view-table--draw-separator "├" "┼" "┤") "\n")
-        
-        ;; 1. Pre-compute all cell content as processed-cells
-        (let ((processed-rows
-               (mapcar (lambda (entity-id)
-                         (when-let* ((entity-data (supertag-view-table--get-entity-data entity-id)))
-                           (let ((widths (mapcar (lambda (c) (plist-get c :width)) supertag-view-table--columns)))
-                             (cl-loop for col in supertag-view-table--columns
-                                      for width in widths
-                                      for col-idx from 0
-                                      collect
-                                      (let* ((content (supertag-view-table--get-cell-value entity-data (plist-get col :key) col))
-                                             (formatted-lines (supertag-view-table--format-cell content width)))
-                                        (list :entity-id entity-id
-                                              :col-index col-idx
-                                              :col-key (plist-get col :key)
-                                              :lines formatted-lines))))))
-                       entity-ids)))
-          
-          ;; 2. Render each row with proper height synchronization
-          (let ((rows processed-rows))
-            (dolist (processed-row rows)
-              (when processed-row
-                ;; Determine row height
-                (let* ((row-height (apply #'max (cons 1 (mapcar (lambda (cell) (length (plist-get cell :lines))) processed-row))))
-                       (output-lines '()))
-                  
-                  ;; Build the output line by line
-                  (dotimes (line-idx row-height)
-                    (let ((line-parts
-                           (cl-loop for p-cell in processed-row
-                                    collect
-                                    (let* ((lines (plist-get p-cell :lines))
-                                           (content-part (or (nth line-idx lines) ""))
-                                           (width (plist-get (nth (plist-get p-cell :col-index) supertag-view-table--columns) :width))
-                                           (padded (supertag-view-table--pad-string content-part width)))
-                                      (propertize (format " %s " padded)
-                                                  'entity-id (plist-get p-cell :entity-id)
-                                                  'col-index (plist-get p-cell :col-index)
-                                                  'col-key (plist-get p-cell :col-key))))))
-                      (push (format "│%s│" (string-join line-parts "│")) output-lines)))
-                  
-                  ;; Insert the final multi-line string for the row
-                  (insert (string-join (nreverse output-lines) "\n"))
-                  
-                  ;; Add separator after row (except for the last row)
-                  (unless (eq processed-row (car (last rows)))
-                    (insert "\n" (supertag-view-table--draw-separator "├" "┼" "┤") "\n")))))))
-        
-        ;; Render bottom border
-        (insert "\n" (supertag-view-table--draw-separator "└" "┴" "┘"))
-        
-        ;; Insert footer with keyboard shortcuts
-        (insert "\n\n")
-        (supertag-view-helper-insert-simple-footer
-         "⌨️ Edit: [RET] Edit Cell | [C-c C-i] Insert Image | [w] Adjust Image Width"
-         "📊 Columns: [C-c C-a] Add | [C-c C-d] Delete | [C-c C-r] Rename | [C-c C-t] Set Type"
-         "🔍 Filter: [/] Apply Filter | [C-c /] Clear Filter | [C-c v s] Switch View"
-         "📍 Navigation: [n/p] Line | [f/b] Cell | [TAB] Next Cell | [t] Switch Table | [o] Goto Node"
-         "🔧 Actions: [g] Refresh | [?] Help | [q] Quit"))
-      
-      ;; After rendering, move cursor to the first cell
+           (table-info (when query-obj
+                         (format "Table: %s (%d/%d)"
+                                 (plist-get query-obj :value)
+                                 (1+ supertag-view-table--current-table-index)
+                                 (length supertag-view-table--query-objs))))
+           (view-info (if supertag-view-table--current-view-name
+                          (format "View: %s" supertag-view-table--current-view-name)
+                        "View: Default"))
+           (full-header (string-join (list table-info view-info) " | "))
+           ;; Update live columns with widths
+           (updated-columns (cl-loop for col in columns
+                                     for width in calculated-widths
+                                     collect (plist-put (copy-sequence col) :width width))))
+      (setq supertag-view-table--columns updated-columns)
+      ;; Table info above the table
+      (when full-header
+        (insert (propertize full-header 'face '(:weight bold :foreground "blue")) "\n\n"))
+      ;; Top border
+      (insert (supertag-view-table--draw-separator "┌" "┬" "┐") "\n")
+      ;; Header row
+      (let ((header-parts (cl-loop for col in updated-columns
+                                   for width in (mapcar (lambda (c) (plist-get c :width)) updated-columns)
+                                   collect (propertize (format " %s " (supertag-view-table--pad-string (plist-get col :name) width))
+                                                       'face 'bold))))
+        (insert (format "│%s│" (string-join header-parts "│")) "\n"))
+      ;; Header separator
+      (insert (supertag-view-table--draw-separator "├" "┼" "┤") "\n")
+      ;; Body rows
+      (let ((processed-rows
+             (mapcar (lambda (row)
+                       (let* ((eid (plist-get row :id))
+                              (widths (mapcar (lambda (c) (plist-get c :width)) updated-columns)))
+                         (cl-loop for col in updated-columns
+                                  for width in widths
+                                  for col-idx from 0
+                                  for key = (plist-get col :key)
+                                  for val = (cdr (assoc key (plist-get row :values)))
+                                  collect (let ((lines (supertag-view-table--format-cell val width)))
+                                            (list :entity-id eid :col-index col-idx :col-key key :lines lines)))))
+                     rows)))
+        (dolist (prow processed-rows)
+          (when prow
+            (let* ((row-height (apply #'max (cons 1 (mapcar (lambda (cell) (length (plist-get cell :lines))) prow))))
+                   (output-lines '()))
+              (dotimes (line-idx row-height)
+                (let ((line-parts
+                       (cl-loop for p-cell in prow
+                                collect (let* ((lines (plist-get p-cell :lines))
+                                               (content-part (or (nth line-idx lines) ""))
+                                               (width (plist-get (nth (plist-get p-cell :col-index) updated-columns) :width))
+                                               (padded (supertag-view-table--pad-string content-part width)))
+                                          (propertize (format " %s " padded)
+                                                      'entity-id (plist-get p-cell :entity-id)
+                                                      'col-index (plist-get p-cell :col-index)
+                                                      'col-key (plist-get p-cell :col-key))))))
+                  (push (format "│%s│" (string-join line-parts "│")) output-lines)))
+              (insert (string-join (nreverse output-lines) "\n"))
+              ;; Expanded inline details (read-only, no cell props)
+              (let ((eid (plist-get (car prow) :entity-id)))
+                (when (supertag-view-table--row-expanded-p eid)
+                  (insert "\n")
+                  (supertag-view-table--insert-expanded-details eid)))
+              (unless (eq prow (car (last processed-rows)))
+                (insert "\n" (supertag-view-table--draw-separator "├" "┼" "┤") "\n"))))))
+      ;; Bottom border
+      (insert "\n" (supertag-view-table--draw-separator "└" "┴" "┘"))
+      ;; Footer
+      (insert "\n\n")
+      (supertag-view-helper-insert-simple-footer
+       "⌨️ Edit: [RET] Edit Cell | [C-c C-i] Insert Image | [w] Adjust Image Width"
+       "📊 Columns: [C-c C-a] Add | [C-c C-d] Delete | [C-c C-r] Rename | [C-c C-t] Set Type"
+       "🔍 Filter: [/] Apply Filter | [C-c /] Clear Filter | [C-c v s] Switch View"
+       "📍 Navigation: [n/p] Line | [f/b] Cell | [TAB] Next Cell | [t] Switch Table | [o] Goto Node"
+       "🔧 Actions: [g] Refresh | [?] Help | [q] Quit")
+      ;; Move to first cell
       (supertag-view-table--goto-first-cell)
-      
       (setq buffer-read-only t))))
 
 (defun supertag-view-table--pad-string (text width)
@@ -545,6 +612,42 @@ Table information is displayed above the table, not inside it."
     (if (> padding 0)
         (concat text-str (make-string padding ?\s))
       text-str)))
+
+;;; --- Additional Layouts: Node Detail ---
+
+(defun supertag-view-table--build-node-detail-state (node-id)
+  "Build a minimal state plist for rendering NODE-ID via the node-detail layout.
+This uses `supertag-view-build-node-state' to obtain the data-only node view."
+  (let ((node-state (supertag-view-build-node-state node-id)))
+    (when node-state
+      (list :layout 'node-detail
+            :node-state node-state))))
+
+(defun supertag-view-table--render-node-detail (state)
+  "Render a single node detail card from STATE in the current buffer.
+STATE is expected to contain a :node-state plist built by
+`supertag-view-build-node-state'."
+  (let* ((node-state (plist-get state :node-state))
+         (node (plist-get node-state :node))
+         (node-id (plist-get node-state :id)))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (cond
+       ;; 优先复用现有的 Node View 渲染函数（如果已加载）。
+       ((and node-state (fboundp 'supertag-view-node--render-from-state))
+        (supertag-view-node--render-from-state node-state))
+       ;; 简单回退：只显示标题和 ID。
+       (node
+        (let* ((title (or (plist-get node :title) "Untitled Node")))
+          (insert (format "📄 %s\n\n" title))
+          (insert (format "ID: %s\n" node-id))))
+       (t
+        (insert "Node not found."))))))
+
+;; Register default table layout renderer + node-detail layout at load time.
+(ignore-errors
+  (supertag-view-table-register-layout 'table #'supertag-view-table--render-table)
+  (supertag-view-table-register-layout 'node-detail #'supertag-view-table--render-node-detail))
 
 (defun supertag-view-table--calculate-column-widths (headers data-rows)
   "Calculate the optimal column widths based on headers and data.
@@ -973,11 +1076,13 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
         (let ((start (point))
               (end (line-end-position)))
           (delete-region start end)
-          ;; Re-render the entire grid to maintain consistency
-          (supertag-view-table--render-grid supertag-view-table--entity-ids)
+          ;; Re-render the entire grid via new dispatcher
+          (let ((state (supertag-view-table--build-state)))
+            (supertag-view-table-render supertag-view-table-default-layout state)
+            ))
           
           ;; Visual feedback for automated updates
-          (supertag-view-table--flash-cell line-number))))))
+          (supertag-view-table--flash-cell line-number)))))
 
 (defun supertag-view-table--find-row-line (entity-id)
   "Find the line number for the row containing ENTITY-ID."
@@ -1032,7 +1137,8 @@ Based on old version's superior navigation system."
     (when next-pos
       (goto-char next-pos)
       (unless (get-text-property (point) 'entity-id)
-        (supertag-view-table-next-cell)))))
+        (supertag-view-table-next-cell))
+      )))
 
 (defun supertag-view-table-previous-cell ()
   "Move to previous cell in the table."
@@ -1041,7 +1147,8 @@ Based on old version's superior navigation system."
     (when prev-pos
       (goto-char prev-pos)
       (unless (get-text-property (point) 'entity-id)
-        (supertag-view-table-previous-cell)))))
+        (supertag-view-table-previous-cell))
+      )))
 
 (defun supertag-view-table--goto-row-relative (delta)
   "Move vertically by DELTA rows while staying in the same column."
@@ -1060,7 +1167,8 @@ Based on old version's superior navigation system."
                 (message "No more rows in that direction.")
               (let ((target-entity (nth new-index supertag-view-table--entity-ids)))
                 (supertag-view-table--goto-cell
-                 (list :entity-id target-entity :col-index col-index))))))))))
+                 (list :entity-id target-entity :col-index col-index))
+                ))))))))
 
 (defun supertag-view-table-next-line ()
   "Move to the cell in the next data row, attempting to preserve column."
@@ -1181,14 +1289,33 @@ COORDS is a plist with :entity-id and :col-index."
                   (query-obj   (supertag-view-table--get-current-query-obj)))
         (pcase (plist-get query-obj :type)
           (:tag
-           (let* ((current-value (supertag-field-get-with-default entity-id
-                                                                  (supertag-view-table--get-current-tag-id)
-                                                                  (symbol-name col-key)))
-                  (new-value (supertag-ui-read-field-value col-def current-value)))
-             (when new-value
-               (supertag-field-set entity-id (supertag-view-table--get-current-tag-id) (symbol-name col-key) new-value)
-               (supertag-view-table-refresh)
-               (supertag-view-table--goto-cell coords))))
+           (if (eq col-key :title)
+               (message "Read-Only")
+             (let* ((tag-id (supertag-view-table--get-current-tag-id))
+                    (current-value (supertag-field-get-with-default entity-id
+                                                                    tag-id
+                                                                    (symbol-name col-key)))
+                    (new-value (supertag-ui-read-field-value col-def current-value))
+                    (field-type (plist-get col-def :type)))
+               (when new-value
+                 ;; For :node-reference fields, keep :reference relations and backlinks in sync.
+                 (when (eq field-type :node-reference)
+                   (let* ((current-targets (supertag-field-normalize-node-reference-list current-value))
+                          (new-targets (supertag-field-normalize-node-reference-list new-value))
+                          (removed (cl-set-difference current-targets new-targets :test #'string=))
+                          (added (cl-set-difference new-targets current-targets :test #'string=)))
+                     ;; Remove stale references and backlinks.
+                     (dolist (target removed)
+                       (dolist (rel (supertag-relation-find-between entity-id target :reference))
+                         (supertag-relation-delete (plist-get rel :id)))
+                       (supertag-ui--remove-link-under-node target entity-id))
+                     ;; Add new references via unified service.
+                     (dolist (target added)
+                       (supertag-relation-add-reference entity-id target))))
+                 ;; Persist field value and refresh view.
+                 (supertag-field-set entity-id tag-id (symbol-name col-key) new-value)
+                 (supertag-view-table-refresh)
+                 (supertag-view-table--goto-cell coords)))))
           (_
            (let* ((entity-data (supertag-view-table--get-entity-data entity-id))
                   (current-value (plist-get entity-data col-key))
@@ -1278,10 +1405,12 @@ With prefix argument INDEX, switch to specific table number."
       (setq-local supertag-view-table--columns 
                  (supertag-view-table--get-columns (supertag-view-table--get-current-query-obj)))
       
-      (supertag-view-table--render-grid supertag-view-table--entity-ids)
+      (let ((state (supertag-view-table--build-state)))
+        (supertag-view-table-render supertag-view-table-default-layout state)
+        ))
       
       (message "Switched to table: %s" 
-               (plist-get (supertag-view-table--get-current-query-obj) :value)))))
+               (plist-get (supertag-view-table--get-current-query-obj) :value))))
 
 (defun supertag-view-table-show-tag ()
   "Switch the current view to display a tag."
@@ -1329,7 +1458,9 @@ With prefix argument INDEX, switch to specific table number."
         (push (cons new-name supertag-view-table--view-config) supertag-view-table--named-views))
       (setq-local supertag-view-table--current-view-name new-name)
       (message "View '%s' saved." new-name)
-      (supertag-view-table--render-grid supertag-view-table--entity-ids))))
+      (let ((state (supertag-view-table--build-state)))
+        (supertag-view-table-render supertag-view-table-default-layout state)
+        )))) 
 
 (defun supertag-view-table-delete-named-view ()
   "Delete a named view."
@@ -1465,6 +1596,12 @@ With prefix argument INDEX, switch to specific table number."
 (defvar supertag-view-table-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'supertag-view-table-edit-cell)
+    ;; Toggle inline details for current row
+    (define-key map (kbd "z") #'supertag-view-table-toggle-row-details)
+    (define-key map (kbd "C-c v e") #'supertag-view-table-expand-all-rows)
+    (define-key map (kbd "C-c v c") #'supertag-view-table-collapse-all-rows)
+    
+    
     (define-key map (kbd "g") #'supertag-view-table-refresh)
     (define-key map (kbd "q") #'quit-window)
     (define-key map (kbd "n") #'supertag-view-table-next-line)
@@ -1543,9 +1680,11 @@ With prefix argument INDEX, switch to specific table number."
       (when active-config
         (supertag-view-table--apply-view-config active-config))
 
-      ;; 4. Re-render with the (potentially filtered) entities
-      (supertag-view-table--render-grid supertag-view-table--entity-ids)
-      (message "Table refreshed."))))
+      ;; 4. Re-render with the (potentially filtered) entities using dispatcher
+      (let ((state (supertag-view-table--build-state)))
+        (supertag-view-table-render supertag-view-table-default-layout state)
+        ))
+      (message "Table refreshed.")))
 
 (defun supertag-view-table-help ()
   "Show help information about table view commands and image support."
@@ -1619,7 +1758,9 @@ With prefix argument INDEX, switch to specific table number."
   "Clean up grid view subscriptions."
   (interactive)
   (let ((view-id (format "%s" (current-buffer))))
-    (remhash view-id supertag-view-table--active-views)))
+    (remhash view-id supertag-view-table--active-views)
+    
+    ))
 
 (add-hook 'kill-buffer-hook #'supertag-view-table-cleanup)
 

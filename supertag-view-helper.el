@@ -11,6 +11,8 @@
 
 ;; Forward declare functions to avoid circular dependencies
 (declare-function supertag-field-get-with-default "supertag-ops-field")
+(declare-function supertag-field-normalize-node-reference-list "supertag-ops-field")
+(declare-function supertag-node-get "supertag-ops-node")
 
 ;;;----------------------------------------------------------------------
 ;;; Constants and Configuration
@@ -324,6 +326,19 @@ TEXT can be any value convertible to string."
       ((or :number :integer) (supertag-view-helper-format-number-value value))
       ((or :date :timestamp) (supertag-view-helper-format-date-value value))
       (:url (supertag-view-helper-format-url-value value))
+      ;; For node-reference fields, prefer showing human-readable titles.
+      (:node-reference
+       (let ((ids (and value (supertag-field-normalize-node-reference-list value))))
+         (if (or (null ids) (null (car ids)))
+             ;; Reuse generic empty formatting to show [Empty].
+             (supertag-view-helper-format-value nil)
+           (let* ((titles (mapcar (lambda (id)
+                                    (let* ((node (and (stringp id) (supertag-node-get id)))
+                                           (title (and node (or (plist-get node :title) id))))
+                                      (or title id)))
+                                  ids))
+                  (joined (mapconcat #'identity titles ", ")))
+             (supertag-view-helper-render-org-links joined)))))
       (_ (supertag-view-helper-format-value value)))))
 
 ;;; --- Simple and Clean Components ---

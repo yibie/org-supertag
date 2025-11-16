@@ -16,6 +16,9 @@
 (require 'org-id)
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
+;; Avoid requiring ops-field here to prevent circular deps via core-scan.
+;; Use a forward declaration and call it when available.
+(declare-function supertag-field-remove "supertag-ops-field" (node-id tag-id field-name))
 (require 'supertag-core-persistence)
 ;;; --- Internal Helper ---
 
@@ -161,15 +164,33 @@ Returns the updated node data."
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
 Returns the updated node data."
-  (supertag-node-update
-   node-id
-   (lambda (node)
-     (when node
-       (let* ((tags (plist-get node :tags))
-              (filtered (remove tag-id (or tags '()))))
-         (unless (equal filtered tags)
-           (let ((copy (copy-sequence node)))
-             (plist-put copy :tags filtered))))))))
+  (let ((removed-p nil)
+        (result nil))
+    ;; First, update the node's tag list
+    (setq result
+          (supertag-node-update
+           node-id
+           (lambda (node)
+             (when node
+               (let* ((tags (plist-get node :tags))
+                      (filtered (remove tag-id (or tags '()))))
+                 (if (equal filtered tags)
+                     node
+                   (setq removed-p t)
+                   (let ((copy (copy-sequence node)))
+                     (plist-put copy :tags filtered))))))))
+    ;; If a tag was actually removed, clear all its field values on this node
+    (when removed-p
+      ;; Read fields directly from the tags collection to avoid requiring ops-tag.
+      (let* ((tags-ht (supertag-store-get-collection :tags))
+             (tag-data (and (hash-table-p tags-ht) (gethash tag-id tags-ht)))
+             (fields (and tag-data (plist-get tag-data :fields))))
+        (when (and (listp fields)
+                   (fboundp 'supertag-field-remove))
+          (dolist (f fields)
+            (when-let ((fname (plist-get f :name)))
+              (ignore-errors (supertag-field-remove node-id tag-id fname)))))))
+    result))
 
 (defun supertag-node-has-tag-p (node-id tag-id)
   "Check if a node has a specific tag.

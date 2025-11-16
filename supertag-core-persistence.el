@@ -572,7 +572,9 @@ Returns Emacs standard time format (high low micro pico)."
   "Safe time comparison function.
 TIME1 and TIME2 should be in Emacs time format.
 Returns t if times are equal, otherwise returns nil."
-  (and (timep time1) (timep time2) (equal time1 time2)))
+  (and (supertag--validate-time time1)
+       (supertag--validate-time time2)
+       (equal time1 time2)))
 
 (defun supertag--validate-time (time-value)
   "Validate that the time value is in valid Emacs time format.
