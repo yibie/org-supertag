@@ -1,4 +1,38 @@
 * Changelog
+* [5.1.6] - 2025-11-17
+** Improvements
+*** Org-Capture Integration as a First-Class Capture Path
+- Added a unified finalization API `supertag-capture-finalize-node-at-point` that turns any Org heading into a Supertag node, ensuring a stable `ID`, syncing to the database, and applying tag fields in one place.
+- `supertag-capture-with-template` and the new org-capture integration now both rely on this core API, avoiding duplicated sync logic.
+- Introduced `supertag-org-capture-after-finalize` hook integration:
+  - Templates can opt in with `:supertag t` in `org-capture-templates`.
+  - Optional `:supertag-template` lets org-capture templates pre-fill tag fields using the Tag/Field/Value model.
+
+*** Supertag-Aware Tag Prompt in org-capture
+- New `:supertag-tags-prompt` option for org-capture templates:
+  - After capture finalization, prompts `Supertag tags (comma separated):` with completion from existing Supertag tags.
+  - Supports creating new tags on the fly: names are sanitized and missing tags are automatically created as Tag entities.
+  - Selected tags are written both to the Supertag database and to the Org headline as inline `#tag`, then re-synced in one pass.
+
+*** Movement Workflow: org-capture + Supertag Move
+- Extended `:supertag-move` options to chain capture → finalize → move:
+  - `t` / `node` → run `supertag-move-node` for full file+position selection.
+  - `link` / `:link` → run `supertag-move-node-and-link`, moving the node and leaving a backlink at the original location.
+  - `within-target` / `:within-target` → only select a position within the capture target file, skipping the file prompt for a smoother “in-file re-positioning” flow.
+- This replaces the need to use `org-refile` for Supertag nodes, while staying compatible with org-capture’s templating model.
+
+*** Capture DSL and org-capture Symmetry
+- Clarified the roles of:
+  - `supertag-capture-with-template`: advanced DSL for Supertag-native capture flows.
+  - org-capture integration: lightweight path that reuses existing `org-capture-templates` and adds Supertag-specific post-processing via `:supertag`, `:supertag-template`, `:supertag-tags-prompt`, and `:supertag-move`.
+- Updated `doc/CAPTURE-GUIDE.md` and `doc/CAPTURE-GUIDE_cn.md`:
+  - Org-capture based capture is now documented as a first-class, recommended workflow for existing Org users.
+  - Added concrete examples for `:supertag-template`, `:supertag-tags-prompt`, and `:supertag-move within-target`, and a developer section for the core finalization API.
+
+**** Implementation Notes
+- Files touched: `supertag-services-capture.el`, `supertag-ui-commands.el`, `doc/CAPTURE-GUIDE.md`, `doc/CAPTURE-GUIDE_cn.md`.
+- `supertag-org-capture-after-finalize` now normalizes `:supertag-move` values from quoted and string forms and safely checks for the presence of move commands (`supertag-move-node`, `supertag-move-node-and-link`) before calling them.
+
 * [5.1.5] - 2025-11-15
 ** Improvements
 *** Node View ergonomics and safety

@@ -540,6 +540,169 @@ TAG-POSITION determines where tags are placed in the headline."
         (save-buffer)
         (list :id new-node-id :marker marker)))))
 
+;;; --- Core Finalization API ---
+
+(defgroup supertag-capture nil
+  "Capture-related configuration and integration for Org-Supertag."
+  :group 'org-supertag)
+
+(defun supertag-capture-finalize-node-at-point (&optional field-specs explicit-node-id)
+  "Finalize current Org headline as a Supertag node.
+
+Ensures the node has a stable ID, syncs it into the Supertag store,
+and applies FIELD-SPECS using the Tag/Field/Value data model.
+
+FIELD-SPECS is a list of plists like:
+  (:tag TAG-ID :field FIELD-NAME :value VALUE)
+
+When EXPLICIT-NODE-ID is non-nil, it is enforced as the node ID and
+registered via `org-id-add-location'.  Otherwise, `org-id-get-create'
+is used to obtain or create an ID."
+  (interactive)
+  (unless (org-before-first-heading-p)
+    (save-excursion
+      (org-back-to-heading t)
+      (let* ((current-id (org-entry-get nil "ID"))
+             (node-id (or explicit-node-id current-id (org-id-get-create))))
+        (when explicit-node-id
+          (unless (string= explicit-node-id current-id)
+            (org-entry-put nil "ID" explicit-node-id))
+          (setq node-id explicit-node-id))
+        (when (and node-id (buffer-file-name))
+          (org-id-add-location node-id (buffer-file-name)))
+        (supertag-node-sync-at-point)
+        (when field-specs
+          (supertag-field-set-many node-id field-specs))
+        node-id))))
+
+;;; --- org-capture Integration Layer ---
+
+(defcustom supertag-org-capture-auto-enable nil
+  "When non-nil, enable Supertag integration with `org-capture'.
+
+This is a convenience toggle.  You can also call
+`supertag-enable-org-capture-integration' and
+`supertag-disable-org-capture-integration' manually."
+  :type 'boolean
+  :group 'supertag-capture)
+
+(defun supertag-org-capture-after-finalize ()
+  "Attach Supertag metadata for org-capture entries that opt in.
+
+Templates can opt in by adding `:supertag t' to their entry in
+`org-capture-templates'.  Optional `:supertag-template' can be a
+list of plists of the form:
+
+  (:tag TAG-ID :field FIELD-NAME :value VALUE)
+
+These will be applied via `supertag-field-set-many'.
+
+Additionally, templates can request a follow-up move using
+`supertag-move-node' or `supertag-move-node-and-link' by setting
+`:supertag-move' in the template plist:
+
+- :supertag-move t                ; use `supertag-move-node'
+- :supertag-move 'node            ; same as t
+- :supertag-move 'link            ; use `supertag-move-node-and-link'
+- :supertag-move 'within-target   ; move within the capture target file only
+
+You can also enable an interactive Supertag tag prompt after
+capture by setting `:supertag-tags-prompt' to non-nil in the
+template plist.  This uses the same tag completion source as the
+capture DSL."
+  (when (and (boundp 'org-capture-plist)
+             (plist-get org-capture-plist :supertag))
+    (let* ((marker (and (boundp 'org-capture-last-stored-marker)
+                        org-capture-last-stored-marker))
+           (field-specs (plist-get org-capture-plist :supertag-template))
+           (move-spec (plist-get org-capture-plist :supertag-move))
+           (tags-prompt (plist-get org-capture-plist :supertag-tags-prompt)))
+      (when (markerp marker)
+        (with-current-buffer (marker-buffer marker)
+          (when (buffer-live-p (current-buffer))
+            (goto-char marker)
+            (progn
+              (let ((node-id (supertag-capture-finalize-node-at-point field-specs)))
+                ;; Optional tags prompt using Supertag tag completion
+                (when (and tags-prompt node-id)
+                  (let* ((chosen
+                          (supertag-capture--get-from-tags-prompt
+                           (list "Supertag tags (comma separated): ")))
+                         (sanitized (mapcar #'supertag-sanitize-tag-name chosen))
+                         (unique-tags (cl-delete-duplicates sanitized :test #'string=)))
+                    (when unique-tags
+                      ;; Update DB tags (create tag entities if needed)
+                      (dolist (tag-id unique-tags)
+                        (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t))
+                      ;; Update inline #tag on the Org headline
+                      (org-back-to-heading t)
+                      (let* ((title (org-get-heading t t t t))
+                             (bare-title
+                              (string-trim
+                               (replace-regexp-in-string
+                                "\\(?:^\\|\\s-\\)#\\w[-_[:alnum:]]*" "" title)))
+                             (tag-string
+                              (mapconcat (lambda (t) (concat "#" t))
+                                         unique-tags " "))
+                             (new-title
+                              (string-trim
+                               (if (string-empty-p bare-title)
+                                   tag-string
+                                 (concat bare-title " " tag-string)))))
+                        (org-edit-headline new-title)
+                        (supertag-node-sync-at-point)))))
+                  (when move-spec
+                    (let* ((raw-move move-spec)
+                           ;; Normalize move-spec:
+                           ;; - (quote foo) -> foo
+                           ;; - \"link\" / \"within-target\" -> symbol
+                           ;; - symbols remain unchanged
+                           (normalized
+                            (cond
+                             ((and (consp raw-move) (eq (car raw-move) 'quote))
+                              (cadr raw-move))
+                             ((stringp raw-move)
+                              (intern (downcase raw-move)))
+                             (t raw-move))))
+                      (pcase normalized
+                        ;; Move within the current capture target file:
+                        ;; re-use `supertag-move-node' but skip the file prompt.
+                        ((or 'within-target :within-target)
+                         (let ((current-file (buffer-file-name)))
+                           (when (and current-file (fboundp 'supertag-move-node))
+                             (cl-letf (((symbol-function 'read-file-name)
+                                        (lambda (&rest _ignore) current-file)))
+                               (call-interactively #'supertag-move-node)))))
+                        ;; Move to another file and leave a link behind
+                        ((or 'link :link)
+                         (when (fboundp 'supertag-move-node-and-link)
+                           (call-interactively #'supertag-move-node-and-link)))
+                        ;; Default: full `supertag-move-node' UI (file + position)
+                        (_
+                         (when (fboundp 'supertag-move-node)
+                           (call-interactively #'supertag-move-node))))))
+              (message "[supertag] org-capture integration: node finalized%s"
+                       (if move-spec " and moved" ""))))))))))
+
+(defun supertag-enable-org-capture-integration ()
+  "Enable Supertag integration with `org-capture'."
+  (interactive)
+  (add-hook 'org-capture-after-finalize-hook
+            #'supertag-org-capture-after-finalize)
+  (setq supertag-org-capture-auto-enable t)
+  (message "[supertag] org-capture integration enabled"))
+
+(defun supertag-disable-org-capture-integration ()
+  "Disable Supertag integration with `org-capture'."
+  (interactive)
+  (remove-hook 'org-capture-after-finalize-hook
+               #'supertag-org-capture-after-finalize)
+  (setq supertag-org-capture-auto-enable nil)
+  (message "[supertag] org-capture integration disabled"))
+
+(when supertag-org-capture-auto-enable
+  (supertag-enable-org-capture-integration))
+
 
 ;;; --- REWRITTEN: Main Workflow ---
 
@@ -586,48 +749,46 @@ TAG-POSITION determines where tags are placed in the headline."
              (new-node-id (org-id-new))
              (insert-result (supertag-capture--insert-node-into-buffer
                              buffer position level title tags body new-node-id tag-position))
-               (node-marker (plist-get insert-result :marker))
-               (resolved-fields
-                (when field-settings
-                  (cl-loop for f-spec in field-settings append
-                           (let* ((tag-id (plist-get f-spec :tag))
-                                  (field-name (plist-get f-spec :field))
-                                  (getter (plist-get f-spec :get))
-                                  (explicit-specified (plist-member f-spec :value))
-                                  (explicit (plist-get f-spec :value))
-                                  (value nil)
-                                  (provided nil))
-                             (cond
-                              (getter
-                               (setq value (supertag-capture--get-content getter))
-                               (setq provided t))
-                              (explicit-specified
-                               (setq value explicit)
-                               (setq provided t)))
-                             (cond
-                              ((and provided
-                                    (listp value)
-                                    (not (stringp value))
-                                    (cl-every (lambda (item)
-                                                (and (plist-get item :tag)
-                                                     (plist-get item :field)))
-                                              value))
-                               (cl-loop for nested in value
-                                        for n-tag = (plist-get nested :tag)
-                                        for n-field = (plist-get nested :field)
-                                        for n-value = (plist-get nested :value)
-                                        when (and n-tag n-field
-                                                  (not (and (stringp n-value)
-                                                            (string-empty-p n-value))))
-                                        collect (list :tag n-tag :field n-field :value n-value)))
-                              ((and provided tag-id field-name
-                                    (not (and (stringp value) (string-empty-p value))))
-                               (list (list :tag tag-id :field field-name :value value)))
-                              (t nil)))))))
+             (node-marker (plist-get insert-result :marker))
+             (resolved-fields
+              (when field-settings
+                (cl-loop for f-spec in field-settings append
+                         (let* ((tag-id (plist-get f-spec :tag))
+                                (field-name (plist-get f-spec :field))
+                                (getter (plist-get f-spec :get))
+                                (explicit-specified (plist-member f-spec :value))
+                                (explicit (plist-get f-spec :value))
+                                (value nil)
+                                (provided nil))
+                           (cond
+                            (getter
+                             (setq value (supertag-capture--get-content getter))
+                             (setq provided t))
+                            (explicit-specified
+                             (setq value explicit)
+                             (setq provided t)))
+                           (cond
+                            ((and provided
+                                  (listp value)
+                                  (not (stringp value))
+                                  (cl-every (lambda (item)
+                                              (and (plist-get item :tag)
+                                                   (plist-get item :field)))
+                                            value))
+                             (cl-loop for nested in value
+                                      for n-tag = (plist-get nested :tag)
+                                      for n-field = (plist-get nested :field)
+                                      for n-value = (plist-get nested :value)
+                                      when (and n-tag n-field
+                                                (not (and (stringp n-value)
+                                                          (string-empty-p n-value))))
+                                      collect (list :tag n-tag :field n-field :value n-value)))
+                            ((and provided tag-id field-name
+                                  (not (and (stringp value) (string-empty-p value))))
+                             (list (list :tag tag-id :field field-name :value value)))
+                            (t nil)))))))
           (org-with-point-at node-marker
-            (supertag-node-sync-at-point))
-          (when resolved-fields
-            (supertag-field-set-many new-node-id resolved-fields))
+            (supertag-capture-finalize-node-at-point resolved-fields new-node-id))
           (message "Capture successful for template: %s" description)))))
 
 (provide 'supertag-services-capture)

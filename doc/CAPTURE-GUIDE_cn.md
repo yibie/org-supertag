@@ -31,7 +31,48 @@ M-x supertag-capture-with-template RET t RET
 
 ## 📖 使用指南
 
-### 两种捕获方式
+### 总览：三种典型工作流
+
+- **基于 org-capture 的捕获**（`org-capture` + Supertag）：复用现有 `org-capture-templates`，由 Supertag 接管 ID、数据库、字段、移动和标签。
+- **模板捕获**（`supertag-capture-with-template`）：使用 DSL + 动态生成器 + 字段规范的高级捕获。
+- **独立捕获**（`supertag-capture`）：一次性、轻量级创建节点。
+
+底层由一个统一的“最终定稿 API”负责：把当前 Org 标题转换为 Supertag 节点，并按 Tag/Field/Value 模型写入字段。
+
+### 基于 org-capture 的捕获（推荐给已有 org-capture 用户）
+
+如果你已经在日常使用 org-capture，这条路线是最自然的：
+
+1. 启用 Supertag 与 org-capture 的集成：
+   ```elisp
+   (setq supertag-org-capture-auto-enable t)
+   ;; 或：
+   ;; (supertag-enable-org-capture-integration)
+   ```
+2. 在你的 org-capture 模板上添加 `:supertag` 以及可选扩展：
+   ```elisp
+   (add-to-list 'org-capture-templates
+                '("t" "带 Supertag 的任务" entry
+                  (file+headline "~/org/tasks.org" "Inbox")
+                  "* TODO %^{任务}\n  %?\n"
+                  :supertag t
+                  :supertag-tags-prompt t
+                  :supertag-template ((:tag "task" :field "status" :value "todo"))
+                  :supertag-move 'link))  ;; 捕获后移动并在原位置留链接
+   ```
+
+整体流程：
+
+- org-capture 按模板插入标题和正文；
+- Supertag 对该节点做“最终定稿”：确保 `ID`、同步数据库、写入字段（`:supertag-template`）；
+- 如果设置了 `:supertag-tags-prompt t`：
+  - 会弹出一个基于 Supertag 标签库的补全界面，可从已有标签中选择，或输入新标签（自动创建为正式 Supertag 标签）；
+- 如果设置了 `:supertag-move`，则在定稿后触发 Supertag 的移动逻辑：
+  - `:supertag-move t` / `node` → 调用 `supertag-move-node`，交互式选择“文件 + 位置”；
+  - `:supertag-move link` / `:link` → 调用 `supertag-move-node-and-link`，移动并在原处留链接；
+  - `:supertag-move within-target` / `:within-target` → 只在 **当前 capture 目标文件内部**选择插入位置（跳过文件选择对话框）。
+
+### 两种内置捕获方式
 
 #### 1. 独立捕获 (`supertag-capture`)
 
@@ -412,11 +453,110 @@ M-x supertag-capture-with-template
 
 ### 用户命令
 
-| 命令                             | 描述                 | 使用方式                                       |
-| -------------------------------- | -------------------- | ---------------------------------------------- |
-| `supertag-capture`               | 独立的捕获命令       | `M-x supertag-capture`                         |
-| `supertag-capture-with-template` | 基于模板的捕获命令   | `M-x supertag-capture-with-template`           |
-| `supertag-capture-enrich-node`   | 交互式丰富节点字段值 | `M-x supertag-capture-enrich-node RET node-id` |
+| 命令                             | 描述                       | 使用方式                                       |
+| -------------------------------- | -------------------------- | ---------------------------------------------- |
+| `supertag-capture`               | 独立的捕获命令             | `M-x supertag-capture`                         |
+| `supertag-capture-with-template` | 基于模板的捕获命令         | `M-x supertag-capture-with-template`           |
+| `supertag-capture-enrich-node`   | 交互式丰富节点字段值       | `M-x supertag-capture-enrich-node RET node-id` |
+
+### 与 org-capture 的集成（可选）
+
+Org-Supertag 可以作为 `org-capture` 的一个“后处理层”：  
+继续使用你原本的 `org-capture-templates`，只在 capture 完成后，由 Supertag 负责：
+
+- 确保节点有稳定的 `ID`
+- 同步到 Supertag 数据库
+- 写入字段（Tag/Field/Value 模型）
+
+#### 启用集成
+
+```elisp
+;; 全局启用 org-capture 集成
+(setq supertag-org-capture-auto-enable t)
+;; 或交互式调用：
+;; M-x supertag-enable-org-capture-integration
+```
+
+这会在 `org-capture-after-finalize-hook` 上注册一个钩子，  
+只对显式标记了 `:supertag t` 的模板生效。
+
+#### 在 org-capture 模板中开启 Supertag 支持
+
+在模板 plist 中加入 `:supertag t` 即可让这个模板的结果变成 Supertag 节点：  
+可选的 `:supertag-template` 用于在捕获后自动写入字段：
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("t" "带 Supertag 的任务" entry
+               (file+headline "~/org/tasks.org" "Inbox")
+               "* TODO %^{任务}  #task\n  %?\n"
+               :supertag t
+               :supertag-template ((:tag "task" :field "status" :value "todo"))))
+```
+
+完成后，Supertag 会：
+
+- 确保节点有稳定 `ID`
+- 同步到 Supertag 数据库
+- 根据 `:supertag-template` 写入字段
+
+#### 把 org-capture 和 `supertag-move-node` 结合起来
+
+你可以复刻“org-capture + org-refile”的习惯工作流：  
+先用 org-capture 创建节点，然后用 Supertag 的移动命令把节点放到真正位置。
+
+在模板里添加 `:supertag-move`，即可在 capture 完成后自动调用移动命令：
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("m" "任务（Supertag + 移动）" entry
+               (file "~/org/inbox.org")
+               "* TODO %^{任务}  #task\n  %?\n"
+               :supertag t
+               :supertag-move t))      ;; 使用 supertag-move-node
+
+(add-to-list 'org-capture-templates
+             '("l" "任务（Supertag + 移动并留链接）" entry
+               (file "~/org/inbox.org")
+               "* %^{标题}  #task\n  %?\n"
+               :supertag t
+               :supertag-move 'link))  ;; 使用 supertag-move-node-and-link
+```
+
+- `:supertag-move t` 或 `:supertag-move 'node`  
+  → capture 结束后调用 `supertag-move-node`，弹出“目标文件 + 插入位置”的交互。  
+- `:supertag-move 'link` 或 `:supertag-move :link`  
+  → capture 结束后调用 `supertag-move-node-and-link`，把节点移走并在原处留下指向该节点的链接。
+
+这等价于经典的“org-capture + org-refile”两步流，但第二步由 Supertag 的移动 API 完成，并自动更新数据库中的位置信息。
+
+#### 在 org-capture 过程中交互式选择 Supertag 标签
+
+如果你希望在 capture 完成后立刻用 Supertag 的标签补全界面来选择标签，可以在模板中添加 `:supertag-tags-prompt t`：
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("s" "带标签选择的 Supertag 任务" entry
+               (file "~/org/inbox.org")
+               "* TODO %^{任务}\n  %?\n"
+               :supertag t
+               :supertag-tags-prompt t))
+```
+
+正确使用步骤：
+
+1. 先启用 org-capture 集成，例如：
+   ```elisp
+   (setq supertag-org-capture-auto-enable t)
+   ;; 或： (supertag-enable-org-capture-integration)
+   ```
+2. 使用上面的模板执行 org-capture，org-capture 按模板插入标题和内容
+3. Supertag 对该标题做“最终定稿”：确保 ID、同步数据库
+4. 随后弹出一个提示：`Supertag tags (comma separated):`
+5. 你可以：
+   - 从现有的 Supertag 标签中选择（支持补全、多选），或
+   - 直接输入新的标签名称；不存在的标签会自动创建为正式 Supertag 标签
+6. Supertag 同时更新数据库中的标签集，并在标题中追加对应的 `#tag`
 
 ### 内容生成器函数
 
@@ -432,13 +572,14 @@ M-x supertag-capture-with-template
 
 ## 🆚 与 Org-Capture 的对比
 
-| 特性     | Org-Capture    | Supertag-Capture  |
-| -------- | -------------- | ----------------- |
-| 模板配置 | 静态字符串模板 | 动态内容生成器    |
-| 标签支持 | 手动输入       | 交互选择+自动完成 |
-| 字段管理 | 属性抽屉       | 数据库字段系统    |
-| 内容来源 | 固定格式       | 多种生成器        |
-| 扩展性   | 有限           | 高度可扩展        |
+| 特性         | Org-Capture            | Supertag 捕获 / 集成层         |
+| ------------ | ---------------------- | ------------------------------- |
+| 模板配置     | 静态字符串模板         | 动态内容生成器 + node-spec DSL |
+| 标签支持     | 手动输入               | 交互选择 + 自动完成             |
+| 字段管理     | 属性抽屉               | 数据库字段系统                 |
+| 内容来源     | 固定格式               | 多种生成器                     |
+| 扩展方式     | 有限                   | 高度可扩展                     |
+| 集成方式     | N/A                    | 通过 hook 做后处理             |
 
 ## 🐛 故障排除
 
@@ -459,6 +600,27 @@ M-x supertag-capture-with-template
 2. 检查 `*Messages*` 缓冲区的错误信息
 3. 验证模板配置的语法正确性
 4. 确认所有依赖的文件和标签存在
+
+## 🧩 开发者说明：核心捕获 API
+
+如果你希望编写自己的前端（例如从其它命令里创建节点），可以直接调用底层的“最终定稿” API，将当前 Org 标题转为 Supertag 节点：
+
+```elisp
+;; 在你希望变成 Supertag 节点的标题上调用：
+(supertag-capture-finalize-node-at-point
+ '((:tag "task" :field "status" :value "todo")
+   (:tag "task" :field "priority" :value "high")))
+```
+
+这会：
+
+- 确保该标题有稳定的 `ID`（必要时自动创建）
+- 使用 `org-id` 注册 ID 与文件路径的映射
+- 同步节点到 Supertag 数据库
+- 按给定的 Tag/Field/Value 规格调用 `supertag-field-set-many` 写入字段
+
+org-capture 集成和 `supertag-capture-with-template` 内部都使用了这个函数。  
+在构建新的捕获流程时，推荐复用该 API，而不是重复实现同步逻辑。
 
 ---
 

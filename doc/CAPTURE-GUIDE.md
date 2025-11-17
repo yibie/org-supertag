@@ -33,6 +33,48 @@ M-x supertag-capture-with-template RET t RET
 
 ## 📖 User Guide
 
+### Core Workflows at a Glance
+
+- **Org-capture based capture** (`org-capture` + Supertag): reuse `org-capture-templates`, Supertag handles ID, database, fields, moves, and tags.
+- **Template capture** (`supertag-capture-with-template`): advanced DSL with dynamic generators and field specs.
+- **Independent capture** (`supertag-capture`): quick, one-off node creation.
+
+The core engine underneath all of these is a single finalization API that
+turns an Org heading into a Supertag node and applies tag fields.
+
+### Org-Capture-Based Capture (`org-capture` + Supertag)
+
+This is the most natural workflow if you already use `org-capture`:
+
+1. Enable Supertag integration:
+   ```elisp
+   (setq supertag-org-capture-auto-enable t)
+   ;; or:
+   ;; (supertag-enable-org-capture-integration)
+   ```
+2. Add `:supertag` (and optional extras) to your capture templates:
+   ```elisp
+(add-to-list 'org-capture-templates
+             '("t" "Task with Supertag" entry
+               (file+headline "~/org/tasks.org" "Inbox")
+               "* TODO %^{Task}\n  %?\n"
+               :supertag t
+               :supertag-tags-prompt t
+               :supertag-template ((:tag "task" :field "status" :value "todo"))
+               :supertag-move 'link))  ;; move and leave a link
+   ```
+
+Flow:
+
+- `org-capture` inserts the heading as usual.
+- Supertag finalizes the node: ensures `ID`, syncs to the database, writes fields.
+- If `:supertag-tags-prompt t` is set, you get a Supertag-aware tag prompt:
+  - choose existing tags with completion, or type new tags (auto-created).
+- If `:supertag-move` is set, Supertag can:
+  - `:supertag-move t` / `node` → run `supertag-move-node` (choose file + position)
+  - `:supertag-move link` / `:link` → run `supertag-move-node-and-link`
+  - `:supertag-move within-target` / `:within-target` → only choose position **within the capture target file**, skipping the file prompt
+
 ### Two Capture Methods
 
 #### 1. Independent Capture (`supertag-capture`)
@@ -450,6 +492,108 @@ Template string processors can be extended to support more placeholders:
 | `supertag-capture-with-template` | Template-based capture command    | `M-x supertag-capture-with-template`           |
 | `supertag-capture-enrich-node`   | Interactive node field enrichment | `M-x supertag-capture-enrich-node RET node-id` |
 
+### Org-Capture Integration (Optional)
+
+Org-Supertag can work as an extension layer on top of `org-capture`,
+reusing your existing capture templates and only adding Supertag-specific
+metadata and field management.
+
+#### Enable Integration
+
+```elisp
+;; Enable org-capture integration (global toggle)
+(setq supertag-org-capture-auto-enable t)
+;; or call interactively:
+;; M-x supertag-enable-org-capture-integration
+```
+
+This adds a post-processing hook to `org-capture-after-finalize-hook`
+and only activates for templates that explicitly opt in.
+
+#### Opt-in from org-capture-templates
+
+Add `:supertag t` to any template that should be synchronized with
+the Supertag store. Optional `:supertag-template` can pre-fill tag fields
+on the created node:
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("t" "Task with Supertag" entry
+               (file+headline "~/org/tasks.org" "Inbox")
+               "* TODO %^{Task}  #task\n  %?\n"
+               :supertag t
+               :supertag-template ((:tag "task" :field "status" :value "todo"))))
+```
+
+When this template finishes, Supertag will:
+
+- Ensure the captured node has a stable `ID`
+- Sync it into the Supertag database
+- Apply `:supertag-template` via the Tag/Field/Value model
+
+#### Combine org-capture with `supertag-move-node`
+
+You can chain capture → Supertag sync → move using the existing
+`supertag-move-node` / `supertag-move-node-and-link` commands.
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("m" "Task with Supertag & move"
+               entry
+               (file "~/org/inbox.org")
+               "* TODO %^{Task}  #task\n  %?\n"
+               :supertag t
+               :supertag-move t))   ;; use supertag-move-node
+
+(add-to-list 'org-capture-templates
+             '("l" "Task with Supertag & move+link"
+               entry
+               (file "~/org/inbox.org")
+               "* %^{Title}  #task\n  %?\n"
+               :supertag t
+               :supertag-move 'link))   ;; use supertag-move-node-and-link
+```
+
+- `:supertag-move t` or `:supertag-move 'node`  
+  → after capture, call `supertag-move-node` interactively  
+- `:supertag-move 'link` or `:supertag-move :link`  
+  → after capture, call `supertag-move-node-and-link`, move the node and
+    leave a backlink at the original position
+
+This mirrors the classic “org-capture + org-refile” workflow, but the second
+step is powered by Supertag’s move APIs and database-aware location updates.
+
+#### Add Supertag tags interactively during org-capture
+
+You can enable a Supertag-aware tag prompt after capture by setting
+`:supertag-tags-prompt t` on a template (and enabling the integration
+as shown above):
+
+```elisp
+(add-to-list 'org-capture-templates
+             '("s" "Supertag task with tag prompt"
+               entry
+               (file "~/org/inbox.org")
+               "* TODO %^{Task}\n  %?\n"
+               :supertag t
+               :supertag-tags-prompt t))
+```
+
+Flow:
+
+1. Ensure org-capture integration is enabled, e.g.:
+   ```elisp
+   (setq supertag-org-capture-auto-enable t)
+   ;; or: (supertag-enable-org-capture-integration)
+   ```
+2. Run org-capture with the template above; org-capture inserts the heading
+3. Supertag finalizes the node (ID + database sync)
+4. A prompt appears: `Supertag tags (comma separated):`
+5. You can either:
+   - Select tags from existing Supertag tags (with completion), or
+   - Type new tag names; missing tags are created automatically
+6. Supertag updates both the database and the Org headline with inline `#tag`
+
 ### Content Generator Functions
 
 | Function                                            | Description                    |
@@ -491,6 +635,30 @@ Template string processors can be extended to support more placeholders:
 2. Check error messages in the `*Messages*` buffer
 3. Verify template configuration syntax correctness
 4. Confirm all dependent files and tags exist
+
+## 🧩 Developer Notes: Core Capture API
+
+For advanced integration or custom frontends, you can call the core
+finalization API directly on any Org heading that should become a
+Supertag node:
+
+```elisp
+;; At an Org heading you want to turn into a Supertag node:
+(supertag-capture-finalize-node-at-point
+ '((:tag "task" :field "status" :value "todo")
+   (:tag "task" :field "priority" :value "high")))
+```
+
+This will:
+
+- Ensure the heading has a stable `ID` (creating one if needed)
+- Register the ID/file mapping with `org-id`
+- Sync the node into the Supertag database
+- Apply the given Tag/Field/Value specs via `supertag-field-set-many`
+
+Org-capture integration and `supertag-capture-with-template` both use
+this function internally. When building new capture flows, prefer
+reusing this API rather than reimplementing sync logic.
 
 ---
 
