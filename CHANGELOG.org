@@ -1,4 +1,12 @@
 * Changelog
+* [5.1.7] - 2025-11-18
+** Features
+*** Field Export to Org Properties with Progress UI
+- Added `supertag-export-all-fields-to-properties` command to export all database field values to Org `:PROPERTIES:` drawers for nodes that have fields.
+- Field names are exported as human-friendly Org property keys (e.g. `rate` → `:RATE:`, `who` → `:WHO:`) while keeping the database as the single source of truth.
+- Node-reference fields are exported as readable titles (e.g. director names) instead of raw node IDs, improving interoperability with external tools that only see Org files.
+- The export process shows a minibuffer progress bar and a final summary message, and can optionally save modified buffers when called with a prefix argument.
+
 * [5.1.6] - 2025-11-17
 ** Improvements
 *** Org-Capture Integration as a First-Class Capture Path
