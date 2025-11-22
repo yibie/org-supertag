@@ -1,4 +1,10 @@
 * Changelog
+* [5.1.8] - 2025-11-22
+** Improvements
+*** Reference and Backlink Consistency
+- `supertag-add-reference` no longer blindly inserts a forward `[[id:...]]` link when creating a `:reference` relation. It now scans the current node's entire subtree (including the headline) and only inserts a forward link if none already exists, preventing duplicate forward links when the user has manually added a link.
+- Added `supertag-fix-missing-backlinks` in `scripts/check-reference-integrity.el`, which uses the results of `supertag-check-reference-integrity` to automatically insert missing backlinks under the target node's content region whenever a `:reference` relation exists in the database but the corresponding backlink is absent in the Org file.
+
 * [5.1.7] - 2025-11-18
 ** Features
 *** Field Export to Org Properties with Progress UI
