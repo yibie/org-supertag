@@ -509,7 +509,8 @@ content region, this function does nothing."
   "Add a reference from the current node to another selected node."
   (interactive)
   (let* ((from-id (supertag-ui--get-containing-node-at-point))
-         (to-id nil))
+         (to-id nil)
+         (insertion-point (point)))
     (unless from-id
       (user-error "Point must be inside an Org heading or its content."))
     
@@ -521,11 +522,25 @@ content region, this function does nothing."
       ;; 1. Call relation-level service to handle DB and reciprocal link.
       (if (supertag-relation-add-reference from-id to-id)
           (progn
-            ;; 2. Service succeeded, now insert the forward link here.
+            ;; 2. Service succeeded. Only insert a forward link if the
+            ;; current node does not already contain one anywhere in its
+            ;; subtree (including the headline).
             (let* ((to-node (supertag-node-get to-id))
-                   (to-title (or (plist-get to-node :title) to-id)))
-              (insert (format "[[id:%s][%s]]" to-id to-title)))
-            (message "Reference added."))
+                   (to-title (or (plist-get to-node :title) to-id))
+                   (link-pattern (format "\\[\\[id:%s\\]" (regexp-quote to-id)))
+                   (link-exists nil))
+              (save-excursion
+                (org-with-wide-buffer
+                  (org-back-to-heading t)
+                  (let* ((subtree-start (point))
+                         (subtree-end (save-excursion
+                                        (org-end-of-subtree t t))))
+                    (goto-char subtree-start)
+                    (setq link-exists (re-search-forward link-pattern subtree-end t)))))
+              (unless link-exists
+                (goto-char insertion-point)
+                (insert (format "[[id:%s][%s]]" to-id to-title)))
+              (message "Reference added."))
         (user-error "Failed to add reference to database.")))))
 
 (defun supertag-add-reference-and-create (beg end)
