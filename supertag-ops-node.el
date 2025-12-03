@@ -19,6 +19,7 @@
 ;; Avoid requiring ops-field here to prevent circular deps via core-scan.
 ;; Use a forward declaration and call it when available.
 (declare-function supertag-field-remove "supertag-ops-field" (node-id tag-id field-name))
+(require 'supertag-ops-global-field)
 (require 'supertag-core-persistence)
 ;;; --- Internal Helper ---
 
@@ -157,7 +158,22 @@ Returns the updated node data."
          (unless present
            (let* ((copy (copy-sequence node))
                   (new-tags (cons tag-id (or tags '()))))
-             (plist-put copy :tags new-tags))))))))
+             (plist-put copy :tags new-tags)
+             ;; Initialize global field entries for this tag if needed
+             (when supertag-use-global-fields
+               (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
+                      (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table))))
+                 (when (listp entries)
+                   (let* ((vals (supertag-store-get-collection :field-values))
+                          (node-table (or (gethash node-id vals)
+                                          (let ((ht (ht-create)))
+                                            (puthash node-id ht vals)
+                                            ht))))
+                     (dolist (entry entries)
+                       (let ((fid (plist-get entry :field-id)))
+                         (when (and fid (not (ht-contains? node-table fid)))
+                           (puthash fid nil node-table))))))))
+             copy)))))))
 
 (defun supertag-node-remove-tag (node-id tag-id)
   "Remove a tag from a node.
@@ -181,15 +197,26 @@ Returns the updated node data."
                      (plist-put copy :tags filtered))))))))
     ;; If a tag was actually removed, clear all its field values on this node
     (when removed-p
-      ;; Read fields directly from the tags collection to avoid requiring ops-tag.
-      (let* ((tags-ht (supertag-store-get-collection :tags))
-             (tag-data (and (hash-table-p tags-ht) (gethash tag-id tags-ht)))
-             (fields (and tag-data (plist-get tag-data :fields))))
-        (when (and (listp fields)
-                   (fboundp 'supertag-field-remove))
-          (dolist (f fields)
-            (when-let ((fname (plist-get f :name)))
-              (ignore-errors (supertag-field-remove node-id tag-id fname)))))))
+      (if supertag-use-global-fields
+          ;; Clear global field values associated to this tag
+          (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
+                 (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
+                 (vals (supertag-store-get-collection :field-values))
+                 (node-table (and (hash-table-p vals) (gethash node-id vals))))
+            (when (and (hash-table-p node-table) (listp entries))
+              (dolist (entry entries)
+                (let ((fid (plist-get entry :field-id)))
+                  (when fid
+                    (remhash fid node-table))))))
+        ;; Legacy: remove nested field values via ops-field
+        (let* ((tags-ht (supertag-store-get-collection :tags))
+               (tag-data (and (hash-table-p tags-ht) (gethash tag-id tags-ht)))
+               (fields (and tag-data (plist-get tag-data :fields))))
+          (when (and (listp fields)
+                     (fboundp 'supertag-field-remove))
+            (dolist (f fields)
+              (when-let ((fname (plist-get f :name)))
+                (ignore-errors (supertag-field-remove node-id tag-id fname))))))))
     result))
 
 (defun supertag-node-has-tag-p (node-id tag-id)

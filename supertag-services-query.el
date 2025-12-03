@@ -190,18 +190,28 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
 (defun supertag-query--find-nodes-by-field-indexed (field-name value)
   "Find nodes by field using indexed lookup.
 This is much faster than the old approach that scanned the entire link table."
-  ;; For now, fall back to the existing field query implementation
-  ;; TODO: Implement field indexing for even better performance
-  (let ((matching-nodes '())
-        (nodes-collection (supertag-store-get-collection :nodes)))
-    (maphash
-     (lambda (node-id node-data)
-       (let ((tags (plist-get node-data :tags)))
-         (when (cl-some (lambda (tag-id)
-                          (equal (supertag-field-get node-id tag-id field-name) value))
-                        tags)
-           (push node-id matching-nodes))))
-     nodes-collection)
+  (let ((matching-nodes '()))
+    (if supertag-use-global-fields
+        ;; Scan global field-values keyed by field-id
+        (let* ((fid (supertag-sanitize-field-id field-name))
+               (vals (supertag-store-get-collection :field-values)))
+          (when (and fid (hash-table-p vals))
+            (maphash
+             (lambda (node-id table)
+               (when (and (hash-table-p table)
+                          (equal (gethash fid table) value))
+                 (push node-id matching-nodes)))
+             vals)))
+      ;; Legacy path: nested :fields under each tag
+      (let ((nodes-collection (supertag-store-get-collection :nodes)))
+        (maphash
+         (lambda (node-id node-data)
+           (let ((tags (plist-get node-data :tags)))
+             (when (cl-some (lambda (tag-id)
+                              (equal (supertag-field-get node-id tag-id field-name) value))
+                            tags)
+               (push node-id matching-nodes))))
+         nodes-collection)))
     (nreverse matching-nodes)))
 
 (defun supertag-query--resolve-date-string (date-str)
@@ -258,14 +268,17 @@ Used for generating table headers in Org Babel output."
 (defun supertag-query--get-node-field-value (node-id field-name)
   "Get the value of FIELD-NAME for NODE-ID.
 This uses the new data format instead of the old link table."
-  (when-let ((node-data (supertag-node-get node-id)))
-    ;; A field can belong to any tag on the node. Find the first match.
-    (catch 'found
-      (dolist (tag-id (plist-get node-data :tags))
-        (let ((value (supertag-field-get node-id tag-id field-name)))
-          (when value
-            (throw 'found value))))
-      nil)))
+  (if supertag-use-global-fields
+      (let* ((fid (supertag-sanitize-field-id field-name)))
+        (and fid (supertag-node-get-global-field node-id fid)))
+    (when-let ((node-data (supertag-node-get node-id)))
+      ;; A field can belong to any tag on the node. Find the first match.
+      (catch 'found
+        (dolist (tag-id (plist-get node-data :tags))
+          (let ((value (supertag-field-get node-id tag-id field-name)))
+            (when value
+              (throw 'found value))))
+        nil))))
 
 ;;; --- Extended Query System for Relations and Databases ---
 

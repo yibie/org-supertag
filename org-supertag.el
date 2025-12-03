@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 5.0.0
+;; Version: 5.2.0
 ;; URL: https://github.com/yibie/org-supertag
 
 ;; This file is NOT part of GNU Emacs.

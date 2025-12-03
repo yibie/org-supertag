@@ -43,10 +43,21 @@ Returns a plist with :headline string and :tags list."
 (defun supertag-capture--get-fields-for-tags (selected-tags)
   "Get all unique fields for selected tags, including inherited fields.
 Returns list of field plists."
-  (cl-loop for tag-id in selected-tags
-           for fields = (supertag-tag-get-all-fields tag-id)
-           when fields append fields into all-fields
-           finally return (cl-delete-duplicates all-fields :key #'(lambda (f) (plist-get f :name)) :test #'equal)))
+  (let ((seen (make-hash-table :test 'equal))
+        (result '()))
+    (dolist (tag-id selected-tags)
+      (let ((fields (supertag-tag-get-all-fields tag-id)))
+        (dolist (field fields)
+          (let* ((fid (or (plist-get field :id)
+                          (plist-get field :name)))
+                 (slug (and fid (supertag-sanitize-field-id fid)))
+                 (dedupe-key (if supertag-use-global-fields
+                                 slug
+                               (plist-get field :name))))
+            (when (and dedupe-key (not (gethash dedupe-key seen)))
+              (puthash dedupe-key t seen)
+              (push field result))))))
+    (nreverse result)))
 
 (defun supertag-capture--prompt-for-field-values (fields)
   "Prompt user for values for the given fields.
@@ -81,19 +92,27 @@ This function correctly uses the Tag -> Field -> Value data model."
                                           prompt-choices nil t)))
             (cond
              ((string= choice "Create New Field")
-              (when-let ((new-field-def (supertag-ui-create-field-definition)))
-                (supertag-tag-add-field tag-id new-field-def)
-                (let* ((field-name (plist-get new-field-def :name))
-                       (value (supertag-ui-read-field-value new-field-def nil)))
-                  (unless (or (null value) (string-empty-p value))
-                    (supertag-field-set node-id tag-id field-name value)
-                    (message "Set %s/%s -> %s" tag-id field-name value)))))
+                  (when-let ((new-field-def (supertag-ui-create-field-definition)))
+                    (supertag-tag-add-field tag-id new-field-def)
+                    (let* ((field-name (plist-get new-field-def :name))
+                           (value (supertag-ui-read-field-value new-field-def nil)))
+                      (unless (or (null value) (string-empty-p value))
+                        (if supertag-use-global-fields
+                            (let ((fid (supertag-sanitize-field-id field-name)))
+                              (when fid
+                                (supertag-node-set-global-field node-id fid value)))
+                          (supertag-field-set node-id tag-id field-name value))
+                        (message "Set %s/%s -> %s" tag-id field-name value)))))
              (choice
               (let* ((field-def (cl-find-if (lambda (f) (string= (plist-get f :name) choice)) fields))
-                     (current-value (supertag-field-get node-id tag-id choice))
+                     (current-value (supertag-field-get-with-default node-id tag-id choice))
                      (new-value (supertag-ui-read-field-value field-def current-value)))
                 (unless (or (null new-value) (equal new-value current-value))
-                  (supertag-field-set node-id tag-id choice new-value)
+                  (if supertag-use-global-fields
+                      (let ((fid (supertag-sanitize-field-id choice)))
+                        (when fid
+                          (supertag-node-set-global-field node-id fid new-value)))
+                    (supertag-field-set node-id tag-id choice new-value))
                   (message "Set %s/%s -> %s" tag-id choice new-value)))))))))))
 
 ;;; --- Dynamic Capture Template System ---

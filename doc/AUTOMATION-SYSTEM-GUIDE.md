@@ -381,8 +381,10 @@ Use the `:case` action when you want to map one field value to another without c
 (supertag-automation-create
  '(:name "contact-tier-frequency"
    :trigger :on-field-change
+   ;; In the global-field model, treat field-centric
+   ;; conditions as global fields by default.
    :condition '(and (has-tag "contact")
-                    (property-changed "层级"))
+                    (field-changed "层级"))
    :actions
    '((:action :case
       :params
@@ -403,6 +405,35 @@ Use the `:case` action when you want to map one field value to another without c
 ```
 
 Because each branch contains its own `:actions` list, you can chain more logic—for example, adding a notification tag, updating properties, or calling functions—once the correct branch has been selected.
+
+### Field-Centric Rules (Global Fields)
+
+In the global field model (`supertag-use-global-fields` non-nil), fields are first-class entities and are not scoped to a single tag. The automation DSL supports writing rules that are primarily driven by field changes instead of tags:
+
+- `field-equals` / `field-changed` – treat the first string argument as a global field id (after `supertag-sanitize-field-id`).
+- `global-field-equals` / `global-field-changed` – explicit global field variants if you want to be fully explicit.
+
+For example, this rule fires whenever the global `status` field for a node becomes `"done"`, regardless of which tags the node has:
+
+```elisp
+(supertag-automation-create
+ '(:name "status-done-anywhere"
+   :trigger :on-field-change
+   :condition '(field-equals "status" "done")
+   :actions ((:action :call-function
+              :params (:function
+                       (lambda (node-id _ctx &rest _)
+                         (message "Node %s reached status=done" node-id)))))))
+```
+
+You can still combine field-centric conditions with tag predicates when you want to narrow the scope:
+
+```elisp
+:condition '(and (has-tag "task")
+                 (field-equals "status" "doing"))
+```
+
+Under the hood, `field-equals`/`field-changed` are indexed by the normalized global field id, so `:on-field-change` events on `:field-values` are able to trigger matching rules in O(1) time.
 
 ### Example 2: Project-Task Integration
 

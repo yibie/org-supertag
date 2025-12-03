@@ -157,8 +157,17 @@ Returns the node ID, creating one if it doesn't exist."
         (message "No valid tag selected.")
       (let* ((tag-data (supertag-tag-get tag-id))
              (tag-name-from-data (plist-get tag-data :name))  ; Get tag name from tag data
-             (fields (plist-get tag-data :fields))
-             (field-names (mapcar (lambda (f) (plist-get f :name)) fields)))
+             (fields (supertag-tag-get-all-fields tag-id))
+             (field-names
+              (let ((seen (make-hash-table :test 'equal))
+                    (names '()))
+                (dolist (f fields (nreverse names))
+                  (let* ((fid (or (plist-get f :id) (plist-get f :name)))
+                         (slug (and fid (supertag-sanitize-field-id fid)))
+                         (dedupe (if supertag-use-global-fields slug (plist-get f :name))))
+                    (when (and dedupe (not (gethash dedupe seen)))
+                      (puthash dedupe t seen)
+                      (push (plist-get f :name) names)))))))
         
         (if (not field-names)
             (message "Tag '%s' has no fields to group by." tag-name-from-data)
@@ -541,7 +550,7 @@ content region, this function does nothing."
                 (goto-char insertion-point)
                 (insert (format "[[id:%s][%s]]" to-id to-title)))
               (message "Reference added."))
-        (user-error "Failed to add reference to database.")))))
+        (user-error "Failed to add reference to database."))))))
 
 (defun supertag-add-reference-and-create (beg end)
   "Create a new node from the selected region and replace it with a link.

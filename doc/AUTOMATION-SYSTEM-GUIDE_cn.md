@@ -381,8 +381,10 @@ graph LR
 (supertag-automation-create
  '(:name "contact-tier-frequency"
    :trigger :on-field-change
+   ;; 在全局字段模型下，规则直接以字段为中心，
+   ;; 这里的 field-changed 会映射到对应的全局字段。
    :condition '(and (has-tag "contact")
-                    (property-changed "层级"))
+                    (field-changed "层级"))
    :actions
    '((:action :case
       :params
@@ -403,6 +405,35 @@ graph LR
 ```
 
 每个分支内都是独立的 `:actions` 列表，因而还能继续追加更多动作（例如加标签、更新属性或调用函数），从而把复杂分支逻辑收敛到单条自动化规则中。
+
+### 字段为中心的规则（Field-Centric Rules）
+
+在启用全局字段模型（`supertag-use-global-fields` 非空）时，字段不再绑定在某个单一 tag 上，而是作为一等实体存在。此时，自动化 DSL 支持写“以字段为中心”的规则——即规则主要由字段的变化驱动，而不是由 tag 决定：
+
+- `field-equals` / `field-changed` —— 把第一个字符串参数视为全局字段的 id（经 `supertag-sanitize-field-id` 归一化）。
+- `global-field-equals` / `global-field-changed` —— 显式的全局字段版本，如果你希望语义完全清晰。
+
+例如，下面这条规则会在任意节点的全局字段 `status` 变为 `"done"` 时触发，与节点上挂了哪些 tag 无关：
+
+```elisp
+(supertag-automation-create
+ '(:name "status-done-anywhere"
+   :trigger :on-field-change
+   :condition '(field-equals "status" "done")
+   :actions ((:action :call-function
+              :params (:function
+                       (lambda (node-id _ctx &rest _)
+                         (message "节点 %s 的 status 变为 done" node-id)))))))
+```
+
+当然，你仍然可以把字段条件和 tag 条件组合起来，用于缩小规则的适用范围：
+
+```elisp
+:condition '(and (has-tag "task")
+                 (field-equals "status" "doing"))
+```
+
+在内部实现上，`field-equals` / `field-changed` 会按归一化后的全局字段 id 建立索引，因此 `:on-field-change` 产生的 `:field-values` 事件能够以 O(1) 时间匹配到相关规则。
 
 ### 示例2：项目与任务联动
 

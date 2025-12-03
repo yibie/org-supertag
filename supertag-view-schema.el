@@ -13,6 +13,7 @@
 (require 'supertag-view-helper)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-schema)
+(require 'supertag-ops-global-field)
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -177,6 +178,26 @@ Returns a list containing two items: the children-by-id map and the list of root
        "Global: [g] Refresh | [q] Quit")
       (goto-char (point-min)))))
 
+(defun supertag-schema--get-own-fields (tag-id)
+  "Get only the fields directly defined on TAG-ID, not inherited ones.
+This function handles both legacy and global field modes."
+  (if supertag-use-global-fields
+      ;; Global field mode: get fields from tag-field-associations
+      (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
+             (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
+             (defs (supertag-store-get-collection :field-definitions))
+             (result '()))
+        (when (and entries (hash-table-p defs))
+          (dolist (entry entries)
+            (let* ((fid (if (plistp entry) (plist-get entry :field-id) entry))
+                   (def (and fid (gethash fid defs))))
+              (when def (push def result)))))
+        (nreverse result))
+    ;; Legacy mode: get fields directly from tag's :fields property
+    (let* ((tag-data (supertag-tag-get tag-id))
+           (plist-data (and tag-data (supertag-schema--ensure-plist tag-data))))
+      (plist-get plist-data :fields))))
+
 (defun supertag-schema--render-tag-node (tag-node &optional level)
   "Recursively render a tag node and its children into the buffer."
   (let* ((level (or level 0))
@@ -194,31 +215,33 @@ Returns a list containing two items: the children-by-id map and the list of root
                            `(supertag-context (:type :tag :tag-id ,tag-id))))
 
     ;; Render fields, grouped by origin
-    (let* ((tag-data (supertag-tag-get tag-id))
-           (own-fields (plist-get (supertag-schema--ensure-plist tag-data) :fields))
+    ;; Use supertag-schema--get-own-fields to get only directly defined fields
+    (let* ((own-fields (supertag-schema--get-own-fields tag-id))
            (processed-fields (make-hash-table :test 'equal))
            (current-parent-id parent-id))
 
-      ;; 1. Render own fields
+      ;; 1. Render own fields (directly defined on this tag)
       (when own-fields
         (dolist (field-def own-fields)
           (let ((start (point))
-                (field-name (plist-get field-def :name)))
-            (puthash field-name t processed-fields) ; Mark as processed
-            (insert (format "%s  %s\n"
-                             indent (supertag-schema--format-field field-def)))
-            (add-text-properties start (1- (point))
-                                 `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name))))))
+                (field-name (or (plist-get field-def :name)
+                                (plist-get field-def :id))))
+            (when field-name
+              (puthash field-name t processed-fields) ; Mark as processed
+              (insert (format "%s  %s\n"
+                               indent (supertag-schema--format-field field-def)))
+              (add-text-properties start (1- (point))
+                                   `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name)))))))
 
-      ;; 2. Traverse parents and render their fields
+      ;; 2. Traverse parents and render their fields as inherited
       (while current-parent-id
-        (let* ((parent-data (supertag-tag-get current-parent-id))
-               (parent-fields (plist-get (supertag-schema--ensure-plist parent-data) :fields))
+        (let* ((parent-own-fields (supertag-schema--get-own-fields current-parent-id))
                (fields-to-render '()))
-          ;; Collect only new, un-overridden fields
-          (dolist (field parent-fields)
-            (let ((field-name (plist-get field :name)))
-              (unless (gethash field-name processed-fields)
+          ;; Collect only new, un-overridden fields from this parent
+          (dolist (field parent-own-fields)
+            (let ((field-name (or (plist-get field :name)
+                                  (plist-get field :id))))
+              (when (and field-name (not (gethash field-name processed-fields)))
                 (puthash field-name t processed-fields)
                 (push field fields-to-render))))
 
@@ -227,7 +250,8 @@ Returns a list containing two items: the children-by-id map and the list of root
                              indent (propertize (format "// Inherited from %s" current-parent-id) 'face 'font-lock-comment-face)))
             (dolist (field-def (nreverse fields-to-render))
               (let ((start (point))
-                    (field-name (plist-get field-def :name)))
+                    (field-name (or (plist-get field-def :name)
+                                    (plist-get field-def :id))))
                 (insert (format "%s  %s\n"
                                  indent (supertag-schema--format-field field-def)))
                 (add-text-properties start (1- (point))
@@ -242,7 +266,9 @@ Returns a list containing two items: the children-by-id map and the list of root
 
 (defun supertag-schema--format-field (field-def)
   "Format a single field definition into a display string."
-  (let* ((name (plist-get field-def :name))
+  (let* ((name (or (plist-get field-def :name)
+                   (plist-get field-def :id)
+                   "unnamed"))
          (type (plist-get field-def :type))
          (options (plist-get field-def :options))
          (type-str (if type (format "(type: %s)" (substring (symbol-name type) 1)) "(type: string)")))
@@ -270,6 +296,7 @@ Returns a list containing two items: the children-by-id map and the list of root
     (define-key map "D" #'supertag-schema--batch-delete-marked-items)
     (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
     ;; Single-item Actions
+    (define-key map "B" #'supertag-schema--bind-existing-field-at-point)
     (define-key map "r" #'supertag-schema--rename-at-point)
     (define-key map "d" #'supertag-schema--delete-at-point)
     (define-key map "e" #'supertag-view-schema-set-extends)
@@ -362,14 +389,80 @@ Returns a list containing two items: the children-by-id map and the list of root
     (if (and context (eq (plist-get context :type) :tag))
         (let* ((tag-id (plist-get context :tag-id))
                (field-def (supertag-ui-create-field-definition)))
-          (if field-def
+          (if (not field-def)
+              (message "Field creation cancelled.")
+            (if (and supertag-use-global-fields
+                     (let* ((fid (or (plist-get field-def :id)
+                                     (supertag-sanitize-field-id (plist-get field-def :name)))))
+                       (and fid (supertag-global-field-get fid))))
+                ;; Conflict: existing global field with same slug
+                (let* ((fid (or (plist-get field-def :id)
+                                (supertag-sanitize-field-id (plist-get field-def :name))))
+                       (choice (completing-read
+                                (format "Field '%s' exists. Action: " fid)
+                                '("Reuse existing (bind only)"
+                                  "Overwrite existing definition"
+                                  "Cancel")
+                                nil t nil nil "Reuse existing (bind only)")))
+                  (pcase choice
+                    ("Reuse existing (bind only)"
+                     (supertag-tag-associate-field tag-id fid)
+                     (message "Bound existing field '%s' to tag '%s'." fid tag-id)
+                     (supertag-schema-refresh))
+                    ("Overwrite existing definition"
+                     (supertag-global-field-update fid (lambda (_old) field-def))
+                     (supertag-tag-associate-field tag-id fid)
+                     (message "Overwrote field '%s' and bound to tag '%s'." fid tag-id)
+                     (supertag-schema-refresh))
+                    (_ (message "Field creation cancelled."))))
+              ;; No conflict
               (progn
                 (supertag-tag-add-field tag-id field-def)
                 (message "Field '%s' added to tag '%s'. Refreshing view..."
                          (plist-get field-def :name) tag-id)
-                (supertag-schema-refresh))
-            (message "Field creation cancelled.")))
+                (supertag-schema-refresh)))))
       (message "Not on a valid tag line."))))
+
+(defun supertag-schema--bind-existing-field-at-point ()
+  "Bind an existing global field to the tag at point (append order)."
+  (interactive)
+  (unless supertag-use-global-fields
+    (user-error "Global fields are disabled; set `supertag-use-global-fields` to t"))
+  (let ((context (supertag-schema--get-context-at-point)))
+    (if (and context (eq (plist-get context :type) :tag))
+        (let* ((tag-id (plist-get context :tag-id))
+               (defs (supertag-store-get-collection :field-definitions))
+               (current (mapcar (lambda (f)
+                                  (supertag-sanitize-field-id
+                                   (or (plist-get f :id) (plist-get f :name))))
+                                (or (supertag-tag-get-all-fields tag-id) '())))
+               (current-set (let ((ht (make-hash-table :test 'equal)))
+                              (dolist (fid current) (when fid (puthash fid t ht))) ht))
+               (candidates '()))
+          (when (hash-table-p defs)
+            (maphash
+             (lambda (fid def)
+               (unless (gethash fid current-set)
+                 (let* ((name (or (plist-get def :name) fid))
+                        (type (plist-get def :type))
+                        (label (format "%s (%s%s%s)"
+                                       fid
+                                       (or type "unknown")
+                                       (if name " · " "")
+                                       (or name ""))))
+                   (push (cons label fid) candidates))))
+             defs))
+          (if (null candidates)
+              (message "No unbound global fields available.")
+            (let* ((choice (completing-read "Bind existing field: "
+                                            (mapcar #'car candidates)
+                                            nil t))
+                   (fid (cdr (assoc choice candidates))))
+              (when fid
+                (supertag-tag-associate-field tag-id fid)
+                (supertag-schema-refresh)
+                (message "Bound field %s to tag %s" fid tag-id))))))
+      (message "Not on a valid tag line.")))
 
 (defun supertag-schema--delete-at-point ()
   "Interactively delete the tag or field at the current line.
@@ -530,6 +623,93 @@ Dispatches to the correct deletion logic based on context."
             (setq supertag-schema--marked-items nil)
             (supertag-schema-refresh)
             (message "Batch extends complete.")))))))
+
+(defun supertag-schema--cleanup-inherited-field-associations (tag-id)
+  "Remove field associations from TAG-ID that are inherited from parent tags.
+This cleans up redundant associations where a field is defined on both
+a parent tag and a child tag."
+  (interactive "sTag ID: ")
+  (unless supertag-use-global-fields
+    (user-error "This function only works in global field mode"))
+  (let* ((tag-data (supertag-tag-get tag-id))
+         (plist-data (and tag-data (supertag-schema--ensure-plist tag-data)))
+         (parent-id (plist-get plist-data :extends)))
+    (unless parent-id
+      (message "Tag '%s' has no parent, nothing to clean up." tag-id)
+      (cl-return-from supertag-schema--cleanup-inherited-field-associations nil))
+    ;; Collect all field IDs from parent chain
+    (let ((parent-field-ids (make-hash-table :test 'equal))
+          (current-parent parent-id))
+      (while current-parent
+        (let ((parent-assocs (supertag-store-get-tag-field-associations current-parent)))
+          (dolist (assoc parent-assocs)
+            (let ((fid (if (plistp assoc) (plist-get assoc :field-id) assoc)))
+              (when fid (puthash fid t parent-field-ids)))))
+        (let* ((parent-data (supertag-tag-get current-parent))
+               (parent-plist (and parent-data (supertag-schema--ensure-plist parent-data))))
+          (setq current-parent (plist-get parent-plist :extends))))
+      ;; Filter out inherited fields from current tag's associations
+      (let* ((current-assocs (supertag-store-get-tag-field-associations tag-id))
+             (filtered-assocs '())
+             (removed-count 0))
+        (dolist (assoc current-assocs)
+          (let ((fid (if (plistp assoc) (plist-get assoc :field-id) assoc)))
+            (if (gethash fid parent-field-ids)
+                (progn
+                  (cl-incf removed-count)
+                  (message "Removing inherited field '%s' from tag '%s'" fid tag-id))
+              (push assoc filtered-assocs))))
+        (when (> removed-count 0)
+          (supertag-store-put-tag-field-associations tag-id (nreverse filtered-assocs) t)
+          (message "Removed %d inherited field associations from tag '%s'" removed-count tag-id))
+        removed-count))))
+
+(defun supertag-schema--cleanup-all-inherited-associations ()
+  "Clean up inherited field associations from all child tags."
+  (interactive)
+  (unless supertag-use-global-fields
+    (user-error "This function only works in global field mode"))
+  (let ((all-tags (supertag-query :tags))
+        (total-removed 0))
+    (dolist (tag-pair all-tags)
+      (let* ((tag-id (car tag-pair))
+             (tag-data (cdr tag-pair))
+             (plist-data (supertag-schema--ensure-plist tag-data))
+             (parent-id (plist-get plist-data :extends)))
+        (when parent-id
+          (let ((removed (supertag-schema--cleanup-inherited-field-associations tag-id)))
+            (when removed
+              (setq total-removed (+ total-removed removed)))))))
+    (message "Total: removed %d inherited field associations." total-removed)
+    (when (> total-removed 0)
+      (supertag-schema-refresh))
+    total-removed))
+
+(defun supertag-schema--debug-tag-data (tag-id)
+  "Debug function to inspect the raw data for TAG-ID."
+  (interactive "sTag ID: ")
+  (let* ((tag-data (supertag-tag-get tag-id))
+         (plist-data (and tag-data (supertag-schema--ensure-plist tag-data)))
+         (own-fields-legacy (plist-get plist-data :fields))
+         (assoc-table (supertag-store-get-collection :tag-field-associations))
+         (own-fields-global (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
+         (resolved (ignore-errors (supertag-ops-schema-get-resolved-tag tag-id))))
+    (with-current-buffer (get-buffer-create "*Supertag Debug*")
+      (erase-buffer)
+      (insert (format "=== Debug Info for Tag: %s ===\n\n" tag-id))
+      (insert (format "supertag-use-global-fields: %s\n\n" supertag-use-global-fields))
+      (insert "--- Raw Tag Data ---\n")
+      (insert (format "%S\n\n" plist-data))
+      (insert "--- Legacy :fields property ---\n")
+      (insert (format "%S\n\n" own-fields-legacy))
+      (insert "--- Global field associations (from :tag-field-associations) ---\n")
+      (insert (format "%S\n\n" own-fields-global))
+      (insert "--- Resolved schema (from supertag-ops-schema-get-resolved-tag) ---\n")
+      (insert (format "%S\n\n" resolved))
+      (insert "--- supertag-schema--get-own-fields result ---\n")
+      (insert (format "%S\n" (supertag-schema--get-own-fields tag-id)))
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
 
 (provide 'supertag-view-schema)
 

@@ -65,7 +65,10 @@ Returns hash table where keys are field values and values are lists of (id . nod
   (let ((grouped (make-hash-table :test 'equal)))
     (dolist (node-pair nodes)
       (let* ((node-id (car node-pair))
-             (field-value (supertag-field-get node-id base-tag group-field))
+             (field-value (if supertag-use-global-fields
+                              (let ((fid (supertag-sanitize-field-id group-field)))
+                                (and fid (supertag-node-get-global-field node-id fid)))
+                            (supertag-field-get node-id base-tag group-field)))
              (key (or field-value "Uncategorized")))
         (push node-pair (gethash key grouped '()))))
     grouped))
@@ -83,7 +86,7 @@ Returns hash table where keys are field values and values are lists of (id . nod
     (if predefined-options
         ;; Use predefined options as the base order, and append any other
         ;; values that are in use but not in the options list.
-        (append predefined-options (cl-set-difference actual-values predefined-options :test #'string=))
+        (append predefined-options (cl-set-difference actual-values predefined-options :test #'equal))
       ;; Otherwise, fall back to existing behavior.
       (sort actual-values #'string<))))
 

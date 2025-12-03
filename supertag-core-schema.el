@@ -20,11 +20,42 @@
 
 (require 'cl-lib) ; For cl-find, cl-loop, etc.
 (require 'ht)
+(require 'subr-x)
+(require 'supertag-core-store)
 
 ;;; --- Cache for schema definitions ---
 
 (defvar supertag--schema-cache (make-hash-table :test 'eq)
   "Cache for compiled schema definitions to improve performance.")
+
+(defvar supertag--global-field-cache (make-hash-table :test 'equal)
+  "Cache of global field definitions keyed by field-id (slug).")
+
+(defvar supertag--tag-field-order-cache (make-hash-table :test 'equal)
+  "Cache of tag -> ordered field-ids for the global field model.")
+
+(defcustom supertag-use-global-fields nil
+  "When non-nil, enable the global field model (opt-in).
+This gates new storage collections (:field-definitions, :tag-field-associations,
+and :field-values). Legacy nested field storage remains untouched while this
+flag is nil."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defun supertag--maybe-rebuild-global-field-caches ()
+  "Rebuild global field caches when enabled."
+  (when supertag-use-global-fields
+    (supertag-schema-rebuild-global-field-caches)))
+
+(defun supertag-sanitize-field-id (name)
+  "Return sanitized field id slug for NAME.
+Lowercase, trim whitespace, convert internal whitespace to underscores."
+  (when (and name (stringp name))
+    (let* ((trimmed (string-trim name))
+           (lower (downcase trimmed))
+           (collapsed (replace-regexp-in-string "[ \t\r\n]+" "_" lower)))
+      (when (not (string-empty-p collapsed))
+        collapsed))))
 
 ;;; --- Core Type Definitions for Hybrid Architecture ---
 
@@ -106,6 +137,68 @@
     :delete-relation     ; Delete relation
     :run-script         ; Execute external script
     :call-function))    ; Call custom function
+
+;;; --- Global field caches (opt-in) ---
+
+(defun supertag-schema-clear-global-field-caches ()
+  "Clear global field caches."
+  (clrhash supertag--global-field-cache)
+  (clrhash supertag--tag-field-order-cache))
+
+(defun supertag-schema--normalize-plist (data)
+  "Return DATA as a plist, converting hash tables when needed."
+  (cond
+   ((hash-table-p data)
+    (let (plist)
+      (maphash (lambda (k v)
+                 (setq plist (plist-put plist k v)))
+               data)
+      plist))
+   ((listp data) data)
+   (t nil)))
+
+(defun supertag-schema--load-global-fields ()
+  "Populate global field caches from the store when enabled."
+  (when supertag-use-global-fields
+    (let ((defs (supertag-store-get-collection :field-definitions))
+          (assoc-table (supertag-store-get-collection :tag-field-associations)))
+      (supertag-schema-clear-global-field-caches)
+      (when (hash-table-p defs)
+        (maphash
+         (lambda (fid raw)
+           (let* ((plist (supertag-schema--normalize-plist raw))
+                  (sanitized (or (plist-get plist :id) (supertag-sanitize-field-id fid))))
+             (when sanitized
+               (puthash sanitized plist supertag--global-field-cache))))
+         defs))
+      (when (hash-table-p assoc-table)
+        (maphash
+         (lambda (tag-id entries)
+           (let* ((order
+                   (cond
+                    ;; preferred: list of plists with :field-id and optional :order
+                    ((and (listp entries) (plistp (car entries)))
+                     (mapcar (lambda (entry) (plist-get entry :field-id)) entries))
+                    ;; fallback: list of field ids
+                    ((listp entries) entries)
+                    (t nil))))
+             (when order
+               (puthash tag-id order supertag--tag-field-order-cache))))
+         assoc-table)))))
+
+(defun supertag-schema-rebuild-global-field-caches ()
+  "Rebuild global field caches from store (no-op unless flag is enabled)."
+  (interactive)
+  (if (not supertag-use-global-fields)
+      (progn
+        (supertag-schema-clear-global-field-caches)
+        (when (called-interactively-p 'interactive)
+          (message "Global field caches cleared (global fields disabled).")))
+    (supertag-schema--load-global-fields)
+    (when (called-interactively-p 'interactive)
+      (message "Global field caches rebuilt (%d fields, %d tag associations)."
+               (hash-table-count supertag--global-field-cache)
+               (hash-table-count supertag--tag-field-order-cache)))))
 
 ;;; --- Database Schema Types ---
 

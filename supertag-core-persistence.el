@@ -334,7 +334,10 @@ FILE is the optional file path. Defaults to supertag-db-file."
           (message "Database loaded. For data migration, run M-x supertag-db-migrate-and-normalize."))
       (unless (hash-table-p supertag--store)
         (setq supertag--store (ht-create))
-        (message "Initialized empty Org-Supertag store.")))))
+        (message "Initialized empty Org-Supertag store."))))
+  ;; Rebuild global field caches if the feature is loaded and enabled.
+  (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
+    (supertag--maybe-rebuild-global-field-caches)))
 
 (defun supertag-schedule-save ()
   "Schedule a delayed save.
