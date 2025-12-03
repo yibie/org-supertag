@@ -428,20 +428,29 @@ Returns the new value entered by the user."
       (:number (read-string prompt (if current-value (format "%s" current-value) "")))
       (_ (read-string prompt current-value)))))
 
+(defun supertag-ui--sanitize-type-input (type-str)
+  "Return a keyword type from TYPE-STR, stripping leading colons/whitespace."
+  (when (and type-str (not (string-empty-p type-str)))
+    (let* ((clean (string-trim type-str)))
+      (when (string-prefix-p ":" clean)
+        (setq clean (substring clean 1)))
+      (when (not (string-empty-p clean))
+        (intern (concat ":" clean))))))
+
 (defun supertag-ui-create-field-definition ()
   "Interactively create a new field definition.
 Returns a field definition plist, or nil if cancelled."
   (let* ((name (read-string "Field name: ")))
     (when (and name (not (string-empty-p name)))
-      (let* ((type-keywords (mapcar #'symbol-name supertag-field-types))
+      (let* ((type-keywords (mapcar (lambda (sym) (substring (symbol-name sym) 1)) supertag-field-types))
              (type-str (completing-read "Field type: " type-keywords nil t))
-             (type (when type-str (intern (concat ":" type-str))))
+             (type (supertag-ui--sanitize-type-input type-str))
              (options nil))
         (when type
-          (if (eq type :options)
-              (let* ((options-input (read-string "Options (comma separated): "))
-                     (options-list (split-string options-input "," t "[ \t\n\r]+")))
-                (setq options options-list)))
+          (when (eq type :options)
+            (let* ((options-input (read-string "Options (comma separated): "))
+                   (options-list (split-string options-input "," t "[ \t\n\r]+")))
+              (setq options options-list)))
           (let ((default (read-string "Default value (optional): " "")))
             (let ((field-def (list :name name :type type)))
               (unless (string-empty-p default)

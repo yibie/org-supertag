@@ -1,4 +1,8 @@
-# Org-SuperTag 5.0: Pure Emacs Lisp Knowledge Management
+# Org-SuperTag 5.0+: Pure Emacs Lisp Knowledge Management
+
+> **⚠️ IMPORTANT (5.2.0 and later):**  
+> If you are upgrading from a pre‑5.2.0 version, you **must run the global field database migration** before enabling `supertag-use-global-fields`.  
+> See `doc/GLOBAL-FIELD-MIGRATION-GUIDE.md` for step‑by‑step instructions.
 
 [English](./README.md) | [中文](./README_CN.md)
 

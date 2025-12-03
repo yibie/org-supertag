@@ -15,6 +15,7 @@
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-field)
+(require 'supertag-ops-global-field)
 (require 'supertag-ops-relation)
 (require 'supertag-ui-commands) ; For backlink helpers
 (require 'supertag-view-helper)
@@ -322,11 +323,17 @@ NEW-VALUE is the value after change (nil for deletions)."
   (when node-id
     (let* ((relations (supertag-relation-find-by-from node-id :node-tag))
            (tag-ids (mapcar (lambda (rel) (plist-get rel :to)) relations))
-           (field-count 0))
+           (seen (make-hash-table :test 'equal))
+           (count 0))
       (dolist (tag-id tag-ids)
-        (let ((fields (supertag-tag-get-all-fields tag-id)))
-          (setq field-count (+ field-count (length fields)))))
-      field-count)))
+        (dolist (field (supertag-tag-get-all-fields tag-id))
+          (let* ((fid (or (plist-get field :id) (plist-get field :name)))
+                 (slug (and fid (supertag-sanitize-field-id fid)))
+                 (dedupe (if supertag-use-global-fields slug (plist-get field :name))))
+            (when (and dedupe (not (gethash dedupe seen)))
+              (puthash dedupe t seen)
+              (cl-incf count)))))
+      count)))
 
 (defun supertag-view-node--get-references (node-id)
   "Get references from NODE-ID to other nodes."
@@ -425,10 +432,19 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
       
       ;; Display valid tags with simple blocks
       (supertag-view-helper-insert-section-title "Metadata" "🏷️")
-      (dolist (tag-id (sort valid-tags #'string<))
-        (let ((fields (supertag-tag-get-all-fields tag-id)))
-          ;; Defensively ensure `fields` is a list to prevent rendering errors.
-          (supertag-view-helper-insert-tag-block tag-id (or fields '()) node-id)))
+      (let ((seen (make-hash-table :test 'equal)))
+        (dolist (tag-id (sort valid-tags #'string<))
+          (let* ((fields (supertag-tag-get-all-fields tag-id))
+                 (filtered (cl-loop for f in (or fields '())
+                                    for fid = (or (plist-get f :id) (plist-get f :name))
+                                    for slug = (and fid (supertag-sanitize-field-id fid))
+                                    for dedupe = (if supertag-use-global-fields slug (plist-get f :name))
+                                    unless (and dedupe (gethash dedupe seen))
+                                    do (when dedupe (puthash dedupe t seen))
+                                    and collect f)))
+            ;; Defensively ensure `fields` is a list to prevent rendering errors.
+            (when filtered
+              (supertag-view-helper-insert-tag-block tag-id filtered node-id)))))
       
       ;; Show a passive warning for tags currently not found (no deletion here)
       (when deleted-tags
@@ -465,29 +481,20 @@ The line looks like `📄 Title' and is clickable with RET/mouse-1."
   "Insert a simple references section for NODE-ID, always showing the section."
   (let* ((refs-to (supertag-view-node--get-references node-id))
          (refs-from (supertag-view-node--get-referenced-by node-id))
-         (total-refs (+ (length (or refs-to '())) (length (or refs-from '())))))
+         ;; In node view, we only surface backlinks (referenced-by)
+         (total-refs (length (or refs-from '()))))
 
-    (supertag-view-helper-insert-section-title "References" "🔗")
+    (supertag-view-helper-insert-section-title
+     (if (> total-refs 0)
+         (format "Referenced by (%d)" total-refs)
+       "Referenced by")
+     "🔗")
 
     (if (> total-refs 0)
         (progn
-          ;; References To
-          (when (and refs-to (> (length refs-to) 0))
-            (insert (propertize (format "  → References %d node%s\n"
-                                       (length refs-to)
-                                       (if (= (length refs-to) 1) "" "s"))
-                               'face `(:foreground ,(supertag-view-helper-get-accent-color))))
-            (dolist (ref-id refs-to)
-              (supertag-view-node--insert-node-link-line ref-id)))
-
-          ;; Referenced By
-          (when (and refs-from (> (length refs-from) 0))
-            (insert (propertize (format "  ← Referenced by %d node%s\n"
-                                       (length refs-from)
-                                       (if (= (length refs-from) 1) "" "s"))
-                               'face `(:foreground ,(supertag-view-helper-get-accent-color))))
-            (dolist (ref-id refs-from)
-              (supertag-view-node--insert-node-link-line ref-id)))
+          ;; List backlinks directly under the section title.
+          (dolist (ref-id refs-from)
+            (supertag-view-node--insert-node-link-line ref-id))
           (insert "\n"))
       ;; Else, show empty state
       (supertag-view-helper-insert-simple-empty-state "No references found."))))

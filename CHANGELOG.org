@@ -1,4 +1,89 @@
 * Changelog
+* [5.2.0] - 2025-12-01
+** Features
+*** Global Field Model: Fields as First-Class Entities
+- Introduced an opt-in global field model guarded by `supertag-use-global-fields`, making fields independent entities instead of being nested under individual tags.
+- Extended the core store (`supertag-core-store.el`) with dedicated collections:
+  - `:field-definitions` – global field definitions keyed by field-id.
+  - `:tag-field-associations` – per-tag ordered lists of associated field-ids.
+  - `:field-values` – node → field-id → value flat storage for all field values.
+- Added `supertag-core-schema.el` as a light-weight schema module:
+  - Provides `supertag-sanitize-field-id` to normalize field ids (name → slug).
+  - Maintains global field caches (`supertag--global-field-cache`) and tag→field-order caches, with `supertag-schema-rebuild-global-field-caches` and `supertag--maybe-rebuild-global-field-caches`.
+
+*** Ops Layer Refactor for Global Fields
+- `supertag-ops-field.el`:
+  - `supertag-field-set` / `supertag-field-set-many` now route to `:field-values` when `supertag-use-global-fields` is non-nil, using sanitized global field ids.
+  - Maintains compatibility with legacy nested `:fields` storage when the flag is off.
+- `supertag-ops-tag.el`:
+  - Tag field definitions now bind to global field ids; associations are stored in `:tag-field-associations` with explicit ordering.
+  - Field CRUD on tags updates both legacy definitions and global associations where appropriate.
+- `supertag-ops-node.el`:
+  - Tag add/remove on a node initializes and prunes corresponding global field value entries in `:field-values`.
+  - Node operations are now aware of global field storage, ensuring tag operations and field values stay consistent.
+
+*** Migration: Legacy Tag-Scoped Fields → Global Fields
+- Extended `supertag-migration.el` with a global field migration pipeline:
+  - Deduplicates per-tag field definitions into global field definitions in `:field-definitions`.
+  - Builds tag↔field association lists (with order) into `:tag-field-associations`.
+  - Rewrites node-level field values from nested `:fields` into flat `:field-values`, with basic conflict handling and idempotent behavior.
+- Added dry-run and stats/reporting helpers to summarize created fields, associations, migrated values, skipped entries, and conflicts.
+
+** Improvements
+*** Automation – Global Field Integration & Field-Centric DSL
+- Unified global field changes with the automation engine:
+  - `supertag-core-store.el` emits `:store-changed` events on `(:field-values node-id field-id)` when global values change.
+  - `supertag-automation.el` passes the full path as metadata into `supertag-automation-sync-handle-event`, allowing sync handlers to recover `(node-id field-id)` reliably.
+  - `supertag-automation-sync.el` consumes commit `:path` metadata and handles `:field-values` events via `supertag-automation-sync--handle-global-field-value-event` / `supertag-automation-sync--process-global-field-change`.
+  - `supertag-field-set` (global branch) explicitly calls into the sync pipeline so UI updates that bypass `supertag-ops-commit` also trigger automation.
+- Extended the automation condition DSL for the global field model:
+  - Added `global-field-equals`, `global-field-changed`, and `global-field-test` so rules can explicitly target global fields.
+  - Updated `field-equals` / `field-changed` to:
+    - Prefer global field storage (via sanitized field ids and `:field-values`) when `supertag-use-global-fields` is non-nil.
+    - Fall back to legacy nested fields when global fields are disabled.
+  - Enhanced `supertag--extract-trigger-sources` and the rule index so both legacy property keys (e.g. `:status`) and normalized global field ids (e.g. `"status"`) are indexed, allowing `:field-values` events to resolve matching rules in O(1).
+- Tests (`dev-note/automation-global-field-tests.el`):
+  - Added coverage for global field conditions (`global-field-equals`, `global-field-changed`, `global-field-test`) and their interaction with `:field-values` events.
+  - Introduced an integration test verifying that both `supertag-store-put-field-value` and `supertag-field-set` fire automation rules correctly when `supertag-use-global-fields` is enabled.
+
+*** Org / Capture / Services Integration with Global Fields
+- `supertag-service-org.el`:
+  - Import/export of Org `:PROPERTIES:` drawers is now aware of global fields:
+    - Maps Org properties to global field ids according to tag associations and global field definitions.
+    - Writes imported values into `:field-values` instead of legacy nested `:fields` when global fields are enabled.
+  - Ensures capture and sync flows treat global fields as the single source of truth for node-level field values.
+- `supertag-services-capture.el`:
+  - Capture templates and capture flows now read/write node fields via global field APIs when the flag is on, removing direct dependency on tag-scoped storage.
+- `supertag-services-query.el`:
+  - Query filters that reference field names are resolved against global field ids and `:field-values` first, with legacy fallbacks only when global fields are disabled.
+
+*** UI & Views – Global Field–Aware Rendering 
+- `supertag-view-table.el`:
+  - Column construction now deduplicates fields using global field slugs when `supertag-use-global-fields` is enabled, preventing duplicate columns when multiple tags share the same global field.
+  - Column keys and exported metadata carry `:field-id` for smooth round-tripping with global field storage.
+  - Cell editing (`supertag-view-table-edit-cell`) sets field values via `supertag-field-set`, which in global mode writes to `:field-values` and triggers automation.
+  - Title column can now optionally render node hierarchy context: the main title on the first line and the direct parent title on the second line using a low-contrast face, while still preserving table alignment.
+  - Org-style links (e.g., `[[id:...][Description]]`) inside title cells are rendered as clickable `Description` labels using the existing org-link rendering helper.
+- `supertag-view-node.el`:
+  - Field rendering and in-place editing (`supertag-view-node--edit-field-value`) now resolve the effective field set using global field associations and read/write via `supertag-field-set` in global mode.
+- `supertag-view-schema.el`:
+  - Schema view reads definitions from `:field-definitions` and tag associations, showing which fields are global and how they are associated to tags.
+  - Adds debugging helpers to inspect raw tag data, legacy field definitions, global field associations, and the resolved schema.
+- `supertag-view-kanban.el`:
+  - Kanban groupings and columns take global field values into account when determining grouping and display, avoiding duplicates from shared fields.
+
+*** Documentation – Global Field Model & Field-Centric Rules
+- Existing global field design/migration docs are complemented by updates to the automation guide:
+  - `doc/AUTOMATION-SYSTEM-GUIDE.md` / `_cn.md`:
+    - Updated the `contact-tier-frequency` example to use `field-changed` instead of the older `property-changed` string form, aligning with the global field DSL.
+    - Added a “Field-Centric Rules (Global Fields)” section explaining how `field-equals` / `field-changed` behave when `supertag-use-global-fields` is enabled, including examples of rules that are driven purely by field changes without tag predicates.
+
+** Migration & Compatibility Notes
+- The global field model is gated by `supertag-use-global-fields` (default `nil`) to avoid breaking existing setups:
+  - When `nil`, behavior stays compatible with the legacy tag-scoped field model and nested `:fields` storage.
+  - When non-nil, all new field operations, UI interactions, and services use `:field-definitions`, `:tag-field-associations`, and `:field-values` as the source of truth, with legacy paths used only for reading or migration.
+- A dedicated migration path in `supertag-migration.el` supports one-shot conversion from tag-scoped fields to the global model; see `GLOBAL-FIELD-MIGRATION-GUIDE.md` for background, ordering, and risk notes.
+
 * [5.1.8] - 2025-11-22
 ** Improvements
 *** Reference and Backlink Consistency

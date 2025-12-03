@@ -26,6 +26,13 @@
 (require 'supertag-view-helper)
 (require 'org)
 
+;;; Faces
+
+(defface supertag-view-table-parent-title-face
+  '((t :inherit shadow :background "#303030"))
+  "Face used for the parent-title line in the Title column."
+  :group 'supertag-view)
+
 ;;; --- Core State Management ---
 
 (defvar supertag-view-table--active-views (make-hash-table :test 'equal)
@@ -497,13 +504,21 @@ Automatically detects virtual databases and uses their database fields."
         (supertag-view-table--default-columns)
       (let* ((fields (supertag-tag-get-all-fields tag-id)) ; Use recursive getter for inherited fields
              (base-columns '((:name "Title" :key :title :width 40)))
-             (field-columns (mapcar (lambda (field-def)
-                                      ;; Ensure the entire field definition, including :options,
-                                      ;; is part of the column definition.
-                                      (let ((col `(:key ,(intern (plist-get field-def :name))
-                                                            :width 20)))
-                                        (append col field-def)))
-                                    fields)))
+             (seen (make-hash-table :test 'equal))
+             (field-columns
+              (cl-loop for field-def in fields
+                       for raw-name = (plist-get field-def :name)
+                       for fid = (or (plist-get field-def :id) raw-name)
+                       for slug = (and fid (supertag-sanitize-field-id fid))
+                       for dedupe-key = (if supertag-use-global-fields slug raw-name)
+                       unless (or (null dedupe-key) (gethash dedupe-key seen))
+                       do (puthash dedupe-key t seen)
+                       collect (let ((col `(:name ,raw-name
+                                          :key ,(intern (or slug raw-name))
+                                          :field-id ,slug
+                                          :width 20)))
+                                 ;; Keep the full field definition (type/options etc.)
+                                 (append col field-def)))))
         (append base-columns field-columns)))))
 
 (defun supertag-view-table--default-columns ()
@@ -726,24 +741,44 @@ Uses improved styling from old version."
 (defun supertag-view-table--get-cell-value (entity-data key column)
   "Get cell value from ENTITY-DATA for KEY, formatted according to COLUMN type."
   (let ((query-obj (supertag-view-table--get-current-query-obj)))
-    (let ((raw-value (pcase (plist-get query-obj :type)
-                       (:tag
-                        (pcase key
-                          (:title (supertag-view-table--strip-todo-keyword
-                                  (or (plist-get entity-data :title) "No Title")))
-                          (:file (or (plist-get entity-data :file) "No File"))
-                          (:tags (string-join (plist-get entity-data :tags) ", "))
-                           (_ (let* ((node-id (plist-get entity-data :id))
-                                     (tag-id (supertag-view-table--get-current-tag-id))
-                                     (field-name (symbol-name key)))
-                                (when (and node-id tag-id)
-                                  (supertag-field-get-with-default node-id tag-id field-name))))))
-                       (_
-                        (plist-get entity-data key)))))
-      ;; Format value based on column type and render Org links for display
-      (let ((formatted (supertag-view-table--format-cell-value
-                        raw-value (plist-get column :type))))
-        (supertag-view-helper-render-org-links formatted)))))
+    (let* ((raw-value
+            (pcase (plist-get query-obj :type)
+              (:tag
+               (pcase key
+                 (:title
+                  (let* ((raw-title (or (plist-get entity-data :title) "No Title"))
+                         (base-title (supertag-view-table--strip-todo-keyword raw-title))
+                         ;; Render org-style links inside the title so [[id:...][desc]]
+                         ;; shows as clickable `desc` within the cell.
+                         (rendered-title (supertag-view-helper-render-org-links base-title))
+                         (olp (plist-get entity-data :olp))
+                         (parent-title (and (listp olp)
+                                            (> (length olp) 1)
+                                            ;; OLP is [root ... parent current]
+                                            (nth (- (length olp) 2) olp))))
+                    (if (and parent-title (not (string-empty-p parent-title)))
+                        ;; First line: current title (with org links rendered);
+                        ;; second line: parent title (grey background).
+                        (concat rendered-title "\n"
+                                (propertize parent-title 'face 'supertag-view-table-parent-title-face))
+                      rendered-title)))
+                 (:file (or (plist-get entity-data :file) "No File"))
+                 (:tags (string-join (plist-get entity-data :tags) ", "))
+                 (_ (let* ((node-id (plist-get entity-data :id))
+                           (tag-id (supertag-view-table--get-current-tag-id))
+                           (field-name (symbol-name key)))
+                      (when (and node-id tag-id)
+                        (supertag-field-get-with-default node-id tag-id field-name))))))
+              (_
+               (plist-get entity-data key)))))
+      ;; For title cells we preserve existing faces and explicit newlines;
+      ;; for all other cells we still run the usual formatting and org link rendering.
+      (if (and (eq (plist-get query-obj :type) :tag)
+               (eq key :title))
+          raw-value
+        (let ((formatted (supertag-view-table--format-cell-value
+                          raw-value (plist-get column :type))))
+          (supertag-view-helper-render-org-links formatted))))))
 
 (defun supertag-view-table--format-cell-value (value type)
   "Format VALUE according to TYPE for display in table cells."
@@ -865,23 +900,31 @@ If VALUE is text, wrap it into multiple lines within WIDTH and apply org-mode ma
                  (list (format "[Image: %s]" (file-name-nondirectory value))))))
           ;; Enforce exact line height on every slice for perfect alignment
           (mapcar (lambda (line) (propertize line 'line-height (supertag-view-table--get-exact-line-height))) lines)))
-    ;; For text, wrap into multiple lines and apply org-mode markup
+    ;; For text, wrap into multiple lines (preserving any existing text properties).
     (let* ((text (cond
                   ((stringp value) value)
                   ((null value) "")
                   (t (format "%s" value))))
-           (flattened (replace-regexp-in-string "\n" " " text))
-           ;; Apply org-mode markup rendering before wrapping
-           (propertized (supertag-view-table--propertize-org-markup flattened))
-           (wrapped-lines (supertag-view-table--wrap-text propertized width)))
-      (mapcar (lambda (line)
-                (let* ((padded (supertag-view-table--pad-string line width))
-                       (copy (copy-sequence padded)))
-                  (add-text-properties 0 (length copy)
-                                       `(line-height ,(supertag-view-table--get-exact-line-height))
-                                       copy)
-                  copy))
-              wrapped-lines))))
+           ;; Split logical lines on explicit newlines so callers can request
+           ;; multi-line cells (e.g., title + parent title).
+           (logical-lines (split-string text "\n" nil))
+           (wrapped-lines
+            (cl-mapcan
+             (lambda (line)
+               ;; We assume markup (and faces) have already been applied in
+               ;; `supertag-view-table--get-cell-value` where needed; here we
+               ;; only wrap and pad without touching faces.
+               (supertag-view-table--wrap-text line width))
+             logical-lines)))
+      (mapcar
+       (lambda (line)
+         (let* ((padded (supertag-view-table--pad-string line width))
+                (copy (copy-sequence padded)))
+           (add-text-properties 0 (length copy)
+                                `(line-height ,(supertag-view-table--get-exact-line-height))
+                                copy)
+           copy))
+       wrapped-lines))))
 
 (defun supertag-view-table--get-exact-line-height ()
   "Get exact line height in pixels, including frame-level line-spacing."
@@ -905,7 +948,7 @@ If VALUE is text, wrap it into multiple lines within WIDTH and apply org-mode ma
       (goto-char (point-min))
       (font-lock-fontify-region (point-min) (point-max))
       ;; Extract the propertized string, removing the extra newlines
-      (buffer-substring-no-properties (point-min) (- (point-max) 2)))))
+      (buffer-substring (point-min) (- (point-max) 2)))))
 
 (defun supertag-view-table--is-image-path-p (text)
   "Return t if TEXT is a string that points to an existing image file."
@@ -1187,7 +1230,7 @@ Based on old version's superior navigation system."
   (interactive)
   (let ((tag-id (supertag-view-table--get-current-tag-id)))
     (when tag-id
-      (when-let ((field-def (supertag-ui-create-field-definition))) ; Call with no arguments
+      (when-let* ((field-def (supertag-ui-create-field-definition))) ; Call with no arguments
         (supertag-tag-add-field tag-id field-def)
         (supertag-view-table-refresh)
         (message "Column '%s' added to tag '%s'." (plist-get field-def :name) tag-id)))))
@@ -1229,8 +1272,15 @@ Based on old version's superior navigation system."
     (when (and tag-id col-key (not (member col-key '(:title))))
       (let* ((field-def (supertag-tag-get-field tag-id col-name))
              (type-str (completing-read (format "New type for '%s': " col-name)
-                                        (mapcar #'symbol-name supertag-field-types) nil t))
-             (new-type (when type-str (intern (concat ":" type-str)))))
+                                        (mapcar (lambda (sym) (substring (symbol-name sym) 1))
+                                                supertag-field-types)
+                                        nil t))
+             (new-type (when (and type-str (not (string-empty-p type-str)))
+                         (let ((clean (string-trim type-str)))
+                           (when (string-prefix-p ":" clean)
+                             (setq clean (substring clean 1)))
+                           (when (not (string-empty-p clean))
+                             (intern (concat ":" clean)))))))
         (when (and new-type field-def)
           (let ((new-field-def (plist-put field-def :type new-type)))
             ;; Handle options type specifically

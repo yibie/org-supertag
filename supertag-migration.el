@@ -1,4 +1,4 @@
-;;; supertag-migration.el --- Standalone data migration script
+;;; supertag-migration.el --- Standalone data migration script  -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; This file contains a self-contained function to migrate data from the
@@ -13,6 +13,10 @@
 (require 'sha1)      ; For secure-hash
 (require 'org)
 (require 'org-element)
+(require 'subr-x)
+(require 'supertag-core-store)
+(require 'supertag-core-schema)
+(require 'supertag-core-persistence)
 
 ;;; --- Helper Functions ---
 
@@ -528,6 +532,241 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
 
           (message "Saving new database to file...")
           (supertag-migrate--save-new-db new-store new-indexes))))))
+
+;; ------------------------------------------------------------------
+;; Global field model migration (modern store -> global fields)
+;; ------------------------------------------------------------------
+
+(defcustom supertag-migration-log-buffer "*supertag-migration*"
+  "Buffer name for migration logs."
+  :type 'string
+  :group 'supertag-migration)
+
+(defcustom supertag-migration-dry-run t
+  "When non-nil, migration commands default to dry-run (no writes)."
+  :type 'boolean
+  :group 'supertag-migration)
+
+(defvar supertag-migration--stats nil
+  "Plist of migration stats for the current run.")
+
+(defun supertag-migration--log (fmt &rest args)
+  "Log formatted message to `supertag-migration-log-buffer'."
+  (with-current-buffer (get-buffer-create supertag-migration-log-buffer)
+    (goto-char (point-max))
+    (insert (apply #'format (concat fmt "\n") args))))
+
+(defun supertag-migration--reset-stats ()
+  "Reset migration stats."
+  (setq supertag-migration--stats
+        '(:fields-created 0
+          :associations-created 0
+          :values-migrated 0
+          :conflicts nil
+          :skipped 0))
+  (supertag-migration--log "Stats reset: %S" supertag-migration--stats))
+
+(defun supertag-migration--increment (key &optional delta)
+  "Increment KEY in stats by DELTA (default 1)."
+  (let* ((delta (or delta 1))
+         (current (plist-get supertag-migration--stats key)))
+    (setq supertag-migration--stats
+          (plist-put supertag-migration--stats key (+ (or current 0) delta)))))
+
+(defun supertag-migration--record-conflict (item)
+  "Record conflict ITEM in stats."
+  (let* ((entry (if (and item (listp item))
+                    item
+                  (list :reason :unspecified :raw item)))
+         (existing (plist-get supertag-migration--stats :conflicts))
+         (updated (cons entry existing)))
+    (setq supertag-migration--stats
+          (plist-put supertag-migration--stats :conflicts updated))
+    (supertag-migration--log "Conflict recorded entry=%S updated=%S" entry updated)))
+
+(defun supertag-migration--dry-run-p (&optional force)
+  "Return t when dry-run is active, unless FORCE is non-nil."
+  (and (not force)
+       (or supertag-migration-dry-run
+           (bound-and-true-p current-prefix-arg))))
+
+(defun supertag-migration--ensure-flag ()
+  "Ensure global field model is enabled for migration."
+  (unless supertag-use-global-fields
+    (error "Set `supertag-use-global-fields' to t before running migration")))
+
+(defun supertag-migration--compare-field-defs (a b)
+  "Return non-nil when field definitions A and B are compatible.
+Compares :type and :config/ :options, ignoring ordering of plist."
+  (and (eq (plist-get a :type) (plist-get b :type))
+       (equal (plist-get a :config) (plist-get b :config))
+       (equal (plist-get a :options) (plist-get b :options))))
+
+(defun supertag-migration--sanitize-field-id (field-name)
+  "Return sanitized field id for FIELD-NAME or nil."
+  (supertag-sanitize-field-id field-name))
+
+(defun supertag-migration--collect-tag-fields ()
+  "Return list of (TAG-ID . FIELD-PLISTS) from legacy tag definitions."
+  (let ((tags (supertag-store-get-collection :tags))
+        result)
+    (when (hash-table-p tags)
+      (maphash
+       (lambda (tag-id tag-data)
+         (let* ((plist (cond
+                        ((hash-table-p tag-data)
+                         (let (p)
+                           (maphash (lambda (k v) (setq p (plist-put p k v))) tag-data)
+                           p))
+                        ((listp tag-data) tag-data)
+                        (t nil)))
+                (fields (plist-get plist :fields)))
+           (when (listp fields)
+             (push (cons tag-id fields) result))))
+       tags))
+    (nreverse result)))
+
+(defun supertag-migration--migrate-field-definitions (dry-run)
+  "Create global field definitions from tag field specs. Respects DRY-RUN.
+Returns a hash-table of field-id -> definition (includes newly collected
+defs even in dry-run)."
+  (let ((seen (make-hash-table :test 'equal)))
+    (dolist (entry (supertag-migration--collect-tag-fields))
+      (let ((fields (cdr entry)))
+        (dolist (field fields)
+          (let* ((name (plist-get field :name))
+                 (fid (and name (supertag-migration--sanitize-field-id name))))
+            (when fid
+              (let* ((existing (gethash fid seen))
+                     (payload (plist-put (copy-tree field) :id fid)))
+                (if existing
+                    (unless (supertag-migration--compare-field-defs existing payload)
+                      (supertag-migration--record-conflict
+                       (list :field fid :reason :type-mismatch
+                             :existing existing :incoming payload)))
+                  (puthash fid payload seen))))))))
+    (maphash
+     (lambda (fid def)
+       (let ((already (supertag-store-get-field-definition fid)))
+         (cond
+          ((and already (supertag-migration--compare-field-defs already def))
+           (supertag-migration--increment :skipped))
+          ((and already (not (supertag-migration--compare-field-defs already def)))
+           (supertag-migration--record-conflict
+            (list :field fid :reason :store-mismatch :existing already :incoming def)))
+          (t
+           (unless dry-run
+             (supertag-store-put-field-definition fid def t))
+           (supertag-migration--increment :fields-created)))))
+     seen)
+    seen))
+
+(defun supertag-migration--migrate-tag-associations (dry-run)
+  "Create tag→field ordered associations. Respects DRY-RUN."
+  (dolist (entry (supertag-migration--collect-tag-fields))
+    (let* ((tag-id (car entry))
+           (fields (cdr entry))
+           (assoc-list '())
+           (order 0))
+      (dolist (field fields)
+        (let* ((name (plist-get field :name))
+               (fid (and name (supertag-migration--sanitize-field-id name))))
+          (when fid
+            (push (list :field-id fid :order order) assoc-list)
+            (setq order (1+ order)))))
+      (setq assoc-list (nreverse assoc-list))
+      (when assoc-list
+        (let ((existing (supertag-store-get-tag-field-associations tag-id)))
+          (cond
+           ((equal existing assoc-list)
+            (supertag-migration--increment :skipped))
+           (t
+            (unless dry-run
+              (supertag-store-put-tag-field-associations tag-id assoc-list t))
+            (supertag-migration--increment :associations-created
+                                           (length assoc-list)))))))))
+
+(defun supertag-migration--migrate-field-values (dry-run defs-table)
+  "Rewrite legacy node→tag→field values into node→field values. Respects DRY-RUN.
+DEFS-TABLE is hash of known field definitions (from store plus newly collected)."
+  (let ((root (supertag-store-get-collection :fields)))
+    (when (hash-table-p root)
+      (maphash
+       (lambda (node-id tag-table)
+         (when (hash-table-p tag-table)
+           (maphash
+            (lambda (_tag-id field-table)
+              (when (hash-table-p field-table)
+                (maphash
+                 (lambda (fname value)
+                   (let* ((fid (supertag-migration--sanitize-field-id fname))
+                          (fdef (and fid (gethash fid defs-table))))
+                     (cond
+                      ((null fid)
+                       (supertag-migration--record-conflict
+                        (list :node node-id :field fname :reason :no-id)))
+                      ((not fdef)
+                       ;; During dry-run, skip missing-definition conflicts since defs not written.
+                       (unless dry-run
+                         (supertag-migration--record-conflict
+                          (list :node node-id :field fid :reason :missing-definition))))
+                      (t
+                       (let ((existing (supertag-store-get-field-value node-id fid supertag--not-found)))
+                         (cond
+                          ((not (eq existing supertag--not-found))
+                           (supertag-migration--increment :skipped))
+                          (t
+                           (unless dry-run
+                             (supertag-store-put-field-value node-id fid value t))
+                           (supertag-migration--increment :values-migrated))))))))
+                 field-table)))
+            tag-table)))
+       root))))
+
+(defun supertag-migration--report (&optional dry-run)
+  "Summarize migration run. Annotate DRY-RUN status."
+  (let ((fields (plist-get supertag-migration--stats :fields-created))
+        (assocs (plist-get supertag-migration--stats :associations-created))
+        (vals (plist-get supertag-migration--stats :values-migrated))
+        (conflicts (plist-get supertag-migration--stats :conflicts))
+        (skipped (plist-get supertag-migration--stats :skipped)))
+    (supertag-migration--log "Migration summary (dry-run=%s): fields=%d associations=%d values=%d skipped=%d conflicts=%d"
+                             (if dry-run "yes" "no") fields assocs vals skipped (length conflicts))
+    (when conflicts
+      (supertag-migration--log "Conflicts: %S" conflicts))
+    ;; Detailed conflict listing for debugging
+    (when conflicts
+      (let ((idx 0))
+        (dolist (c conflicts)
+          (setq idx (1+ idx))
+          (supertag-migration--log "Conflict[%d]: %S" idx c))))
+    (supertag-migration--log "Stats raw: %S" supertag-migration--stats)
+    (message "Supertag migration finished (dry-run=%s): fields=%d associations=%d values=%d skipped=%d conflicts=%d"
+             (if dry-run "yes" "no") fields assocs vals skipped (length conflicts))))
+
+;;;###autoload
+(defun supertag-migration-run-global-fields (&optional force-write)
+  "Run migration to global field model.
+With FORCE-WRITE non-nil (or prefix arg), perform writes; otherwise dry-run."
+  (interactive "P")
+  (supertag-migration--ensure-flag)
+  (supertag-migration--reset-stats)
+  (let* ((dry-run (supertag-migration--dry-run-p force-write))
+         (defs-table nil))
+    (with-current-buffer (get-buffer-create supertag-migration-log-buffer)
+      (erase-buffer))
+    (supertag-migration--log "--- Supertag global field migration start (dry-run=%s) ---"
+                             (if dry-run "yes" "no"))
+    (unless dry-run
+      (supertag-migration--log "Reminder: ensure a fresh backup exists before applying migration.")
+      (message "[supertag] Applying migration (not a dry-run). Consider running `supertag-backup-database-now` first."))
+    (setq defs-table (supertag-migration--migrate-field-definitions dry-run))
+    (supertag-migration--log "Stats after field definitions: %S" supertag-migration--stats)
+    (supertag-migration--migrate-tag-associations dry-run)
+    (supertag-migration--log "Stats after associations: %S" supertag-migration--stats)
+    (supertag-migration--migrate-field-values dry-run defs-table)
+    (supertag-migration--log "Stats after values: %S" supertag-migration--stats)
+    (supertag-migration--report dry-run)))
 
 (provide 'supertag-migration)
 

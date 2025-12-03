@@ -20,12 +20,31 @@
 Data is stored in a tree-like structure using nested hash tables.")
 
 (defconst supertag--store-collections
-  '(:nodes :tags :relations :embeds :fields :meta)
+  '(:nodes
+    :tags
+    :relations
+    :embeds
+    ;; Legacy nested field values (node -> tag -> field)
+    :fields
+    ;; Global field model (new)
+    :field-definitions          ; field-id -> field plist
+    :tag-field-associations     ; tag-id -> ordered list of association plists
+    :field-values               ; node-id -> field-id -> value
+    :meta)
   "Canonical root collections maintained in `supertag--store'.")
 
 (defconst supertag--canonical-collections
-  '(:nodes :tags :relations :embeds)
+  '(:nodes :tags :relations :embeds :field-definitions)
   "Collections expected to contain entity plists keyed by identifier.")
+
+(defun supertag-store--put-and-notify (collection id data &optional emit-event-p)
+  "Internal helper to store DATA under COLLECTION/ID and optionally emit event."
+  (let ((bucket (supertag-store-get-collection collection))
+        (canonical (supertag--normalize-entity data)))
+    (puthash id canonical bucket)
+    (when emit-event-p
+      (supertag-emit-event :store-changed (list collection id) nil canonical))
+    canonical))
 
 (defconst supertag--not-found (make-symbol "supertag-not-found")
   "Sentinel used to signal missing entries during path resolution.")
@@ -67,12 +86,7 @@ Data is stored in a tree-like structure using nested hash tables.")
 (defun supertag-store-put-entity (collection id data &optional emit-event-p)
   "Store DATA under COLLECTION/ID.
 When EMIT-EVENT-P is non-nil, emit :store-changed notification."
-  (let ((bucket (supertag-store-get-collection collection))
-        (canonical (supertag--normalize-entity data)))
-    (puthash id canonical bucket)
-    (when emit-event-p
-      (supertag-emit-event :store-changed (list collection id) nil canonical))
-    canonical))
+  (supertag-store--put-and-notify collection id data emit-event-p))
 
 (defun supertag-store-remove-entity (collection id)
   "Remove entity under COLLECTION/ID. Returns removed value or nil."
@@ -149,6 +163,77 @@ Returns the normalized hash table and updates `supertag--store' when DATA is nil
   ;; This function is deprecated due to its complexity and potential for data corruption.
   ;; It now acts as a pass-through to maintain API compatibility while preventing issues.
   (or data supertag--store))
+
+;;; --- Global Field Collections (opt-in scaffolding) ---
+
+(defun supertag-store-put-field-definition (field-id data &optional emit-event-p)
+  "Store global field definition DATA under FIELD-ID."
+  (let ((result (supertag-store--put-and-notify :field-definitions field-id data emit-event-p)))
+    (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
+      (supertag--maybe-rebuild-global-field-caches))
+    result))
+
+(defun supertag-store-get-field-definition (field-id)
+  "Fetch global field definition for FIELD-ID."
+  (gethash field-id (supertag-store-get-collection :field-definitions)))
+
+(defun supertag-store-remove-field-definition (field-id)
+  "Remove global field definition FIELD-ID."
+  (let ((old (supertag-store-remove-entity :field-definitions field-id)))
+    (when (and old (fboundp 'supertag--maybe-rebuild-global-field-caches))
+      (supertag--maybe-rebuild-global-field-caches))
+    old))
+
+(defun supertag-store-put-tag-field-associations (tag-id associations &optional emit-event-p)
+  "Store ASSOCIATIONS (ordered list) for TAG-ID."
+  (let ((result (supertag-store--put-and-notify :tag-field-associations tag-id associations emit-event-p)))
+    (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
+      (supertag--maybe-rebuild-global-field-caches))
+    result))
+
+(defun supertag-store-get-tag-field-associations (tag-id)
+  "Fetch field association list for TAG-ID."
+  (gethash tag-id (supertag-store-get-collection :tag-field-associations)))
+
+(defun supertag-store-remove-tag-field-associations (tag-id)
+  "Remove field associations for TAG-ID."
+  (let ((old (supertag-store-remove-entity :tag-field-associations tag-id)))
+    (when (and old (fboundp 'supertag--maybe-rebuild-global-field-caches))
+      (supertag--maybe-rebuild-global-field-caches))
+    old))
+
+(defun supertag-store-put-field-value (node-id field-id value &optional emit-event-p)
+  "Set VALUE for FIELD-ID on NODE-ID."
+  (let* ((root (supertag-store-get-collection :field-values))
+         (node-table (or (gethash node-id root)
+                         (let ((ht (ht-create)))
+                           (puthash node-id ht root)
+                           ht))))
+    (puthash field-id value node-table)
+    (when emit-event-p
+      (supertag-emit-event :store-changed (list :field-values node-id field-id) nil value))
+    value))
+
+(defun supertag-store-get-field-value (node-id field-id &optional default)
+  "Get VALUE for FIELD-ID on NODE-ID, or DEFAULT if missing."
+  (let* ((root (supertag-store-get-collection :field-values))
+         (node-table (and (hash-table-p root) (gethash node-id root))))
+    (if (and (hash-table-p node-table)
+             (ht-contains? node-table field-id))
+        (gethash field-id node-table)
+      default)))
+
+(defun supertag-store-remove-field-value (node-id field-id)
+  "Remove FIELD-ID value for NODE-ID. Returns removed value or nil."
+  (let* ((root (supertag-store-get-collection :field-values))
+         (node-table (and (hash-table-p root) (gethash node-id root))))
+    (when (and (hash-table-p node-table)
+               (ht-contains? node-table field-id))
+      (let ((old (gethash field-id node-table)))
+        (remhash field-id node-table)
+        (supertag-emit-event :store-changed (list :field-values node-id field-id) old nil)
+        old))))
+
 
 ;; Direct storage is now the default and only mode for optimal performance
 ;; This hybrid architecture combines old system performance with new system features

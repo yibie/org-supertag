@@ -40,7 +40,8 @@
 This function replaces the old queue-based event processing.
 
 OPERATION is the operation type (:create, :update, :delete).
-COLLECTION is the target collection (:nodes, :tags, :relations, :fields).
+COLLECTION is the target collection (:nodes, :tags, :relations, :fields,
+  :field-values, :field-definitions, :tag-field-associations).
 ID is the entity identifier.
 PAYLOAD is the operation data.
 PREVIOUS is the previous entity value.
@@ -52,6 +53,15 @@ METADATA is additional operation context."
        (supertag-automation-sync--handle-node-event operation id payload previous metadata))
       (:fields
        (supertag-automation-sync--handle-field-event operation id payload previous metadata))
+      ;; Global field value changes (new)
+      (:field-values
+       (supertag-automation-sync--handle-global-field-value-event operation id payload previous metadata))
+      ;; Global field definition changes (new)
+      (:field-definitions
+       (supertag-automation-sync--handle-global-field-def-event operation id payload previous metadata))
+      ;; Tag-field association changes (new)
+      (:tag-field-associations
+       (supertag-automation-sync--handle-association-event operation id payload previous metadata))
       (:tags
        (supertag-automation-sync--handle-tag-event operation id payload previous metadata))
       (:relations
@@ -78,7 +88,8 @@ METADATA is additional operation context."
             (_ nil)))))))
 
 (defun supertag-automation-sync--handle-field-event (operation id payload previous metadata)
-  "Handle field-related events synchronously."
+  "Handle legacy field-related events synchronously.
+This handles the old nested field storage format (:fields node-id tag-id field-name)."
   (when (and (plist-member payload :node-id) (plist-member payload :tag-id) (plist-member payload :field-name))
     (let ((node-id (plist-get payload :node-id))
           (tag-id (plist-get payload :tag-id))
@@ -90,13 +101,52 @@ METADATA is additional operation context."
         (supertag-automation-sync--with-protection node-id
           (lambda ()
             (when supertag-debug-log-field-events
-              (message "supertag-automation-sync EVENT %s node=%s tag=%s field=%s old=%S new=%S"
+              (message "supertag-automation-sync EVENT (legacy) %s node=%s tag=%s field=%s old=%S new=%S"
                        operation node-id tag-id field-name old-value new-value))
             ;; 1. Trigger field synchronization for relations
             (supertag-automation-sync-all-relations node-id field-name new-value)
             
             ;; 2. Trigger automation rules for field changes
             (supertag-automation-sync--process-field-change node-id tag-id field-name old-value new-value)))))))
+
+(defun supertag-automation-sync--handle-global-field-value-event (operation id payload previous metadata)
+  "Handle global field value change events synchronously.
+ID is the node-id, PAYLOAD contains the new value, PREVIOUS contains the old value.
+The field-id is extracted from the event path in metadata."
+  (let* ((path (plist-get (car metadata) :path))
+         (node-id (if (and path (>= (length path) 2)) (cadr path) id))
+         (field-id (if (and path (>= (length path) 3)) (caddr path) nil))
+         (new-value payload)
+         (old-value previous))
+    (when (and node-id field-id)
+      (supertag-automation-sync--with-protection node-id
+        (lambda ()
+          (when supertag-debug-log-field-events
+            (message "supertag-automation-sync EVENT (global) %s node=%s field=%s old=%S new=%S"
+                     operation node-id field-id old-value new-value))
+          ;; 1. Trigger field synchronization for relations
+          (supertag-automation-sync-all-relations node-id field-id new-value)
+          
+          ;; 2. Trigger automation rules for global field changes
+          (supertag-automation-sync--process-global-field-change node-id field-id old-value new-value))))))
+
+(defun supertag-automation-sync--handle-global-field-def-event (operation id payload previous metadata)
+  "Handle global field definition change events.
+ID is the field-id. This is mainly for cache invalidation and schema updates."
+  (when supertag-debug-log-field-events
+    (message "supertag-automation-sync: field definition %s for %s" operation id))
+  ;; Field definition changes don't typically trigger automation rules,
+  ;; but we could add support for :on-field-defined triggers in the future
+  nil)
+
+(defun supertag-automation-sync--handle-association-event (operation id payload previous metadata)
+  "Handle tag-field association change events.
+ID is the tag-id. This is mainly for cache invalidation."
+  (when supertag-debug-log-field-events
+    (message "supertag-automation-sync: association %s for tag %s" operation id))
+  ;; Association changes don't typically trigger automation rules,
+  ;; but we could add support for :on-field-associated triggers in the future
+  nil)
 
 (defun supertag-automation-sync--handle-tag-event (operation id payload previous metadata)
   "Handle tag-related events synchronously."
@@ -162,7 +212,7 @@ METADATA is additional operation context."
           (supertag-rule-execute rule node-id current-event))))))
 
 (defun supertag-automation-sync--process-field-change (node-id tag-id field-name old-value new-value)
-  "Process a field change and trigger relevant automation rules."
+  "Process a legacy field change and trigger relevant automation rules."
   (let* ((path (list :fields node-id tag-id field-name))
          (rule-ids (supertag--get-rules-from-index path))
          (current-event (list :path path :old old-value :new new-value))
@@ -174,6 +224,21 @@ METADATA is additional operation context."
           (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
             (when (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)
               (message "Field change triggered rule %s" rule-id)
+              (supertag-rule-execute rule node-id current-event))))))))
+
+(defun supertag-automation-sync--process-global-field-change (node-id field-id old-value new-value)
+  "Process a global field change and trigger relevant automation rules."
+  (let* ((path (list :field-values node-id field-id))
+         (rule-ids (supertag--get-rules-from-index path))
+         (current-event (list :path path :old old-value :new new-value))
+         (supertag-automation--current-event current-event))
+    (dolist (rule-id rule-ids)
+      (when-let ((rule (supertag-automation-get rule-id)))
+        ;; Skip tag-only triggers
+        (let ((trigger (plist-get rule :trigger)))
+          (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
+            (when (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)
+              (message "Global field change triggered rule %s" rule-id)
               (supertag-rule-execute rule node-id current-event))))))))
 
 ;;; --- Rule Lookup and Matching ---
@@ -294,13 +359,27 @@ This is an optimized version of the original rule lookup."
                 (supertag-automation-sync-field from-id to-id field-name value relation)))))))))
 
 (defun supertag-automation-sync--get-field-value (entity field-name)
-  "Get field value from ENTITY by FIELD-NAME."
+  "Get field value from ENTITY by FIELD-NAME.
+Supports both global field storage and legacy nested storage."
   (if (plist-get entity :tags)  ; It's a node
       (let ((node-id (plist-get entity :id))
             (tags (plist-get entity :tags)))
-        (cl-some (lambda (tag-id)
-                   (supertag-field-get node-id tag-id field-name))
-                 tags))
+        ;; Try global field storage first when enabled
+        (if (and (boundp 'supertag-use-global-fields) supertag-use-global-fields)
+            (let* ((field-id (if (fboundp 'supertag-sanitize-field-id)
+                                 (supertag-sanitize-field-id field-name)
+                               field-name))
+                   (value (when (fboundp 'supertag-node-get-global-field)
+                            (supertag-node-get-global-field node-id field-id))))
+              (or value
+                  ;; Fallback to legacy storage
+                  (cl-some (lambda (tag-id)
+                             (supertag-field-get node-id tag-id field-name))
+                           tags)))
+          ;; Legacy mode
+          (cl-some (lambda (tag-id)
+                     (supertag-field-get node-id tag-id field-name))
+                   tags)))
     ;; It's a tag
     (plist-get entity (intern (concat ":" field-name)))))
 
@@ -330,19 +409,27 @@ Preserves all existing target entity data."
 
 (defun supertag-automation-sync--update-node-field (node-id field-name value)
   "Update a field on a node entity synchronously.
-Preserves all existing node data including tags and other properties."
-  (let ((field-key (intern (concat ":" field-name))))
-    (supertag-node-update
-     node-id
-     (lambda (node)
-       (when node
-         (let* ((props (copy-tree (or (plist-get node :properties) '())))
-                (current (plist-get props field-key)))
-           (if (equal current value)
-               node  ; Return unchanged node to preserve data
-             ;; Create new node copy with updated field while preserving everything else
-             (let ((updated-node (copy-tree node)))
-               (plist-put updated-node :properties (plist-put props field-key value))))))))))
+Supports both global field storage and legacy property storage."
+  ;; Use global field storage when enabled
+  (if (and (boundp 'supertag-use-global-fields) supertag-use-global-fields)
+      (let ((field-id (if (fboundp 'supertag-sanitize-field-id)
+                          (supertag-sanitize-field-id field-name)
+                        field-name)))
+        (when (fboundp 'supertag-node-set-global-field)
+          (supertag-node-set-global-field node-id field-id value)))
+    ;; Legacy mode: update via properties
+    (let ((field-key (intern (concat ":" field-name))))
+      (supertag-node-update
+       node-id
+       (lambda (node)
+         (when node
+           (let* ((props (copy-tree (or (plist-get node :properties) '())))
+                  (current (plist-get props field-key)))
+             (if (equal current value)
+                 node  ; Return unchanged node to preserve data
+               ;; Create new node copy with updated field while preserving everything else
+               (let ((updated-node (copy-tree node)))
+                 (plist-put updated-node :properties (plist-put props field-key value)))))))))))
 
 (defun supertag-automation-sync--update-tag-field (tag-id field-name value)
   "Update a field on a tag entity synchronously."
@@ -378,11 +465,17 @@ EVENT is the plist provided by `supertag-ops-commit` after hooks."
            (id (plist-get event :id))
            (current (plist-get event :current))
            (previous (plist-get event :previous))
+           (path (plist-get event :path))
            (context (plist-get event :context))
-           (meta-args (cond
-                       ((null context) nil)
-                       ((listp context) context)
-                       (t (list context)))))
+           (context-args (cond
+                          ((null context) nil)
+                          ((listp context) context)
+                          (t (list context))))
+           ;; Always pass the canonical path as metadata so handlers
+           ;; (notably global field value handlers) can recover the
+           ;; full location of the change.
+           (meta-args (append (when path (list (list :path path)))
+                              context-args)))
       (apply #'supertag-automation-sync-handle-event
              (append (list operation collection id current previous) meta-args)))))
 

@@ -1,4 +1,8 @@
-# Org-SuperTag 5.0: 纯 Emacs Lisp 知识管理
+# Org-SuperTag 5.0+: 纯 Emacs Lisp 知识管理
+
+> **⚠️ 重要提示（5.2.0 及以上版本）**  
+> 如果你是从 5.2.0 之前的版本升级，请在启用 `supertag-use-global-fields` 之前，**先完成数据库全局字段迁移**。  
+> 具体步骤见 `doc/GLOBAL-FIELD-MIGRATION-GUIDE_CN.md`。
 
 [English](./README.md) | [中文](./README_CN.md)
 
