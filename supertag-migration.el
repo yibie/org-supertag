@@ -17,6 +17,11 @@
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
 (require 'supertag-core-persistence)
+(require 'supertag-ops-node)
+(require 'supertag-view-helper)
+(require 'org-id)
+(require 'org)
+(require 'org-element)
 
 ;;; --- Helper Functions ---
 
@@ -767,6 +772,509 @@ With FORCE-WRITE non-nil (or prefix arg), perform writes; otherwise dry-run."
     (supertag-migration--migrate-field-values dry-run defs-table)
     (supertag-migration--log "Stats after values: %S" supertag-migration--stats)
     (supertag-migration--report dry-run)))
+
+;; ------------------------------------------------------------------
+;; Org Properties → SuperTag Fields Migration (Simplified Version)
+;; ------------------------------------------------------------------
+
+(defun supertag-migration--collect-all-properties ()
+  "Collect all org properties from existing nodes in the database.
+Returns a hash table: property-name -> (list of (node-id . value) pairs).
+This function reads from the already-synced :properties field in nodes,
+avoiding the need to re-parse org files."
+  (let ((props-table (make-hash-table :test 'equal))
+        (nodes-table (supertag-store-get-collection :nodes)))
+    (when (hash-table-p nodes-table)
+      (maphash
+       (lambda (node-id node-data)
+         (let ((props (plist-get node-data :properties)))
+           ;; properties can be a plist: (:KEY "value" ...) or alist: ((:KEY . "value") ...)
+           (when (and props (listp props))
+             (if (plistp props)
+                 ;; Handle plist format
+                 (let ((plist props))
+                   (while plist
+                     (let* ((key (car plist))
+                            (value (cadr plist)))
+                       (when (keywordp key)
+                         (let* ((key-name (substring (symbol-name key) 1))
+                                (existing (gethash key-name props-table)))
+                           ;; Skip org-mode internal properties
+                           (unless (member (upcase key-name) '("ID" "CUSTOM_ID" "CATEGORY"))
+                             (puthash key-name
+                                      (cons (cons node-id value) existing)
+                                      props-table))))
+                       (setq plist (cddr plist)))))
+               ;; Handle alist format (legacy compatibility)
+               (dolist (prop props)
+                 (when (and (consp prop) (car prop))
+                   (let* ((key (car prop))
+                          (key-name (if (keywordp key)
+                                        (substring (symbol-name key) 1)
+                                      (format "%s" key)))
+                          (value (cdr prop))
+                          (existing (gethash key-name props-table)))
+                     ;; Skip org-mode internal properties
+                     (unless (member (upcase key-name) '("ID" "CUSTOM_ID" "CATEGORY"))
+                       (puthash key-name
+                                (cons (cons node-id value) existing)
+                                props-table)))))))))
+       nodes-table))
+    props-table))
+
+(defun supertag-migration--property-stats (props-table)
+  "Generate statistics from PROPS-TABLE.
+Returns a sorted list of (property-name count sample-values) tuples."
+  (let ((stats '()))
+    (maphash
+     (lambda (prop-name occurrences)
+       (let* ((count (length occurrences))
+              ;; Get up to 3 sample values
+              (samples (cl-subseq occurrences 0 (min 3 count)))
+              (sample-values (mapcar #'cdr samples)))
+         (push (list prop-name count sample-values) stats)))
+     props-table)
+    ;; Sort by count descending
+    (sort stats (lambda (a b) (> (nth 1 a) (nth 1 b))))))
+
+;;;###autoload
+(defun supertag-analyze-org-properties ()
+  "Analyze org properties in the database and display a report.
+This is a read-only operation - it does not modify any data.
+Shows which properties exist and how often they appear."
+  (interactive)
+  (let* ((props-table (supertag-migration--collect-all-properties))
+         (stats (supertag-migration--property-stats props-table))
+         (buf (get-buffer-create "*Supertag Property Analysis*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "=== Org Properties Analysis ===\n\n")
+      (if (null stats)
+          (insert "No org properties found in the database.\n\n")
+        (insert (format "Found %d unique property names across nodes.\n\n"
+                        (length stats)))
+        (insert "Property Name            | Count | Sample Values\n")
+        (insert "-------------------------|-------|---------------------------\n")
+        (dolist (stat stats)
+          (let ((name (nth 0 stat))
+                (count (nth 1 stat))
+                (samples (nth 2 stat)))
+            (insert (format "%-24s | %5d | %s\n"
+                            (if (> (length name) 24)
+                                (concat (substring name 0 21) "...")
+                              name)
+                            count
+                            (mapconcat (lambda (v)
+                                         (let ((s (format "%s" v)))
+                                           (if (> (length s) 15)
+                                               (concat (substring s 0 12) "...")
+                                             s)))
+                                       samples ", "))))))
+      (insert "\n\nTo convert a property to a tag field, use:\n")
+      (insert "  M-x supertag-convert-properties-to-field\n"))
+    (display-buffer buf)
+    (message "Found %d unique properties. See *Supertag Property Analysis* buffer."
+             (length stats))))
+
+(defun supertag-migration--nodes-with-property (props-table property-name)
+  "Get list of (node-id . value) pairs for PROPERTY-NAME from PROPS-TABLE."
+  (gethash property-name props-table))
+
+(defun supertag-migration--infer-field-type (values)
+  "Infer the most likely field type from a list of VALUES.
+Returns a keyword like :string, :number, :date, etc."
+  (let ((sample-values (cl-remove-if-not #'stringp
+                                         (mapcar #'cdr (cl-subseq values 0 (min 10 (length values)))))))
+    (cond
+     ;; Check for date patterns
+     ((cl-every (lambda (v)
+                  (or (string-match-p "^[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" v)
+                      (string-match-p "^<[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" v)))
+                sample-values)
+      :date)
+     ;; Check for numbers
+     ((cl-every (lambda (v)
+                  (string-match-p "^-?[0-9]+\\(?:\\.[0-9]+\\)?$" v))
+                sample-values)
+      :number)
+     ;; Check for boolean-like values
+     ((cl-every (lambda (v)
+                  (member (downcase v) '("yes" "no" "true" "false" "t" "nil" "1" "0")))
+                sample-values)
+      :boolean)
+     ;; Default to string
+     (t :string))))
+
+;;;###autoload
+(defun supertag-convert-properties-to-field (property-name)
+  "Convert an org property to a tag field.
+PROPERTY-NAME is the name of the org property to convert.
+
+This function:
+1. Prompts for a tag (existing or new) to associate with
+2. Creates the tag if it doesn't exist
+3. Creates a field definition on the tag
+4. For each node that has both the property AND the tag,
+   copies the property value to the field value
+5. Inserts #tag in the org file for nodes that didn't have the tag"
+  (interactive
+   (let* ((props-table (supertag-migration--collect-all-properties))
+          (prop-names (let ((names '()))
+                        (maphash (lambda (k _v) (push k names)) props-table)
+                        (sort names #'string<))))
+     (unless prop-names
+       (user-error "No org properties found in the database"))
+     (list (completing-read "Property to convert: " prop-names nil t))))
+  
+  ;; Validate property name
+  (unless (and property-name (not (string-empty-p property-name)))
+    (user-error "Property name is required"))
+  
+  ;; Prompt for tag (allow creating new ones)
+  (let* ((all-tags (mapcar #'car (supertag-query :tags)))
+         (tag-input (completing-read
+                     (format "Associate '%s' with tag (or enter new tag name): " property-name)
+                     all-tags nil nil))
+         (tag-id (supertag-sanitize-tag-name tag-input)))
+    
+    (unless (and tag-id (not (string-empty-p tag-id)))
+      (user-error "Tag name is required"))
+    
+    ;; Create tag if it doesn't exist
+    (unless (supertag-tag-get tag-id)
+      (if (yes-or-no-p (format "Tag '%s' doesn't exist. Create it? " tag-id))
+          (progn
+            (supertag-tag-create `(:id ,tag-id :name ,tag-id))
+            (message "Created tag '%s'" tag-id))
+        (user-error "Tag '%s' was not created" tag-id)))
+    
+    ;; Now do the conversion
+    (let* ((props-table (supertag-migration--collect-all-properties))
+           (occurrences (supertag-migration--nodes-with-property props-table property-name))
+           (field-type (supertag-migration--infer-field-type occurrences))
+           (field-id (supertag-sanitize-field-id property-name))
+           (values-set 0)
+           (tags-added 0)
+           (nodes-skipped 0))
+      
+      (unless occurrences
+        (user-error "Property '%s' not found in any nodes" property-name))
+      
+      ;; Show confirmation with inferred type
+      (unless (yes-or-no-p
+               (format "Convert property '%s' (found in %d nodes) to field type '%s' on tag '%s'? "
+                       property-name (length occurrences) field-type tag-id))
+        (user-error "Conversion cancelled"))
+      
+      ;; Step 1: Create or update field definition on the tag
+      (message "Creating field '%s' (type: %s) on tag '%s'..."
+               property-name field-type tag-id)
+      
+      (let ((field-def `(:name ,property-name
+                         :id ,field-id
+                         :type ,field-type)))
+        ;; Use supertag-tag-add-field which handles both global and legacy models
+        (supertag-tag-add-field tag-id field-def))
+      
+      ;; Step 2: For each node with this property, set the field value
+      ;; but ONLY if the node also has the specified tag
+      (message "Migrating property values to field values...")
+      
+      (dolist (occurrence occurrences)
+        (let* ((node-id (car occurrence))
+               (value (cdr occurrence))
+               (node (supertag-node-get node-id)))
+          (if node
+              (let* ((node-tags (plist-get node :tags))
+                     (has-tag (and node-tags (member tag-id node-tags))))
+                (unless has-tag
+                  ;; Add tag to database
+                  (let ((updated (supertag-node-add-tag node-id tag-id)))
+                    (when updated
+                      (setq node updated
+                            node-tags (plist-get updated :tags)
+                            has-tag (and node-tags (member tag-id node-tags)))
+                      ;; Also insert #tag in the org file
+                      (supertag-migration--insert-tag-in-org-file node-id tag-id)
+                      (cl-incf tags-added))))
+                (if has-tag
+                    (progn
+                      (supertag-field-set node-id tag-id property-name value)
+                      (cl-incf values-set))
+                  (cl-incf nodes-skipped)))
+            (cl-incf nodes-skipped))))
+      
+      ;; Report results
+      (message "Conversion complete on tag '%s': %d values migrated, %d tags added automatically (in DB and org files), %d nodes skipped (missing node data or failed tag assignment)"
+               tag-id values-set tags-added nodes-skipped)
+      
+      (list :property property-name
+            :tag tag-id
+            :field-id field-id
+            :field-type field-type
+            :values-set values-set
+            :tags-added tags-added
+            :nodes-skipped nodes-skipped))))
+
+;;;###autoload
+(defun supertag-batch-convert-properties-to-fields ()
+  "Batch convert multiple properties to fields, one at a time.
+For each selected property:
+1. Shows property statistics
+2. Prompts for a tag (existing or new)
+3. Converts the property to a field on that tag
+4. Continues to next property until all are done or user cancels."
+  (interactive)
+  (let* ((props-table (supertag-migration--collect-all-properties))
+         (prop-names (let ((names '()))
+                       (maphash (lambda (k _v) (push k names)) props-table)
+                       (sort names #'string<)))
+         (selected-props (completing-read-multiple
+                          "Select properties to convert (comma-separated): "
+                          prop-names nil t))
+         (results '())
+         (cancelled nil))
+    
+    (unless prop-names
+      (user-error "No org properties found in the database"))
+    
+    (unless selected-props
+      (user-error "No properties selected"))
+    
+    (message "Starting batch conversion of %d properties..." (length selected-props))
+    
+    ;; Process each property one by one
+    (catch 'batch-cancelled
+      (dolist (prop selected-props)
+        (when cancelled
+          (throw 'batch-cancelled nil))
+        
+        (let* ((all-tags (mapcar #'car (supertag-query :tags)))
+               (occurrences (supertag-migration--nodes-with-property props-table prop))
+               (field-type (supertag-migration--infer-field-type occurrences)))
+          
+          (unless occurrences
+            (message "Skipping '%s': not found in any nodes" prop)
+            (push (list :property prop :status 'skipped :reason "No occurrences") results)
+            (cl-return))
+          
+          ;; Show property info and ask for tag
+          (message "\n--- Property: %s (found in %d nodes, inferred type: %s) ---"
+                   prop (length occurrences) field-type)
+          
+          (let ((tag-input (completing-read
+                            (format "[%s] Associate with tag (or enter new, or C-g to skip): "
+                                    prop)
+                            all-tags nil nil)))
+            
+            (if (or (null tag-input) (string-empty-p tag-input))
+                ;; User cancelled or entered empty string - skip this property
+                (progn
+                  (message "Skipped property: %s" prop)
+                  (push (list :property prop :status 'skipped :reason "User skipped") results))
+              
+              ;; Process this property
+              (let ((tag-id (supertag-sanitize-tag-name tag-input)))
+                
+                ;; Create tag if it doesn't exist
+                (unless (supertag-tag-get tag-id)
+                  (if (yes-or-no-p (format "Tag '%s' doesn't exist. Create it? " tag-id))
+                      (progn
+                        (supertag-tag-create `(:id ,tag-id :name ,tag-id))
+                        (message "Created tag '%s'" tag-id))
+                    (message "Cancelled: tag '%s' was not created. Skipping property '%s'."
+                             tag-id prop)
+                    (push (list :property prop :status 'skipped :reason "Tag not created") results)
+                    (cl-return)))
+                
+                ;; Convert the property
+                (condition-case err
+                    (let ((result (supertag-migration--convert-single-property 
+                                   prop tag-id props-table)))
+                      (push result results)
+                      (message "✓ Converted: %s → tag '%s' (%d values migrated, %d tags added, %d nodes skipped)"
+                               prop tag-id 
+                               (plist-get result :values-set)
+                               (or (plist-get result :tags-added) 0)
+                               (plist-get result :nodes-skipped)))
+                  (error
+                   (message "✗ Error converting '%s': %s" prop (error-message-string err))
+                   (push (list :property prop 
+                               :status 'error 
+                               :error (error-message-string err)) 
+                         results)))))))))
+    
+    ;; Summary
+    (let* ((completed (cl-count-if (lambda (r) 
+                                     (and (plist-get r :values-set)
+                                          (>= (plist-get r :values-set) 0)))
+                                   results))
+           (skipped (cl-count-if (lambda (r) (eq (plist-get r :status) 'skipped)) results))
+           (errors (cl-count-if (lambda (r) (eq (plist-get r :status) 'error)) results)))
+      (message "\n=== Batch Conversion Summary ===")
+      (message "Total: %d properties" (length selected-props))
+      (message "Completed: %d" completed)
+      (message "Skipped: %d" skipped)
+      (message "Errors: %d" errors)
+      (nreverse results))))
+
+(defun supertag-migration--insert-tag-in-org-file (node-id tag-id)
+  "Insert #TAG-ID in the org file for NODE-ID.
+This function finds the node's location in the org file and inserts the tag
+at the end of the headline (e.g., '* My Heading #tag')."
+  (when-let* ((node (supertag-node-get node-id))
+              (file (plist-get node :file))
+              (position (plist-get node :position)))
+    (when (and file (file-exists-p file))
+      (with-current-buffer (find-file-noselect file)
+        (save-excursion
+          (goto-char position)
+          ;; Make sure we're at a heading
+          (when (org-at-heading-p)
+            ;; Go to end of headline (before any org native tags like :tag:)
+            (let* ((element (org-element-at-point))
+                   (tags-start (org-element-property :tags element))
+                   (line-end (line-end-position)))
+              ;; Position at end of headline text, before org native tags
+              (if tags-start
+                  ;; If there are org native tags, find where they start
+                  (progn
+                    (end-of-line)
+                    (when (re-search-backward "\\s-+:[[:alnum:]_@#%:]+:\\s-*$" (line-beginning-position) t)
+                      (goto-char (match-beginning 0))))
+                ;; No org native tags, just go to end of line
+                (end-of-line))
+              ;; Insert the tag with proper spacing
+              (insert " #" tag-id)
+              (save-buffer))))))))
+
+(defun supertag-migration--convert-single-property (property-name tag-id props-table)
+  "Internal function to convert a single PROPERTY-NAME to a field on TAG-ID.
+PROPS-TABLE is the pre-collected properties table."
+  (let* ((occurrences (supertag-migration--nodes-with-property props-table property-name))
+         (field-type (supertag-migration--infer-field-type occurrences))
+         (field-id (supertag-sanitize-field-id property-name))
+         (values-set 0)
+         (tags-added 0)
+         (nodes-skipped 0))
+    
+    (unless occurrences
+      (error "Property '%s' not found in any nodes" property-name))
+    
+    ;; Create field definition on the tag
+    (let ((field-def `(:name ,property-name
+                       :id ,field-id
+                       :type ,field-type)))
+      (supertag-tag-add-field tag-id field-def))
+    
+    ;; For each node with this property, set the field value
+    (dolist (occurrence occurrences)
+      (let* ((node-id (car occurrence))
+             (value (cdr occurrence))
+             (node (supertag-node-get node-id)))
+        (if node
+            (let* ((node-tags (plist-get node :tags))
+                   (has-tag (and node-tags (member tag-id node-tags))))
+              (unless has-tag
+                ;; Add tag to database
+                (let ((updated (supertag-node-add-tag node-id tag-id)))
+                  (when updated
+                    (setq node updated
+                          node-tags (plist-get updated :tags)
+                          has-tag (and node-tags (member tag-id node-tags)))
+                    ;; Also insert #tag in the org file
+                    (supertag-migration--insert-tag-in-org-file node-id tag-id)
+                    (cl-incf tags-added))))
+              (if has-tag
+                  (progn
+                    (supertag-field-set node-id tag-id property-name value)
+                    (cl-incf values-set))
+                (cl-incf nodes-skipped)))
+          (cl-incf nodes-skipped))))
+    
+    (list :property property-name
+          :tag tag-id
+          :field-id field-id
+          :field-type field-type
+          :values-set values-set
+          :tags-added tags-added
+          :nodes-skipped nodes-skipped)))
+
+;;;###autoload
+(defun supertag-migration-add-ids-to-org-headings (directory)
+  "Add :ID: properties to all Org headings in DIRECTORY that don't have one.
+This function recursively processes all .org files in DIRECTORY and adds
+:ID: properties to headings that are missing them. This is useful for
+preparing Org files for Supertag synchronization.
+
+DIRECTORY should be an absolute path to a directory containing .org files.
+
+Returns a plist with statistics: (:files-processed N :ids-added N :errors N)"
+  (interactive "DDirectory to process: ")
+  (unless (and directory (file-directory-p directory))
+    (user-error "Invalid directory: %s" directory))
+
+  (let* ((files (directory-files-recursively directory "\\.org$" nil))
+         (total-files (length files))
+         (stats '(:files-processed 0 :ids-added 0 :errors 0)))
+
+    (message "Starting to add IDs to Org headings in %s..." directory)
+    (message "Found %d .org files to process" total-files)
+
+    (dolist (file files)
+      (condition-case err
+          (let ((file-stats (supertag-migration--add-ids-to-file file)))
+            (cl-incf (plist-get stats :files-processed))
+            (cl-incf (plist-get stats :ids-added) (plist-get file-stats :ids-added))
+            (message "[%d/%d] %s: %d IDs added"
+                     (plist-get stats :files-processed) total-files
+                     (file-name-nondirectory file)
+                     (plist-get file-stats :ids-added)))
+        (error
+         (cl-incf (plist-get stats :errors))
+         (message "Error processing %s: %s" (file-name-nondirectory file) (error-message-string err)))))
+
+    (message "Completed! Processed %d files, added %d IDs, %d errors"
+             (plist-get stats :files-processed)
+             (plist-get stats :ids-added)
+             (plist-get stats :errors))
+    stats))
+
+(defun supertag-migration--add-ids-to-file (file)
+  "Add :ID: properties to headings in FILE that don't have one.
+Returns a plist with (:ids-added N)."
+  (let ((ids-added 0)
+        (existing-buffer (find-buffer-visiting file))
+        (buffer (condition-case nil
+                   (find-file-noselect file t)
+                 (error nil))))
+
+    (unless buffer
+      (error "Cannot open file: %s" file))
+
+    (with-current-buffer buffer
+      (save-excursion
+        (org-mode)  ; Ensure org-mode is active
+        (goto-char (point-min))
+
+        ;; Visit each heading
+        (while (re-search-forward org-heading-regexp nil t)
+          (when (org-at-heading-p)
+            (let ((existing-id (org-entry-get nil "ID")))
+              (unless existing-id
+                ;; No ID exists, add one
+                (org-id-get-create)
+                (cl-incf ids-added))))))
+
+      ;; Save the buffer if we modified it
+      (when (> ids-added 0)
+        (save-buffer))
+
+      ;; Close buffer if we opened it
+      (unless existing-buffer
+        (kill-buffer buffer)))
+
+    (list :ids-added ids-added)))
 
 (provide 'supertag-migration)
 

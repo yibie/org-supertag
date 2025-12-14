@@ -547,6 +547,44 @@ Returns the loaded or initialized sync state."
 
 ;;; Core Functions - Node Hash Support (from org-supertag-old/org-supertag-sync.el)
 
+(defun supertag--node-hash--properties-to-alist (props)
+  "Normalize PROPS into an alist of (key . value) pairs for hashing."
+  (cond
+   ((hash-table-p props)
+    (let (alist)
+      (maphash (lambda (k v)
+                 (push (cons k v) alist))
+               props)
+      (nreverse alist)))
+   ((and (listp props) (consp (car props)))
+    ;; Already an alist such as ((:KEY . "value"))
+    (cl-copy-list props))
+   ((plistp props)
+    (let ((cursor props)
+          (alist '()))
+      (while cursor
+        (let ((key (car cursor))
+              (val (cadr cursor)))
+          (push (cons key val) alist))
+        (setq cursor (cddr cursor)))
+      (nreverse alist)))
+   (t nil)))
+
+(defun supertag--node-hash--property-key-string (key)
+  "Return a comparable string representation for property KEY."
+  (cond
+   ((keywordp key) (symbol-name key))
+   ((symbolp key) (symbol-name key))
+   ((stringp key) key)
+   (t (format "%s" key))))
+
+(defun supertag--node-hash--property-value-string (value)
+  "Return stable string representation for property VALUE."
+  (cond
+   ((null value) "")
+   ((stringp value) value)
+   (t (format "%s" value))))
+
 (defun supertag-node-hash (node)
   "Calculate hash value for NODE.
 Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
@@ -559,24 +597,20 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
                    (or tag-list ""))))
          (todo-type (or (plist-get node :todo) "")) ; Use :todo for schema consistency
          (priority (or (plist-get node :priority) ""))
-         (properties (let ((props-plist (plist-get node :properties)))
-                       (if (plistp props-plist)
-                           (let (props-alist)
-                             ;; Convert plist to alist for safe sorting.
-                             (cl-loop for (k v) on props-plist by #'cddr
-                                      when k ; Handle odd-length or malformed plists
-                                      do (push (cons k v) props-alist))
-
-                             ;; Sort the alist by key (keys are keywords).
-                             (setq props-alist (sort props-alist (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))))
-
-                             ;; Create the flattened string representation.
-                             (mapconcat (lambda (pair)
-                                          ;; Format value as empty string if it's nil.
-                                          (format "%s=%s" (car pair) (or (cdr pair) "")))
-                                        props-alist
-                                        "|"))
-                         ""))))
+         (properties (let* ((raw-props (plist-get node :properties))
+                            (props-alist (supertag--node-hash--properties-to-alist raw-props)))
+                       (if (null props-alist)
+                           ""
+                         (let* ((sorted (sort (cl-copy-list props-alist)
+                                              (lambda (a b)
+                                                (string< (supertag--node-hash--property-key-string (car a))
+                                                         (supertag--node-hash--property-key-string (car b)))))))
+                           (mapconcat (lambda (pair)
+                                        (format "%s=%s"
+                                                (supertag--node-hash--property-key-string (car pair))
+                                                (supertag--node-hash--property-value-string (cdr pair))))
+                                      sorted
+                                      "|"))))))
     (secure-hash 'sha1 (format "%s|%s|%s|%s|%s|%s|%s" id raw-value content tags todo-type priority properties))))
 
 (defun supertag-node-mark-deleted-from-file (id)
@@ -982,18 +1016,38 @@ COUNTERS is a plist for tracking changes."
   
 
 ;; --- Org Parser ---
-(defun supertag--parse-properties (properties-plist)
-  "Parse a properties plist from org-element into an alist."
-  (let ((node-props '()))
-    (when properties-plist
-      (let ((props (copy-list properties-plist)))
+(defun supertag--parse-properties (headline)
+  "Extract user-defined properties from HEADLINE org-element.
+org-element stores PROPERTIES drawer entries as uppercase keyword properties
+directly on the headline element (e.g., :AUTHOR, :DATE).
+Returns a plist of keyword-value pairs, excluding org-internal properties."
+  (let ((user-props '())
+        ;; Standard org-element properties to exclude (not user-defined)
+        (standard-props '(:standard-properties :pre-blank :raw-value :title :level
+                          :priority :tags :todo-keyword :todo-type
+                          :footnote-section-p :archivedp :commentedp
+                          :begin :end :contents-begin :contents-end :post-blank :parent
+                          :scheduled :deadline :closed))
+        ;; Org-mode internal PROPERTIES drawer entries to exclude
+        (org-internal-props '(:ID :CUSTOM_ID :CATEGORY)))
+    (when headline
+      (let ((props (nth 1 headline)))
         (while props
-          (let* ((key-str (plist-get props :key))
-                 (key (intern (concat ":" key-str)))
-                 (value (plist-get props :value)))
-            (push (cons key value) node-props))
+          (let ((key (car props))
+                (val (cadr props)))
+            ;; User properties are uppercase keywords not in standard/internal lists
+            (when (and (keywordp key)
+                       (not (memq key standard-props))
+                       (not (memq key org-internal-props))
+                       val  ; Has a value
+                       (let ((name (symbol-name key)))
+                         (and (> (length name) 1)
+                              ;; Check if the property name (after :) is all uppercase
+                              (equal (upcase (substring name 1))
+                                     (substring name 1)))))
+              (setq user-props (plist-put user-props key val))))
           (setq props (cddr props)))))
-    (nreverse node-props)))
+    user-props))
 
 (defun supertag--extract-refs (elements)
   "Extract id: links from a list of org elements."
@@ -1297,7 +1351,7 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
          (all-tags (supertag--merge-and-sanitize-tags
                    (cl-union headline-tags content-tags :test #'equal)
                      org-native-tags))
-         (properties (supertag--parse-properties (org-element-property :properties headline)))
+         (properties (supertag--parse-properties headline))
          (refs-to (supertag--extract-refs
                    (when contents-begin
                      (org-element-contents headline)))))
