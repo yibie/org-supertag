@@ -1,4 +1,47 @@
 * Changelog
+* [5.3.0] - 2025-12-14
+** Features
+*** Property to Field Migration System
+- Added comprehensive Org properties to structured fields migration system
+- Introduced `supertag-migration-add-ids-to-org-headings` command to add :ID: properties to all Org headings
+- Enhanced `supertag-convert-properties-to-field` with automatic tag insertion in Org files
+- Added `supertag-batch-convert-properties-to-fields` for batch property conversion
+- Implemented plist format compatibility for property parsing and storage
+- Added automatic tag insertion in Org headlines during property conversion
+- Improved property collection with format-agnostic parsing (alist/plist support)
+
+*** Code Cleanup and Legacy Removal
+- Removed deprecated `supertag-import-fields-from-properties` and related import functions
+- Cleaned up 300+ lines of obsolete import code from `supertag-service-org.el`
+- Streamlined codebase by removing redundant property import functionality
+
+** Improvements
+*** Enhanced Property Format Compatibility
+- Fixed plist/alist format inconsistencies in property parsing
+- Updated `supertag--parse-properties` to consistently return plist format
+- Improved `supertag-node-hash` with format-agnostic property handling
+- Enhanced automation sync with proper plist-member usage
+
+*** Migration Workflow Optimization
+- Optimized property-to-field conversion workflow for both Org-roam and non-Org-roam users
+- Added intelligent tag insertion that respects Org file structure
+- Improved error handling and user feedback during migration
+- Added comprehensive documentation for migration paths
+
+** Bug Fixes
+*** Fixed Property Conversion Issues
+- Resolved "No org properties found" error in property conversion
+- Fixed plist-member parameter order in automation sync
+- Corrected property format detection in migration functions
+- Fixed tag insertion logic to prevent duplicate tags
+
+** Documentation
+*** Added Migration Documentation
+- Comprehensive English and Chinese documentation for property-to-field migration
+- Step-by-step guides for different user scenarios (with/without Org-roam)
+- Before/after examples showing migration benefits
+- Batch conversion workflow documentation
+
 * [5.2.0] - 2025-12-01
 ** Features
 *** Global Field Model: Fields as First-Class Entities

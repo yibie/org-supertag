@@ -1,8 +1,12 @@
-# Org-SuperTag 5.0+: Pure Emacs Lisp Knowledge Management
+# Org-SuperTag 5.3+: Pure Emacs Lisp Knowledge Management
 
-> **⚠️ IMPORTANT (5.2.0 and later):**  
-> If you are upgrading from a pre‑5.2.0 version, you **must run the global field database migration** before enabling `supertag-use-global-fields`.  
+> **⚠️ IMPORTANT (5.3.0 and later):**
+> If you are upgrading from a pre‑5.2.0 version, you **must run the global field database migration** before enabling `supertag-use-global-fields`.
 > See `doc/GLOBAL-FIELD-MIGRATION-GUIDE.md` for step‑by‑step instructions.
+>
+> **🆕 NEW (5.3.0):** Property to Field Migration System
+> Convert your existing Org `:PROPERTIES:` to structured database fields for better querying and automation.
+> See the "Property to Field Migration" section below for complete instructions.
 
 [English](./README.md) | [中文](./README_CN.md)
 
@@ -118,6 +122,115 @@ Find papers you haven't read yet:
 2. `M-x load-file RET supertag-migration.el RET`
 3. `M-x supertag-migrate-database-to-new-arch RET`
 4. Restart Emacs
+
+## 🔄 Property to Field Migration
+
+**Convert Org Properties to Structured Fields**
+
+Org-SuperTag 5.3 introduces a powerful migration system to convert your existing Org `:PROPERTIES:` drawers into structured database fields. This enables better querying, automation, and data management.
+
+### Two Migration Paths
+
+#### Path 1: Already Using Org-roam (Headings have `:ID:` properties)
+
+If your Org files already have `:ID:` properties on headings:
+
+1. **Add IDs to all headings** (if missing):
+   ```elisp
+   M-x supertag-migration-add-ids-to-org-headings
+   ```
+   Select your Org directory to add `:ID:` properties to all headings.
+
+2. **Sync to database**:
+   ```elisp
+   M-x supertag-sync-full-rescan
+   ```
+   This imports all nodes with their properties into the database.
+
+3. **Convert properties to fields**:
+   ```elisp
+   M-x supertag-convert-properties-to-field
+   ```
+   Choose a property (e.g., "LOCATION"), select/create a tag, and convert.
+
+#### Path 2: Not Using Org-roam (Headings lack `:ID:` properties)
+
+If your Org files don't have `:ID:` properties:
+
+1. **Add IDs to all headings**:
+   ```elisp
+   M-x supertag-migration-add-ids-to-org-headings
+   ```
+   This adds `:ID:` properties to all headings.
+
+2. **Sync to database**:
+   ```elisp
+   M-x supertag-sync-full-rescan
+   ```
+
+3. **Convert properties to fields**:
+   ```elisp
+   M-x supertag-convert-properties-to-field
+   ```
+
+### What Happens During Conversion
+
+When you convert a property like `:LOCATION: London`:
+
+1. **Database updates**:
+   - Node gets the specified tag (e.g., `#place`)
+   - Field value is stored in database (`LOCATION = "London"`)
+
+2. **Org file updates**:
+   - Tag is inserted in headline: `* My Heading #place`
+   - Properties drawer remains unchanged for compatibility
+
+3. **Query capabilities**:
+   - Find by field: `(field "LOCATION" "London")`
+   - Find by tag: `(tag "place")`
+   - Combined queries work seamlessly
+
+### Batch Conversion
+
+Convert multiple properties at once:
+
+```elisp
+M-x supertag-batch-convert-properties-to-fields
+```
+
+This shows statistics for each property and lets you choose tags for each conversion.
+
+### Before/After Example
+
+**Before**:
+```org
+* Project Meeting
+:PROPERTIES:
+:LOCATION: Conference Room A
+:ATTENDEES: Alice, Bob, Carol
+:END:
+```
+
+**After** (in database):
+- Node has tag: `meeting`
+- Fields: `LOCATION = "Conference Room A"`, `ATTENDEES = "Alice, Bob, Carol"`
+
+**Org file**:
+```org
+* Project Meeting #meeting
+:PROPERTIES:
+:LOCATION: Conference Room A
+:ATTENDEES: Alice, Bob, Carol
+:END:
+```
+
+### Benefits
+
+- **Better queries**: Search by field values, not just text
+- **Automation**: Trigger rules based on field changes
+- **Data integrity**: Structured data with validation
+- **Views**: Table views show field columns automatically
+- **Backward compatibility**: Original properties remain intact
 
 ## ⚙️ Configuration
 

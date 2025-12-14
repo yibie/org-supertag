@@ -292,7 +292,7 @@ This is an optimized version of the original rule lookup."
                  (push key changed)))
       ;; Check for removed properties
       (cl-loop for (key value) on old-props by #'cddr do
-               (unless (plist-member key new-props)
+               (unless (plist-member new-props key)
                  (push key changed))))
     changed))
 
