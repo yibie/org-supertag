@@ -824,11 +824,14 @@ Can be used both at headings and within node content areas."
   (let* ((node-id (supertag-ui--get-containing-node-at-point))
      (tag-id (supertag-ui-select-tag-on-node node-id)))
       (when tag-id
-        ;; 1. Find and delete the relationship in the database
-        (let* ((relations (supertag-relation-find-between node-id tag-id :node-tag))
-               (relation-to-delete (car relations)))
-          (when relation-to-delete
-            (supertag-relation-delete (plist-get relation-to-delete :id))))
+        ;; 1. Clean up database state inside a single transaction
+        (supertag-with-transaction
+          ;; Remove any node-tag relations
+          (let ((relations (supertag-relation-find-between node-id tag-id :node-tag)))
+            (dolist (relation relations)
+              (supertag-relation-delete (plist-get relation :id))))
+          ;; Remove the tag from the node's :tags list (also clears field data)
+          (supertag-node-remove-tag node-id tag-id))
 
         ;; 2. Remove tag text using view-helper
         (require 'supertag-view-helper)

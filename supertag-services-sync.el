@@ -64,6 +64,11 @@ Takes precedence over `org-supertag-sync-directories`."
   :type 'string
   :group 'supertag-sync)
 
+(defcustom supertag-sync-quiet-when-idle t
+  "If non-nil, suppress routine sync summary/diagnostic messages when no changes were detected."
+  :type 'boolean
+  :group 'supertag-sync)
+
 
 (defcustom supertag-sync-hash-props
   '(:raw-value :tags :todo-type :priority)
@@ -868,25 +873,29 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (supertag-sync-validate-nodes counters)
 
       ;; Report results with enhanced diagnostics
-      (let ((refs-created (or (plist-get counters :references-created) 0))
-            (refs-deleted (or (plist-get counters :references-deleted) 0))
-            (total-changes (+ (plist-get counters :nodes-created)
-                             (plist-get counters :nodes-updated)
-                             (plist-get counters :nodes-deleted))))
-        (message "File Sync Completed: %d nodes created, %d updated, %d deleted, %d refs created, %d refs deleted."
-                 (plist-get counters :nodes-created)
-                 (plist-get counters :nodes-updated)
-                 (plist-get counters :nodes-deleted)
-                 refs-created
-                 refs-deleted)
+      (let* ((refs-created (or (plist-get counters :references-created) 0))
+             (refs-deleted (or (plist-get counters :references-deleted) 0))
+             (total-changes (+ (plist-get counters :nodes-created)
+                               (plist-get counters :nodes-updated)
+                               (plist-get counters :nodes-deleted)))
+             (idle-run (and (= total-changes 0)
+                            (= refs-created 0)
+                            (= refs-deleted 0)
+                            (not modified-files))))
+        (unless (and idle-run supertag-sync-quiet-when-idle)
+          (message "File Sync Completed: %d nodes created, %d updated, %d deleted, %d refs created, %d refs deleted."
+                   (plist-get counters :nodes-created)
+                   (plist-get counters :nodes-updated)
+                   (plist-get counters :nodes-deleted)
+                   refs-created
+                   refs-deleted))
         
         ;; Provide diagnostic hints if no changes were detected
-        (when (and (= total-changes 0)
-                   (not modified-files))
-          (supertag--diagnose-empty-sync))))
+        (when idle-run
+          (supertag--diagnose-empty-sync supertag-sync-quiet-when-idle)))))
 
     ;; Run garbage collection outside of transaction to ensure immediate persistence
-    (supertag-sync-garbage-collect-orphaned-nodes)))
+    (supertag-sync-garbage-collect-orphaned-nodes))
 
 ;;; --- Enhanced Hash Table Traversal Utilities ---
 
@@ -1736,8 +1745,9 @@ Returns a list of .org file paths."
         (push file org-files)))
     (nreverse org-files)))
     
-(defun supertag--diagnose-empty-sync ()
+(defun supertag--diagnose-empty-sync (&optional quiet)
   "Diagnose why sync found no files to process.
+QUIET suppresses benign \"all clear\" diagnostics.
 Provides helpful hints to the user about configuration issues."
   (let ((sync-dirs org-supertag-sync-directories)
         (state-table (supertag-sync--get-state-table))
@@ -1765,9 +1775,8 @@ Provides helpful hints to the user about configuration issues."
             (message "  - %s: %d .org files found" dir (length org-files))
             (when (= (length org-files) 0)
               (message "    Hint: Check if directory contains .org files"))))))
-     
      ;; Case 4: Files tracked but all up-to-date
-     (t
+     ((not quiet)
       (message "DIAGNOSTIC: %d files tracked." state-count)))))
 
 (provide 'supertag-services-sync)

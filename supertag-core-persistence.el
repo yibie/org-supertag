@@ -215,22 +215,21 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
              (existing-size (when existing-file-p (file-attribute-size (file-attributes file-to-save))))
              ;; Treat DB file larger than 1KB as "non-trivial" by default
              (non-trivial-file (and existing-size (> existing-size 1024))))
-        (when (and non-trivial-file
-                   (numberp live-node-count)
-                   (= live-node-count 0))
-          (message "Protective skip: Live DB has 0 nodes while on-disk DB looks non-trivial (%s bytes). Skipping save to avoid data loss."
-                   existing-size)
-          (cl-return-from supertag-save-store nil)))
-      (with-temp-file file-to-save
-        (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
-        (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
-              (print-length nil)         ; Unlimited print length 
-              (print-level nil)          ; No limit print level
-              (print-circle t))          ; Handle circular structures
-          (prin1 supertag--store (current-buffer)))))
-      (supertag-clear-dirty)
-      ;; Check if daily backup is needed after successful save
-      (supertag-check-daily-backup)))
+        (if (and non-trivial-file
+                 (numberp live-node-count)
+                 (= live-node-count 0))
+            (message "Protective skip: Live DB has 0 nodes while on-disk DB looks non-trivial (%s bytes). Skipping save to avoid data loss."
+                     existing-size)
+          (with-temp-file file-to-save
+            (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
+            (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
+                  (print-length nil)         ; Unlimited print length 
+                  (print-level nil)          ; No limit print level
+                  (print-circle t))          ; Handle circular structures
+              (prin1 supertag--store (current-buffer))))
+          (supertag-clear-dirty)
+          ;; Check if daily backup is needed after successful save
+          (supertag-check-daily-backup))))))
 
 (defun supertag-db-migrate-and-normalize ()
   "Run all data migrations and normalizations on the loaded store.
@@ -239,17 +238,16 @@ and legacy field name migrations. This function should be called
 manually after loading a database from an older version or when
 data corruption is suspected."
   (interactive)
-  (unless (hash-table-p supertag--store)
-    (message "Database not loaded. Please load the database first.")
-    (cl-return-from supertag-db-migrate-and-normalize))
+  (if (hash-table-p supertag--store)
+      (progn
+        (message "Starting database migration and normalization...")
 
-  (message "Starting database migration and normalization...")
+        ;; --- Data version check and automatic migration ---
+        (supertag--run-migrations supertag--store)
 
-  ;; --- Data version check and automatic migration ---
-  (supertag--run-migrations supertag--store)
-
-  ;; --- Normalize :fields collection structure ---
-  (supertag--normalize-fields-collection)
+        ;; --- Normalize :fields collection structure ---
+        (supertag--normalize-fields-collection))
+    (message "Database not loaded. Please load the database first.")))
 
   ;; --- Automatic Purge of Invalid Nodes (example, kept commented) ---
   ;; (let* ((nodes-table (supertag-store-get-collection :nodes))
@@ -299,7 +297,7 @@ data corruption is suspected."
   (message "Database migration and normalization complete.")
   (when (supertag-dirty-p)
     (message "Changes were made. Saving database...")
-    (supertag-save-store)))
+    (supertag-save-store))
 
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
