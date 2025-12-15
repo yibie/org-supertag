@@ -1363,7 +1363,9 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
          (properties (supertag--parse-properties headline))
          (refs-to (supertag--extract-refs
                    (when contents-begin
-                     (org-element-contents headline)))))
+                     ;; Filter out child headlines to only extract links from the node's direct content.
+                     (cl-remove-if (lambda (el) (eq (org-element-type el) 'headline))
+                                   (org-element-contents headline))))))
     ;; Handle ID generation based on mode
     (let ((final-id (if migration-mode
                         ;; Migration mode: only use existing IDs
