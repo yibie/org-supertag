@@ -18,15 +18,18 @@
 ;;; Constants and Configuration
 ;;;----------------------------------------------------------------------
 
-(defconst supertag-view-helper--valid-tag-chars "^[:space:]#"
+(defvar supertag-view-helper--valid-tag-chars nil
   "Character class used to detect inline tags.
 This string is spliced directly into [] expressions, so \"^\" negates the set.
 Anything except whitespace-like characters and another # counts as part of the tag,
 allowing hierarchies (/) and arbitrary unicode/emoji symbols.")
 
+;; Always refresh the value so reloading this file picks up updates.
+(setq supertag-view-helper--valid-tag-chars "^[:space:]#")
+
 ;; Legacy alias for backward compatibility
-(defconst supertag-view-style--valid-tag-chars supertag-view-helper--valid-tag-chars
-  "Legacy alias for valid tag characters.")
+(defvaralias 'supertag-view-style--valid-tag-chars
+  'supertag-view-helper--valid-tag-chars)
 
 (defgroup supertag-view-style nil
   "Customization options for supertag inline tag styling."
