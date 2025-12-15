@@ -71,6 +71,13 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
   (when-let ((node-data (supertag-node-get node-id)))
     (plist-get node-data :tags)))
 
+(defun supertag-completion--valid-tag-char-p (char)
+  "Return non-nil if CHAR should be considered part of a tag name.
+Anything except whitespace/control characters and # counts as valid.
+This keeps completion flexible enough for emoji and other symbols."
+  (and char
+       (not (memq char '(?\s ?\t ?\n ?\r ?#)))))
+
 (defun supertag-completion--get-prefix-bounds ()
   "Find the bounds of a tag prefix at point, if any.
 Returns (START . END) where START is right after the # character."
@@ -78,12 +85,15 @@ Returns (START . END) where START is right after the # character."
     (let* ((end (point))
            (start nil)
            (result nil))
-      
-      ;; Skip back over valid tag characters (NOT including #, which is the trigger)
-      ;; Support Org-mode tag character set: alphanumeric, underscore, hyphen, @, %
-      ;; Note: # is the TRIGGER character, not part of the tag name itself
-      (skip-chars-backward "a-zA-Z0-9_-@%")
-      
+
+      ;; Walk backwards over everything that counts as part of the tag.
+      ;; We explicitly allow emoji/unicode, hyphen, slash, etc. Anything
+      ;; except whitespace/control characters and another # triggers stop.
+      (while (and (> (point) (point-min))
+                  (supertag-completion--valid-tag-char-p
+                   (char-before (point))))
+        (backward-char))
+
       ;; Check if we're right after a # character
       ;; Note: after skip-chars-backward, point is at the start of the tag prefix
       (when (and (> (point) (point-min))
