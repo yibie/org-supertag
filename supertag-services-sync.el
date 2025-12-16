@@ -23,6 +23,7 @@
 (require 'supertag-core-persistence) ; For supertag-data-directory
 (require 'supertag-ops-tag) ; For supertag-tag-create
 (require 'supertag-ops-relation) ; For supertag-relation-create, supertag-relation-find-between
+(require 'supertag-core-async) ; For async job queue
 
 ;;; Customization (from org-supertag-old/org-supertag-sync.el)
 
@@ -778,7 +779,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
 
 (defun supertag-sync--check-and-sync ()
   "Check and synchronize modified files.
-  This is the main sync function called periodically."
+  This is the main sync function called periodically.
+  It enqueues modified files for asynchronous processing."
   ;;(message "DEBUG: supertag-sync--check-and-sync function called at %s" (current-time))
   
   ;; Pre-check: Warn if sync directories are not configured
@@ -786,116 +788,65 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
     (cl-return-from supertag-sync--check-and-sync nil))
   
-  ;; CRITICAL FIX: Check if database is empty but sync-state has files
-  ;; This indicates data loss - warn user and suggest recovery
-  (let* ((nodes-table (supertag-store-get-collection :nodes))
-         (db-empty (= (hash-table-count nodes-table) 0))
-         (state-table (supertag-sync--get-state-table))
-         (state-count (hash-table-count state-table)))
-    (when (and db-empty (> state-count 0))
-      (message "WARNING: Database is empty but %d files are tracked in sync-state." state-count)
-      (message "This suggests data was lost. Please run: M-x supertag-sync-full-rescan")))
-  
-  (supertag-with-transaction
-    (let ((files-to-remove nil)
-          (state-changed nil)
-          (modified-files (supertag-get-modified-files))
-          ;; Use a plist to hold counters, making it easy to pass around.
-          (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0))
-          ;; Track all files that have been processed to identify orphaned files
-          (processed-files (make-hash-table :test 'equal)))
+  (let ((files-to-remove nil)
+        (modified-files (supertag-get-modified-files))
+        (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
 
-      ;; (message "DEBUG: Modified files found: %S" modified-files)
-      ;; (message "DEBUG: Sync state hash table size: %d" (hash-table-count supertag-sync--state))
-      ;; 1. Cleanup Sync State - Remove files that are no longer in scope
-      ;; CRITICAL FIX: Only clean up files if sync directories are configured
-      ;; If not configured, skip cleanup to prevent accidental data loss
-      (when org-supertag-sync-directories
-        (let ((state-table (supertag-sync--get-state-table)))
-          (maphash (lambda (file _state)
-                     (let ((file-exists (file-exists-p file))
-                           (in-scope (supertag-sync--in-sync-scope-p file)))
-                       (when (or (not file-exists)
-                                 (not in-scope))
-                         (push file files-to-remove))))
-                   state-table)))
+    ;; 1. Cleanup Sync State - Remove files that are no longer in scope
+    (when org-supertag-sync-directories
+      (let ((state-table (supertag-sync--get-state-table)))
+        (maphash (lambda (file _state)
+                   (let ((file-exists (file-exists-p file))
+                         (in-scope (supertag-sync--in-sync-scope-p file)))
+                     (when (or (not file-exists)
+                               (not in-scope))
+                       (push file files-to-remove))))
+                 state-table)))
 
-      (when files-to-remove
-        (setq state-changed t)
-        (let ((state-table (supertag-sync--get-state-table)))
-          (dolist (file files-to-remove)
-            (let ((file-exists-before (file-exists-p file)))
-              (remhash file state-table)
-              ;; If file is out of scope but still exists, we just untrack it.
-              ;; We DO NOT delete its nodes. They become "unmanaged".
-              ;; If the file truly doesn't exist, then we can clean up its nodes.
-              (unless (file-exists-p file)
-                (supertag-sync--verify-file-nodes file counters))))))
+    (when files-to-remove
+      (let ((state-table (supertag-sync--get-state-table)))
+        (dolist (file files-to-remove)
+          (remhash file state-table)
+          ;; If file doesn't exist, we can clean up its nodes synchronously (usually fast)
+          ;; or we could enqueue a "deletion job" if we had one.
+          ;; For now, keep deletion synchronous to ensure consistency quickly.
+          (unless (file-exists-p file)
+            (supertag-with-transaction
+              (supertag-sync--verify-file-nodes file counters))))
+        (supertag-sync-save-state)))
 
-      ;; 2. Scan for New Files
-      (let ((new-files (supertag-scan-sync-directories)))
-        (when new-files
-          (setq modified-files
-                (cl-union modified-files new-files :test #'string=))))
+    ;; 2. Scan for New Files
+    (let ((new-files (supertag-scan-sync-directories)))
+      (when new-files
+        (setq modified-files
+              (cl-union modified-files new-files :test #'string=))))
 
-      ;; 3. Process Modified Files
-      (when modified-files
-        (let ((sorted-files (sort modified-files ; Remove debug message
-                                  (lambda (a b)
-                                    (time-less-p
-                                     (file-attribute-modification-time (file-attributes a))
-                                     (file-attribute-modification-time (file-attributes b)))))))
-          (dolist (file sorted-files)
-            (supertag-sync--process-single-file file counters)
-            (setq state-changed t)
-            ;; Mark this file as processed
-            (puthash file t processed-files))))
+    ;; 3. Enqueue Modified Files for Async Processing
+    (when modified-files
+      (let ((queued-count 0))
+        (dolist (file modified-files)
+          ;; Add to async queue
+          (supertag-async-enqueue file)
+          (cl-incf queued-count))
+        (unless supertag-sync-quiet-when-idle
+          (message "Queued %d files for async sync." queued-count))))
 
-      ;; 4. Process All Files in Sync Scope to Identify Orphaned Files
-      ;; FIX: Get ALL files from directories, not just from sync state
-      (let ((all-files-in-scope (supertag-scan-sync-directories t)))
-        ;; Process files that haven't been processed yet (i.e., not modified)
-        (dolist (file all-files-in-scope)
-          (unless (gethash file processed-files)
-            ;;(message "DEBUG: Processing unmodified file for orphan check: %s" file)
-            (supertag-sync--verify-file-nodes file counters)
-            ;; Also ensure the file is in sync state
-            (let ((state-table (supertag-sync--get-state-table)))
-              (unless (gethash file state-table)
-                (supertag-sync-update-state file)
-                (setq state-changed t))))))
+    ;; 4. Check for Orphans (Files in directory but not in state)
+    ;; This is less urgent, can be done periodically or also queued.
+    ;; For now, let's queue them if found.
+    (let ((all-files-in-scope (supertag-scan-sync-directories t))
+          (state-table (supertag-sync--get-state-table)))
+      (dolist (file all-files-in-scope)
+        (unless (gethash file state-table)
+          (supertag-async-enqueue file))))
+      
+    ;; 5. Report if needed (mostly handled by async worker now)
+    (let ((idle-run (and (null modified-files) (null files-to-remove))))
+      (when idle-run
+        (supertag--diagnose-empty-sync supertag-sync-quiet-when-idle)))
 
-      (when state-changed
-        (supertag-sync-save-state))
-
-      ;; 5. Perform deep validation to catch any remaining zombie nodes
-      ;; This is the robust check inspired by the old system.
-      (supertag-sync-validate-nodes counters)
-
-      ;; Report results with enhanced diagnostics
-      (let* ((refs-created (or (plist-get counters :references-created) 0))
-             (refs-deleted (or (plist-get counters :references-deleted) 0))
-             (total-changes (+ (plist-get counters :nodes-created)
-                               (plist-get counters :nodes-updated)
-                               (plist-get counters :nodes-deleted)))
-             (idle-run (and (= total-changes 0)
-                            (= refs-created 0)
-                            (= refs-deleted 0)
-                            (not modified-files))))
-        (unless (and idle-run supertag-sync-quiet-when-idle)
-          (message "File Sync Completed: %d nodes created, %d updated, %d deleted, %d refs created, %d refs deleted."
-                   (plist-get counters :nodes-created)
-                   (plist-get counters :nodes-updated)
-                   (plist-get counters :nodes-deleted)
-                   refs-created
-                   refs-deleted))
-        
-        ;; Provide diagnostic hints if no changes were detected
-        (when idle-run
-          (supertag--diagnose-empty-sync supertag-sync-quiet-when-idle)))))
-
-    ;; Run garbage collection outside of transaction to ensure immediate persistence
-    (supertag-sync-garbage-collect-orphaned-nodes))
+    ;; Run garbage collection (can be done periodically)
+    (supertag-sync-garbage-collect-orphaned-nodes)))
 
 ;;; --- Enhanced Hash Table Traversal Utilities ---
 
@@ -1445,6 +1396,30 @@ MIGRATION-MODE when t, only processes nodes with existing IDs."
 ;;;------------------------------------------------------------------
 ;;; Supertag Sync Auto Star or Stop
 ;;;------------------------------------------------------------------
+
+(defun supertag-sync--async-processor (file)
+  "Worker function for the async queue.
+Processes FILE for synchronization."
+  (when (file-exists-p file)
+    (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
+      (supertag-with-transaction
+        (supertag-sync--process-single-file file counters)
+        ;; Also run orphan cleanup on the file's nodes if necessary
+        (supertag-sync--verify-file-nodes file counters))
+      
+      ;; If changes happened, save state
+      (when (> (+ (plist-get counters :nodes-created)
+                  (plist-get counters :nodes-updated)
+                  (plist-get counters :nodes-deleted))
+               0)
+        ;; (message "Async processed %s: +%d ~%d -%d" 
+        ;;          (file-name-nondirectory file)
+        ;;          (plist-get counters :nodes-created)
+        ;;          (plist-get counters :nodes-updated)
+        ;;          (plist-get counters :nodes-deleted))
+        (supertag-sync-update-state file)
+        (supertag-sync-save-state)))))
+
 ;;;###autoload
 (defun supertag-sync-start-auto-sync (&optional interval)
   "Start automatic synchronization with INTERVAL seconds.
@@ -1461,8 +1436,8 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
     (cancel-timer supertag-sync--timer)
     (setq supertag-sync--timer nil))
 
-  ;; Clear pending idle work to avoid duplicates
-  (supertag-sync--cancel-idle-dispatch)
+  ;; Initialize the async queue with our processor
+  (supertag-async-init #'supertag-sync--async-processor)
 
   ;; Ensure store is initialized before starting auto-sync
   (unless (hash-table-p supertag--store)
@@ -1474,7 +1449,7 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
          (or interval supertag-sync-auto-interval) ; Then, repeat at the configured interval
          (lambda ()
            "Safe wrapper for scheduling sync during idle periods."
-           (supertag-sync--queue-idle-dispatch)))))
+           (supertag-sync--check-and-sync)))))
 
 (defun supertag-sync-stop-auto-sync ()
   "Stop automatic synchronization."
@@ -1483,7 +1458,8 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
     (cancel-timer supertag-sync--timer)
     (setq supertag-sync--timer nil)
     (message "Auto-sync stopped"))
-  (supertag-sync--cancel-idle-dispatch))
+  ;; Stop the async worker
+  (supertag-async-clear))
 
 ;;;###autoload
 (defun supertag-sync-full-rescan ()
@@ -1589,15 +1565,9 @@ external modifications (by user/other tools) to avoid unnecessary re-parsing."
             (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file))
             ;; Update sync state to prevent periodic sync from re-syncing
             (supertag-sync-update-state file))
-        ;; External modification: sync from file to memory
-        (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0))
-              (inhibit-modification-hooks t))
-          (message "Supertag: Sync external modification: %s" (file-name-nondirectory file))
-          ;; Process the file within a transaction for atomicity
-          (supertag-with-transaction
-            (supertag-sync--process-single-file file counters))
-          ;; Immediately run garbage collection after processing
-          (supertag-sync-garbage-collect-orphaned-nodes))))))
+        ;; External modification: enqueue for async sync
+        (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file))
+        (supertag-async-enqueue file)))))
         
 
 (defun supertag-sync-setup-realtime-hooks ()
