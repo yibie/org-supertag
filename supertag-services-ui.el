@@ -11,6 +11,7 @@
 (require 'supertag-ops-tag)
 (require 'supertag-ops-relation)
 (require 'supertag-services-sync) ; For supertag-node-sync-at-point
+(require 'supertag-view-api)
 
 
 (defun supertag-ui--adjust-content-level (content from-level to-level)
@@ -78,7 +79,7 @@ all subheadings proportionally."
 (defun supertag-goto-node (node-id &optional other-window)
   "Navigate to the location of NODE-ID based on data in the supertag store.
 If OTHER-WINDOW is non-nil, open in another window."
-  (when-let* ((node (supertag-node-get node-id))
+  (when-let* ((node (supertag-view-api-get-entity :nodes node-id))
               (file (plist-get node :file)))
     (if (not (and file (file-exists-p file)))
         (message "Error: File for node %s does not exist or is not set." node-id)
@@ -115,7 +116,7 @@ Returned keys (current contract):
 - :field-count  — Total number of fields across all tags
 - :ref-count    — Total number of references (:refs-to + :refs-from)"
   (when (and node-id (stringp node-id))
-    (let* ((node (supertag-node-get node-id)))
+    (let* ((node (supertag-view-api-get-entity :nodes node-id)))
       (when node
         (let* (;; Tags via relations ensure we respect the store as source of truth.
                (tag-relations (supertag-relation-find-by-from node-id :node-tag))
@@ -127,7 +128,7 @@ Returned keys (current contract):
               (dolist (field-def tag-fields)
                 (let* ((fname (plist-get field-def :name))
                        (value (and fname
-                                   (supertag-field-get-with-default node-id tag-id fname))))
+                                   (supertag-view-api-node-field-in-tag node-id tag-id fname))))
                   (push (list :tag-id tag-id
                               :field-def field-def
                               :value value)
@@ -136,7 +137,7 @@ Returned keys (current contract):
           ;; Compute reference info from :reference relations.
           (let* ((refs-to-rels   (supertag-relation-find-by-from node-id :reference))
                  (refs-to        (mapcar (lambda (rel) (plist-get rel :to)) refs-to-rels))
-                 (all-relations  (supertag-store-get-collection :relations))
+                 (all-relations  (supertag-view-api-get-collection :relations))
                  (refs-from '()))
             (when (hash-table-p all-relations)
               (maphash

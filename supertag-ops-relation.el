@@ -221,6 +221,10 @@ Returns t on success, nil on failure."
                             (goto-char content-end)
                             (unless (bolp) (insert "\n"))
                             (insert (format "[[id:%s][%s]]\n" from-id from-title)))))
+                      
+                      ;; Mark as internal modification to prevent sync loop
+                      (when (fboundp 'supertag--mark-internal-modification)
+                        (supertag--mark-internal-modification (buffer-file-name)))
                       (save-buffer))
                   (error
                    (message "[org-supertag] Failed to insert backlink for reference %s -> %s: %s"

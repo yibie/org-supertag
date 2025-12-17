@@ -16,6 +16,7 @@
 (require 'supertag-ops-tag)
 (require 'supertag-view-helper)
 (require 'supertag-core-notify)
+(require 'supertag-view-api)
 
 ;;; --- State Management ---
 
@@ -45,13 +46,7 @@ COLUMN-ORDER is an optional list of column values in specific order."
 
 (defun supertag-view-kanban--get-all-tags ()
   "Get list of all tag names."
-  (let ((tags (supertag-store-get-collection :tags))
-        (tag-names '()))
-    (maphash (lambda (_id tag-data)
-               (when (plist-get tag-data :name)
-                 (push (plist-get tag-data :name) tag-names)))
-             tags)
-    (sort tag-names #'string<)))
+  (supertag-view-api-list-tags))
 
 ;;; --- Data Querying ---
 
@@ -303,9 +298,11 @@ Returns plist with :node-id, :current-value, and other card info."
 (defun supertag-view-kanban--subscribe-updates ()
   "Subscribe to node update events for reactive Kanban updates."
   (setq-local supertag-view-kanban--unsubscribe-fn
-              (supertag-subscribe :node-updated (lambda (path _old-value _new-value)
-                                                  (when (and (listp path) (eq (car path) :nodes))
-                                                    (supertag-view-kanban-refresh))))))
+              (supertag-view-api-subscribe
+               :node-updated
+               (lambda (path _old-value _new-value)
+                 (when (and (listp path) (eq (car path) :nodes))
+                   (supertag-view-kanban-refresh))))))
 
 (defun supertag-view-kanban--unsubscribe-updates ()
   "Unsubscribe from update events."
