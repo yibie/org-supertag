@@ -1,4 +1,50 @@
 * Changelog
+* [5.6.0] - 2025-12-17
+** Features
+*** View Data API and Plugin System
+- Introduced `supertag-view-api.el` as a unified, UI-agnostic data access layer for all views.
+- Established a formal View Plugin system with comprehensive documentation (`ORG-SUPERTAG-PLUGIN-GUIDE.md`).
+- Added a complete View Plugin demo: `supertag-view-demo-dashboard.el` (Dashboard UI).
+- Added Schema Registry to support custom entity type registration at startup.
+
+** Improvements
+*** Architecture
+- Decoupled `supertag-services-ui.el` and all view modules (`view-table`, `view-node`, `view-kanban`, `view-schema`) to use the new stable Data API.
+- Clarified plugin architecture: View Plugins are now the primary extension point.
+
+* [5.5.0] - 2025-12-17
+** Features
+*** Smart Sync Detection
+- Implemented content-hash based change detection to reduce unnecessary parsing.
+- Sync now only parses files if `mtime` changes AND content hash differs.
+- Added automatic sync state reconciliation when `org-supertag-sync-directories` changes.
+
+** Improvements
+*** Performance & Observability
+- Optimized buffer usage in sync to avoid double-reading files.
+- Added verbose logging (`supertag-sync-smart-detection-verbose`) and decision debugging.
+
+* [5.4.0] - 2025-12-16
+** Features
+*** Queue-Based Sync & Auto-Maintenance
+- Introduced file-level queue system for sync operations (default for full rescan).
+- Implemented configurable automatic database maintenance (validation + GC) triggered by sync ticks.
+
+** Improvements
+*** Safety & Reliability
+- Enabled "Safe Auto Mode" by default for sync.
+- Fixed `supertag-sync-check-state` compatibility with plist-style state entries.
+
+* [5.3.1] - 2025-12-16
+** Features
+*** Extractor Plugin Pipeline
+- Refactored node parsing to use an extensible Extractor Plugin system.
+- Built-in extractors now handle tags, properties, content, and OLP parsing.
+
+** Improvements
+*** Architecture
+- Moved parsing logic into registered extractors to allow future extensibility.
+
 * [5.3.0] - 2025-12-14
 ** Features
 *** Property to Field Migration System
