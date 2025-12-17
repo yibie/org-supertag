@@ -8,11 +8,11 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'supertag-view-api)
 
 ;; Forward declare functions to avoid circular dependencies
 (declare-function supertag-field-get-with-default "supertag-ops-field")
 (declare-function supertag-field-normalize-node-reference-list "supertag-ops-field")
-(declare-function supertag-node-get "supertag-ops-node")
 
 ;;;----------------------------------------------------------------------
 ;;; Constants and Configuration
@@ -337,7 +337,7 @@ TEXT can be any value convertible to string."
              ;; Reuse generic empty formatting to show [Empty].
              (supertag-view-helper-format-value nil)
            (let* ((titles (mapcar (lambda (id)
-                                    (let* ((node (and (stringp id) (supertag-node-get id)))
+                                    (let* ((node (and (stringp id) (supertag-view-api-get-entity :nodes id)))
                                            (title (and node (or (plist-get node :title) id))))
                                       (or title id)))
                                   ids))
@@ -618,9 +618,7 @@ TEXT can be any value convertible to string."
   "Find the location of a node by its ID.
 Returns a cons (POSITION . FILE-PATH) if found, nil otherwise."
   (when node-id
-    ;; First try to get the node data from store
-    (require 'supertag-ops-node)
-    (when-let* ((node (supertag-node-get node-id)))
+    (when-let* ((node (supertag-view-api-get-entity :nodes node-id)))
       (let ((file-path (plist-get node :file))
             (position (plist-get node :position)))
         (when (and file-path (file-exists-p file-path))

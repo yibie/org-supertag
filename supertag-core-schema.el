@@ -28,6 +28,22 @@
 (defvar supertag--schema-cache (make-hash-table :test 'eq)
   "Cache for compiled schema definitions to improve performance.")
 
+(defvar supertag-schema--registry (make-hash-table :test 'eq)
+  "User-registered schema overrides keyed by TYPE keyword.")
+
+(defvar supertag--registered-entity-types nil
+  "Extra entity types registered at runtime.
+This is used by validation helpers (e.g. `supertag--valid-entity-type-p`).")
+
+(defcustom supertag-schema-registration-functions nil
+  "Functions called to register custom schemas and entity types.
+
+Each function is called with no arguments during `supertag-init`.
+Use `supertag-schema-register' and/or `supertag-register-entity-type' inside
+these functions."
+  :type '(repeat function)
+  :group 'org-supertag)
+
 (defvar supertag--global-field-cache (make-hash-table :test 'equal)
   "Cache of global field definitions keyed by field-id (slug).")
 
@@ -230,9 +246,10 @@ Lowercase, trim whitespace, convert internal whitespace to underscores."
 ;; Used for field value conversion in hybrid architecture
 
 (defun supertag--get-schema (type)
-  "Get the schema for the specified TYPE, prioritizing from cache."
+  "Get the schema for TYPE, including user-registered overrides."
   (or (gethash type supertag--schema-cache)
-      (let ((schema (pcase type
+      (let ((schema (or (gethash type supertag-schema--registry)
+                        (pcase type
                       (:node '(:id (:type :string :required t :validator supertag--valid-id-p)
                                :title (:type :string :required t :default "")
                                :tags (:type :list :default nil)
@@ -326,9 +343,9 @@ Lowercase, trim whitespace, convert internal whitespace to underscores."
                                 :modified (:type :timestamp :default (lambda () (current-time)))
                                 :sync-status (:type :keyword :default :synced) ; :synced, :dirty, :conflict
                                 :user-data (:type :any :default nil)))
-                        (_ (error "Unknown schema type: %s" type))))
+                        (_ (error "Unknown schema type: %s" type))))))
         (puthash type schema supertag--schema-cache)
-        schema))))
+        schema)))
  
 
 (defun supertag--convert-type (value type)
@@ -432,13 +449,76 @@ Supports user-friendly input formats like:
 
 ;;; --- 3.3 Validation Helper Functions ---
 
+(defun supertag-schema--merge-plists (base overlay)
+  "Merge OVERLAY plist into BASE plist and return a new plist.
+
+Keys in OVERLAY override keys in BASE."
+  (let ((result (copy-sequence base)))
+    (while overlay
+      (setq result (plist-put result (pop overlay) (pop overlay))))
+    result))
+
+(defun supertag-schema-register (type schema &optional replace)
+  "Register SCHEMA for TYPE.
+
+TYPE is a keyword identifying the schema.
+SCHEMA is a plist describing fields and their specs.
+
+When REPLACE is non-nil, replace existing registered schema for TYPE.
+Otherwise, merge SCHEMA onto the existing registered schema (or the built-in
+schema when no registered one exists)."
+  (unless (keywordp type)
+    (error "TYPE must be a keyword, got: %S" type))
+  (unless (listp schema)
+    (error "SCHEMA must be a plist, got: %S" schema))
+  (let* ((existing (gethash type supertag-schema--registry))
+         (base (cond
+                (existing existing)
+                (replace nil)
+                (t (supertag--get-schema type))))
+         (merged (if replace
+                     schema
+                   (supertag-schema--merge-plists base schema))))
+    (puthash type merged supertag-schema--registry)
+    (remhash type supertag--schema-cache)
+    merged))
+
+(defun supertag-schema-unregister (type)
+  "Unregister any user schema override for TYPE."
+  (unless (keywordp type)
+    (error "TYPE must be a keyword, got: %S" type))
+  (remhash type supertag-schema--registry)
+  (remhash type supertag--schema-cache))
+
+(defun supertag-register-entity-type (type schema)
+  "Register a new entity TYPE and its SCHEMA.
+
+TYPE is a keyword (e.g. :my-entity). SCHEMA is a plist.
+This makes TYPE valid for `supertag--valid-entity-type-p' and installs a
+schema retrievable by `supertag--get-schema'."
+  (unless (keywordp type)
+    (error "TYPE must be a keyword, got: %S" type))
+  (unless (listp schema)
+    (error "SCHEMA must be a plist, got: %S" schema))
+  (add-to-list 'supertag--registered-entity-types type)
+  (supertag-schema-register type schema t))
+
+(defun supertag-schema-apply-registrations ()
+  "Apply user schema registrations from `supertag-schema-registration-functions'."
+  (interactive)
+  (dolist (fn supertag-schema-registration-functions)
+    (when (functionp fn)
+      (funcall fn))))
+
 (defun supertag--valid-id-p (id)
   "Validate if ID is a valid string ID."
   (and (stringp id) (not (string-empty-p id))))
 
 (defun supertag--valid-entity-type-p (type)
   "Validate if TYPE is a valid entity type."
-  (memq type supertag-entity-types))
+  (or (memq type supertag-entity-types)
+      (memq type supertag--registered-entity-types)
+      (gethash type supertag-schema--registry)))
 
 (defun supertag--valid-field-type-p (type)
   "Validate if field TYPE is supported."

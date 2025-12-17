@@ -14,6 +14,7 @@
 (require 'supertag-ops-tag)
 (require 'supertag-ops-schema)
 (require 'supertag-ops-global-field)
+(require 'supertag-view-api)
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -183,9 +184,9 @@ Returns a list containing two items: the children-by-id map and the list of root
 This function handles both legacy and global field modes."
   (if supertag-use-global-fields
       ;; Global field mode: get fields from tag-field-associations
-      (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
+      (let* ((assoc-table (supertag-view-api-get-collection :tag-field-associations))
              (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
-             (defs (supertag-store-get-collection :field-definitions))
+             (defs (supertag-view-api-get-collection :field-definitions))
              (result '()))
         (when (and entries (hash-table-p defs))
           (dolist (entry entries)
@@ -431,7 +432,7 @@ This function handles both legacy and global field modes."
   (let ((context (supertag-schema--get-context-at-point)))
     (if (and context (eq (plist-get context :type) :tag))
         (let* ((tag-id (plist-get context :tag-id))
-               (defs (supertag-store-get-collection :field-definitions))
+               (defs (supertag-view-api-get-collection :field-definitions))
                (current (mapcar (lambda (f)
                                   (supertag-sanitize-field-id
                                    (or (plist-get f :id) (plist-get f :name))))
@@ -691,7 +692,7 @@ a parent tag and a child tag."
   (let* ((tag-data (supertag-tag-get tag-id))
          (plist-data (and tag-data (supertag-schema--ensure-plist tag-data)))
          (own-fields-legacy (plist-get plist-data :fields))
-         (assoc-table (supertag-store-get-collection :tag-field-associations))
+         (assoc-table (supertag-view-api-get-collection :tag-field-associations))
          (own-fields-global (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
          (resolved (ignore-errors (supertag-ops-schema-get-resolved-tag tag-id))))
     (with-current-buffer (get-buffer-create "*Supertag Debug*")

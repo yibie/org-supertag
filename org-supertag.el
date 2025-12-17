@@ -128,6 +128,10 @@ This function loads all necessary components and sets up the environment."
     ;; Step 5: Validate loaded data and sync directories
     (supertag--validate-initialization)
     
+    ;; Step 5.5: Apply user schema registrations (optional)
+    (when (fboundp 'supertag-schema-apply-registrations)
+      (supertag-schema-apply-registrations))
+
     ;; Step 6: Materialize tag schema cache after loading data
     (supertag-ops-schema-rebuild-cache)
     

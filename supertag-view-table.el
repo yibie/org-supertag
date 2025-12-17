@@ -24,6 +24,7 @@
 (require 'supertag-services-formula)
 (require 'supertag-services-ui)
 (require 'supertag-view-helper)
+(require 'supertag-view-api)
 (require 'org)
 
 ;;; Faces
@@ -437,15 +438,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
 
 (defun supertag-view-table--get-entities (query-obj)
   "Get entity IDs based on QUERY-OBJ configuration."
-  (pcase (plist-get query-obj :type)
-    (:tag
-     (supertag-index-get-nodes-by-tag (plist-get query-obj :value)))
-    (:behavior
-     (mapcar (lambda (b) (plist-get b :id)) (supertag-database-list-behaviors)))
-    (:automation
-     (mapcar (lambda (a) (plist-get a :id)) (supertag-database-list-automations)))
-    (_
-     (error "Unknown query type: %s" (plist-get query-obj :type)))))
+  (supertag-view-api-list-entity-ids query-obj))
 
 (defun supertag-view-table--get-columns (query-obj)
   "Get column configuration based on QUERY-OBJ."
@@ -476,25 +469,11 @@ Prompts user to select a tag from available tags."
 
 (defun supertag-view-table--get-available-tags ()
   "Return list of available tag names."
-  (let ((tags (supertag-store-get-collection :tags))
-        (tag-names '()))
-    (when (hash-table-p tags)
-      (maphash (lambda (id tag-data)
-                 (when (plist-get tag-data :name)
-                   (push (plist-get tag-data :name) tag-names)))
-               tags))
-    (sort tag-names #'string<)))
+  (supertag-view-api-list-tags))
 
 (defun supertag-tag-get-id-by-name (tag-name)
   "Get tag ID by TAG-NAME."
-  (let ((tags (supertag-store-get-collection :tags)))
-    (when (hash-table-p tags)
-      (catch 'found
-        (maphash (lambda (id tag-data)
-                   (when (equal (plist-get tag-data :name) tag-name)
-                     (throw 'found id)))
-                 tags)
-        nil))))
+  (supertag-view-api-tag-id tag-name))
 
 (defun supertag-view-table--get-columns-for-tag (tag-name)
   "Get column configuration for TAG-NAME, including custom fields with type information.
@@ -728,15 +707,15 @@ Uses improved styling from old version."
   (let ((query-obj (supertag-view-table--get-current-query-obj)))
     (pcase (plist-get query-obj :type)
       (:tag
-       (supertag-node-get entity-id))
+       (supertag-view-api-get-entity :nodes entity-id))
       (:behavior
-       (supertag-database-get-behavior entity-id))
+       (supertag-view-api-get-entity :behaviors entity-id))
       (:automation
-       (supertag-database-get-automation entity-id))
+       (supertag-view-api-get-entity :automations entity-id))
       (:database
-       (supertag-database-get-database entity-id))
+       (supertag-view-api-get-entity :databases entity-id))
       (_
-       (supertag-store-get-entity (plist-get query-obj :type) entity-id)))))
+       (supertag-view-api-get-entity (plist-get query-obj :type) entity-id)))))
 
 (defun supertag-view-table--get-cell-value (entity-data key column)
   "Get cell value from ENTITY-DATA for KEY, formatted according to COLUMN type."
@@ -768,7 +747,7 @@ Uses improved styling from old version."
                            (tag-id (supertag-view-table--get-current-tag-id))
                            (field-name (symbol-name key)))
                       (when (and node-id tag-id)
-                        (supertag-field-get-with-default node-id tag-id field-name))))))
+                        (supertag-view-api-node-field-in-tag node-id tag-id field-name))))))
               (_
                (plist-get entity-data key)))))
       ;; For title cells we preserve existing faces and explicit newlines;
@@ -791,7 +770,7 @@ Uses improved styling from old version."
    ((eq type :node-reference)
     (if (string-empty-p value)
         ""
-      (let* ((node (supertag-node-get value))
+      (let* ((node (supertag-view-api-get-entity :nodes value))
              (title (plist-get node :title)))
         (format "[[id:%s][%s]]" value (or title "No Title")))))
    (t (format "%s" value))))
@@ -1091,12 +1070,14 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
     (puthash view-id (current-buffer) supertag-view-table--active-views)
     
     ;; Subscribe to entity updates
-    (supertag-subscribe :node-updated
-                       (lambda (path old-value new-value)
-                         (supertag-view-table--handle-entity-update path old-value new-value view-id)))
-    (supertag-subscribe :database-updated
-                       (lambda (path old-value new-value)
-                         (supertag-view-table--handle-entity-update path old-value new-value view-id)))))
+    (supertag-view-api-subscribe
+     :node-updated
+     (lambda (path old-value new-value)
+       (supertag-view-table--handle-entity-update path old-value new-value view-id)))
+    (supertag-view-api-subscribe
+     :database-updated
+     (lambda (path old-value new-value)
+       (supertag-view-table--handle-entity-update path old-value new-value view-id)))))
 
 (defun supertag-view-table--handle-entity-update (path old-value new-value view-id)
   "Handle entity update event for reactive grid updates."
@@ -1386,7 +1367,7 @@ Opens the file in a new window on the right and moves cursor to the node."
       (let ((entity-id (plist-get coords :entity-id)))
         (if (null entity-id)
             (message "No entity ID found in cell coordinates.")
-          (when-let* ((node (supertag-node-get entity-id))
+          (when-let* ((node (supertag-view-api-get-entity :nodes entity-id))
                       (file (plist-get node :file)))
             (if (not (file-exists-p file))
                 (message "Error: File for node %s does not exist." entity-id)

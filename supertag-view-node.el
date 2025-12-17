@@ -20,6 +20,7 @@
 (require 'supertag-ui-commands) ; For backlink helpers
 (require 'supertag-view-helper)
 (require 'supertag-services-ui)
+(require 'supertag-view-api)
 
 ;;; --- Variables ---
 
@@ -273,9 +274,9 @@ Key Bindings:
 (defun supertag-view-node--subscribe-to-events ()
   "Subscribe to store events for auto-refresh.
 This implements the correct separation: data layer emits events, UI subscribes."
-  (when (fboundp 'supertag-subscribe)
+  (when (fboundp 'supertag-view-api-subscribe)
     ;; Subscribe to store changes
-    (supertag-subscribe :store-changed #'supertag-view-node--handle-store-change)))
+    (supertag-view-api-subscribe :store-changed #'supertag-view-node--handle-store-change)))
 
 (defun supertag-view-node--handle-store-change (path old-value new-value)
   "Handle store change events and refresh if relevant.
@@ -344,7 +345,7 @@ NEW-VALUE is the value after change (nil for deletions)."
 (defun supertag-view-node--get-referenced-by (node-id)
   "Get nodes that reference NODE-ID."
   (when node-id
-    (let ((relations (supertag-store-get-collection :relations))
+    (let ((relations (supertag-view-api-get-collection :relations))
           (referencing-ids '()))
       (maphash
        (lambda (_ rel-data)
@@ -456,7 +457,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
 (defun supertag-view-node--insert-node-link-line (node-id)
   "Insert a single clickable line for NODE-ID.
 The line looks like `📄 Title' and is clickable with RET/mouse-1."
-  (when-let* ((node (supertag-node-get node-id)))
+  (when-let* ((node (supertag-view-api-get-entity :nodes node-id)))
     (let* ((raw-title (or (plist-get node :raw-value)
                           (plist-get node :title)
                           "[Untitled]"))
