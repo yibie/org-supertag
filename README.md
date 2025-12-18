@@ -1,4 +1,4 @@
-# Org-SuperTag 5.3+: Pure Emacs Lisp Knowledge Management
+# Org-SuperTag
 
 > **⚠️ IMPORTANT (5.3.0 and later):**
 > If you are upgrading from a pre‑5.2.0 version, you **must run the global field database migration** before enabling `supertag-use-global-fields`.
@@ -10,14 +10,17 @@
 
 [English](./README.md) | [中文](./README_CN.md)
 
-## ⚡ What Changed in 5.0
+## ⚡ Intro
 
-**One line summary**: We deleted 44% of the code, removed Python completely, and made everything faster.
+Org-SuperTag is a database-backed Org workflow focused on structured tags and fields.
 
-- **Pure Emacs Lisp**: No more Python dependencies
-- **Single source of truth**: All data in one hash table
-- **5x faster sync**: No more EPC overhead
-- **Simpler installation**: Just load the package
+- **Pure Emacs Lisp**: No Python/EPC; load and go
+- **Structured data**: `#tag` + fields on headings (queryable, automatable)
+- **Local database**: One in-memory store persisted to disk (fast reads)
+- **Sync service**: Incremental file sync with safety guards + diagnostics
+- **Views & UX**: Node view, table view, kanban (for data-centric workflows)
+- **Automation hooks**: React to field changes and keep metadata consistent
+- **Optional vault isolation**: Treat each sync directory as its own DB/state (single active vault)
 
 ## 🚀 30-Second Quick Start
 
@@ -26,7 +29,12 @@
 (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
 
 ;; 2. Configure
+;; Single vault (recommended)
 (setq org-supertag-sync-directories '("~/org/"))
+
+;; Multiple vaults (separate DB/state per directory)
+;; (setq org-supertag-sync-directories '("~/org/" "~/work-notes/"))
+;; (setq org-supertag-sync-directories-mode 'vaults)
 
 ;; 3. Initialize (run once)
 M-x supertag-sync-full-initialize
@@ -237,8 +245,18 @@ This shows statistics for each property and lets you choose tags for each conver
 Minimal config:
 
 ```emacs-lisp
+;; Single vault (recommended)
 (setq org-supertag-sync-directories '("~/org/"))
+
+;; Multiple vaults (separate DB/state per directory)
+;; (setq org-supertag-sync-directories '("~/org/" "~/work-notes/"))
+;; (setq org-supertag-sync-directories-mode 'vaults)
 ```
+
+Vault mode notes:
+- Auto-switch is disabled by default; enable with `(setq org-supertag-vault-auto-switch t)`.
+- Shows a mode line hint `ST[<vault>]` for the current file (when multiple sync directories are configured).
+- Manually switch with `M-x supertag-vault-activate` (vault mode only).
 
 With AI features (optional):
 
@@ -248,11 +266,10 @@ With AI features (optional):
 
 ## 🆚 Why Not Use...
 
-| Tool     | Org-SuperTag Advantage    |
-| -------- | ------------------------- |
-| Org-roam | Structured data + queries |
-| Obsidian | Native Emacs integration  |
-| Notion   | Offline + programmable    |
+| Tool | What it’s best at | How Org-SuperTag differs |
+| --- | --- | --- |
+| Org-roam | Zettelkasten + backlinks + graph | Org-SuperTag is **data-first**: tags-as-tables, fields, database queries, and views, while still providing a rich reference system (`supertag-add-reference`) that shows up in views (node/table). |
+| Denote | Minimal, file-based note organization | Org-SuperTag adds a **database layer**: structured fields, rich queries, and views; Denote stays intentionally lightweight and file-centric. |
 
 ## 🐛 Troubleshooting
 

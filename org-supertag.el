@@ -35,6 +35,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-id)
+(require 'subr-x)
 
 (defgroup org-supertag nil
   "Core configuration for Org-Supertag."
@@ -45,6 +46,263 @@
   "Directory for storing Org-Supertag data."
   :type 'directory
   :group 'org-supertag)
+
+(defvar supertag--base-data-directory
+  (file-name-as-directory (expand-file-name supertag-data-directory))
+  "Base data directory for vault storage.
+
+This stays constant even when `supertag-data-directory` is switched per vault.")
+
+(defcustom org-supertag-active-sync-directory nil
+  "Active vault root directory when `org-supertag-sync-directories` lists multiple roots.
+
+This is only used when `org-supertag-sync-directories-mode` is `vaults`.
+The value may include `~`; it will be normalized internally."
+  :type '(choice (const :tag "First directory" nil)
+                 directory)
+  :group 'org-supertag)
+
+(defcustom org-supertag-vault-auto-switch nil
+  "When non-nil, automatically switch the active vault for Org buffers.
+
+If enabled, entering an Org buffer will activate the matching vault (by file path),
+which includes loading that vault's DB/state and restarting auto-sync for it.
+
+Default is nil to avoid unexpected IO and model reload costs during navigation."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom org-supertag-vault-modeline-indicator t
+  "When non-nil, show the matched vault name in the mode line for Org buffers.
+
+This does not switch the active vault; it only displays which vault the current
+file belongs to (based on its path)."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defvar supertag-vault--current nil
+  "Currently active vault plist (normalized).")
+
+(defvar-local supertag-vault--buffer-indicator nil
+  "Cached mode line indicator for the current buffer.")
+
+(define-minor-mode supertag-vault-indicator-mode
+  "Show Org-Supertag vault indicator in the mode line."
+  :init-value nil
+  :lighter (:eval (or supertag-vault--buffer-indicator "")))
+
+(defun supertag-vault--normalize-path (path)
+  "Return a canonical directory PATH for matching and IO."
+  (when (and (stringp path) (not (string-empty-p path)))
+    (file-name-as-directory
+     (file-truename (expand-file-name path)))))
+
+(defun supertag-vault--sanitize-name (name)
+  "Return filesystem-friendly NAME."
+  (let ((s (or name "")))
+    (setq s (downcase s))
+    (setq s (replace-regexp-in-string "[^[:alnum:]_.-]+" "-" s))
+    (setq s (replace-regexp-in-string "^-+" "" s))
+    (setq s (replace-regexp-in-string "-+$" "" s))
+    (if (string-empty-p s) "vault" s)))
+
+(defun supertag-vault--id (vault)
+  "Return stable identifier string for VAULT."
+  (let* ((root (plist-get vault :root))
+         (name (plist-get vault :name))
+         (root-norm (and root (supertag-vault--normalize-path root)))
+         (base (supertag-vault--sanitize-name (or name "vault")))
+         (suffix (when root-norm (substring (secure-hash 'sha1 root-norm) 0 10))))
+    (if suffix (format "%s-%s" base suffix) base)))
+
+(defun supertag-vault--normalize-vault-root (root)
+  "Normalize ROOT directory into a vault plist."
+  (let* ((root-norm (supertag-vault--normalize-path root)))
+    (when root-norm
+      (let* ((name (file-name-nondirectory (directory-file-name root-norm)))
+             (vault (list :name (or name "vault") :root root-norm))
+             (id (supertag-vault--id vault))
+             (base (or supertag--base-data-directory
+                       (file-name-as-directory (expand-file-name supertag-data-directory))))
+             (data-dir (file-name-as-directory
+                        (expand-file-name (format "vaults/%s" id) base))))
+        (list :id id :name (plist-get vault :name) :root root-norm :data-directory data-dir)))))
+
+(defun supertag-vault--vault-mode-p ()
+  "Return non-nil when sync directories are treated as separate vaults."
+  (and (boundp 'org-supertag-sync-directories-mode)
+       (eq org-supertag-sync-directories-mode 'vaults)))
+
+(defun supertag-vault--normalized-vaults ()
+  "Return list of normalized vaults."
+  (when (and (supertag-vault--vault-mode-p) (listp org-supertag-sync-directories))
+    (delq nil (mapcar #'supertag-vault--normalize-vault-root org-supertag-sync-directories))))
+
+(defun supertag-vault--find-by-root (root)
+  "Find normalized vault by ROOT directory."
+  (let ((target (supertag-vault--normalize-path root)))
+    (when target
+      (cl-find-if (lambda (v) (string= (plist-get v :root) target))
+                  (supertag-vault--normalized-vaults)))))
+
+(defun supertag-vault--find-by-file (file)
+  "Find the best matching vault for FILE (longest root prefix)."
+  (when (and (stringp file) (not (string-empty-p file)))
+    (let* ((file-norm (condition-case nil
+                          (file-truename (expand-file-name file))
+                        (error (expand-file-name file))))
+           (best nil)
+           (best-len -1))
+      (dolist (vault (supertag-vault--normalized-vaults))
+        (let* ((root (plist-get vault :root))
+               (root-len (length root)))
+          (when (and (string-prefix-p root file-norm)
+                     (> root-len best-len))
+            (setq best vault)
+            (setq best-len root-len))))
+      best)))
+
+(defun supertag-vault--apply (vault)
+  "Apply VAULT persistence and sync configuration without loading data."
+  (let* ((data-dir (file-name-as-directory (plist-get vault :data-directory)))
+         (root (plist-get vault :root)))
+    (setq supertag-data-directory data-dir)
+    (setq supertag-db-file (expand-file-name "supertag-db.el" data-dir))
+    (setq supertag-db-backup-directory (expand-file-name "backups" data-dir))
+    (setq supertag-sync-state-file (expand-file-name "sync-state.el" data-dir))
+    ;; Backup date is per-vault; reset to allow correct daily backup decisions.
+    (when (boundp 'supertag-db--last-backup-date)
+      (setq supertag-db--last-backup-date nil))))
+
+(defun supertag-vault--current-id ()
+  "Return current vault ID or nil."
+  (plist-get supertag-vault--current :id))
+
+(defun supertag-vault--effective-root ()
+  "Return the active vault root directory, or nil when not in vault mode."
+  (when (supertag-vault--vault-mode-p)
+    (let ((vaults (supertag-vault--normalized-vaults)))
+      (cond
+       ((and org-supertag-active-sync-directory
+             (supertag-vault--find-by-root org-supertag-active-sync-directory))
+        (plist-get (supertag-vault--find-by-root org-supertag-active-sync-directory) :root))
+       ((and (consp vaults) (plist-get (car vaults) :root))
+        (plist-get (car vaults) :root))
+       (t nil)))))
+
+;;;###autoload
+(defun org-supertag--effective-sync-directories ()
+  "Return effective sync directories for the current session.
+
+In vault mode, returns a single-element list containing the active vault root.
+Otherwise, returns `org-supertag-sync-directories` unchanged."
+  (if (supertag-vault--vault-mode-p)
+      (let ((root (supertag-vault--effective-root)))
+        (when root (list root)))
+    org-supertag-sync-directories))
+
+(defun supertag-vault--persist-current ()
+  "Persist current vault state/store best-effort."
+  (ignore-errors
+    (when (fboundp 'supertag-sync-save-state)
+      (supertag-sync-save-state)))
+  (ignore-errors
+    (when (fboundp 'supertag-save-store)
+      (supertag-save-store))))
+
+(defun supertag-vault--buffer-vault-name (&optional file)
+  "Return vault name that FILE belongs to, or nil."
+  (let* ((file (or file (buffer-file-name)))
+         (vault (and file (supertag-vault--find-by-file file))))
+    (plist-get vault :name)))
+
+(defun supertag-vault--update-buffer-indicator ()
+  "Update `supertag-vault--buffer-indicator` for the current buffer."
+  (setq supertag-vault--buffer-indicator nil)
+  (when (and org-supertag-vault-modeline-indicator
+             (listp org-supertag-sync-directories)
+             (> (length org-supertag-sync-directories) 1))
+    (let ((name (supertag-vault--buffer-vault-name)))
+      (setq supertag-vault--buffer-indicator
+            (if name
+                (format " ST[%s]" name)
+              " ST[-]"))))
+  (force-mode-line-update))
+
+;;;###autoload
+(defun supertag-vault-activate (vault)
+  "Activate VAULT (normalized plist) and load its DB/state.
+
+This stops the current auto-sync worker (if any), switches persistence paths,
+loads store/sync-state for the selected vault, and restarts auto-sync for the
+active vault when `supertag-sync-auto-start` is non-nil."
+  (interactive
+   (let* ((vaults (supertag-vault--normalized-vaults))
+          (choices (mapcar (lambda (v)
+                             (format "%s  (%s)"
+                                     (plist-get v :name)
+                                     (abbreviate-file-name (plist-get v :root))))
+                           vaults))
+          (choice (completing-read "Supertag vault: " choices nil t)))
+     (list (nth (cl-position choice choices :test #'string=) vaults))))
+  (unless vault
+    (user-error "No vault selected"))
+  (unless (supertag-vault--vault-mode-p)
+    (user-error "Vault switching requires `org-supertag-sync-directories-mode` set to 'vaults"))
+  (unless (equal (plist-get vault :id) (supertag-vault--current-id))
+    (supertag-vault--persist-current)
+    (when (fboundp 'supertag-sync--cancel-auto-start)
+      (ignore-errors (supertag-sync--cancel-auto-start)))
+    (when (fboundp 'supertag-sync-stop-auto-sync)
+      (ignore-errors (supertag-sync-stop-auto-sync)))
+    (setq supertag-vault--current vault)
+    (setq org-supertag-active-sync-directory (plist-get vault :root))
+    (supertag-vault--apply vault)
+    (when (fboundp 'supertag-persistence-ensure-data-directory)
+      (supertag-persistence-ensure-data-directory))
+    (when (fboundp 'supertag-sync-load-state)
+      (supertag-sync-load-state))
+    (when (fboundp 'supertag-load-store)
+      (supertag-load-store))
+    (when (and (boundp 'supertag-sync-auto-start)
+               supertag-sync-auto-start
+               (fboundp 'supertag-sync-start-auto-sync))
+      (ignore-errors (supertag-sync-start-auto-sync)))
+    (when (fboundp 'supertag-view-node-refresh)
+      (ignore-errors (supertag-view-node-refresh)))
+    (message "Supertag: active vault => %s (%s)"
+             (plist-get vault :name)
+             (abbreviate-file-name (plist-get vault :root)))))
+
+;;;###autoload
+(defun supertag-vault-auto-activate ()
+  "Update vault indicator and optionally auto-switch active vault for Org buffers."
+  (when (and (listp org-supertag-sync-directories)
+             (> (length org-supertag-sync-directories) 1))
+    (when org-supertag-vault-modeline-indicator
+      (supertag-vault-indicator-mode 1))
+    (supertag-vault--update-buffer-indicator)
+    (when org-supertag-vault-auto-switch
+      (let ((file (buffer-file-name)))
+        (when file
+          (let ((vault (supertag-vault--find-by-file file)))
+            (when vault
+              (supertag-vault-activate vault))))))))
+
+(defun supertag-vault--select-startup-default ()
+  "Select and apply a default vault at startup (without loading)."
+  (setq supertag--base-data-directory
+        (or supertag--base-data-directory
+            (file-name-as-directory (expand-file-name supertag-data-directory))))
+  (when (and (supertag-vault--vault-mode-p)
+             (listp org-supertag-sync-directories)
+             (> (length org-supertag-sync-directories) 1))
+    (let* ((vault (or (supertag-vault--find-by-root org-supertag-active-sync-directory)
+                      (car (supertag-vault--normalized-vaults)))))
+      (when vault
+        (setq supertag-vault--current vault)
+        (setq org-supertag-active-sync-directory (plist-get vault :root))
+        (supertag-vault--apply vault)))))
 
 (defcustom supertag-project-root
   (file-name-directory (file-name-directory (or load-file-name buffer-file-name)))
@@ -112,6 +370,9 @@
  "Initialize the Org-Supertag system.
 This function loads all necessary components and sets up the environment."
     (interactive)
+
+    ;; Step 0: Select default vault (if configured) before any IO.
+    (supertag-vault--select-startup-default)
     
     ;; Step 1: Ensure data directories exist
     (supertag-persistence-ensure-data-directory)
@@ -168,7 +429,6 @@ This function loads all necessary components and sets up the environment."
 (defun supertag--check-critical-config ()
   "Check critical configuration before initialization.
 Warn user if important settings are missing or incorrect."
-  ;; Check if sync directories are configured
   (unless org-supertag-sync-directories
     (display-warning 'org-supertag
                      "org-supertag-sync-directories is not configured!\n\
@@ -176,14 +436,23 @@ This means no files will be synchronized automatically.\n\
 Please set this variable in your Emacs configuration, for example:\n\
   (setq org-supertag-sync-directories '(\"/path/to/your/notes\"))"
                      :warning))
-  
-  ;; Check if configured directories exist
+
   (when org-supertag-sync-directories
     (dolist (dir org-supertag-sync-directories)
-      (unless (file-directory-p dir)
+      (unless (file-directory-p (expand-file-name dir))
         (display-warning 'org-supertag
                          (format "Configured sync directory does not exist: %s\n\
-Please check your org-supertag-sync-directories configuration." dir)
+Please check your org-supertag-sync-directories configuration."
+                                 (abbreviate-file-name (expand-file-name dir)))
+                         :warning))))
+
+  (when (supertag-vault--vault-mode-p)
+    (let ((vaults (supertag-vault--normalized-vaults)))
+      (when (and (> (length org-supertag-sync-directories) 1)
+                 (null vaults))
+        (display-warning 'org-supertag
+                         "Vault mode is enabled but no valid vault roots were found.\n\
+Check `org-supertag-sync-directories`."
                          :warning)))))
 
 (defun supertag--validate-initialization ()
@@ -233,6 +502,7 @@ Consider running: M-x supertag-sync-full-rescan" db-file)
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
 (add-hook 'emacs-startup-hook #'supertag-init)
+(add-hook 'org-mode-hook #'supertag-vault-auto-activate)
 (add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks)
 
 (provide 'org-supertag)
