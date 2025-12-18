@@ -57,6 +57,7 @@ commands/
 .continue/
 .kiro/
 dev-note/
+.phrase/
 .qoder/
 .ruff_cache/
 IMPROVEMENT_PLAN.md

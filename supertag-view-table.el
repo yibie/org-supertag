@@ -293,7 +293,8 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
         (setq-local supertag-view-table--columns
                   (cl-remove-if-not
                    (lambda (col)
-                     (member (symbol-name (plist-get col :key)) visible-fields))
+                     (or (memq (plist-get col :key) '(:title :refs))
+                         (member (symbol-name (plist-get col :key)) visible-fields)))
                    supertag-view-table--columns)))
       
       ;; Apply sorting
@@ -482,7 +483,8 @@ Automatically detects virtual databases and uses their database fields."
     (if (not tag-id)
         (supertag-view-table--default-columns)
       (let* ((fields (supertag-tag-get-all-fields tag-id)) ; Use recursive getter for inherited fields
-             (base-columns '((:name "Title" :key :title :width 40)))
+             (base-columns '((:name "Title" :key :title :width 40)
+                             (:name "Refs" :key :refs :width 10)))
              (seen (make-hash-table :test 'equal))
              (field-columns
               (cl-loop for field-def in fields
@@ -502,7 +504,8 @@ Automatically detects virtual databases and uses their database fields."
 
 (defun supertag-view-table--default-columns ()
   "Return default column configuration."
-  '((:name "Title" :key :title :width 40)))
+  '((:name "Title" :key :title :width 40)
+    (:name "Refs" :key :refs :width 10)))
 
 (defun supertag-view-table--render-table (state)
   "Renderer for layout 'table'. Consumes STATE built by `supertag-view-table--build-state'."
@@ -741,6 +744,14 @@ Uses improved styling from old version."
                         (concat rendered-title "\n"
                                 (propertize parent-title 'face 'supertag-view-table-parent-title-face))
                       rendered-title)))
+                 (:refs
+                  (let* ((outgoing (length (or (plist-get entity-data :ref-to) '())))
+                         (incoming (or (plist-get entity-data :ref-count) 0)))
+                    (cond
+                     ((and (= outgoing 0) (= incoming 0)) "")
+                     ((= incoming 0) (format "→%d" outgoing))
+                     ((= outgoing 0) (format "←%d" incoming))
+                     (t (format "→%d ←%d" outgoing incoming)))))
                  (:file (or (plist-get entity-data :file) "No File"))
                  (:tags (string-join (plist-get entity-data :tags) ", "))
                  (_ (let* ((node-id (plist-get entity-data :id))
@@ -1223,7 +1234,7 @@ Based on old version's superior navigation system."
          (col-key (plist-get coords :col-key))
          (col-name (symbol-name col-key))
          (tag-id (supertag-view-table--get-current-tag-id)))
-    (when (and tag-id col-key (not (member col-key '(:title)))) ; Protect primary column
+    (when (and tag-id col-key (not (member col-key '(:title :refs)))) ; Protect fixed columns
       (when (yes-or-no-p (format "Really delete column '%s' and all its data? " col-name))
         (supertag-tag-remove-field tag-id col-name)
         (supertag-view-table-refresh)
@@ -1236,7 +1247,7 @@ Based on old version's superior navigation system."
          (col-key (plist-get coords :col-key))
          (old-name (symbol-name col-key))
          (tag-id (supertag-view-table--get-current-tag-id)))
-    (when (and tag-id col-key (not (member col-key '(:title))))
+    (when (and tag-id col-key (not (member col-key '(:title :refs))))
       (let ((new-name (read-string (format "New name for '%s': " old-name) old-name)))
         (when (and (not (string-empty-p new-name)) (not (equal old-name new-name)))
           (supertag-tag-rename-field tag-id old-name new-name)
@@ -1250,7 +1261,7 @@ Based on old version's superior navigation system."
          (col-key (plist-get coords :col-key))
          (col-name (symbol-name col-key))
          (tag-id (supertag-view-table--get-current-tag-id)))
-    (when (and tag-id col-key (not (member col-key '(:title))))
+    (when (and tag-id col-key (not (member col-key '(:title :refs))))
       (let* ((field-def (supertag-tag-get-field tag-id col-name))
              (type-str (completing-read (format "New type for '%s': " col-name)
                                         (mapcar (lambda (sym) (substring (symbol-name sym) 1))
@@ -1320,7 +1331,7 @@ COORDS is a plist with :entity-id and :col-index."
                   (query-obj   (supertag-view-table--get-current-query-obj)))
         (pcase (plist-get query-obj :type)
           (:tag
-           (if (eq col-key :title)
+           (if (memq col-key '(:title :refs))
                (message "Read-Only")
              (let* ((tag-id (supertag-view-table--get-current-tag-id))
                     (current-value (supertag-field-get-with-default entity-id

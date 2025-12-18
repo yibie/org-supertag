@@ -54,6 +54,28 @@ If nil, no automatic synchronization will occur."
   :type '(repeat directory)
   :group 'supertag-sync)
 
+(defcustom org-supertag-sync-directories-mode 'unified
+  "How to interpret `org-supertag-sync-directories`.
+
+- `unified`: all directories share one database (legacy/default behavior).
+- `vaults`: each directory is treated as an isolated vault with its own DB/state,
+  and sync only runs for the currently active vault directory.
+
+Vault activation is handled by `org-supertag.el` (see `supertag-vault-activate`)."
+  :type '(choice (const :tag "Unified DB" unified)
+                 (const :tag "Vaults (isolated per directory)" vaults))
+  :group 'supertag-sync)
+
+(defun supertag-sync--effective-directories ()
+  "Return effective sync directories.
+
+When Org-Supertag is running in vault mode, this resolves to the active vault's
+directory (single-element list). Otherwise returns `org-supertag-sync-directories`."
+  (if (and (eq org-supertag-sync-directories-mode 'vaults)
+           (fboundp 'org-supertag--effective-sync-directories))
+      (org-supertag--effective-sync-directories)
+    org-supertag-sync-directories))
+
 (defcustom supertag-sync-exclude-directories nil
   "List of directories to exclude from synchronization.
 Takes precedence over `org-supertag-sync-directories`."
@@ -252,11 +274,12 @@ If no directories are configured, returns t for all org files."
                                    (let ((expanded-exclude-dir (expand-file-name dir)))
                                      (string-prefix-p expanded-exclude-dir file-dir)))
                                  supertag-sync-exclude-directories)))
-           (included (if org-supertag-sync-directories
+           (sync-dirs (supertag-sync--effective-directories))
+           (included (if sync-dirs
                         (cl-some (lambda (dir)
                                   (let ((expanded-dir (expand-file-name dir)))
                                     (string-prefix-p expanded-dir file-dir)))
-                                org-supertag-sync-directories)
+                                sync-dirs)
                       t)))
       (let ((result (and included
                          (not excluded)
@@ -271,9 +294,9 @@ If no directories are configured, returns t for all org files."
                    (string-match-p supertag-sync-file-pattern file))
           (message "DEBUG-SCOPE: expanded-file: %s" expanded-file)
           (message "DEBUG-SCOPE: file-dir: %s" file-dir)
-          (message "DEBUG-SCOPE: sync-directories: %S" org-supertag-sync-directories)
-          (when org-supertag-sync-directories
-            (dolist (dir org-supertag-sync-directories)
+          (message "DEBUG-SCOPE: sync-directories: %S" sync-dirs)
+          (when sync-dirs
+            (dolist (dir sync-dirs)
               (let ((expanded-dir (expand-file-name dir)))
                 (message "DEBUG-SCOPE: Checking dir %s (expanded: %s) - prefix match: %s"
                          dir
@@ -287,18 +310,19 @@ If ALL-FILES-P is non-nil, return all files in scope.
 Otherwise, returns a list of new files that are not yet in sync state."
   (let ((files nil)
         (state-table (supertag-sync--get-state-table)))
-    (if (not org-supertag-sync-directories)
-        (message "WARNING: org-supertag-sync-directories is not configured. No files will be synced.")
-      (dolist (dir org-supertag-sync-directories)
-        (when (file-exists-p dir)
-          (let ((dir-files (directory-files-recursively
-                           dir supertag-sync-file-pattern t)))
-            (dolist (file dir-files)
-              (when (and (file-regular-p file)
-                         (supertag-sync--in-sync-scope-p file)
-                         (or all-files-p
-                             (not (gethash file state-table))))
-                (push file files)))))))
+    (let ((sync-dirs (supertag-sync--effective-directories)))
+      (if (not sync-dirs)
+          (message "WARNING: org-supertag-sync-directories is not configured. No files will be synced.")
+        (dolist (dir sync-dirs)
+          (when (file-exists-p dir)
+            (let ((dir-files (directory-files-recursively
+                              dir supertag-sync-file-pattern t)))
+              (dolist (file dir-files)
+                (when (and (file-regular-p file)
+                           (supertag-sync--in-sync-scope-p file)
+                           (or all-files-p
+                               (not (gethash file state-table))))
+                  (push file files))))))))
     files))
 
 (defun supertag-sync-update-state (file &optional content-hash)
@@ -474,7 +498,7 @@ Returns the loaded or initialized sync state."
 
 (defun supertag-sync-ensure-directories ()
   "Ensure sync directories are properly configured."
-  (unless org-supertag-sync-directories
+  (unless (supertag-sync--effective-directories)
     (message "Warning: `org-supertag-sync-directories` is not set. Auto-sync will not occur.")))
     
 (defvar supertag-sync--timer nil
@@ -508,8 +532,9 @@ Returns the loaded or initialized sync state."
 
 (defun supertag-sync--dirs-ready-p ()
   "Return non-nil when all configured sync directories exist and are accessible."
-  (and org-supertag-sync-directories
-       (cl-every #'file-directory-p org-supertag-sync-directories)))
+  (let ((sync-dirs (supertag-sync--effective-directories)))
+    (and sync-dirs
+         (cl-every #'file-directory-p sync-dirs))))
 
 (defun supertag-sync--cancel-auto-start ()
   "Cancel any pending auto-start timer."
@@ -833,7 +858,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
   ;;(message "DEBUG: supertag-sync--check-and-sync function called at %s" (current-time))
   
   ;; Pre-check: Warn if sync directories are not configured
-  (unless org-supertag-sync-directories
+  (unless (supertag-sync--effective-directories)
     (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
     (cl-return-from supertag-sync--check-and-sync nil))
   
@@ -842,7 +867,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
         (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
 
     ;; 1. Cleanup Sync State - Remove files that are no longer in scope
-    (when org-supertag-sync-directories
+    (when (supertag-sync--effective-directories)
       (let ((state-table (supertag-sync--get-state-table)))
         (maphash (lambda (file _state)
                    (let ((file-exists (file-exists-p file))
@@ -1607,20 +1632,20 @@ This is a safe operation that helps maintain database integrity."
 This function distinguishes between internal modifications (by Supertag) and
 external modifications (by user/other tools) to avoid unnecessary re-parsing."
   ;; Only run for org-mode buffers that are part of the sync scope
-  (when (and (derived-mode-p 'org-mode)
-             (buffer-file-name)
-             (supertag-sync--in-sync-scope-p (buffer-file-name)))
-    (let ((file (buffer-file-name)))
-      ;; Check if this is an internal modification
-      (if (supertag--is-internal-modification-p file)
-          ;; Internal modification: skip sync, memory is already up-to-date
-          (progn
-            (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file))
-            ;; Update sync state to prevent periodic sync from re-syncing
-            (supertag-sync-update-state file))
-        ;; External modification: enqueue for async sync
-        (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file))
-        (supertag-async-enqueue file)))))
+  (when (and (derived-mode-p 'org-mode) (buffer-file-name))
+    (let* ((file (buffer-file-name))
+           (file-norm (and file (file-truename (expand-file-name file)))))
+      (when (and file-norm (supertag-sync--in-sync-scope-p file-norm))
+        ;; Check if this is an internal modification
+        (if (supertag--is-internal-modification-p file-norm)
+            ;; Internal modification: skip sync, memory is already up-to-date
+            (progn
+              (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file-norm))
+              ;; Update sync state to prevent periodic sync from re-syncing
+              (supertag-sync-update-state file-norm))
+          ;; External modification: enqueue for async sync
+          (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file-norm))
+          (supertag-async-enqueue file-norm))))))
         
 
 (defun supertag-sync-setup-realtime-hooks ()
@@ -1638,7 +1663,8 @@ Uses minimal side effects to avoid interfering with other packages."
       (let* ((begin (point))
              (end (save-excursion (org-end-of-subtree t t) (point)))
              (subtree-text (buffer-substring-no-properties begin end))
-             (current-file (buffer-file-name)))
+             (current-file (and (buffer-file-name)
+                                (file-truename (expand-file-name (buffer-file-name))))))
         (with-temp-buffer
           ;; Disable hooks that might interfere
           (let ((org-mode-hook nil)
@@ -1774,7 +1800,7 @@ Returns a list of .org file paths."
   "Diagnose why sync found no files to process.
 QUIET suppresses benign \"all clear\" diagnostics.
 Provides helpful hints to the user about configuration issues."
-  (let ((sync-dirs org-supertag-sync-directories)
+  (let ((sync-dirs (supertag-sync--effective-directories))
         (state-table (supertag-sync--get-state-table))
         (state-count (if (hash-table-p (supertag-sync--get-state-table))
                          (hash-table-count (supertag-sync--get-state-table))
