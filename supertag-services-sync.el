@@ -99,6 +99,21 @@ Takes precedence over `org-supertag-sync-directories`."
   :type '(repeat symbol)
   :group 'supertag-sync)
 
+(defcustom supertag-sync-smart-detection-enabled nil
+  "If non-nil, enable smart detection to skip unchanged files during sync.
+When enabled, files are hashed and only re-parsed if their content has changed."
+  :type 'boolean
+  :group 'supertag-sync)
+
+(defcustom supertag-sync-smart-detection-verbose nil
+  "If non-nil, show messages about smart detection decisions during sync."
+  :type 'boolean
+  :group 'supertag-sync)
+
+(defvar supertag-sync--last-smart-detection-decision nil
+  "Internal state tracking the last smart detection decision.
+Stores a plist with :file, :decision, :reason, and :time.")
+
 (defcustom supertag-sync-auto-create-node nil
   "Whether to automatically create nodes for headings during sync.
 When enabled, any heading without an ID will get one automatically.
