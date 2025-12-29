@@ -37,6 +37,9 @@
   :type 'file
   :group 'supertag-sync)
 
+(defvar supertag-sync--state-source nil
+  "Resolved sync-state file path last loaded into memory.")
+
 (defcustom supertag-sync-auto-interval 900
   "Interval in seconds for automatic synchronization."
   :type 'integer
@@ -91,6 +94,18 @@ Takes precedence over `org-supertag-sync-directories`."
   "If non-nil, suppress routine sync summary/diagnostic messages when no changes were detected."
   :type 'boolean
   :group 'supertag-sync)
+
+(defcustom supertag-sync-snapshot-guard t
+  "When non-nil, sync uses snapshot state to guard destructive operations."
+  :type 'boolean
+  :group 'supertag-sync)
+
+(defun supertag-sync--state-file ()
+  "Return the resolved sync-state file path for current data directory."
+  (let* ((data-dir (file-name-as-directory (expand-file-name supertag-data-directory)))
+         (default-file (expand-file-name "sync-state.el" data-dir)))
+    (setq supertag-sync-state-file default-file)
+    supertag-sync-state-file))
 
 
 (defcustom supertag-sync-hash-props
@@ -206,6 +221,10 @@ Value: timestamp of last internal modification.
 This is used to distinguish internal modifications (by automation/UI) from
 external modifications (by user/other tools), preventing unnecessary re-sync.")
 
+(defvar supertag-sync--deferred-files (make-hash-table :test 'equal)
+  "Files processed while destructive sync is disabled.
+These files will be re-verified once the snapshot becomes complete.")
+
 (defvar supertag-sync--is-full-rescan-p nil
   "Dynamically bound to t during a full rescan.
 This allows special behavior, like one-time import of legacy tags.")
@@ -247,48 +266,79 @@ Handles both old format (direct hash table) and new format (plist with :sync-sta
    (t
     ;; Fallback: create empty hash table
     (let ((new-table (make-hash-table :test 'equal)))
-      (setq supertag-sync--state new-table)
+      (setq supertag-sync--state (list :sync-state new-table))
       new-table))))
 
 (defun supertag-sync--ensure-state-format ()
   "Ensure supertag-sync--state is in the correct format for current code.
-If it's a plist, extract the hash table. If it's already a hash table, keep it."
+If it's a hash table, wrap it in a plist so metadata can be stored."
+  (cond
+   ((hash-table-p supertag-sync--state)
+    (setq supertag-sync--state (list :sync-state supertag-sync--state)))
+   ((and (listp supertag-sync--state)
+         (plist-get supertag-sync--state :sync-state))
+    supertag-sync--state)
+   (t
+    (setq supertag-sync--state (list :sync-state (make-hash-table :test 'equal))))))
+
+(defun supertag-sync--snapshot-get ()
+  "Return snapshot metadata stored in sync state."
   (when (and (listp supertag-sync--state)
-             (plist-get supertag-sync--state :sync-state))
-    (setq supertag-sync--state (plist-get supertag-sync--state :sync-state))))
+             (plist-get supertag-sync--state :snapshot))
+    (plist-get supertag-sync--state :snapshot)))
+
+(defun supertag-sync--snapshot-set (snapshot)
+  "Store SNAPSHOT metadata in sync state (in-memory)."
+  (supertag-sync--ensure-state-format)
+  (setq supertag-sync--state (plist-put supertag-sync--state :snapshot snapshot))
+  snapshot)
+
+(defun supertag-sync--snapshot-status ()
+  "Return current snapshot status symbol, or nil."
+  (plist-get (supertag-sync--snapshot-get) :status))
+
+(defun supertag-sync--allow-destructive-p ()
+  "Return non-nil when destructive sync operations are allowed."
+  (or (not supertag-sync-snapshot-guard)
+      (eq (supertag-sync--snapshot-status) 'complete)))
+
+(defun supertag-sync--ensure-state-source ()
+  "Ensure in-memory sync state matches the current data directory."
+  (let ((state-file (supertag-sync--state-file)))
+    (unless (and (stringp supertag-sync--state-source)
+                 (string= supertag-sync--state-source state-file))
+      (supertag-sync-load-state))))
 
 
 ;;; --- Sync Mechanism ---
 
 ;; Core Functions - File State Tracking
 
-(defun supertag-sync--in-sync-scope-p (file)
-  "Check if FILE is within synchronization scope.
-Returns t if file should be synchronized based on configured directories.
-If no directories are configured, returns t for all org files."
-  (when (and file (file-exists-p file))
+(defun supertag-sync--in-scope-path-p (file)
+  "Check if FILE path is within synchronization scope.
+Does not require the file to exist."
+  (when file
     (let* ((expanded-file (expand-file-name file))
            (file-dir (file-name-directory expanded-file))
            (excluded (and supertag-sync-exclude-directories
-                         (cl-some (lambda (dir)
-                                   (let ((expanded-exclude-dir (expand-file-name dir)))
-                                     (string-prefix-p expanded-exclude-dir file-dir)))
-                                 supertag-sync-exclude-directories)))
+                          (cl-some (lambda (dir)
+                                     (let ((expanded-exclude-dir (expand-file-name dir)))
+                                       (string-prefix-p expanded-exclude-dir file-dir)))
+                                   supertag-sync-exclude-directories)))
            (sync-dirs (supertag-sync--effective-directories))
            (included (if sync-dirs
-                        (cl-some (lambda (dir)
-                                  (let ((expanded-dir (expand-file-name dir)))
-                                    (string-prefix-p expanded-dir file-dir)))
-                                sync-dirs)
-                      t)))
+                         (cl-some (lambda (dir)
+                                    (let ((expanded-dir (expand-file-name dir)))
+                                      (string-prefix-p expanded-dir file-dir)))
+                                  sync-dirs)
+                       t)))
       (let ((result (and included
                          (not excluded)
                          (string-match-p supertag-sync-file-pattern file))))
         ;; Enhanced debug logging for troubleshooting
         (when (not result)
-          (message "DEBUG-SCOPE: File %s REJECTED - exists: %s, included: %s, excluded: %s, pattern-match: %s"
+          (message "DEBUG-SCOPE: File %s REJECTED - included: %s, excluded: %s, pattern-match: %s"
                    file
-                   (file-exists-p file)
                    included
                    excluded
                    (string-match-p supertag-sync-file-pattern file))
@@ -303,6 +353,13 @@ If no directories are configured, returns t for all org files."
                          expanded-dir
                          (string-prefix-p expanded-dir file-dir))))))
         result))))
+
+(defun supertag-sync--in-sync-scope-p (file)
+  "Check if FILE is within synchronization scope.
+Returns t if file should be synchronized based on configured directories.
+If no directories are configured, returns t for all org files."
+  (when (and file (file-exists-p file))
+    (supertag-sync--in-scope-path-p file)))
 
 (defun supertag-scan-sync-directories (&optional all-files-p)
   "Scan sync directories for org files.
@@ -324,6 +381,75 @@ Otherwise, returns a list of new files that are not yet in sync state."
                                (not (gethash file state-table))))
                   (push file files))))))))
     files))
+
+(defun supertag-sync--snapshot-build ()
+  "Build a snapshot of sync directories.
+Returns a plist with :status, :files, :scope, :errors, :observed-at."
+  (let* ((sync-dirs (supertag-sync--effective-directories))
+         (errors '()))
+    (cond
+     ((not sync-dirs)
+      (list :status 'unavailable
+            :files nil
+            :scope nil
+            :errors (list "sync directories not configured")
+            :observed-at (current-time)))
+     (t
+      (let ((unavailable nil))
+        (dolist (dir sync-dirs)
+          (unless (and (file-directory-p dir)
+                       (file-readable-p dir))
+            (push (list :dir dir :error 'unavailable) errors)
+            (setq unavailable t)))
+        (if unavailable
+            (list :status 'unavailable
+                  :files nil
+                  :scope sync-dirs
+                  :errors (nreverse errors)
+                  :observed-at (current-time))
+          (let ((partial nil)
+                (files '()))
+            (dolist (dir sync-dirs)
+              (condition-case err
+                  (let ((dir-files (directory-files-recursively
+                                    dir supertag-sync-file-pattern t)))
+                    (dolist (file dir-files)
+                      (when (and (file-regular-p file)
+                                 (supertag-sync--in-scope-path-p file))
+                        (push file files))))
+                (error
+                 (setq partial t)
+                 (push (list :dir dir :error (error-message-string err)) errors))))
+            (list :status (if partial 'partial 'complete)
+                  :files (cl-delete-duplicates files :test #'string-equal)
+                  :scope sync-dirs
+                  :errors (nreverse errors)
+                  :observed-at (current-time)))))))))
+
+(defun supertag-sync--snapshot-new-files (snapshot-files)
+  "Return files that are in SNAPSHOT-FILES but missing from sync state."
+  (let ((state-table (supertag-sync--get-state-table))
+        (new-files '()))
+    (dolist (file snapshot-files)
+      (unless (gethash file state-table)
+        (push file new-files)))
+    new-files))
+
+(defun supertag-sync--snapshot-files-to-remove (snapshot-files)
+  "Return state files that should be removed based on SNAPSHOT-FILES."
+  (let ((state-table (supertag-sync--get-state-table))
+        (snapshot-set (make-hash-table :test 'equal))
+        (files-to-remove '()))
+    (dolist (file snapshot-files)
+      (puthash file t snapshot-set))
+    (maphash
+     (lambda (file _state)
+       (let ((in-scope (supertag-sync--in-scope-path-p file)))
+         (when (or (not in-scope)
+                   (not (gethash file snapshot-set)))
+           (push file files-to-remove))))
+     state-table)
+    files-to-remove))
 
 (defun supertag-sync-update-state (file &optional content-hash)
   "Update sync state for FILE.
@@ -445,40 +571,49 @@ Respects `supertag-tag-style` configuration for tag formatting."
 (defun supertag-sync-save-state ()
   "Save sync state to file."
   (supertag-sync--ensure-state-format)
-  (with-temp-file supertag-sync-state-file
-    (let ((print-length nil)
-          (print-level nil))
-      (prin1 supertag-sync--state (current-buffer)))))
+  (let ((state-file (supertag-sync--state-file)))
+    (with-temp-file state-file
+      (let ((print-length nil)
+            (print-level nil))
+        (prin1 supertag-sync--state (current-buffer))))
+    (setq supertag-sync--state-source state-file)))
 
 (defun supertag-sync-load-state ()
   "Load sync state from file.
 If file doesn't exist, initialize empty state.
 Returns the loaded or initialized sync state."
-  (condition-case err
-      (let ((result
-             (if (file-exists-p supertag-sync-state-file)
-                 (with-temp-buffer
-                   (insert-file-contents supertag-sync-state-file)
+  (let ((state-file (supertag-sync--state-file)))
+    (condition-case err
+        (let ((result
+               (if (file-exists-p state-file)
+                   (with-temp-buffer
+                     (insert-file-contents state-file)
                    (goto-char (point-min))
                    ;; Check if file is empty
                    (if (= (point-min) (point-max))
                        (progn
                          (message "Warning: Sync state file is empty, initializing new state")
-                         (setq supertag-sync--state (make-hash-table :test 'equal)))
+                         (setq supertag-sync--state (make-hash-table :test 'equal))
+                         (supertag-sync--ensure-state-format)
+                         (setq supertag-sync--state-source state-file))
                      (condition-case read-err
                          (progn
                            (setq supertag-sync--state (read (current-buffer)))
                            (message "Loaded sync state with %d entries"
-                                    (if (hash-table-p supertag-sync--state)
-                                        (hash-table-count supertag-sync--state)
-                                      0))
+                                    (let ((state-table (supertag-sync--get-state-table)))
+                                      (if (hash-table-p state-table)
+                                          (hash-table-count state-table)
+                                        0)))
                            ;; Ensure the loaded state is in the correct format
                            (supertag-sync--ensure-state-format)
+                           (setq supertag-sync--state-source state-file)
                            supertag-sync--state)
                        (error
                         (message "Error reading sync state: %s" (error-message-string read-err))
                         (message "Initializing new sync state")
                         (setq supertag-sync--state (make-hash-table :test 'equal))
+                        (supertag-sync--ensure-state-format)
+                        (setq supertag-sync--state-source state-file)
                         supertag-sync--state))))
                ;; Initialize empty state if file doesn't exist
                (progn
@@ -487,12 +622,13 @@ Returns the loaded or initialized sync state."
                  ;; Save the initial state
                  (supertag-sync-save-state)
                  supertag-sync--state))))
-        result)
-    (error
-     (message "Critical error loading sync state: %s" (error-message-string err))
-     (message "Initializing fresh sync state")
-     (setq supertag-sync--state (make-hash-table :test 'equal))
-     supertag-sync--state)))
+          result)
+      (error
+       (message "Critical error loading sync state: %s" (error-message-string err))
+       (message "Initializing fresh sync state")
+       (setq supertag-sync--state (make-hash-table :test 'equal))
+       (setq supertag-sync--state-source state-file)
+       supertag-sync--state))))
 
 ;; --- Check and sync ---
 
@@ -733,30 +869,33 @@ OLD-PROPS is the source of truth for database-only fields."
 (defun supertag-sync--process-single-file (file counters)
   "Process a single FILE for synchronization.
 COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
-  (let ((should-parse t)
-        (content-hash nil)
-        (nodes-from-file nil))
+  (let* ((should-parse t)
+         (content-hash nil)
+         (nodes-from-file nil)
+         (allow-destructive (supertag-sync--allow-destructive-p))
+         (deferred-entry (gethash file supertag-sync--deferred-files))
+         (force-parse (and allow-destructive deferred-entry)))
 
     ;; 1. Smart Detection / Reading
     (if (not supertag-sync-smart-detection-enabled)
         (setq nodes-from-file (supertag--parse-org-nodes file))
-      
+
       (with-temp-buffer
         (insert-file-contents file)
         (setq content-hash (secure-hash 'sha1 (current-buffer)))
-        
+
         (let* ((state-table (supertag-sync--get-state-table))
                (state (gethash file state-table))
                (old-hash (when (and (listp state) (keywordp (car state)))
                            (plist-get state :content-hash))))
-          
-          (when (and old-hash (string= content-hash old-hash))
+
+          (when (and old-hash (string= content-hash old-hash) (not force-parse))
             (setq should-parse nil)
             (setq supertag-sync--last-smart-detection-decision
                   (list :file file :decision 'skip :reason "hash unchanged" :time (current-time)))
             (when supertag-sync-smart-detection-verbose
               (message "Supertag: skip (hash unchanged): %s" (file-name-nondirectory file)))))
-        
+
         (when should-parse
           (when supertag-sync-smart-detection-enabled
             (setq supertag-sync--last-smart-detection-decision
@@ -769,7 +908,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     (if (not should-parse)
         ;; Just update state (mtime + hash)
         (supertag-sync-update-state file content-hash)
-      
+
       ;; Parse & Update
       (let* ((current-nodes-in-file (make-hash-table :test 'equal))
              ;; nodes-from-file is already set
@@ -786,23 +925,32 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                  (new-node-props (gethash id current-nodes-in-file)))
             (cond
              ((null new-node-props)
-              (supertag-node-mark-deleted-from-file id)
-              (setf (plist-get counters :nodes-deleted) (1+ (or (plist-get counters :nodes-deleted) 0))))
+              (when allow-destructive
+                (supertag-node-mark-deleted-from-file id)
+                (setf (plist-get counters :nodes-deleted)
+                      (1+ (or (plist-get counters :nodes-deleted) 0)))))
              ((supertag-node-changed-p old-node-props new-node-props)
               (let ((merged-props (supertag--merge-node-properties new-node-props old-node-props)))
                 (supertag-db-add-with-hash id merged-props counters))
-              (setf (plist-get counters :nodes-updated) (1+ (or (plist-get counters :nodes-updated) 0))))
+              (setf (plist-get counters :nodes-updated)
+                    (1+ (or (plist-get counters :nodes-updated) 0))))
              (t nil))
             (remhash id current-nodes-in-file)))
 
         ;; Process new nodes
         (maphash (lambda (id new-node-props)
                    (supertag-db-add-with-hash id new-node-props counters)
-                   (setf (plist-get counters :nodes-created) (1+ (or (plist-get counters :nodes-created) 0))))
+                   (setf (plist-get counters :nodes-created)
+                         (1+ (or (plist-get counters :nodes-created) 0))))
                  current-nodes-in-file)
 
         ;; Update sync state
-        (supertag-sync-update-state file content-hash)))))
+        (supertag-sync-update-state file content-hash)))
+
+    (when (and allow-destructive deferred-entry)
+      (remhash file supertag-sync--deferred-files))
+    (when (and (not allow-destructive) should-parse)
+      (puthash file :pending supertag-sync--deferred-files))))
 
 
 (defun supertag-sync--verify-file-nodes (file counters)
@@ -811,6 +959,8 @@ This function checks if nodes associated with FILE still exist in the file.
 If a node exists in the database but not in the file, it's marked as orphaned.
 FILE is the file path to verify.
 COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
+  (unless (supertag-sync--allow-destructive-p)
+    (cl-return-from supertag-sync--verify-file-nodes nil))
   (let* ((file-exists (file-exists-p file))
          (current-nodes-in-file (make-hash-table :test 'equal))
          (nodes-from-file (when file-exists
@@ -851,7 +1001,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                   (1+ (plist-get counters :nodes-deleted)))))))))
 
 
-(defun supertag-sync--check-and-sync ()
+(defun supertag-sync--check-and-sync-legacy ()
   "Check and synchronize modified files.
   This is the main sync function called periodically.
   It enqueues modified files for asynchronous processing."
@@ -860,7 +1010,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
   ;; Pre-check: Warn if sync directories are not configured
   (unless (supertag-sync--effective-directories)
     (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
-    (cl-return-from supertag-sync--check-and-sync nil))
+    (cl-return-from supertag-sync--check-and-sync-legacy nil))
   
   (let ((files-to-remove nil)
         (modified-files (supertag-get-modified-files))
@@ -921,6 +1071,82 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
 
     ;; Run garbage collection (can be done periodically)
     (supertag-sync-garbage-collect-orphaned-nodes)))
+
+(defun supertag-sync--check-and-sync-guarded ()
+  "Check and synchronize modified files with snapshot guard."
+  ;; Pre-check: Warn if sync directories are not configured
+  (unless (supertag-sync--effective-directories)
+    (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
+    (cl-return-from supertag-sync--check-and-sync-guarded nil))
+  (let* ((snapshot (supertag-sync--snapshot-build))
+         (status (plist-get snapshot :status))
+         (snapshot-files (plist-get snapshot :files))
+         (files-to-remove nil)
+         (modified-files (supertag-get-modified-files))
+         (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
+    (supertag-sync--snapshot-set snapshot)
+    (when (eq status 'unavailable)
+      (message "Supertag: sync skipped; directories unavailable")
+      (cl-return-from supertag-sync--check-and-sync-guarded nil))
+
+    ;; 1. Cleanup Sync State (only when snapshot complete)
+    (when (eq status 'complete)
+      (setq files-to-remove (supertag-sync--snapshot-files-to-remove snapshot-files))
+      (when files-to-remove
+        (let ((state-table (supertag-sync--get-state-table)))
+          (dolist (file files-to-remove)
+            (remhash file state-table)
+            (unless (file-exists-p file)
+              (supertag-with-transaction
+                (supertag-sync--verify-file-nodes file counters))))
+          (supertag-sync-save-state))))
+
+    ;; 2. Scan for New Files (from snapshot)
+    (let ((new-files (supertag-sync--snapshot-new-files snapshot-files)))
+      (when new-files
+        (setq modified-files
+              (cl-union modified-files new-files :test #'string=))))
+
+    ;; 2.5 Re-verify deferred files when snapshot becomes complete
+    (when (eq status 'complete)
+      (let ((deferred-files '()))
+        (maphash (lambda (file state)
+                   (cond
+                    ((not (file-exists-p file))
+                     (remhash file supertag-sync--deferred-files))
+                    ((and (not (eq state :queued))
+                          (supertag-sync--in-sync-scope-p file))
+                     (push file deferred-files)
+                     (puthash file :queued supertag-sync--deferred-files))))
+                 supertag-sync--deferred-files)
+        (when deferred-files
+          (setq modified-files
+                (cl-union modified-files deferred-files :test #'string=)))))
+
+    ;; 3. Enqueue Modified Files for Async Processing
+    (when modified-files
+      (let ((queued-count 0))
+        (dolist (file modified-files)
+          (supertag-async-enqueue file)
+          (cl-incf queued-count))
+        (unless supertag-sync-quiet-when-idle
+          (message "Queued %d files for async sync." queued-count))))
+
+    ;; 4. Report if needed (mostly handled by async worker now)
+    (let ((idle-run (and (null modified-files) (null files-to-remove))))
+      (when idle-run
+        (supertag--diagnose-empty-sync supertag-sync-quiet-when-idle)))
+
+    ;; 5. Run garbage collection only when snapshot complete
+    (when (eq status 'complete)
+      (supertag-sync-garbage-collect-orphaned-nodes))))
+
+(defun supertag-sync--check-and-sync ()
+  "Entry point for sync worker."
+  (supertag-sync--ensure-state-source)
+  (if supertag-sync-snapshot-guard
+      (supertag-sync--check-and-sync-guarded)
+    (supertag-sync--check-and-sync-legacy)))
 
 ;;; --- Enhanced Hash Table Traversal Utilities ---
 
@@ -1101,8 +1327,8 @@ Returns a plist of keyword-value pairs, excluding org-internal properties."
       (with-temp-buffer
         (insert content-string)
         (goto-char (point-min))
-        (while (re-search-forward "#\\([a-zA-Z0-9][-_a-zA-Z0-9]*\\)" nil t)
-             (push (match-string 1) tags))))
+        (while (re-search-forward "#\\([^[:space:]#]+\\)" nil t)
+          (push (match-string 1) tags))))
     (nreverse tags)))
 
 (defun supertag--strip-inline-tags (title)
@@ -1111,7 +1337,7 @@ Collapses extra spaces produced by tag removal and trims leading/trailing
 whitespace."
   (when title
     (let* ((without-tags (replace-regexp-in-string
-                          "#[a-zA-Z0-9][-_a-zA-Z0-9]*\\(?:[ \t]+\\)?"
+                          "#[^[:space:]#]+\\(?:[ \t]+\\)?"
                           "" title))
            (collapsed (replace-regexp-in-string "[ \t]+" " " without-tags)))
       (string-trim collapsed))))
@@ -1545,6 +1771,14 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
 When called interactively, display a summary report and return a plist
 describing the work that was performed."
   (interactive)
+  (supertag-sync--ensure-state-source)
+  (when supertag-sync-snapshot-guard
+    (let* ((snapshot (supertag-sync--snapshot-build))
+           (status (plist-get snapshot :status)))
+      (supertag-sync--snapshot-set snapshot)
+      (unless (eq status 'complete)
+        (message "Supertag rescan aborted: directories unavailable or incomplete.")
+        (cl-return-from supertag-sync-full-rescan nil))))
   (let* ((state-table (supertag-sync--get-state-table))
          (files (cl-delete-duplicates
                  (append (supertag-scan-sync-directories t)

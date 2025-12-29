@@ -136,7 +136,7 @@ MATCHES is the list to collect matching paths."
       (with-temp-buffer
         (insert content-string)
         (goto-char (point-min))
-        (while (re-search-forward "#\\(\\w[-_[:alnum:]]*\\)" nil t)
+        (while (re-search-forward "#\\([^[:space:]#]+\\)" nil t)
           (push (match-string 1) tags))))
     (nreverse tags)))
 

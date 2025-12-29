@@ -179,7 +179,7 @@ This function recursively copies nested hash tables."
   "Detect tag style used on HEADLINE element. Returns 'inline, 'org, 'both or 'none."
   (let* ((raw (org-element-property :raw-value headline))
          (org-tags (org-element-property :tags headline))
-         (has-inline (and raw (string-match-p "#\\w[-_[:alnum:]]*" raw)))
+         (has-inline (and raw (string-match-p "#[^[:space:]#]+" raw)))
          (has-org (and org-tags (> (length org-tags) 0))))
     (cond
      ((and has-inline has-org) 'both)
@@ -195,7 +195,7 @@ This function recursively copies nested hash tables."
          (title (org-element-property :raw-value headline))
          (tags (org-element-property :tags headline))
          (clean-title (string-trim (replace-regexp-in-string ":[[:alnum:]_@#%]+:" ""
-                                       (replace-regexp-in-string "#\\w[-_[:alnum:]]*" "" title))))
+                                       (replace-regexp-in-string "#[^[:space:]#]+" "" title))))
          (inline-part (when tags (mapconcat (lambda (tag) (concat "#" tag)) tags " ")))
          (org-part (when tags (concat ":" (mapconcat #'identity tags ":") ":")))
          (new-line (pcase style

@@ -363,13 +363,13 @@ Prioritizes title prompts over body content for better UX."
 
         ;; Determine tag position based on where tags occur
         (setq tag-position (when tags
-                             (if (string-match-p "\\`#\\w" headline-content)
+                             (if (string-match-p "\\`#[^[:space:]#]" headline-content)
                                  :before-title
                                :after-title)))
 
         ;; Extract title template by removing tags
         (let* ((raw-title-template
-                (replace-regexp-in-string "\\(?:^\\|\\s-\\)#\\w[-_[:alnum:]]*" "" headline-content))
+                (replace-regexp-in-string "\\(?:^\\|\\s-\\)#[^[:space:]#]+" "" headline-content))
                (clean-title-template
                 (string-trim (replace-regexp-in-string "\\s-\\{2,\\}" " " raw-title-template))))
           (setq title-spec `(:part :title :get ,(supertag-capture--generate-get-spec clean-title-template)))
@@ -659,7 +659,7 @@ capture DSL."
                              (bare-title
                               (string-trim
                                (replace-regexp-in-string
-                                "\\(?:^\\|\\s-\\)#\\w[-_[:alnum:]]*" "" title)))
+                                "\\(?:^\\|\\s-\\)#[^[:space:]#]+" "" title)))
                              (tag-string
                               (mapconcat (lambda (t) (concat "#" t))
                                          unique-tags " "))

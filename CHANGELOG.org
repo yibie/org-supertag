@@ -1,4 +1,20 @@
 * Changelog
+* [5.6.1] - 2025-12-26
+** Improvements
+*** Sync Integrity
+- Added snapshot guard (availability/completeness) to block destructive sync when directories are unavailable or partial.
+- Deferred orphan verification and GC remember pending files; full rescan now aborts if snapshot is not complete.
+- Bound sync-state to the active data directory (per-vault) and auto-reload on data-dir changes to prevent state mismatch.
+- Added `supertag-sync-snapshot-guard` toggle.
+
+*** View/Fields Resilience
+- Resolve node tags via relations with fallback to node `:tags`, improving field rendering when relations are missing.
+- Node view refreshes on `:field-values` change events.
+
+** Bug Fixes
+*** Inline Tag Parsing
+- Broadened inline `#tag` matching to support non-ASCII and slash-containing tags across parsing, capture, and migration.
+
 * [5.6.0] - 2025-12-17
 ** Features
 *** View Data API and Plugin System
