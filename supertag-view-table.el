@@ -483,8 +483,8 @@ Automatically detects virtual databases and uses their database fields."
     (if (not tag-id)
         (supertag-view-table--default-columns)
       (let* ((fields (supertag-tag-get-all-fields tag-id)) ; Use recursive getter for inherited fields
-             (base-columns '((:name "Title" :key :title :width 40)
-                             (:name "Refs" :key :refs :width 10)))
+             (base-columns '((:name "Title" :key :title :width 40)))
+             (refs-column '((:name "Refs" :key :refs :width 20)))
              (seen (make-hash-table :test 'equal))
              (field-columns
               (cl-loop for field-def in fields
@@ -500,12 +500,12 @@ Automatically detects virtual databases and uses their database fields."
                                           :width 20)))
                                  ;; Keep the full field definition (type/options etc.)
                                  (append col field-def)))))
-        (append base-columns field-columns)))))
+        (append base-columns field-columns refs-column)))))
 
 (defun supertag-view-table--default-columns ()
   "Return default column configuration."
   '((:name "Title" :key :title :width 40)
-    (:name "Refs" :key :refs :width 10)))
+    (:name "Refs" :key :refs :width 20)))
 
 (defun supertag-view-table--render-table (state)
   "Renderer for layout 'table'. Consumes STATE built by `supertag-view-table--build-state'."
@@ -604,7 +604,7 @@ Automatically detects virtual databases and uses their database fields."
 
 (defun supertag-view-table--pad-string (text width)
   "Pad TEXT with spaces to fit WIDTH while respecting maximum cell width."
-  (let* ((text-str (truncate-string-to-width (format "%s" text) width 0 nil))
+  (let* ((text-str (truncate-string-to-width (if (stringp text) text (format "%s" text)) width 0 nil))
          (padding (- width (string-width text-str))))
     (if (> padding 0)
         (concat text-str (make-string padding ?\s))
@@ -720,6 +720,37 @@ Uses improved styling from old version."
       (_
        (supertag-view-api-get-entity (plist-get query-obj :type) entity-id)))))
 
+(defun supertag-view-table--get-referenced-by (node-id)
+  "Return node IDs that reference NODE-ID."
+  (when node-id
+    (let ((relations (supertag-relation-find-by-to node-id :reference)))
+      (cl-remove-if-not #'stringp
+                        (mapcar (lambda (rel) (plist-get rel :from)) relations)))))
+
+(defun supertag-view-table--format-reference-sources (node-id)
+  "Format backlinks for NODE-ID as a multi-line string with jump metadata."
+  (let ((refs (supertag-view-table--get-referenced-by node-id)))
+    (if (null refs)
+        ""
+      (mapconcat
+       (lambda (ref-id)
+         (let* ((node (supertag-view-api-get-entity :nodes ref-id))
+                (raw-title (or (plist-get node :raw-value)
+                               (plist-get node :title)
+                               "[Untitled]"))
+                (display-title (if (fboundp 'org-link-display-format)
+                                   (org-link-display-format raw-title)
+                                 raw-title))
+                (clean-title (supertag-view-table--strip-todo-keyword display-title))
+                (rendered (supertag-view-helper-render-org-links (string-trim clean-title))))
+           (when (and rendered (> (length rendered) 0))
+             (add-text-properties 0 (length rendered)
+                                  `(supertag-ref-id ,ref-id)
+                                  rendered))
+           rendered))
+       refs
+       "\n"))))
+
 (defun supertag-view-table--get-cell-value (entity-data key column)
   "Get cell value from ENTITY-DATA for KEY, formatted according to COLUMN type."
   (let ((query-obj (supertag-view-table--get-current-query-obj)))
@@ -728,7 +759,7 @@ Uses improved styling from old version."
               (:tag
                (pcase key
                  (:title
-                  (let* ((raw-title (or (plist-get entity-data :title) "No Title"))
+                 (let* ((raw-title (or (plist-get entity-data :title) "No Title"))
                          (base-title (supertag-view-table--strip-todo-keyword raw-title))
                          ;; Render org-style links inside the title so [[id:...][desc]]
                          ;; shows as clickable `desc` within the cell.
@@ -737,7 +768,7 @@ Uses improved styling from old version."
                          (parent-title (and (listp olp)
                                             (> (length olp) 1)
                                             ;; OLP is [root ... parent current]
-                                            (nth (- (length olp) 2) olp))))
+                                           (nth (- (length olp) 2) olp))))
                     (if (and parent-title (not (string-empty-p parent-title)))
                         ;; First line: current title (with org links rendered);
                         ;; second line: parent title (grey background).
@@ -745,13 +776,8 @@ Uses improved styling from old version."
                                 (propertize parent-title 'face 'supertag-view-table-parent-title-face))
                       rendered-title)))
                  (:refs
-                  (let* ((outgoing (length (or (plist-get entity-data :ref-to) '())))
-                         (incoming (or (plist-get entity-data :ref-count) 0)))
-                    (cond
-                     ((and (= outgoing 0) (= incoming 0)) "")
-                     ((= incoming 0) (format "→%d" outgoing))
-                     ((= outgoing 0) (format "←%d" incoming))
-                     (t (format "→%d ←%d" outgoing incoming)))))
+                  (let ((node-id (plist-get entity-data :id)))
+                    (supertag-view-table--format-reference-sources node-id)))
                  (:file (or (plist-get entity-data :file) "No File"))
                  (:tags (string-join (plist-get entity-data :tags) ", "))
                  (_ (let* ((node-id (plist-get entity-data :id))
@@ -764,7 +790,7 @@ Uses improved styling from old version."
       ;; For title cells we preserve existing faces and explicit newlines;
       ;; for all other cells we still run the usual formatting and org link rendering.
       (if (and (eq (plist-get query-obj :type) :tag)
-               (eq key :title))
+               (memq key '(:title :refs)))
           raw-value
         (let ((formatted (supertag-view-table--format-cell-value
                           raw-value (plist-get column :type))))
@@ -784,6 +810,7 @@ Uses improved styling from old version."
       (let* ((node (supertag-view-api-get-entity :nodes value))
              (title (plist-get node :title)))
         (format "[[id:%s][%s]]" value (or title "No Title")))))
+   ((stringp value) value)
    (t (format "%s" value))))
 
 (defun supertag-view-table--format-date (value)
@@ -909,9 +936,11 @@ If VALUE is text, wrap it into multiple lines within WIDTH and apply org-mode ma
       (mapcar
        (lambda (line)
          (let* ((padded (supertag-view-table--pad-string line width))
-                (copy (copy-sequence padded)))
+                (copy (copy-sequence padded))
+                (ref-id (get-text-property 0 'supertag-ref-id line)))
            (add-text-properties 0 (length copy)
-                                `(line-height ,(supertag-view-table--get-exact-line-height))
+                                `(line-height ,(supertag-view-table--get-exact-line-height)
+                                              ,@(when ref-id (list 'supertag-ref-id ref-id)))
                                 copy)
            copy))
        wrapped-lines))))
@@ -1375,7 +1404,10 @@ Opens the file in a new window on the right and moves cursor to the node."
   (let ((coords (supertag-view-table--get-cell-coords)))
     (if (null coords)
         (message "No cell found at point. Please move to a table cell first.")
-      (let ((entity-id (plist-get coords :entity-id)))
+      (let* ((fallback-pos (max (point-min) (1- (point))))
+             (ref-id (or (get-text-property (point) 'supertag-ref-id)
+                         (get-text-property fallback-pos 'supertag-ref-id)))
+             (entity-id (or ref-id (plist-get coords :entity-id))))
         (if (null entity-id)
             (message "No entity ID found in cell coordinates.")
           (when-let* ((node (supertag-view-api-get-entity :nodes entity-id))
