@@ -19,6 +19,22 @@
 
 (defvar supertag-debug-log-field-events nil)
 
+;;; Customization
+
+(defgroup supertag-automation-sync nil
+  "Synchronous automation execution settings for Org-Supertag."
+  :group 'supertag)
+
+(defcustom supertag-automation-sync-use-commit-hooks nil
+  "When non-nil, run automation via `supertag-after-operation-hook'.
+
+By default this is nil, because the automation system already subscribes to
+`:store-changed' events emitted by the unified commit pipeline, as well as
+some legacy direct store updates (e.g. global field value updates) that do not
+go through `supertag-ops-commit'."
+  :type 'boolean
+  :group 'supertag-automation-sync)
+
 ;;; --- Synchronous Event Processing State ---
 
 (defvar supertag-automation-sync--processing-stack nil
@@ -174,8 +190,10 @@ ID is the tag-id. This is mainly for cache invalidation."
       (when-let ((rule (supertag-automation-get rule-id)))
         (let* ((condition (plist-get rule :condition))
                (current-event (list :path (list :nodes node-id) :old old-node :new new-node))
+               (trigger (plist-get rule :trigger))
                (supertag-automation--current-event current-event))
-          (when (supertag-automation--evaluate-condition condition node-id)
+          (when (and (supertag-automation--trigger-match-p trigger current-event)
+                     (supertag-automation--evaluate-condition condition node-id))
             (supertag-rule-execute rule node-id current-event)))))))
 
 (defun supertag-automation-sync--process-node-creation (node-id payload)
@@ -186,8 +204,10 @@ ID is the tag-id. This is mainly for cache invalidation."
       (when-let ((rule (supertag-automation-get rule-id)))
         (let* ((condition (plist-get rule :condition))
                (current-event (list :path (list :nodes node-id) :old nil :new node-data))
+               (trigger (plist-get rule :trigger))
                (supertag-automation--current-event current-event))
-          (when (supertag-automation--evaluate-condition condition node-id)
+          (when (and (supertag-automation--trigger-match-p trigger current-event)
+                     (supertag-automation--evaluate-condition condition node-id))
             (supertag-rule-execute rule node-id current-event)))))))
 
 (defun supertag-automation-sync--process-node-deletion (node-id old-node)
@@ -197,8 +217,10 @@ ID is the tag-id. This is mainly for cache invalidation."
       (when-let ((rule (supertag-automation-get rule-id)))
         (let* ((condition (plist-get rule :condition))
                (current-event (list :path (list :nodes node-id) :old old-node :new nil))
+               (trigger (plist-get rule :trigger))
                (supertag-automation--current-event current-event))
-          (when (supertag-automation--evaluate-condition condition node-id)
+          (when (and (supertag-automation--trigger-match-p trigger current-event)
+                     (supertag-automation--evaluate-condition condition node-id))
             (supertag-rule-execute rule node-id current-event)))))))
 
 (defun supertag-automation-sync--process-tag-change (node-id operation tag-id)
@@ -222,8 +244,9 @@ ID is the tag-id. This is mainly for cache invalidation."
         ;; Skip tag-only triggers
         (let ((trigger (plist-get rule :trigger)))
           (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
-            (when (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)
-              (message "Field change triggered rule %s" rule-id)
+            (when (and (supertag-automation--trigger-match-p trigger current-event)
+                       (supertag-automation--evaluate-condition (plist-get rule :condition) node-id))
+              (supertag-automation--log "Field change triggered rule %s" rule-id)
               (supertag-rule-execute rule node-id current-event))))))))
 
 (defun supertag-automation-sync--process-global-field-change (node-id field-id old-value new-value)
@@ -237,8 +260,9 @@ ID is the tag-id. This is mainly for cache invalidation."
         ;; Skip tag-only triggers
         (let ((trigger (plist-get rule :trigger)))
           (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
-            (when (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)
-              (message "Global field change triggered rule %s" rule-id)
+            (when (and (supertag-automation--trigger-match-p trigger current-event)
+                       (supertag-automation--evaluate-condition (plist-get rule :condition) node-id))
+              (supertag-automation--log "Global field change triggered rule %s" rule-id)
               (supertag-rule-execute rule node-id current-event))))))))
 
 ;;; --- Rule Lookup and Matching ---
@@ -503,8 +527,14 @@ EVENT is the plist provided by `supertag-ops-commit` after hooks."
 
 ;;; --- Auto-initialization ---
 
-;; Register with commit system when loaded
-(supertag-automation-sync--register-commit-hooks)
+;; Avoid double-triggering automation:
+;; - `supertag-core-store.el` emits both :store-changed and `supertag-after-operation-hook`
+;; - `supertag-automation.el` already subscribes to :store-changed
+;;
+;; Keep commit-hook integration opt-in for now.
+(if supertag-automation-sync-use-commit-hooks
+    (supertag-automation-sync--register-commit-hooks)
+  (remove-hook 'supertag-after-operation-hook #'supertag-automation-sync--handle-commit-result))
 
 (provide 'supertag-automation-sync)
 ;;; supertag-automation-sync.el ends here
