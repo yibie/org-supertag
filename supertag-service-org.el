@@ -51,7 +51,11 @@ This intentionally does not consult `org-id-locations`."
 Returns non-nil when NODE-ID was handled, nil otherwise."
   (let* ((node (and (stringp node-id) (supertag-node-get node-id)))
          (file (and (listp node) (plist-get node :file))))
-    (when (and (stringp file) (file-exists-p file))
+    (when (and (stringp file)
+               (file-exists-p file)
+               ;; Only apply to files in sync scope.
+               (or (not (fboundp 'supertag-sync--in-sync-scope-p))
+                   (supertag-sync--in-sync-scope-p file)))
       (let ((buffer (find-file-noselect file)))
         (pop-to-buffer buffer)
         (when (supertag-service-org--goto-id-in-current-buffer node-id)

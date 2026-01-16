@@ -100,6 +100,11 @@ Takes precedence over `org-supertag-sync-directories`."
   :type 'boolean
   :group 'supertag-sync)
 
+(defcustom supertag-sync-scope-debug nil
+  "When non-nil, log verbose diagnostics for sync scope checks."
+  :type 'boolean
+  :group 'supertag-sync)
+
 (defun supertag-sync--state-file ()
   "Return the resolved sync-state file path for current data directory."
   (let* ((data-dir (file-name-as-directory (expand-file-name supertag-data-directory)))
@@ -336,7 +341,7 @@ Does not require the file to exist."
                          (not excluded)
                          (string-match-p supertag-sync-file-pattern file))))
         ;; Enhanced debug logging for troubleshooting
-        (when (not result)
+        (when (and supertag-sync-scope-debug (not result))
           (message "DEBUG-SCOPE: File %s REJECTED - included: %s, excluded: %s, pattern-match: %s"
                    file
                    included
