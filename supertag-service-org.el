@@ -108,7 +108,7 @@ Only headline lines are adjusted (lines starting with `*`)."
   "Move NODE-ID's subtree to TARGET-FILE without prompting.
 
 This does not trust stored character positions. It locates the subtree via
-`org-id-goto`, moves the full subtree text (including all child headings), and
+an in-buffer `:ID:` search, moves the full subtree text (including all child headings), and
 updates Supertag store location for all Org IDs found in that subtree.
 
 When LEAVE-LINK is non-nil, replace the original subtree with a single headline
@@ -139,9 +139,8 @@ that outline level in TARGET-FILE."
       (with-current-buffer source-buf
         (org-with-wide-buffer
           (goto-char (point-min))
-          (org-id-goto node-id)
-          (unless (org-at-heading-p)
-            (error "ID %s not at a heading in %s" node-id (abbreviate-file-name source-file)))
+          (unless (supertag-service-org--goto-id-in-current-buffer node-id)
+            (error "ID %s not found in %s" node-id (abbreviate-file-name source-file)))
           (setq from-level (org-outline-level))
           (setq title (org-get-heading t t t t))
           (setq begin (point))
