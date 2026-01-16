@@ -720,6 +720,9 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 #### 1. 触发器优化
 
 ```elisp
+;; 注意：`:trigger` 必须拼写正确且能匹配当前事件，否则规则不会执行。
+;; （例如写成 `:on-field-chang` 会被视为未知 trigger，从而不会触发。）
+
 ;; 好的做法：使用具体的触发器
 (supertag-automation-create
  '(:name "specific-trigger"

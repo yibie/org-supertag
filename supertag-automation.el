@@ -39,6 +39,25 @@
 (require 'org-id)                  ; For ID generation
 (require 'ht)
 
+;;; Customization
+
+(defgroup supertag-automation nil
+  "Automation settings for Org-Supertag."
+  :group 'supertag)
+
+(defcustom supertag-automation-verbose nil
+  "When non-nil, log verbose automation diagnostics.
+
+This controls routine messages such as rule execution traces and no-op action
+skips. Errors and warnings are still reported regardless of this flag."
+  :type 'boolean
+  :group 'supertag-automation)
+
+(defun supertag-automation--log (format-string &rest args)
+  "Log FORMAT-STRING with ARGS when `supertag-automation-verbose' is non-nil."
+  (when supertag-automation-verbose
+    (apply #'message format-string args)))
+
 ;;; --- Core State Management ---
 
 (defun supertag-automation--ensure-plist (data)
@@ -101,6 +120,54 @@ Plist keys:
   :new   - new value at that path
   :tag-event - when tag event happens, either :added or :removed
   :tag   - the tag name for a tag event")
+
+(defun supertag-automation--event-type (&optional event)
+  "Return a keyword describing EVENT type.
+
+EVENT defaults to `supertag-automation--current-event'."
+  (let* ((ev (or event supertag-automation--current-event))
+         (path (plist-get ev :path)))
+    (cond
+     ((plist-member ev :tag-event) :tag-change)
+     ((and (listp path) (eq (car path) :field-values)) :global-field-change)
+     ((and (listp path) (eq (car path) :fields)) :field-change)
+     ((and (listp path) (eq (car path) :nodes)
+           (>= (length path) 4)
+           (eq (nth 2 path) :properties))
+      :property-change)
+     ((and (listp path) (eq (car path) :nodes)) :node-change)
+     (t :unknown))))
+
+(defun supertag-automation--trigger-match-p (trigger &optional event)
+  "Return non-nil when TRIGGER matches EVENT.
+
+EVENT defaults to `supertag-automation--current-event'. Unknown triggers
+do not match (fail closed)."
+  (let* ((ev (or event supertag-automation--current-event))
+         (normalized (if (fboundp 'supertag-automation--normalize-trigger)
+                         (supertag-automation--normalize-trigger trigger)
+                       trigger))
+         (event-type (supertag-automation--event-type ev))
+         (tag-op (plist-get ev :tag-event))
+         (tag (plist-get ev :tag)))
+    (pcase normalized
+      ((or 'nil :always) t)
+      (:on-change (not (eq event-type :unknown)))
+      (:on-field-change (memq event-type '(:field-change :global-field-change)))
+      (:on-property-change (memq event-type '(:property-change :field-change :global-field-change)))
+      (:on-schedule nil)
+      (:manual nil)
+      (`(:on-tag-added ,tag-name)
+       (and (eq event-type :tag-change)
+            (eq tag-op :added)
+            (equal tag-name tag)))
+      (`(:on-tag-removed ,tag-name)
+       (and (eq event-type :tag-change)
+            (eq tag-op :removed)
+            (equal tag-name tag)))
+      (_
+       (supertag-automation--log "Automation: unknown trigger %S (event=%S)" trigger ev)
+       nil))))
 
 ;;; --- Automation Rule Indexing System ---
 
@@ -485,10 +552,10 @@ Returns automation data or nil if not found."
   "Register a :on-schedule RULE with the central scheduler, if available."
   (when (and (eq (plist-get rule :trigger) :on-schedule)
              (fboundp 'supertag-scheduler-register-task))
-    (let* ((schedule (plist-get rule :schedule))
-           (time (plist-get schedule :time))
-           (days (plist-get schedule :days-of-week))
-           (id-sym (intern (plist-get rule :id)))
+	    (let* ((schedule (plist-get rule :schedule))
+	           (time (plist-get schedule :time))
+	           (days (plist-get schedule :days-of-week))
+	           (id-sym (intern (plist-get rule :id)))
            (runner
             (lambda ()
               (let ((rule-now (supertag-automation-get (plist-get rule :id))))
@@ -499,26 +566,27 @@ Returns automation data or nil if not found."
                        :call-function nil (plist-get action :params)
                        (list :scheduled t :rule (plist-get rule-now :id))))))))))
       (condition-case err
-          (progn
-            (supertag-scheduler-register-task id-sym :daily runner
-                                              :time time
-                                              :days-of-week days)
-            (message "[Automation Scheduler] Registered scheduled rule: %s at %s days=%S"
-                     (plist-get rule :id) time days))
-        (error (message "ERROR: Failed to register scheduled rule %s: %S"
-                        (plist-get rule :id) err))))))
+	          (progn
+	            (supertag-scheduler-register-task id-sym :daily runner
+	                                              :time time
+	                                              :days-of-week days)
+	            (supertag-automation--log "[Automation Scheduler] Registered scheduled rule: %s at %s days=%S"
+	                                     (plist-get rule :id) time days))
+	        (error (message "ERROR: Failed to register scheduled rule %s: %S"
+	                        (plist-get rule :id) err))))))
 
 (defun supertag-automation--deregister-scheduled-rule (rule)
   "Deregister a scheduled RULE from the scheduler, if available."
   (when (and (fboundp 'supertag-scheduler-deregister-task)
              (plist-get rule :id))
     (let ((id-sym (intern (plist-get rule :id))))
-      (condition-case err
-          (progn
-            (supertag-scheduler-deregister-task id-sym)
-            (message "[Automation Scheduler] Deregistered scheduled rule: %s" (plist-get rule :id)))
-        (error (message "ERROR: Failed to deregister scheduled rule %s: %S"
-                        (plist-get rule :id) err))))))
+	      (condition-case err
+	          (progn
+	            (supertag-scheduler-deregister-task id-sym)
+	            (supertag-automation--log "[Automation Scheduler] Deregistered scheduled rule: %s"
+	                                     (plist-get rule :id)))
+	        (error (message "ERROR: Failed to deregister scheduled rule %s: %S"
+	                        (plist-get rule :id) err))))))
 
 (defun supertag-automation--register-all-scheduled ()
   "Register all :on-schedule rules with the scheduler."
@@ -541,7 +609,7 @@ This is called by the automation engine when a rule matches an event."
       (let ((actions (plist-get rule :actions))
             (rule-id (plist-get rule :id))
             (supertag-automation--executing t))
-        (message "Executing rule %s on node %s" rule-id node-id)
+        (supertag-automation--log "Executing rule %s on node %s" rule-id node-id)
         (unwind-protect
             (progn
               (supertag-automation--execute-actions actions node-id context))
@@ -676,7 +744,7 @@ This updates native Org properties like :SCHEDULED:, :DEADLINE:, etc.
 Preserves all existing node data including tags and other properties."
   (let ((property (plist-get params :property))
         (value (plist-get params :value)))
-    (when (and node-id property)
+  (when (and node-id property)
       (supertag-node-update
        node-id
        (lambda (node)
@@ -685,7 +753,7 @@ Preserves all existing node data including tags and other properties."
                   (current (plist-get props property)))
              (if (equal current value)
                  (progn
-                   (message "SKIP(update-property): %s unchanged on node %s" property node-id)
+                   (supertag-automation--log "SKIP(update-property): %s unchanged on node %s" property node-id)
                    node)  ; Return unchanged node to preserve data
                ;; Create new node copy with updated property while preserving everything else
                (let ((new-props (plist-put props property value))
@@ -710,7 +778,7 @@ if not already present."
       (let* ((node (supertag-node-get node-id))
              (tags (plist-get node :tags)))
         (if (member tag-name tags)
-            (message "SKIP(add-tag): tag '%s' already on node %s" tag-name node-id)
+            (supertag-automation--log "SKIP(add-tag): tag '%s' already on node %s" tag-name node-id)
           ;; 1) Update datastore first
           (supertag-ops-add-tag-to-node node-id tag-name :create-if-needed t)
           ;; 2) Update buffer text: end-of-line append if missing
@@ -721,11 +789,11 @@ if not already present."
                 (unless (string-match (concat "#" (regexp-quote tag-name) "\\b") line-content)
                   (end-of-line)
                   (insert (concat " #" tag-name))))
-              (save-buffer)
-              ;; Mark as internal modification AFTER saving
               (when (buffer-file-name)
-                (supertag--mark-internal-modification (buffer-file-name)))))
-          (message "Automation: Added tag '%s' to node %s" tag-name node-id))))))
+                (supertag--mark-internal-modification (buffer-file-name)))
+              (let ((inhibit-message t))
+                (save-buffer))))
+          (supertag-automation--log "Automation: Added tag '%s' to node %s" tag-name node-id))))))
 
 (defun supertag-automation-action-remove-tag (node-id params)
   "Remove a tag from the node.
@@ -737,7 +805,7 @@ Uses the same data-first approach as UI commands for consistency."
       (let* ((node (supertag-node-get node-id))
              (tags (plist-get node :tags)))
         (if (not (member tag-name tags))
-            (message "SKIP(remove-tag): tag '%s' not present on node %s" tag-name node-id)
+            (supertag-automation--log "SKIP(remove-tag): tag '%s' not present on node %s" tag-name node-id)
           ;; 1. Delete relationship from database (same as UI command)
           (let* ((relations (supertag-relation-find-between node-id tag-name :node-tag))
                  (relation-to-delete (car relations)))
@@ -751,11 +819,11 @@ Uses the same data-first approach as UI commands for consistency."
               (let ((tag-regexp (concat "\\s-?#" (regexp-quote tag-name) "\\b")))
                 (when (re-search-forward tag-regexp (line-end-position) t)
                   (replace-match "")))
-              (save-buffer)
-              ;; Mark as internal modification AFTER saving
               (when (buffer-file-name)
-                (supertag--mark-internal-modification (buffer-file-name)))))
-          (message "Automation: Removed tag '%s' from node %s" tag-name node-id))))))
+                (supertag--mark-internal-modification (buffer-file-name)))
+              (let ((inhibit-message t))
+                (save-buffer))))
+          (supertag-automation--log "Automation: Removed tag '%s' from node %s" tag-name node-id))))))
 
 (defun supertag-automation-action-call-function (node-id params context)
   "Call a custom function with node context."
@@ -771,12 +839,12 @@ Uses the same data-first approach as UI commands for consistency."
     (cond
      ((not (fboundp 'supertag-node-create))
       (message "ERROR(:create-node): supertag-node-create not available"))
-     (t
-      (let ((node-id (apply #'supertag-node-create
-                            (append (when title (list :title title))
-                                    (when tags (list :tags tags))))))
-        (message "Created node %s (title=%s tags=%S)" node-id title tags)
-        node-id)))))
+	     (t
+	      (let ((node-id (apply #'supertag-node-create
+	                            (append (when title (list :title title))
+	                                    (when tags (list :tags tags))))))
+	        (supertag-automation--log "Created node %s (title=%s tags=%S)" node-id title tags)
+	        node-id)))))
 
 (defun supertag-automation-action-update-field (node-id params)
   "Update a tag field for NODE-ID. PARAMS: :tag (id/name), :field (string), :value."
@@ -791,7 +859,7 @@ Uses the same data-first approach as UI commands for consistency."
     (when (and node-id tag-id (stringp field))
       (let ((current (supertag-field-get node-id tag-id field)))
         (if (equal current value)
-            (message "SKIP(update-field): %s/%s unchanged on node %s" tag-id field node-id)
+            (supertag-automation--log "SKIP(update-field): %s/%s unchanged on node %s" tag-id field node-id)
           (supertag-field-set node-id tag-id field value))))))
 
 ;;; --- Field Synchronization Engine ---
@@ -803,7 +871,7 @@ TO-ID is the target entity ID.
 FIELD-NAME is the field to sync.
 VALUE is the value to sync.
 RELATION-CONFIG provides sync configuration from the relation."
-  (when supertag-automation--enabled
+    (when supertag-automation--enabled
     (let ((sync-key (format "%s->%s:%s" from-id to-id field-name)))
       ;; Check cache to avoid redundant syncs
       (unless (equal (gethash sync-key supertag-automation--sync-cache) value)
@@ -823,10 +891,10 @@ RELATION-CONFIG provides sync configuration from the relation."
             (supertag-automation--sync-to-tag to-id field-name value))
            
            (t
-            (message "Warning: Unknown target entity type for %s" to-id))))
-        
-        (message "Synced property %s=%s from %s to %s"
-                 field-name value from-id to-id)))))
+           (message "Warning: Unknown target entity type for %s" to-id))))
+
+        (supertag-automation--log "Synced property %s=%s from %s to %s"
+                                 field-name value from-id to-id)))))
 
 (defun supertag-automation--sync-to-node (node-id field-name value)
   "Sync field to a node entity via properties.
@@ -1075,24 +1143,25 @@ This is the actual handler that was previously called directly."
   "Handle node changes and trigger relevant automation."
   (let ((rule-ids (supertag--get-rules-from-index path)))
     ;; (message "DEBUG-6: Found %d candidate rules for path %S" (length rule-ids) path)
-    (dolist (rule-id rule-ids)
-      ;; (message "DEBUG-6.5: Checking rule %s" rule-id)
-      (when-let ((rule (supertag-rule-get rule-id)))
-        (let ((trig (plist-get rule :trigger)))
+	    (dolist (rule-id rule-ids)
+	      ;; (message "DEBUG-6.5: Checking rule %s" rule-id)
+	      (when-let ((rule (supertag-rule-get rule-id)))
+	        (let ((trig (plist-get rule :trigger)))
           ;; Runtime trigger gate: skip tag-only triggers here
           (if (and (consp trig) (memq (car trig) '(:on-tag-added :on-tag-removed)))
               ;; (message "DEBUG-TRIGGER: skip tag-triggered rule %s for non-tag event %S" rule-id path)
-              nil
-            (let ((supertag-automation--current-event (list :path path :old old-value :new new-value)))
-              ;; (message "DEBUG-6.7: Evaluating condition for rule %s" rule-id)
-              (if (supertag-automation--evaluate-condition (plist-get rule :condition) (cadr path))
-                  (progn
-                    (message "Condition passed for rule %s. Executing actions." rule-id)
-                    (message "INDEX-MATCH: Event %S triggered rule %S" path rule-id)
-                    (supertag-rule-execute rule (cadr path)
-                                           (list :path path :old old-value :new new-value)))
-                ;; (message "DEBUG-6.8: Condition failed for rule %s" rule-id)
-                ))))))))
+	              nil
+	            (let ((supertag-automation--current-event (list :path path :old old-value :new new-value)))
+	              ;; (message "DEBUG-6.7: Evaluating condition for rule %s" rule-id)
+	              (if (and (supertag-automation--trigger-match-p trig supertag-automation--current-event)
+	                       (supertag-automation--evaluate-condition (plist-get rule :condition) (cadr path)))
+	                  (progn
+	                    (supertag-automation--log "Condition passed for rule %s. Executing actions." rule-id)
+	                    (supertag-automation--log "INDEX-MATCH: Event %S triggered rule %S" path rule-id)
+	                    (supertag-rule-execute rule (cadr path)
+	                                           (list :path path :old old-value :new new-value)))
+	                ;; (message "DEBUG-6.8: Condition failed for rule %s" rule-id)
+	                ))))))))
 
 (defun supertag-automation--handle-tag-change (node-id old-tags new-tags)
   "Detect added/removed tags and execute runtime-gated tag rules."
@@ -1120,19 +1189,19 @@ This is the actual handler that was previously called directly."
       (dolist (rule-id candidate)
         (when-let ((rule (supertag-rule-get rule-id)))
           (pcase (plist-get rule :trigger)
-            (`(:on-tag-added ,tn)
-             (when (and (eq op :added) (equal tn tag-name)
-                        (let ((supertag-automation--current-event (list :tag-event op :tag tag-name)))
-                          (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)))
-               (message "INDEX-MATCH: Tag added '%s' triggered rule %s" tag-name rule-id)
-               (supertag-rule-execute rule node-id (list :tag-event :added :tag tag-name))))
-            (`(:on-tag-removed ,tn)
-             (when (and (eq op :removed) (equal tn tag-name)
-                        (let ((supertag-automation--current-event (list :tag-event op :tag tag-name)))
-                          (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)))
-               (message "INDEX-MATCH: Tag removed '%s' triggered rule %s" tag-name rule-id)
-               (supertag-rule-execute rule node-id (list :tag-event :removed :tag tag-name))))
-            (_ nil)))))))
+	            (`(:on-tag-added ,tn)
+	             (when (and (eq op :added) (equal tn tag-name)
+	                        (let ((supertag-automation--current-event (list :tag-event op :tag tag-name)))
+	                          (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)))
+	               (supertag-automation--log "INDEX-MATCH: Tag added '%s' triggered rule %s" tag-name rule-id)
+	               (supertag-rule-execute rule node-id (list :tag-event :added :tag tag-name))))
+	            (`(:on-tag-removed ,tn)
+	             (when (and (eq op :removed) (equal tn tag-name)
+	                        (let ((supertag-automation--current-event (list :tag-event op :tag tag-name)))
+	                          (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)))
+	               (supertag-automation--log "INDEX-MATCH: Tag removed '%s' triggered rule %s" tag-name rule-id)
+	               (supertag-rule-execute rule node-id (list :tag-event :removed :tag tag-name))))
+	            (_ nil)))))))
 
 ;; Helper functions for condition evaluation
 (defun supertag-automation--get-field-value (node-id tags field-name)
