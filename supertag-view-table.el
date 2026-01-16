@@ -74,6 +74,12 @@
   :type '(choice (const table) (symbol))
   :group 'supertag-view)
 
+(defconst supertag-view-table--refs-field-name "Refs"
+  "Display name for the default reference field.")
+
+(defconst supertag-view-table--refs-field-id "refs"
+  "Canonical field id for the default reference field.")
+
 (defun supertag-view-table-render (layout state)
   "Render STATE using LAYOUT. STATE is a plist produced by `supertag-view-table--build-state'."
   (let* ((lo (or layout supertag-view-table-default-layout 'table))
@@ -476,15 +482,45 @@ Prompts user to select a tag from available tags."
   "Get tag ID by TAG-NAME."
   (supertag-view-api-tag-id tag-name))
 
+(defun supertag-view-table--ensure-refs-field (tag-id)
+  "Ensure the Refs node-reference field exists and is associated with TAG-ID."
+  (when (and tag-id (stringp tag-id))
+    (if supertag-use-global-fields
+        (progn
+          (unless (supertag-global-field-get supertag-view-table--refs-field-id)
+            (supertag-global-field-create
+             (list :id supertag-view-table--refs-field-id
+                   :name supertag-view-table--refs-field-name
+                   :type :node-reference)))
+          (unless (supertag-tag-get-field tag-id supertag-view-table--refs-field-name)
+            (supertag-tag-associate-field tag-id supertag-view-table--refs-field-id)))
+      (unless (supertag-tag-get-field tag-id supertag-view-table--refs-field-name)
+        (supertag-tag-add-field tag-id
+                                (list :name supertag-view-table--refs-field-name
+                                      :type :node-reference))))))
+
 (defun supertag-view-table--get-columns-for-tag (tag-name)
   "Get column configuration for TAG-NAME, including custom fields with type information.
 Automatically detects virtual databases and uses their database fields."
   (let ((tag-id (supertag-tag-get-id-by-name tag-name)))
     (if (not tag-id)
         (supertag-view-table--default-columns)
-      (let* ((fields (supertag-tag-get-all-fields tag-id)) ; Use recursive getter for inherited fields
-             (base-columns '((:name "Title" :key :title :width 40)))
-             (refs-column '((:name "Refs" :key :refs :width 20)))
+      (progn
+        (supertag-view-table--ensure-refs-field tag-id)
+        (let* ((fields (supertag-tag-get-all-fields tag-id)) ; Use recursive getter for inherited fields
+               (base-columns '((:name "Title" :key :title :width 40)))
+               (refs-field (cl-find supertag-view-table--refs-field-id fields
+                                    :key (lambda (f)
+                                           (or (plist-get f :id)
+                                               (supertag-sanitize-field-id (plist-get f :name))))
+                                    :test #'equal))
+               (refs-name (or (plist-get refs-field :name) supertag-view-table--refs-field-name))
+               (refs-column (list (append `(:name ,refs-name
+                                              :key :refs
+                                              :field-id ,supertag-view-table--refs-field-id
+                                              :type :node-reference
+                                              :width 20)
+                                          refs-field)))
              (seen (make-hash-table :test 'equal))
              (field-columns
               (cl-loop for field-def in fields
@@ -492,7 +528,9 @@ Automatically detects virtual databases and uses their database fields."
                        for fid = (or (plist-get field-def :id) raw-name)
                        for slug = (and fid (supertag-sanitize-field-id fid))
                        for dedupe-key = (if supertag-use-global-fields slug raw-name)
-                       unless (or (null dedupe-key) (gethash dedupe-key seen))
+                       unless (or (null dedupe-key)
+                                  (and slug (equal slug supertag-view-table--refs-field-id))
+                                  (gethash dedupe-key seen))
                        do (puthash dedupe-key t seen)
                        collect (let ((col `(:name ,raw-name
                                           :key ,(intern (or slug raw-name))
@@ -500,12 +538,16 @@ Automatically detects virtual databases and uses their database fields."
                                           :width 20)))
                                  ;; Keep the full field definition (type/options etc.)
                                  (append col field-def)))))
-        (append base-columns field-columns refs-column)))))
+          (append base-columns field-columns refs-column))))))
 
 (defun supertag-view-table--default-columns ()
   "Return default column configuration."
-  '((:name "Title" :key :title :width 40)
-    (:name "Refs" :key :refs :width 20)))
+  `((:name "Title" :key :title :width 40)
+    (:name ,supertag-view-table--refs-field-name
+     :key :refs
+     :field-id ,supertag-view-table--refs-field-id
+     :type :node-reference
+     :width 20)))
 
 (defun supertag-view-table--render-table (state)
   "Renderer for layout 'table'. Consumes STATE built by `supertag-view-table--build-state'."
@@ -596,7 +638,7 @@ Automatically detects virtual databases and uses their database fields."
        "⌨️ Edit: [RET] Edit Cell | [C-c C-i] Insert Image | [w] Adjust Image Width"
        "📊 Columns: [C-c C-a] Add | [C-c C-d] Delete | [C-c C-r] Rename | [C-c C-t] Set Type"
        "🔍 Filter: [/] Apply Filter | [C-c /] Clear Filter | [C-c v s] Switch View"
-       "📍 Navigation: [n/p] Line | [f/b] Cell | [TAB] Next Cell | [t] Switch Table | [o] Goto Node"
+       "📍 Navigation: [n/p] Line | [f/b] Cell | [TAB] Next Cell | [t] Switch Table | [o] Goto Node | [C-o] Goto Ref"
        "🔧 Actions: [g] Refresh | [?] Help | [q] Quit")
       ;; Move to first cell
       (supertag-view-table--goto-first-cell)
@@ -727,6 +769,22 @@ Uses improved styling from old version."
       (cl-remove-if-not #'stringp
                         (mapcar (lambda (rel) (plist-get rel :from)) relations)))))
 
+(defun supertag-view-table--get-references (node-id)
+  "Return node IDs referenced by NODE-ID."
+  (when node-id
+    (let ((relations (supertag-relation-find-by-from node-id :reference)))
+      (cl-remove-if-not #'stringp
+                        (mapcar (lambda (rel) (plist-get rel :to)) relations)))))
+
+(defun supertag-view-table--merge-reference-values (field-value relation-ids)
+  "Merge FIELD-VALUE with RELATION-IDS, preserving FIELD-VALUE order."
+  (let* ((field-ids (supertag-field-normalize-node-reference-list field-value))
+         (rel-ids (cl-remove-duplicates
+                   (cl-remove-if-not #'stringp relation-ids)
+                   :test #'string=))
+         (extras (cl-remove-if (lambda (id) (member id field-ids)) rel-ids)))
+    (append field-ids extras)))
+
 (defun supertag-view-table--format-reference-sources (node-id)
   "Format backlinks for NODE-ID as a multi-line string with jump metadata."
   (let ((refs (supertag-view-table--get-referenced-by node-id)))
@@ -751,10 +809,41 @@ Uses improved styling from old version."
        refs
        "\n"))))
 
+(defun supertag-view-table--format-node-reference-values (value)
+  "Format node-reference VALUE as a multi-line string with jump metadata."
+  (let ((refs (supertag-field-normalize-node-reference-list value)))
+    (if (null refs)
+        ""
+      (mapconcat
+       (lambda (ref-id)
+         (let* ((node (supertag-view-api-get-entity :nodes ref-id))
+                (raw-title (or (plist-get node :raw-value)
+                               (plist-get node :title)
+                               "[Untitled]"))
+                (display-title (if (fboundp 'org-link-display-format)
+                                   (org-link-display-format raw-title)
+                                 raw-title))
+                (clean-title (supertag-view-table--strip-todo-keyword display-title))
+                (rendered (supertag-view-helper-render-org-links (string-trim clean-title))))
+           (when (and rendered (> (length rendered) 0))
+             (add-text-properties 0 (length rendered)
+                                  `(supertag-ref-id ,ref-id)
+                                  rendered))
+           rendered))
+       refs
+       "\n"))))
+
+(defun supertag-view-table--field-name-for-column (column key)
+  "Return the field name string for COLUMN/KEY."
+  (or (and supertag-use-global-fields (plist-get column :field-id))
+      (plist-get column :name)
+      (symbol-name key)))
+
 (defun supertag-view-table--get-cell-value (entity-data key column)
   "Get cell value from ENTITY-DATA for KEY, formatted according to COLUMN type."
   (let ((query-obj (supertag-view-table--get-current-query-obj)))
-    (let* ((raw-value
+    (let* ((col-type (plist-get column :type))
+           (raw-value
             (pcase (plist-get query-obj :type)
               (:tag
                (pcase key
@@ -776,25 +865,34 @@ Uses improved styling from old version."
                                 (propertize parent-title 'face 'supertag-view-table-parent-title-face))
                       rendered-title)))
                  (:refs
-                  (let ((node-id (plist-get entity-data :id)))
-                    (supertag-view-table--format-reference-sources node-id)))
+                  (let* ((node-id (plist-get entity-data :id))
+                         (tag-id (supertag-view-table--get-current-tag-id))
+                         (field-name (supertag-view-table--field-name-for-column column key))
+                         (field-value (when (and node-id tag-id)
+                                        (supertag-view-api-node-field-in-tag node-id tag-id field-name)))
+                         (rel-ids (supertag-view-table--get-references node-id)))
+                    (supertag-view-table--merge-reference-values field-value rel-ids)))
                  (:file (or (plist-get entity-data :file) "No File"))
                  (:tags (string-join (plist-get entity-data :tags) ", "))
                  (_ (let* ((node-id (plist-get entity-data :id))
                            (tag-id (supertag-view-table--get-current-tag-id))
-                           (field-name (symbol-name key)))
+                           (field-name (supertag-view-table--field-name-for-column column key)))
                       (when (and node-id tag-id)
                         (supertag-view-api-node-field-in-tag node-id tag-id field-name))))))
               (_
                (plist-get entity-data key)))))
       ;; For title cells we preserve existing faces and explicit newlines;
       ;; for all other cells we still run the usual formatting and org link rendering.
-      (if (and (eq (plist-get query-obj :type) :tag)
-               (memq key '(:title :refs)))
-          raw-value
-        (let ((formatted (supertag-view-table--format-cell-value
-                          raw-value (plist-get column :type))))
-          (supertag-view-helper-render-org-links formatted))))))
+      (cond
+       ((and (eq (plist-get query-obj :type) :tag)
+             (eq key :title))
+        raw-value)
+       ((and (eq (plist-get query-obj :type) :tag)
+             (eq col-type :node-reference))
+        (supertag-view-table--format-node-reference-values raw-value))
+       (t
+        (let ((formatted (supertag-view-table--format-cell-value raw-value col-type)))
+          (supertag-view-helper-render-org-links formatted)))))))
 
 (defun supertag-view-table--format-cell-value (value type)
   "Format VALUE according to TYPE for display in table cells."
@@ -805,11 +903,16 @@ Uses improved styling from old version."
    ((eq type :options) (supertag-view-table--format-options value))
    ((eq type :boolean) (supertag-view-table--format-boolean value))
    ((eq type :node-reference)
-    (if (string-empty-p value)
-        ""
-      (let* ((node (supertag-view-api-get-entity :nodes value))
-             (title (plist-get node :title)))
-        (format "[[id:%s][%s]]" value (or title "No Title")))))
+    (let ((refs (supertag-field-normalize-node-reference-list value)))
+      (if (null refs)
+          ""
+        (mapconcat
+         (lambda (ref-id)
+           (let* ((node (supertag-view-api-get-entity :nodes ref-id))
+                  (title (plist-get node :title)))
+             (format "[[id:%s][%s]]" ref-id (or title "No Title"))))
+         refs
+         "\n"))))
    ((stringp value) value)
    (t (format "%s" value))))
 
@@ -1360,18 +1463,27 @@ COORDS is a plist with :entity-id and :col-index."
                   (query-obj   (supertag-view-table--get-current-query-obj)))
         (pcase (plist-get query-obj :type)
           (:tag
-           (if (memq col-key '(:title :refs))
+           (if (eq col-key :title)
                (message "Read-Only")
-             (let* ((tag-id (supertag-view-table--get-current-tag-id))
-                    (current-value (supertag-field-get-with-default entity-id
-                                                                    tag-id
-                                                                    (symbol-name col-key)))
+            (let* ((tag-id (supertag-view-table--get-current-tag-id))
+                    (field-name (supertag-view-table--field-name-for-column col-def col-key))
+                    (base-value (supertag-field-get-with-default entity-id
+                                                                 tag-id
+                                                                 field-name))
+                    (current-value (if (eq col-key :refs)
+                                       (supertag-view-table--merge-reference-values
+                                        base-value
+                                        (supertag-view-table--get-references entity-id))
+                                     base-value))
                     (new-value (supertag-ui-read-field-value col-def current-value))
                     (field-type (plist-get col-def :type)))
                (when new-value
                  ;; For :node-reference fields, keep :reference relations and backlinks in sync.
                  (when (eq field-type :node-reference)
-                   (let* ((current-targets (supertag-field-normalize-node-reference-list current-value))
+                   (let* ((relation-targets (supertag-view-table--get-references entity-id))
+                          (current-targets (if (eq col-key :refs)
+                                               (supertag-field-normalize-node-reference-list relation-targets)
+                                             (supertag-field-normalize-node-reference-list current-value)))
                           (new-targets (supertag-field-normalize-node-reference-list new-value))
                           (removed (cl-set-difference current-targets new-targets :test #'string=))
                           (added (cl-set-difference new-targets current-targets :test #'string=)))
@@ -1384,7 +1496,7 @@ COORDS is a plist with :entity-id and :col-index."
                      (dolist (target added)
                        (supertag-relation-add-reference entity-id target))))
                  ;; Persist field value and refresh view.
-                 (supertag-field-set entity-id tag-id (symbol-name col-key) new-value)
+                 (supertag-field-set entity-id tag-id field-name new-value)
                  (supertag-view-table-refresh)
                  (supertag-view-table--goto-cell coords)))))
           (_
@@ -1397,6 +1509,32 @@ COORDS is a plist with :entity-id and :col-index."
                (supertag-view-table-refresh)
                (supertag-view-table--goto-cell coords)))))))))
 
+(defun supertag-view-table--goto-node-id (entity-id)
+  "Jump to the Org node for ENTITY-ID."
+  (if (null entity-id)
+      (message "No entity ID found.")
+    (when-let* ((node (supertag-view-api-get-entity :nodes entity-id))
+                (file (plist-get node :file)))
+      (if (not (file-exists-p file))
+          (message "Error: File for node %s does not exist." entity-id)
+        ;; Split window to the right if not already split
+        (unless (window-in-direction 'right)
+          (split-window-right))
+        ;; Select the right window
+        (let ((target-window (window-in-direction 'right)))
+          (select-window target-window)
+          ;; Open the file in the selected window
+          (find-file file)
+          ;; Find and jump to the node
+          (goto-char (point-min))
+          (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
+              (progn
+                (org-back-to-heading t)
+                (org-show-context)
+                (recenter)
+                (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
+            (message "Error: Could not find ID %s in file %s" entity-id file)))))))
+
 (defun supertag-view-table-goto-node ()
   "Jump to the Org node corresponding to the current row.
 Opens the file in a new window on the right and moves cursor to the node."
@@ -1404,33 +1542,20 @@ Opens the file in a new window on the right and moves cursor to the node."
   (let ((coords (supertag-view-table--get-cell-coords)))
     (if (null coords)
         (message "No cell found at point. Please move to a table cell first.")
-      (let* ((fallback-pos (max (point-min) (1- (point))))
-             (ref-id (or (get-text-property (point) 'supertag-ref-id)
-                         (get-text-property fallback-pos 'supertag-ref-id)))
-             (entity-id (or ref-id (plist-get coords :entity-id))))
+      (let ((entity-id (plist-get coords :entity-id)))
         (if (null entity-id)
             (message "No entity ID found in cell coordinates.")
-          (when-let* ((node (supertag-view-api-get-entity :nodes entity-id))
-                      (file (plist-get node :file)))
-            (if (not (file-exists-p file))
-                (message "Error: File for node %s does not exist." entity-id)
-              ;; Split window to the right if not already split
-              (unless (window-in-direction 'right)
-                (split-window-right))
-              ;; Select the right window
-              (let ((target-window (window-in-direction 'right)))
-                (select-window target-window)
-                ;; Open the file in the selected window
-                (find-file file)
-                ;; Find and jump to the node
-                (goto-char (point-min))
-                (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
-                    (progn
-                      (org-back-to-heading t)
-                      (org-show-context)
-                      (recenter)
-                      (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
-                  (message "Error: Could not find ID %s in file %s" entity-id file))))))))))
+          (supertag-view-table--goto-node-id entity-id))))))
+
+(defun supertag-view-table-goto-reference ()
+  "Jump to the referenced node at point."
+  (interactive)
+  (let* ((fallback-pos (max (point-min) (1- (point))))
+         (ref-id (or (get-text-property (point) 'supertag-ref-id)
+                     (get-text-property fallback-pos 'supertag-ref-id))))
+    (if (null ref-id)
+        (message "No reference found at point.")
+      (supertag-view-table--goto-node-id ref-id))))
 
 (defun supertag-view-table--get-current-query-obj ()
   "Get current query object."
@@ -1708,6 +1833,7 @@ With prefix argument INDEX, switch to specific table number."
     (define-key map (kbd "C-c C-r") #'supertag-view-table-rename-column)
     (define-key map (kbd "C-c C-t") #'supertag-view-table-set-column-type)
     (define-key map (kbd "o") #'supertag-view-table-goto-node)
+    (define-key map (kbd "C-o") #'supertag-view-table-goto-reference)
     ;; Help
     (define-key map (kbd "?") #'supertag-view-table-help)
     map)
@@ -1771,6 +1897,8 @@ With prefix argument INDEX, switch to specific table number."
     (princ "  TAB         - Next cell\n")
     (princ "  <backtab>   - Previous cell\n")
     (princ "  <, >        - Beginning/end of buffer\n\n")
+    (princ "  o           - Jump to current row's node\n")
+    (princ "  C-o         - Jump to referenced node at point\n\n")
     (princ "Editing:\n")
     (princ "  RET         - Edit current cell\n")
     (princ "  C-c C-i     - Insert image into current cell\n\n")

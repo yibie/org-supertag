@@ -10,7 +10,7 @@
 *** View/Fields Resilience
 - Resolve node tags via relations with fallback to node `:tags`, improving field rendering when relations are missing.
 - Node view refreshes on `:field-values` change events.
-- Table view lists reference sources in the Refs column (fixed at the end) with `o` jump support.
+- Table view pins a "Refs" node-reference field at the end (auto-created/associated in global-field mode) so references can be edited in-table; it merges `add-reference` relations into display/selection; `C-o` jumps to referenced nodes.
 
 ** Bug Fixes
 *** Inline Tag Parsing
