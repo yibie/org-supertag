@@ -16,6 +16,131 @@
 (declare-function supertag-node-update "supertag-ops-node" (id updater))
 (declare-function supertag-tag-update "supertag-ops-tag" (id updater))
 
+;;; --- Reference Field Ownership ---
+
+(defconst supertag-reference-default-field-id "refs"
+  "Default global field id used to store generic references.")
+
+(defconst supertag-reference-default-field-name "Refs"
+  "Default global field name used to store generic references.")
+
+(defconst supertag-reference--missing (list :supertag-reference-missing)
+  "Sentinel used to detect missing reference field values.")
+
+(defvar supertag-reference--materializing nil
+  "Non-nil while lazily materializing reference fields into relations.")
+
+(defun supertag-reference--normalize-id-list (value)
+  "Normalize VALUE into a list of non-empty string ids."
+  (let* ((candidates (cond
+                      ((null value) '())
+                      ((and (listp value) (not (stringp value))) value)
+                      ((stringp value) (list value))
+                      (t (list (format "%s" value)))))
+         (cleaned (cl-remove-if
+                   (lambda (item)
+                     (or (null item)
+                         (and (stringp item) (= (length item) 0))))
+                   (mapcar (lambda (item)
+                             (cond
+                              ((null item) nil)
+                              ((stringp item) item)
+                              (t (format "%s" item))))
+                           candidates))))
+    cleaned))
+
+(defun supertag-reference--normalize-field-ids (fields)
+  "Normalize FIELDS into a list of field-id strings."
+  (supertag-reference--normalize-id-list fields))
+
+(defun supertag-reference--pack-targets (targets)
+  "Pack TARGETS list into stored field form."
+  (pcase targets
+    ('() nil)
+    (`(,single) single)
+    (_ targets)))
+
+(defun supertag-reference--effective-fields (relation)
+  "Return effective field ids for RELATION, defaulting to Refs."
+  (let ((fields (supertag-reference--normalize-field-ids (plist-get relation :fields))))
+    (if (null fields)
+        (list supertag-reference-default-field-id)
+      fields)))
+
+(defun supertag-reference--relation-has-field-p (relation field-id)
+  "Return non-nil when RELATION is associated with FIELD-ID."
+  (member field-id (supertag-reference--effective-fields relation)))
+
+(defun supertag-reference--collect-targets (from-id field-id)
+  "Collect reference targets for FROM-ID filtered by FIELD-ID."
+  (let ((relations (supertag-relation-find-by-from from-id :reference)))
+    (cl-remove-duplicates
+     (cl-loop for rel in relations
+              when (supertag-reference--relation-has-field-p rel field-id)
+              collect (plist-get rel :to))
+     :test #'string=)))
+
+(defun supertag-reference--merge-field-ids (current new-fields)
+  "Merge NEW-FIELDS into CURRENT field list, preserving defaults."
+  (let* ((base (if (null current)
+                   (list supertag-reference-default-field-id)
+                 (supertag-reference--normalize-field-ids current)))
+         (extra (supertag-reference--normalize-field-ids new-fields)))
+    (cl-remove-duplicates (append base extra) :test #'string=)))
+
+(defun supertag-reference--update-field-cache (from-id field-id)
+  "Sync FIELD-ID value for FROM-ID from reference relations."
+  (when (and supertag-use-global-fields from-id field-id)
+    (unless supertag-reference--materializing
+      (let* ((raw (supertag-store-get-field-value from-id field-id supertag-reference--missing))
+             (legacy (if (eq raw supertag-reference--missing)
+                         '()
+                       (supertag-reference--normalize-id-list raw)))
+             (current (supertag-reference--collect-targets from-id field-id))
+             (missing (cl-set-difference legacy current :test #'string=)))
+        (when missing
+          (let ((supertag-reference--materializing t))
+            (dolist (target missing)
+              (supertag-relation-create
+               (list :type :reference
+                     :from from-id
+                     :to target
+                     :fields (list field-id))))))))
+    (let* ((targets (supertag-reference--collect-targets from-id field-id))
+           (packed (supertag-reference--pack-targets targets)))
+      (supertag-store-put-field-value from-id field-id packed t))))
+
+(defun supertag-reference-get-targets (from-id field-id)
+  "Return reference targets for FROM-ID/FIELD-ID, lazily materializing legacy values."
+  (when (and from-id field-id)
+    (supertag-reference--update-field-cache from-id field-id)
+    (supertag-reference--collect-targets from-id field-id)))
+
+(defun supertag-reference-set-targets (from-id field-id targets)
+  "Set reference TARGETS for FROM-ID/FIELD-ID via relation updates."
+  (let* ((desired (supertag-reference--normalize-id-list targets))
+         (current (supertag-reference--collect-targets from-id field-id))
+         (removed (cl-set-difference current desired :test #'string=))
+         (added (cl-set-difference desired current :test #'string=)))
+    ;; Remove field membership (or relation) for removed targets.
+    (dolist (target removed)
+      (dolist (rel (supertag-relation-find-between from-id target :reference))
+        (let* ((rel-fields (supertag-reference--effective-fields rel))
+               (new-fields (remove field-id rel-fields)))
+          (if (null new-fields)
+              (progn
+                (supertag-relation-delete (plist-get rel :id))
+                (when (fboundp 'supertag-ui--remove-link-under-node)
+                  (supertag-ui--remove-link-under-node target from-id)))
+            (supertag-relation-update
+             (plist-get rel :id)
+             (lambda (old) (plist-put (copy-sequence old) :fields new-fields)))))))
+    ;; Add references for new targets.
+    (dolist (target added)
+      (supertag-relation-add-reference from-id target field-id))
+    (supertag-reference--update-field-cache from-id field-id)
+    desired))
+
 ;;; --- Internal Helper ---
 
 ;; Deterministic IDs are now the default for optimal data consistency
