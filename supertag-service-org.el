@@ -71,21 +71,32 @@ If NODE-ID is already a top-level heading, return nil."
 
 (defun supertag-service-org--update-buffer-and-resync (node-id buffer-update-func)
   "Generic function to run a buffer-updating function and then trigger a resync."
-  (supertag-service-org--with-node-buffer node-id
-					  (lambda ()
-					    (funcall buffer-update-func)
-					    ;; Sync to update memory from the modified buffer
-					    (when (fboundp 'supertag-node-sync-at-point)
-					      (supertag-node-sync-at-point))
-					    (save-buffer)
-					    ;; Mark as internal modification AFTER saving
-					    (when (buffer-file-name)
-					      (supertag--mark-internal-modification (buffer-file-name))))))
+  (supertag-service-org--with-node-buffer
+   node-id
+   (lambda ()
+     (let ((before-tick (buffer-chars-modified-tick)))
+       (funcall buffer-update-func)
+       ;; Only sync/save when buffer actually changed, to avoid noisy no-op runs.
+       (unless (eq before-tick (buffer-chars-modified-tick))
+         ;; Sync to update memory from the modified buffer.
+         (when (fboundp 'supertag-node-sync-at-point)
+           (supertag-node-sync-at-point))
+         ;; Mark internal modification BEFORE save so after-save hook can skip.
+         (when (buffer-file-name)
+           (supertag--mark-internal-modification (buffer-file-name)))
+         (let ((inhibit-message t))
+           (save-buffer)))))))
 
 (defun supertag-service-org-set-todo-state (node-id state)
-  "Sets the TODO state for NODE-ID in the buffer and triggers a resync."
-  (supertag-service-org--update-buffer-and-resync node-id
-						  (lambda () (org-todo state))))
+  "Set the TODO STATE for NODE-ID in the buffer and trigger a resync."
+  (supertag-service-org--update-buffer-and-resync
+   node-id
+   (lambda ()
+     (let ((inhibit-message t)
+           (current (when (fboundp 'org-get-todo-state)
+                      (org-get-todo-state))))
+       (unless (equal current state)
+         (org-todo state))))))
 
 (defun supertag-service-org-add-tag (node-id tag-name)
   "Adds #TAG-NAME text to the headline for NODE-ID and triggers a resync."
