@@ -19,6 +19,75 @@
 (require 'supertag-view-helper)
 (require 'supertag-core-scan)
 
+(defgroup supertag-org-link nil
+  "Org link integration for Org-Supertag."
+  :group 'org-supertag)
+
+(defcustom supertag-org-id-open-link-auto-enable t
+  "When non-nil, let `org-id-open-link` resolve IDs via Org-Supertag first.
+
+This avoids depending on `org-id-locations` when the target node exists in the
+Supertag store. The fallback remains the original Org behavior when the node is
+unknown to Supertag or the recorded file is missing."
+  :type 'boolean
+  :group 'supertag-org-link)
+
+(defun supertag-service-org--goto-id-in-current-buffer (node-id)
+  "Jump to NODE-ID by searching `:ID:` in the current buffer.
+
+This intentionally does not consult `org-id-locations`."
+  (when (and (stringp node-id) (not (string-empty-p node-id)))
+    (org-with-wide-buffer
+      (goto-char (point-min))
+      (when (re-search-forward
+             (concat "^[ \t]*:ID:[ \t]*" (regexp-quote node-id) "[ \t]*$")
+             nil t)
+        (org-back-to-heading t)
+        t))))
+
+(defun supertag-service-org-follow-id (node-id)
+  "Open NODE-ID using Org-Supertag's node location and a robust `:ID:` search.
+
+Returns non-nil when NODE-ID was handled, nil otherwise."
+  (let* ((node (and (stringp node-id) (supertag-node-get node-id)))
+         (file (and (listp node) (plist-get node :file))))
+    (when (and (stringp file) (file-exists-p file))
+      (let ((buffer (find-file-noselect file)))
+        (pop-to-buffer buffer)
+        (when (supertag-service-org--goto-id-in-current-buffer node-id)
+          (org-show-context)
+          (recenter)
+          t)))))
+
+(defun supertag-service-org--org-id-open-link-advice (orig-fn &rest args)
+  "Advice for `org-id-open-link` that prefers Org-Supertag lookup when available."
+  (let ((node-id (car args)))
+    (if (and supertag-org-id-open-link-auto-enable
+             (bound-and-true-p supertag--initialized)
+             (stringp node-id)
+             (supertag-service-org-follow-id node-id))
+        t
+      (apply orig-fn args))))
+
+(defun supertag-enable-org-id-open-link-integration ()
+  "Enable Org-Supertag integration for `org-id-open-link`."
+  (interactive)
+  (setq supertag-org-id-open-link-auto-enable t)
+  (when (fboundp 'org-id-open-link)
+    (advice-add 'org-id-open-link :around #'supertag-service-org--org-id-open-link-advice))
+  (message "[supertag] org-id-open-link integration enabled"))
+
+(defun supertag-disable-org-id-open-link-integration ()
+  "Disable Org-Supertag integration for `org-id-open-link`."
+  (interactive)
+  (setq supertag-org-id-open-link-auto-enable nil)
+  (when (fboundp 'org-id-open-link)
+    (advice-remove 'org-id-open-link #'supertag-service-org--org-id-open-link-advice))
+  (message "[supertag] org-id-open-link integration disabled"))
+
+(when supertag-org-id-open-link-auto-enable
+  (supertag-enable-org-id-open-link-integration))
+
 (defun supertag-service-org--normalize-plist (data)
   "Return DATA as a plist. Convert hash tables into plists."
   (if (hash-table-p data)
