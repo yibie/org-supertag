@@ -304,9 +304,19 @@ Each action is a `plist` in the format `(:action :action-type :params (...))`.
 | **`:update-todo-state`** | `(:state "new-state")` | Update the TODO state of the current node (e.g., to "DONE", "TODO"). This directly changes the headline's keyword, unlike `:update-property`. |
 | **`:add-tag`** | `(:tag "tag-name")` | Add a new tag to the current node. |
 | **`:remove-tag`** | `(:tag "tag-name")` | Remove a tag from the current node. |
-| **`:call-function`** | `(:function #'your-function)` | Call an Emacs Lisp function you've defined yourself. This is the "ultimate weapon" for implementing complex logic. The function will receive `(node-id context)` as two parameters. |
+| **`:call-function`** | `(:function #'your-function :args (...))` | Call an Emacs Lisp function you've defined yourself. This is the "ultimate weapon" for implementing complex logic. The function receives `(node-id context &rest args)`. |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | Create a completely new node. |
 | **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | Resolve a value (`:on`) and execute the first matching branch. Each branch can use `:equals`, `:in`, `:match` (regexp/function), or `:test` to match, and runs its own nested `:actions`. Provide `:default t` for a fallback branch. |
+
+Tip: A commonly useful built-in helper for `:call-function` is
+`supertag-service-org-move-node-to-file-action`, which moves a node's subtree
+to a target file without prompting:
+
+```elisp
+(:action :call-function
+ :params (:function #'supertag-service-org-move-node-to-file-action
+         :args ("~/org/archive.org" t 1)))
+```
 
 ---
 
@@ -488,7 +498,7 @@ When a subtask's status changes, we want to check if all tasks in the parent pro
 
 This is the best demonstration of the new automation engine's powerful capabilities: a single rule can execute multiple actions sequentially.
 
-**Scenario**: When a task's status is set to `Done`, automatically record the completion date and tag it with `#archived`.
+**Scenario**: When a task's status is set to `Done`, automatically record the completion date, tag it with `#archived`, and move it to an archive file.
 
 ```elisp
 (supertag-automation-create
@@ -500,7 +510,10 @@ This is the best demonstration of the new automation engine's powerful capabilit
    '((:action :update-property
       :params (:property :completed_date :value (current-time)))
      (:action :add-tag
-      :params (:tag "archived")))))
+      :params (:tag "archived"))
+     (:action :call-function
+      :params (:function #'supertag-service-org-move-node-to-file-action
+              :args ("~/org/archive.org" t 1))))))
 ```
 
 #### Simulated Effects
@@ -510,6 +523,7 @@ This is the best demonstration of the new automation engine's powerful capabilit
 *   **After Operation**:
     1.  The node gains a `:completed_date:` property with the current time as its value.
     2.  The node is automatically tagged with `#archived`.
+    3.  The node subtree is moved into `~/org/archive.org` (leaving an `id:` link behind at the original location).
 
 ---
 

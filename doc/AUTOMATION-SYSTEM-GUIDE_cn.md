@@ -304,9 +304,17 @@ graph LR
 | **`:update-todo-state`** | `(:state "new-state")` | 更新当前节点的 TODO 状态 (例如 "DONE", "TODO")。这会直接修改标题的关键字，与 `:update-property` 不同。 |
 | **`:add-tag`** | `(:tag "tag-name")` | 为当前节点添加一个新标签。 |
 | **`:remove-tag`** | `(:tag "tag-name")` | 从当前节点移除一个标签。 |
-| **`:call-function`** | `(:function #'your-function)` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context)` 两个参数。 |
+| **`:call-function`** | `(:function #'your-function :args (...))` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context &rest args)` 参数。 |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | 创建一个全新的节点。 |
 | **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | 根据 `:on` 解析出的值执行首个匹配分支。每个分支可使用 `:equals`、`:in`、`:match`（正则/函数）或 `:test` 进行匹配，并包含自己的 `:actions` 列表。通过 `:default t` 指定兜底分支。 |
+
+提示：一个常用的内置 helper 是 `supertag-service-org-move-node-to-file-action`，用于把节点 subtree 非交互式移动到目标文件：
+
+```elisp
+(:action :call-function
+ :params (:function #'supertag-service-org-move-node-to-file-action
+         :args ("~/org/archive.org" t 1)))
+```
 
 ---
 
@@ -488,7 +496,7 @@ graph LR
 
 这是新自动化引擎强大能力的最佳体现：一条规则可以按顺序执行多个动作。
 
-**场景**: 当一个任务的状态被设置为 `Done` 时，自动记录完成日期，并为其打上 `#archived` 标签。
+**场景**: 当一个任务的状态被设置为 `Done` 时，自动记录完成日期，为其打上 `#archived` 标签，并把节点移动到归档文件。
 
 ```elisp
 (supertag-automation-create
@@ -500,7 +508,10 @@ graph LR
    '((:action :update-property
       :params (:property :completed_date :value (current-time)))
      (:action :add-tag
-      :params (:tag "archived")))))
+      :params (:tag "archived"))
+     (:action :call-function
+      :params (:function #'supertag-service-org-move-node-to-file-action
+              :args ("~/org/archive.org" t 1))))))
 ```
 
 #### 模拟效果
@@ -510,6 +521,7 @@ graph LR
 *   **操作后**:
     1.  该节点新增了 `:completed_date:` 属性，其值为当前时间。
     2.  该节点被自动添加了 `#archived` 标签。
+    3.  该节点 subtree 会被移动到 `~/org/archive.org`（并在原位置留下一个 `id:` 链接）。
 
 ---
 
