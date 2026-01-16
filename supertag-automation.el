@@ -1318,12 +1318,13 @@ Returns t if condition passes, nil otherwise."
          (cond
           ;; Keyword: direct property on node plist
           ((keywordp key)
-           (let ((actual-val (plist-get props key)))
+           (let ((actual-val (or (and (plistp props) (plist-get props key))
+                                 (plist-get node-data key))))
              (equal actual-val expected-val)))
           ;; String key: treat as field name; value is resolved via
           ;; global field storage when enabled (for compatibility).
           ((stringp key)
-           (let ((actual-val (supertag-automation--get-field-value node-id tags key)))
+            (let ((actual-val (supertag-automation--get-field-value node-id tags key)))
              (equal actual-val expected-val))))))
       
       ('property-changed
@@ -1337,7 +1338,8 @@ Returns t if condition passes, nil otherwise."
              (test-fn (cadr args))
              (fn-args (cddr args)))
         (let ((value (cond
-                      ((keywordp key) (plist-get props key))
+                      ((keywordp key) (or (and (plistp props) (plist-get props key))
+                                          (plist-get node-data key)))
                       ((stringp key) (supertag-automation--get-field-value node-id tags key))
                       (t nil))))
           (if (functionp test-fn)
