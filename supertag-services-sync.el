@@ -882,32 +882,19 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
          (force-parse (and allow-destructive deferred-entry)))
 
     ;; 1. Smart Detection / Reading
-    (if (not supertag-sync-smart-detection-enabled)
-        (setq nodes-from-file (supertag--parse-org-nodes file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (setq content-hash (secure-hash 'sha1 (current-buffer)))
 
-      (with-temp-buffer
-        (insert-file-contents file)
-        (setq content-hash (secure-hash 'sha1 (current-buffer)))
+      (let* ((state-table (supertag-sync--get-state-table))
+             (state (gethash file state-table))
+             (old-hash (when (and (listp state) (keywordp (car state)))
+                         (plist-get state :content-hash))))
+        (when (and old-hash (string= content-hash old-hash) (not force-parse))
+          (setq should-parse nil)))
 
-        (let* ((state-table (supertag-sync--get-state-table))
-               (state (gethash file state-table))
-               (old-hash (when (and (listp state) (keywordp (car state)))
-                           (plist-get state :content-hash))))
-
-          (when (and old-hash (string= content-hash old-hash) (not force-parse))
-            (setq should-parse nil)
-            (setq supertag-sync--last-smart-detection-decision
-                  (list :file file :decision 'skip :reason "hash unchanged" :time (current-time)))
-            (when supertag-sync-smart-detection-verbose
-              (message "Supertag: skip (hash unchanged): %s" (file-name-nondirectory file)))))
-
-        (when should-parse
-          (when supertag-sync-smart-detection-enabled
-            (setq supertag-sync--last-smart-detection-decision
-                  (list :file file :decision 'sync :reason "hash changed" :time (current-time)))
-            (when supertag-sync-smart-detection-verbose
-              (message "Supertag: sync (hash changed): %s" (file-name-nondirectory file))))
-          (setq nodes-from-file (supertag--parse-org-nodes-from-current-buffer file)))))
+      (when should-parse
+        (setq nodes-from-file (supertag--parse-org-nodes-from-current-buffer file))))
 
     ;; 2. Processing (if not skipped)
     (if (not should-parse)
