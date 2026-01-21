@@ -225,14 +225,14 @@ This function handles both legacy and global field modes."
       (when own-fields
         (dolist (field-def own-fields)
           (let ((start (point))
-                (field-name (or (plist-get field-def :name)
-                                (plist-get field-def :id))))
+                (field-id (plist-get field-def :id))
+                (field-name (or (plist-get field-def :name) field-id)))
             (when field-name
-              (puthash field-name t processed-fields) ; Mark as processed
+              (puthash field-name t processed-fields) ; Mark as processed (by display name)
               (insert (format "%s  %s\n"
                                indent (supertag-schema--format-field field-def)))
               (add-text-properties start (1- (point))
-                                   `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name)))))))
+                                   `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name :field-id ,field-id)))))))
 
       ;; 2. Traverse parents and render their fields as inherited
       (while current-parent-id
@@ -251,12 +251,12 @@ This function handles both legacy and global field modes."
                              indent (propertize (format "// Inherited from %s" current-parent-id) 'face 'font-lock-comment-face)))
             (dolist (field-def (nreverse fields-to-render))
               (let ((start (point))
-                    (field-name (or (plist-get field-def :name)
-                                    (plist-get field-def :id))))
+                    (field-id (plist-get field-def :id))
+                    (field-name (or (plist-get field-def :name) field-id)))
                 (insert (format "%s  %s\n"
                                  indent (supertag-schema--format-field field-def)))
                 (add-text-properties start (1- (point))
-                                     `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name :inherited-from ,current-parent-id)))))))
+                                     `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name :field-id ,field-id :inherited-from ,current-parent-id)))))))
 
         ;; Move to next parent
         (setq current-parent-id (plist-get (supertag-schema--ensure-plist (supertag-tag-get current-parent-id)) :extends))))
@@ -270,12 +270,16 @@ This function handles both legacy and global field modes."
   (let* ((name (or (plist-get field-def :name)
                    (plist-get field-def :id)
                    "unnamed"))
+         (id (plist-get field-def :id))
          (type (plist-get field-def :type))
          (options (plist-get field-def :options))
          (type-str (if type (format "(type: %s)" (substring (symbol-name type) 1)) "(type: string)")))
-    (if (and (eq type :options) options)
-        (format "- %s %s %s" name type-str options)
-      (format "- %s %s" name type-str))))
+    (let ((label (if (and supertag-use-global-fields id)
+                     (format "%s [%s]" name id)
+                   name)))
+      (if (and (eq type :options) options)
+          (format "- %s %s %s" label type-str options)
+        (format "- %s %s" label type-str)))))
 
 ;;; --- Major Mode and User Command ---
 
@@ -473,12 +477,15 @@ Dispatches to the correct deletion logic based on context."
     (pcase (plist-get context :type)
       (:field
        (let* ((tag-id (plist-get context :tag-id))
-              (field-name (plist-get context :field-name))
-              (inherited-from (plist-get context :inherited-from)))
+             (field-name (plist-get context :field-name))
+             (field-id (plist-get context :field-id))
+             (inherited-from (plist-get context :inherited-from)))
          (if inherited-from
              (message "Cannot delete: Field '%s' is inherited from '%s'. Delete it from the parent tag." field-name inherited-from)
            (when (yes-or-no-p (format "Really delete field '%s' from tag '%s'?" field-name tag-id))
-             (supertag-tag-remove-field tag-id field-name)
+             (if (and supertag-use-global-fields field-id (stringp field-id) (not (string-empty-p field-id)))
+                 (supertag-tag-disassociate-field tag-id field-id)
+               (supertag-tag-remove-field tag-id field-name))
              (message "Field '%s' deleted. Refreshing view..." field-name)
              (supertag-schema-refresh)))))
       (:tag

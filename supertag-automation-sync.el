@@ -183,55 +183,167 @@ ID is the tag-id. This is mainly for cache invalidation."
 
 ;;; --- Node Change Processing ---
 
+(defun supertag-automation-sync--normalize-tag-list (value)
+  "Normalize VALUE into a tag list."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   (t (list value))))
+
+(defun supertag-automation-sync--diff-tags (old-tags new-tags)
+  "Return (ADDED . REMOVED) between OLD-TAGS and NEW-TAGS."
+  (let* ((old (cl-remove-duplicates (copy-sequence (supertag-automation-sync--normalize-tag-list old-tags))
+                                    :test 'equal))
+         (new (cl-remove-duplicates (copy-sequence (supertag-automation-sync--normalize-tag-list new-tags))
+                                    :test 'equal))
+         (added (cl-set-difference new old :test 'equal))
+         (removed (cl-set-difference old new :test 'equal)))
+    (cons added removed)))
+
+(defun supertag-automation-sync--condition-contains-op-p (condition ops)
+  "Return non-nil when CONDITION contains any operator in OPS.
+
+OPS is a list of symbols, e.g. '(property-changed field-changed)."
+  (when condition
+    (let ((targets (if (listp ops) ops (list ops)))
+          (found nil))
+      (cl-labels ((walk (form)
+                        (when (and (not found) (consp form))
+                          (pcase (car form)
+                            ('quote (walk (cadr form)))
+                            (_
+                             (when (memq (car form) targets)
+                               (setq found t))
+                             (dolist (sub (cdr form))
+                               (walk sub)))))))
+        (walk condition))
+      found)))
+
+(defun supertag-automation-sync--execute-rule-for-event (rule node-id event)
+  "Execute RULE for NODE-ID under EVENT when trigger/condition pass."
+  (let* ((trigger (plist-get rule :trigger))
+         (condition (plist-get rule :condition))
+         (supertag-automation--current-event event))
+    (when (and (supertag-automation--trigger-match-p trigger event)
+               (supertag-automation--evaluate-condition condition node-id))
+      (supertag-rule-execute rule node-id event))))
+
+(defun supertag-automation-sync--execute-tag-trigger (node-id tag-name op)
+  "Execute tag-trigger rules for NODE-ID when TAG-NAME changes.
+OP must be :added or :removed."
+  (when (and (boundp 'supertag--rule-index) tag-name)
+    (when-let ((candidate (gethash tag-name supertag--rule-index)))
+      (dolist (rule-id (cl-remove-duplicates candidate :test #'equal))
+        (when-let ((rule (supertag-automation-get rule-id)))
+          (pcase (plist-get rule :trigger)
+            (`(:on-tag-added ,tn)
+             (when (and (eq op :added) (equal tn tag-name))
+               (supertag-automation-sync--execute-rule-for-event
+                rule node-id (list :tag-event :added :tag tag-name))))
+            (`(:on-tag-removed ,tn)
+             (when (and (eq op :removed) (equal tn tag-name))
+               (supertag-automation-sync--execute-rule-for-event
+                rule node-id (list :tag-event :removed :tag tag-name))))
+            (_ nil)))))))
+
+(defun supertag-automation-sync--make-property-event (node-id prop old-val new-val)
+  "Build a property-change event for NODE-ID/PROP."
+  (list :path (list :nodes node-id :properties prop) :old old-val :new new-val))
+
 (defun supertag-automation-sync--process-node-change (node-id old-node new-node)
   "Process a node change and trigger relevant automation rules."
-  (let ((rule-ids (supertag-automation-sync--get-relevant-rules node-id old-node new-node)))
-    (dolist (rule-id rule-ids)
-      (when-let ((rule (supertag-automation-get rule-id)))
-        (let* ((condition (plist-get rule :condition))
-               (current-event (list :path (list :nodes node-id) :old old-node :new new-node))
-               (trigger (plist-get rule :trigger))
-               (supertag-automation--current-event current-event))
-          (when (and (supertag-automation--trigger-match-p trigger current-event)
-                     (supertag-automation--evaluate-condition condition node-id))
-            (supertag-rule-execute rule node-id current-event)))))))
+  (let* ((old-tags (plist-get old-node :tags))
+         (new-tags (plist-get new-node :tags))
+         (tag-diff (supertag-automation-sync--diff-tags old-tags new-tags))
+         (added-tags (car tag-diff))
+         (removed-tags (cdr tag-diff))
+         (changed-props (supertag-automation-sync--get-changed-properties old-node new-node))
+         (rule-ids (supertag-automation-sync--get-relevant-rules node-id old-node new-node)))
+
+    ;; 1) Tag triggers (runtime-gated): (:on-tag-added ...) / (:on-tag-removed ...)
+    (dolist (tag added-tags)
+      (supertag-automation-sync--execute-tag-trigger node-id tag :added))
+    (dolist (tag removed-tags)
+      (supertag-automation-sync--execute-tag-trigger node-id tag :removed))
+
+    ;; 2) Property-change driven rules: provide precise :path so
+    ;; (property-changed ...) can work deterministically.
+    (when changed-props
+      (let* ((old-props (plist-get old-node :properties))
+             (new-props (plist-get new-node :properties))
+             (representative (car changed-props))
+             (representative-event
+              (supertag-automation-sync--make-property-event
+               node-id representative
+               (plist-get old-props representative)
+               (plist-get new-props representative))))
+        (dolist (rule-id rule-ids)
+          (when-let ((rule (supertag-automation-get rule-id)))
+            ;; Skip tag-only triggers here; they are handled above.
+            (let ((trigger (plist-get rule :trigger)))
+              (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
+                (if (supertag-automation-sync--condition-contains-op-p
+                     (plist-get rule :condition)
+                     '(property-changed field-changed global-field-changed))
+                    ;; Change-sensitive rules: evaluate once per changed property.
+                    (dolist (prop changed-props)
+                      (supertag-automation-sync--execute-rule-for-event
+                       rule node-id
+                       (supertag-automation-sync--make-property-event
+                        node-id prop
+                        (plist-get old-props prop)
+                        (plist-get new-props prop))))
+                  ;; Generic rules: evaluate once per update.
+                  (supertag-automation-sync--execute-rule-for-event
+                   rule node-id representative-event))))))))
+
+    ;; 3) Non-property changes (e.g., title/metadata) with no tag/property delta:
+    ;; fall back to a node-change event.
+    (when (and (null changed-props)
+               (null added-tags)
+               (null removed-tags)
+               (not (equal old-node new-node)))
+      (let ((node-event (list :path (list :nodes node-id) :old old-node :new new-node)))
+        (dolist (rule-id rule-ids)
+          (when-let ((rule (supertag-automation-get rule-id)))
+            (let ((trigger (plist-get rule :trigger)))
+              (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
+                (supertag-automation-sync--execute-rule-for-event rule node-id node-event)))))))))
 
 (defun supertag-automation-sync--process-node-creation (node-id payload)
   "Process a node creation and trigger relevant automation rules."
   (let* ((node-data (or payload (supertag-node-get node-id)))
          (rule-ids (supertag-automation-sync--get-relevant-rules node-id nil node-data)))
+    ;; Treat initial tags as :added events (first time the node is tagged).
+    (dolist (tag (supertag-automation-sync--normalize-tag-list (plist-get node-data :tags)))
+      (supertag-automation-sync--execute-tag-trigger node-id tag :added))
     (dolist (rule-id rule-ids)
       (when-let ((rule (supertag-automation-get rule-id)))
-        (let* ((condition (plist-get rule :condition))
-               (current-event (list :path (list :nodes node-id) :old nil :new node-data))
-               (trigger (plist-get rule :trigger))
-               (supertag-automation--current-event current-event))
-          (when (and (supertag-automation--trigger-match-p trigger current-event)
-                     (supertag-automation--evaluate-condition condition node-id))
-            (supertag-rule-execute rule node-id current-event)))))))
+        ;; Skip tag-only triggers here; they are handled above.
+        (let ((trigger (plist-get rule :trigger)))
+          (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
+            (supertag-automation-sync--execute-rule-for-event
+             rule node-id (list :path (list :nodes node-id) :old nil :new node-data))))))))
 
 (defun supertag-automation-sync--process-node-deletion (node-id old-node)
   "Process a node deletion and trigger relevant automation rules."
   (let ((rule-ids (supertag-automation-sync--get-relevant-rules node-id old-node nil)))
     (dolist (rule-id rule-ids)
       (when-let ((rule (supertag-automation-get rule-id)))
-        (let* ((condition (plist-get rule :condition))
-               (current-event (list :path (list :nodes node-id) :old old-node :new nil))
-               (trigger (plist-get rule :trigger))
-               (supertag-automation--current-event current-event))
-          (when (and (supertag-automation--trigger-match-p trigger current-event)
-                     (supertag-automation--evaluate-condition condition node-id))
-            (supertag-rule-execute rule node-id current-event)))))))
+        ;; Skip tag-only triggers; deletion is not a tag-change event.
+        (let ((trigger (plist-get rule :trigger)))
+          (unless (and (consp trigger) (memq (car trigger) '(:on-tag-added :on-tag-removed)))
+            (supertag-automation-sync--execute-rule-for-event
+             rule node-id (list :path (list :nodes node-id) :old old-node :new nil))))))))
 
 (defun supertag-automation-sync--process-tag-change (node-id operation tag-id)
   "Process a tag change on a node and trigger relevant automation rules."
-  (let* ((current-event (list :tag-event operation :tag tag-id))
-         (rule-ids (supertag-automation-sync--get-tag-trigger-rules tag-id operation))
-         (supertag-automation--current-event current-event))
-    (dolist (rule-id rule-ids)
-      (when-let ((rule (supertag-automation-get rule-id)))
-        (when (supertag-automation--evaluate-condition (plist-get rule :condition) node-id)
-          (supertag-rule-execute rule node-id current-event))))))
+  (let ((op (pcase operation
+              ((or :added :add-tag) :added)
+              ((or :removed :remove-tag) :removed)
+              (_ operation))))
+    (when (memq op '(:added :removed))
+      (supertag-automation-sync--execute-tag-trigger node-id tag-id op))))
 
 (defun supertag-automation-sync--process-field-change (node-id tag-id field-name old-value new-value)
   "Process a legacy field change and trigger relevant automation rules."
@@ -299,26 +411,25 @@ This is an optimized version of the original rule lookup."
          (lambda (rule-id)
            (when-let ((rule (supertag-automation-get rule-id)))
              (pcase (plist-get rule :trigger)
-               (`(:on-tag-added ,tn) (and (eq operation :add-tag) (equal tn tag-id)))
-               (`(:on-tag-removed ,tn) (and (eq operation :remove-tag) (equal tn tag-id)))
+               (`(:on-tag-added ,tn) (and (memq operation '(:added :add-tag)) (equal tn tag-id)))
+               (`(:on-tag-removed ,tn) (and (memq operation '(:removed :remove-tag)) (equal tn tag-id)))
                (_ nil))))
          candidate-rules)))))
 
 (defun supertag-automation-sync--get-changed-properties (old-node new-node)
   "Get list of changed properties between OLD-NODE and NEW-NODE."
   (let ((changed '())
-        (old-props (plist-get old-node :properties))
-        (new-props (plist-get new-node :properties)))
-    (when (and old-props new-props)
-      ;; Compare properties
-      (cl-loop for (key value) on new-props by #'cddr do
-               (unless (equal (plist-get old-props key) value)
-                 (push key changed)))
-      ;; Check for removed properties
-      (cl-loop for (key value) on old-props by #'cddr do
-               (unless (plist-member new-props key)
-                 (push key changed))))
-    changed))
+        (old-props (or (plist-get old-node :properties) '()))
+        (new-props (or (plist-get new-node :properties) '())))
+    ;; Compare properties
+    (cl-loop for (key value) on new-props by #'cddr do
+             (unless (equal (plist-get old-props key) value)
+               (push key changed)))
+    ;; Check for removed properties
+    (cl-loop for (key _value) on old-props by #'cddr do
+             (unless (plist-member new-props key)
+               (push key changed)))
+    (cl-remove-duplicates changed :test #'equal)))
 
 (defun supertag-automation-sync--get-affected-node-ids (tag-id operation previous-tags)
   "Get list of node IDs affected by a tag operation."

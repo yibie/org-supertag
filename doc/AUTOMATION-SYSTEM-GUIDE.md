@@ -13,15 +13,15 @@
 - ✅ **Scheduled Tasks**: Supports time-based and periodic automation, driven by an integrated scheduler.
 - ✅ **Relationships and Calculations**: Supports advanced features like bidirectional relationships, property synchronization, and Rollup calculations.
 - ✅ **Formula Fields**: Calculates and displays data in real-time in table views without persistent storage.
-- ✅ **Backward Compatibility**: Provides a compatibility layer for legacy APIs to ensure smooth transitions.
+- ✅ **Legacy Interop**: Some legacy storage/events are still supported where needed (details are called out explicitly below).
 
 ## 🏗️ Unified Architecture (Automation System 2.0)
 
 The new version adopts a unified module architecture:
-- **Single Module**: `supertag-automation.el` contains all automation functionality
-- **Eliminated Dependencies**: No more circular dependencies between modules
-- **Unified API**: All functionality accessed through consistent interfaces
-- **High Performance**: Cohesive design brings better performance
+- **Unified API Surface**: `supertag-automation.el` is the public entry for rule CRUD + evaluation + actions.
+- **Synchronous Event Bridge**: `supertag-automation-sync.el` routes store/commit events into the rule engine.
+- **Unified Interfaces**: All user-facing functionality is accessed through a consistent rule shape.
+- **Index-Driven Lookup**: Rules are pre-indexed to avoid scanning all rules on every event.
 
 The core of the new architecture is **simplicity** and **automation**. We've eliminated the distinction between "regular tags" and "database tags," replacing the manual "behavior attachment" process with an intelligent "rule indexing" system.
 
@@ -39,7 +39,12 @@ The core of the new architecture is **simplicity** and **automation**. We've eli
 
 ```elisp
 ;; New unified module loading approach
-(require 'supertag-automation)  ; Unified automation module
+(require 'supertag-automation)  ; Rule engine + public API
+;; `supertag-automation-sync` is loaded internally as needed.
+
+;; Optional (advanced): run automation via `supertag-after-operation-hook`.
+;; Default is nil to avoid double-triggering (store emits multiple event streams).
+;; (setq supertag-automation-sync-use-commit-hooks t)
 ```
 
 ```mermaid
@@ -78,8 +83,8 @@ Under the new system, you no longer need to "attach" behaviors. You simply **def
    ;; Trigger: When a node is tagged with "task"
    :trigger (:on-tag-added "task")
    ;; Action list: Can contain one or more actions
-   :actions '((:action :update-property
-              :params (:property :todo :value "TODO")))))
+   :actions '((:action :update-todo-state
+              :params (:state "TODO")))))
 ```
 
 **That's it!**
@@ -91,13 +96,16 @@ Under the new system, you no longer need to "attach" behaviors. You simply **def
 * A regular heading
 ```
 
-**Operation**: In Org Mode, with cursor on the heading, press `C-c C-q` (`org-set-tags-command`) and enter `task`.
+**Operation**: In Org Mode, with cursor on the heading, run `M-x supertag-add-tag` and select/add `task`.
 
 **After Operation**:
 ```org
-* TODO A regular heading :task:
+* TODO A regular heading #task
 ```
-**Effect Analysis**: The rule is activated by the `:on-tag-added` trigger, executing the `:update-property` action in the `:actions` list, automatically adding the `TODO` state.
+**Effect Analysis**: The rule is activated by the `:on-tag-added` trigger, executing the `:update-todo-state` action in the `:actions` list, automatically setting the headline TODO keyword.
+
+> Note: `org-supertag` tags are represented as inline `#tag` text and stored in the supertag database.
+> Use `M-x supertag-add-tag` / `M-x supertag-remove-tag` to mutate tags; `org-set-tags-command` edits Org's native `:tag:` mechanism and is not the same thing.
 
 ---
 
@@ -168,21 +176,21 @@ In tag definitions, you can declare formula fields just like regular fields, but
    :fields ((:name "due_date" :type :date)
             (:name "completed_date" :type :date)
             (:name "progress" :type :number)
-            ;; Example: Calculate remaining days
+            ;; Example: A derived number for display (not persisted)
             (:name "days_left" :type :formula
-                   :formula "(days-until (get-property :due_date))")
-            ;; Example: Calculate completion percentage
+                   :formula "(- 10 {{:progress}})")
+            ;; Example: Calculate completion percentage (basic arithmetic)
             (:name "completion_percentage" :type :formula
-                   :formula "(* (/ (get-property :progress) 100) 100))")))
+                   :formula "(* (/ {{:progress}} 100) 100)"))))
 ```
 
 ### Formula Language and Available Functions
 
-Formula expressions use a safe subset of Emacs Lisp. In the formula environment, you can access the following functions:
+Formula fields currently perform simple placeholder substitution and then evaluate the resulting Emacs Lisp expression.
 
-*   `get-property :prop-name`: Get the value of a specified property of the current node.
-*   `days-until date-list`: Calculate the number of days from the current date to the date specified by `date-list` (`date-list` format is `(year month day)`).
-*   And other standard Emacs Lisp functions (within a safe sandbox).
+- Property references use `{{...}}` placeholders that are looked up from the entity's `:properties` plist.
+  - Example: `{{:progress}}` resolves `(plist-get props :progress)`.
+- The resulting expression is evaluated via Emacs Lisp (`eval`), so do not use untrusted formulas.
 
 ### Differences Between Formula Fields, Automation Rules, and Rollup
 
@@ -272,12 +280,17 @@ The `trigger` field defines "when" to check this rule. A precise trigger is the 
 
 | Trigger Type | Format | Description |
 | :--- | :--- | :--- |
-| **Property Change** | `:on-property-change` | Triggered when any property of any node changes. This is the most commonly used but most generic trigger, usually requiring `condition` for precision. |
+| **Any Change** | `:on-change` | Triggered on any recognized store change event (broad; use conditions to narrow). |
+| **Property/Field Change** | `:on-property-change` | Triggered on property/field/global-field changes (broad; use `property-changed` / `field-changed` in conditions to narrow). |
+| **Field Change** | `:on-field-change` | Triggered on legacy tag field changes and global field value changes. |
 | **Tag Added** | `(:on-tag-added "tag-name")` | Triggered when a node is **first** tagged with the specified tag. |
 | **Tag Removed** | `(:on-tag-removed "tag-name")` | Triggered when a specified tag is removed from a node. |
-| **Relationship Change** | `:on-relation-change` | Triggered when a node's "relationship" changes (e.g., when a task is linked to a project). |
-| **Scheduled Task** | `:on-schedule` | Time-based trigger, requires `:schedule` property. |
-| **Node Creation** | `:on-create` | Triggered when a new node with tags is created. |
+| **Scheduled Task** | `:on-schedule` | Time-based trigger, requires `:schedule` property and a running scheduler (see above). |
+| **Always / Fallback** | `nil` / `:always` | Always matches (useful for tag-only rules where the trigger is implied by the tag trigger itself). |
+
+Notes:
+- `:on-schedule` rules are executed by the scheduler runner; they are not matched against store change events.
+- Unknown triggers fail closed (do not match).
 
 ### 2. Conditions - `IF`
 
@@ -290,7 +303,13 @@ The `condition` field defines the "preconditions" that must be met for the rule 
 | **Property Equals** | `(property-equals :prop-name "value")` | Check if a node's property equals a specific value. |
 | **Property Changed**| `(property-changed :prop-name)` | Check if this event was caused by a change in the specified property. |
 | **Property Test**| `(property-test :prop-name #'> 8)` | Use a function to test the property value. |
-| **Formula Condition**| `(:formula "(> (get-property :hours) 8)")` | Execute a complete formula for maximum flexibility. |
+| **Field Equals** | `(field-equals "field-name" "value")` | Check a legacy tag-field value by name. |
+| **Field Changed** | `(field-changed "field-name")` | Check if a legacy field or a mapped global field changed (see “Event Context”). |
+| **Global Field Equals** | `(global-field-equals "field-id" "value")` | Check a global field value (field-id is the global slug/id). |
+| **Global Field Changed** | `(global-field-changed "field-id")` | Check if the current event changed that global field-id. |
+| **Global Field Test** | `(global-field-test "field-id" #'pred ...)` | Test a global field value via a function. |
+
+> This guide does not define a condition-level “formula DSL”. For complex logic, compose existing conditions and/or move complexity into `:call-function` actions.
 
 ### 3. Actions - `THEN`
 
@@ -300,13 +319,33 @@ Each action is a `plist` in the format `(:action :action-type :params (...))`.
 
 | Action Type (`:action-type`) | `:params` Parameters | Description |
 | :--- | :--- | :--- |
-| **`:update-property`** | `(:property :prop-name :value new-value)` | Update or add a property to the node. `new-value` can be a direct value or a Lisp expression that returns a value. |
+| **`:update-property`** | `(:property :prop-name :value new-value)` | Update or add a node property in the datastore (`:properties` plist). `new-value` is treated as a literal value. |
 | **`:update-todo-state`** | `(:state "new-state")` | Update the TODO state of the current node (e.g., to "DONE", "TODO"). This directly changes the headline's keyword, unlike `:update-property`. |
 | **`:add-tag`** | `(:tag "tag-name")` | Add a new tag to the current node. |
 | **`:remove-tag`** | `(:tag "tag-name")` | Remove a tag from the current node. |
 | **`:call-function`** | `(:function #'your-function :args (...))` | Call an Emacs Lisp function you've defined yourself. This is the "ultimate weapon" for implementing complex logic. The function receives `(node-id context &rest args)`. |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | Create a completely new node. |
+| **`:update-field`** | `(:tag "tag-id" :field "field-name" :value v)` | Update a legacy tag field value for a node (tag-scoped field storage). |
 | **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | Resolve a value (`:on`) and execute the first matching branch. Each branch can use `:equals`, `:in`, `:match` (regexp/function), or `:test` to match, and runs its own nested `:actions`. Provide `:default t` for a fallback branch. |
+
+#### Event Context (重要)
+
+When a rule is executed, it receives a `context` plist describing the current event.
+
+- For value changes, context commonly includes:
+  - `:path` — a structured path describing what changed
+  - `:old` / `:new` — old/new values for that path
+- For tag events, context commonly includes:
+  - `:tag-event` — one of `:added`/`:removed` (legacy path) or `:add-tag`/`:remove-tag` (sync bridge)
+  - `:tag` — tag name (string)
+
+Common `:path` shapes used by the engine:
+
+- Node property change: `(:nodes NODE-ID :properties :some-prop)`
+- Legacy tag-field change: `(:fields NODE-ID TAG-ID "field-name")`
+- Global field value change: `(:field-values NODE-ID "field-id")`
+
+`(property-changed ...)` relies on `:path` being specific (e.g. `(:nodes NODE-ID :properties :hours)`), so the engine must preserve this precision when routing events.
 
 Tip: A commonly useful built-in helper for `:call-function` is
 `supertag-service-org-move-node-to-file-action`, which moves a node's subtree
@@ -339,11 +378,11 @@ This example will demonstrate some features that are difficult or impossible to 
    :condition (and
                (has-tag "task")
                (property-changed :hours)
-               (:formula "(> (get-property :hours) 8)"))
+               (property-test :hours #'> 8))
    :actions '((:action :update-property
               :params (:property :priority :value "High")))))
 ```
-*(Note: `property-changed` and `get-property` are envisioned richer condition functions to clearly express intent)*
+*(Tip: pair `:on-property-change` with `property-changed`/`property-test` to keep the rule precise.)*
 
 **Rule B: Automatically Unlock the Next Dependent Task When One Task is Completed**
 
@@ -555,6 +594,72 @@ After creating automation rules, you can use the following methods to test and d
 (hash-table-count supertag--rule-index)
 ```
 
+### Minimal Verification Matrix (Manual)
+
+The following matrix gives you small, repeatable scenarios to verify that the rule engine is wired correctly.
+You can run these snippets in `*scratch*` after loading `org-supertag`.
+
+#### 1) Tag trigger: `(:on-tag-added "task")`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-tag-added"
+   :trigger (:on-tag-added "task")
+   :actions '((:action :add-tag :params (:tag "verified")))))
+
+(let ((node-id (supertag-node-create :title "Verify tag-added" :tags nil)))
+  (supertag-ops-add-tag-to-node node-id "task" :create-if-needed t)
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; Expect: tags include "task" and "verified".
+```
+
+#### 2) Tag trigger: `(:on-tag-removed "task")`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-tag-removed"
+   :trigger (:on-tag-removed "task")
+   :actions '((:action :add-tag :params (:tag "removed-task")))))
+
+(let ((node-id (supertag-node-create :title "Verify tag-removed" :tags '("task"))))
+  (supertag-with-transaction
+    (supertag-node-remove-tag node-id "task"))
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; Expect: tags include "removed-task" and do NOT include "task".
+```
+
+#### 3) Property change + `property-changed`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-property-changed"
+   :trigger :on-property-change
+   :condition (property-changed :hours)
+   :actions '((:action :update-property :params (:property :verified_hours :value t)))))
+
+(let ((node-id (supertag-node-create :title "Verify property-changed" :tags nil)))
+  (supertag-node-update-property node-id :hours 10)
+  (message "verified_hours=%S"
+           (supertag-node-get-property node-id :verified_hours)))
+;; Expect: verified_hours is non-nil.
+```
+
+#### 4) Property test (`property-test`)
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-property-test"
+   :trigger :on-property-change
+   :condition (property-test :hours #'> 8)
+   :actions '((:action :add-tag :params (:tag "gt8")))))
+
+(let ((node-id (supertag-node-create :title "Verify property-test" :tags nil)))
+  (supertag-node-update-property node-id :hours 7)
+  (supertag-node-update-property node-id :hours 9)
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; Expect: tags include "gt8" (only after the 9 update).
+```
+
 ### Debugging Tips
 
 - **Add Logging**: Use the `message` function to add log output in rules
@@ -572,7 +677,10 @@ After creating automation rules, you can use the following methods to test and d
 (supertag-node-get node-id)
 
 ;; Check if rule is correctly indexed
-(gethash "your-trigger-key" supertag--rule-index)
+;; - property key (keyword): e.g. :hours
+;; - tag name (string): e.g. "task"
+(gethash :hours supertag--rule-index)
+(gethash "task" supertag--rule-index)
 ```
 
 ### Testing Workflow
@@ -606,12 +714,13 @@ Automation System 2.0 provides a series of maintenance commands to ensure health
 ;; Recalculate all rollup values
 (supertag-automation-recalculate-all-rollups)
 
-;; Synchronize all property relationships
-(supertag-automation-sync-all-properties)
+;; Synchronize all field-sync relations
+(supertag-automation-sync-all-fields)
 
 ;; Clean up and rebuild index
 (supertag-automation-cleanup)
 (supertag-automation-init)
+(supertag-rebuild-rule-index)
 ```
 
 ### Batch Data Operations
@@ -703,23 +812,27 @@ The core performance advantage of Automation System 2.0 comes from its intellige
 (defun supertag-check-index-status ()
   "Check rule index status and statistics."
   (interactive)
-  (let ((total-rules (hash-table-count supertag--rule-index))
-        (trigger-types (make-hash-table :test 'equal)))
-    (maphash (lambda (key value)
-               (let ((trigger-type (car (split-string key ":"))))
-                 (puthash trigger-type (1+ (gethash trigger-type trigger-types 0)) trigger-types)))
+  (let ((entry-count (hash-table-count supertag--rule-index))
+        (by-type (make-hash-table :test 'eq)))
+    (maphash (lambda (key _value)
+               (let* ((tkey (cond
+                             ((keywordp key) :keyword)
+                             ((stringp key) :string)
+                             ((symbolp key) :symbol)
+                             (t :other))))
+                 (puthash tkey (1+ (gethash tkey by-type 0)) by-type)))
              supertag--rule-index)
-    (message "Total indexed rules: %d" total-rules)
+    (message "Index entries: %d" entry-count)
     (maphash (lambda (type count)
-               (message "  %s: %d rules" type count))
-             trigger-types)))
+               (message "  %s: %d" type count))
+             by-type)))
 
 ;; Benchmark rule lookup performance
 (defun supertag-benchmark-rule-lookup (iterations)
   "Benchmark rule lookup performance."
   (interactive "nIterations: ")
   (let ((start-time (current-time))
-        (test-key "on-property-change:status"))
+        (test-key :status))
     (dotimes (i iterations)
       (gethash test-key supertag--rule-index))
     (let ((elapsed (float-time (time-subtract (current-time) start-time))))
@@ -756,7 +869,7 @@ The core performance advantage of Automation System 2.0 comes from its intellige
    :condition (and 
                (property-equals :priority "High")  ; Specific value match, quick failure
                (has-tag "task")                    ; Tag check
-               (:formula "(> (get-property :hours) 8)"))  ; Complex calculation last
+               (property-test :hours #'> 8))  ; Numeric test last
    :actions '((:action :add-tag :params (:tag "urgent")))))
 ```
 
@@ -768,16 +881,26 @@ The core performance advantage of Automation System 2.0 comes from its intellige
  '(:name "potential-loop"
    :trigger :on-property-change
    :condition (property-equals :status "Done")
-   :actions '((:action :update-property :params (:property :completed_date :value (current-time)))
-              (:action :update-property :params (:property :status :value "Archived")))))  ; This will trigger the rule again
+   :actions '((:action :call-function
+              :params (:function #'my-app-mark-completed-and-archive)))))  ; This can trigger itself if not guarded
+
+(defun my-app-mark-completed-and-archive (node-id _context)
+  "Mark completion time and archive a node (example)."
+  (supertag-node-update-property node-id :completed_date (current-time))
+  (supertag-node-update-property node-id :status "Archived"))
 
 ;; Safe practice: Use different trigger conditions or avoid modifying trigger properties
 (supertag-automation-create
  '(:name "safe-completion"
    :trigger :on-property-change
    :condition (and (property-equals :status "Done")
-                   (not (property-exists :completed_date)))  ; Prevent repeated triggering
-   :actions '((:action :update-property :params (:property :completed_date :value (current-time))))))
+                   (property-test :completed_date #'null))  ; Prevent repeated triggering
+   :actions '((:action :call-function
+              :params (:function #'my-app-mark-completed))))))
+
+(defun my-app-mark-completed (node-id _context)
+  "Set :completed_date once (example)."
+  (supertag-node-update-property node-id :completed_date (current-time)))
 ```
 
 ### Performance Monitoring Tools
@@ -935,14 +1058,11 @@ When processing large numbers of nodes, consider the following optimization stra
 Enable debug mode to get more detailed log information:
 
 ```elisp
-;; Enable debug mode
-(setq supertag-automation-debug t)
+;; Enable verbose automation diagnostics (routine traces, SKIP/no-op notices)
+(setq supertag-automation-verbose t)
 
-;; Set log level
-(setq supertag-log-level 'debug)
-
-;; View debug logs
-(switch-to-buffer "*supertag-debug*")
+;; Optional: log detailed field events in the sync bridge
+(setq supertag-debug-log-field-events t)
 ```
 
 ### System Health Checks
@@ -1152,17 +1272,10 @@ Avoid overly complex logical nesting, moving complex logic to custom functions.
  '(:name "flag-urgent-tasks"
    :trigger :on-property-change
    :condition (and (has-tag "task")
-                   (:formula "(is-task-urgent-p (current-node))"))
+                   (property-equals :priority "High")
+                   (property-test :hours #'> 8)
+                   (not (property-equals :status "Done")))
    :actions '((:action :add-tag :params (:tag "urgent")))))
-
-(defun is-task-urgent-p (node)
-  "Check if task is urgent."
-  (let ((priority (supertag-node-get-property node :priority))
-        (due-date (supertag-node-get-property node :due-date))
-        (days-left (days-until due-date)))
-    (and (equal priority "High")
-         (< days-left 3)
-         (not (equal (supertag-node-get-property node :status) "Done")))))
 
 ;; Avoid: Complex nested conditions
 (supertag-automation-create
@@ -1170,7 +1283,7 @@ Avoid overly complex logical nesting, moving complex logic to custom functions.
    :trigger :on-property-change
    :condition (and (has-tag "task")
                    (property-equals :priority "High")
-                   (:formula "(< (days-until (get-property :due-date)) 3)")
+                   (property-test :hours #'> 8)
                    (not (property-equals :status "Done")))
    :actions '((:action :add-tag :params (:tag "urgent")))))
 ```
@@ -1189,7 +1302,7 @@ Put most likely to fail conditions first to achieve quick short-circuiting.
                (property-equals :priority "Critical")  ; Most selective condition
                (has-tag "task")                        ; Tag check
                (not (property-equals :status "Done"))  ; Status check
-               (:formula "(< (days-until (get-property :due-date)) 1)"))  ; Complex calculation last
+               (property-test :hours #'> 8))  ; Numeric test last
    :actions '((:action :call-function :params (:function #'send-urgent-alert)))))
 ```
 

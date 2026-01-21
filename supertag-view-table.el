@@ -874,11 +874,33 @@ Uses improved styling from old version."
                     (supertag-view-table--merge-reference-values field-value rel-ids)))
                  (:file (or (plist-get entity-data :file) "No File"))
                  (:tags (string-join (plist-get entity-data :tags) ", "))
-                 (_ (let* ((node-id (plist-get entity-data :id))
-                           (tag-id (supertag-view-table--get-current-tag-id))
-                           (field-name (supertag-view-table--field-name-for-column column key)))
-                      (when (and node-id tag-id)
-                        (supertag-view-api-node-field-in-tag node-id tag-id field-name))))))
+                 (_
+                  (let* ((node-id (plist-get entity-data :id))
+                         (tag-id (supertag-view-table--get-current-tag-id))
+                         (field-name (supertag-view-table--field-name-for-column column key)))
+                    (cond
+                     ((or (null node-id) (null tag-id)) nil)
+                     ;; Formula fields are computed at render time and are not persisted.
+                     ((eq col-type :formula)
+                      (let ((formula (plist-get column :formula)))
+                        (when (and (stringp formula) (not (string-empty-p formula)))
+                          (condition-case err
+                              (supertag-formula-evaluate
+                               formula
+                               entity-data
+                               (lambda (k)
+                                 (let* ((kstr (cond
+                                               ((keywordp k) (substring (symbol-name k) 1))
+                                               ((symbolp k) (symbol-name k))
+                                               ((stringp k) (string-trim k))
+                                               (t (format "%s" k))))
+                                        ;; Support both :prop and prop forms.
+                                        (fname (if (string-prefix-p ":" kstr) (substring kstr 1) kstr)))
+                                   (supertag-view-api-node-field-in-tag node-id tag-id fname))))
+                            (error
+                             (format "FORMULA-ERROR: %s" (error-message-string err)))))))
+                     (t
+                      (supertag-view-api-node-field-in-tag node-id tag-id field-name)))))))
               (_
                (plist-get entity-data key)))))
       ;; For title cells we preserve existing faces and explicit newlines;
