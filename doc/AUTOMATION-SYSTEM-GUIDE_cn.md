@@ -13,15 +13,15 @@
 - ✅ **计划任务**：支持基于时间和周期的自动化，由集成的调度器驱动。
 - ✅ **关系与计算**：支持双向关系、属性同步、Rollup 计算等高级功能。
 - ✅ **公式字段**：在表格视图中实时计算和显示数据，无需持久化存储。
-- ✅ **向后兼容**：为旧版API提供兼容层，确保平滑过渡。
+- ✅ **遗留互操作**：在必要时兼容部分旧存储/事件路径（下文会明确指出）。
 
 ## 🏗️ 统一架构 (Automation System 2.0)
 
 新版本采用统一的模块架构：
-- **单一模块**: `supertag-automation.el` 包含所有自动化功能
-- **消除依赖**: 不再有模块间循环依赖
-- **统一 API**: 所有功能通过一致的接口访问
-- **高性能**: 内聚设计带来更好的性能表现
+- **统一 API 面**：`supertag-automation.el` 作为对外入口，提供规则 CRUD + 条件评估 + 动作执行。
+- **同步事件桥**：`supertag-automation-sync.el` 将 store/commit 事件路由到规则引擎。
+- **统一接口**：用户只需要学习一种规则形状（`:trigger/:condition/:actions`）。
+- **索引驱动**：规则会被预先索引，避免每次事件都全量扫描规则。
 
 新架构的核心是**简单**和**自动化**。我们废除了"普通标签"和"数据库标签"的区分，并用一个智能的"规则索引"代替了手动的"行为附加"流程。
 
@@ -39,7 +39,12 @@
 
 ```elisp
 ;; 新的统一模块加载方式
-(require 'supertag-automation)  ; 统一的自动化模块
+(require 'supertag-automation)  ; 规则引擎 + 对外 API
+;; `supertag-automation-sync` 会按需在内部加载。
+
+;; 可选（高级）：通过 `supertag-after-operation-hook` 触发自动化。
+;; 默认 nil，用于避免双重触发（store 可能发出多条事件流）。
+;; (setq supertag-automation-sync-use-commit-hooks t)
 ```
 
 ```mermaid
@@ -78,8 +83,8 @@ graph LR
    ;; 触发器：当有节点被添加 "task" 标签时
    :trigger (:on-tag-added "task")
    ;; 动作列表：可以包含一个或多个动作
-   :actions '((:action :update-property
-              :params (:property :todo :value "TODO")))))
+   :actions '((:action :update-todo-state
+              :params (:state "TODO")))))
 ```
 
 **这就完成了！**
@@ -91,13 +96,17 @@ graph LR
 * 一个普通的标题
 ```
 
-**操作**: 在 Org Mode 中，光标停留在标题上，按下 `C-c C-q` (`org-set-tags-command`) 并输入 `task`。
+**操作**: 在 Org Mode 中，光标停留在标题上，运行 `M-x supertag-add-tag` 并选择/输入 `task`。
 
 **操作后**:
 ```org
-* TODO 一个普通的标题 :task:
+* TODO 一个普通的标题 #task
 ```
-**效果分析**: 规则被 `:on-tag-added` 触发器激活，执行了 `:actions` 列表中的 `:update-property` 动作，自动添加了 `TODO` 状态。
+**效果分析**: 规则被 `:on-tag-added` 触发器激活，执行了 `:actions` 列表中的 `:update-todo-state` 动作，自动设置 headline 的 TODO 关键字。
+
+> 注意：`org-supertag` 的标签是以内联 `#tag` 的形式呈现，并存储在 supertag 数据库中。
+> `M-x supertag-add-tag` / `M-x supertag-remove-tag-from-node` 是推荐的变更方式；
+> `org-set-tags-command` 修改的是 Org 原生的 `:tag:` 机制，与 supertag 标签不是一回事。
 
 ---
 
@@ -168,21 +177,21 @@ graph LR
    :fields ((:name "due_date" :type :date)
             (:name "completed_date" :type :date)
             (:name "progress" :type :number)
-            ;; 示例：计算剩余天数
+            ;; 示例：用于显示的派生数值（不持久化）
             (:name "days_left" :type :formula
-                   :formula "(days-until (get-property :due_date))")
-            ;; 示例：计算完成百分比
+                   :formula "(- 10 {{:progress}})")
+            ;; 示例：计算完成百分比（基础算术）
             (:name "completion_percentage" :type :formula
-                   :formula "(* (/ (get-property :progress) 100) 100))")))
+                   :formula "(* (/ {{:progress}} 100) 100)"))))
 ```
 
 ### 公式语言与可用函数
 
-公式表达式使用 Emacs Lisp 的一个安全子集。在公式环境中，您可以访问以下函数：
+当前的公式字段实现采用“占位符替换 + 求值”：
 
-*   `get-property :prop-name`：获取当前节点指定属性的值。
-*   `days-until date-list`：计算从当前日期到 `date-list` 指定日期的天数（`date-list` 格式为 `(year month day)`）。
-*   以及其他标准 Emacs Lisp 函数（在安全沙盒内）。
+- 使用 `{{...}}` 占位符从实体的 `:properties` plist 中取值。
+  - 例如：`{{:progress}}` 对应 `(plist-get props :progress)`。
+- 替换完成后，表达式会通过 Emacs Lisp `eval` 执行，因此请勿使用不可信公式。
 
 ### 公式字段与自动化规则/汇总的区别
 
@@ -272,12 +281,17 @@ graph LR
 
 | 触发器类型 | 格式 | 描述 |
 | :--- | :--- | :--- |
-| **属性变化时** | `:on-property-change` | 当任何节点的任何属性发生变化时触发。这是最常用但最通用的触发器，通常需要配合 `condition` 来精确化。 |
+| **任意变化** | `:on-change` | 当系统识别到 store 变化事件时触发（很宽；建议用条件缩小范围）。 |
+| **属性/字段变化** | `:on-property-change` | 当 property/field/global-field 变化时触发（很宽；建议用 `property-changed` / `field-changed` 缩小范围）。 |
+| **字段变化** | `:on-field-change` | 当遗留 tag-field 或全局字段值变化时触发。 |
 | **标签添加时** | `(:on-tag-added "tag-name")` | 当一个节点被**首次**添加指定标签时触发。 |
 | **标签移除时** | `(:on-tag-removed "tag-name")` | 当一个节点的指定标签被移除时触发。 |
-| **关系变化时** | `:on-relation-change` | 当节点的“关系”发生变化时触发（例如，一个任务被关联到一个项目上）。 |
-| **计划任务** | `:on-schedule` | 基于时间触发，需要配合 `:schedule` 属性使用。 |
-| **节点创建时** | `:on-create` | 当一个带有标签的新节点被创建时触发。 |
+| **计划任务** | `:on-schedule` | 基于时间的触发器，需要提供 `:schedule` 属性并启动调度器。 |
+| **总是匹配 / 兜底** | `nil` / `:always` | 总是匹配（适用于“由 tag 触发本身就足够明确”的规则场景）。 |
+
+说明：
+- `:on-schedule` 由调度器 runner 执行，不依赖 store 变化事件匹配。
+- 未知 trigger 会 fail closed（不匹配，不执行）。
 
 ### 2. 条件 (Conditions) - `IF`
 
@@ -290,7 +304,13 @@ graph LR
 | **属性等于** | `(property-equals :prop-name "value")` | 检查节点的某个属性是否等于一个特定的值。 |
 | **属性已改变**| `(property-changed :prop-name)` | 检查本次事件是否是由指定属性的变化引起的。 |
 | **属性测试**| `(property-test :prop-name #'> 8)` | 使用一个函数来对属性值进行测试。 |
-| **公式条件**| `(:formula "(> (get-property :hours) 8)")` | 执行一段完整的公式，提供最大的灵活性。 |
+| **字段等于** | `(field-equals "field-name" "value")` | 检查遗留 tag-field（按名称）是否等于指定值。 |
+| **字段发生变化** | `(field-changed "field-name")` | 检查遗留字段或映射到全局字段的字段是否发生变化（见下方“事件上下文”）。 |
+| **全局字段等于** | `(global-field-equals "field-id" "value")` | 检查全局字段值（field-id 为全局字段的 slug/id）。 |
+| **全局字段发生变化** | `(global-field-changed "field-id")` | 检查本次事件是否改变了该全局字段。 |
+| **全局字段测试** | `(global-field-test "field-id" #'pred ...)` | 使用函数测试全局字段值。 |
+
+> 本指南不定义“条件级公式 DSL”。复杂逻辑建议用现有条件组合，或迁移到 `:call-function` 动作中实现。
 
 ### 3. 动作 (Actions) - `THEN`
 
@@ -300,13 +320,41 @@ graph LR
 
 | 动作类型 (`:action-type`) | `:params` 参数 | 描述 |
 | :--- | :--- | :--- |
-| **`:update-property`** | `(:property :prop-name :value new-value)` | 更新或添加节点的某个属性。`new-value` 可以是直接的值，也可以是返回值的Lisp表达式。 |
+| **`:update-property`** | `(:property :prop-name :value new-value)` | 更新或新增节点属性（存储在节点的 `:properties` plist）。`new-value` 按字面值写入。 |
 | **`:update-todo-state`** | `(:state "new-state")` | 更新当前节点的 TODO 状态 (例如 "DONE", "TODO")。这会直接修改标题的关键字，与 `:update-property` 不同。 |
 | **`:add-tag`** | `(:tag "tag-name")` | 为当前节点添加一个新标签。 |
 | **`:remove-tag`** | `(:tag "tag-name")` | 从当前节点移除一个标签。 |
-| **`:call-function`** | `(:function #'your-function)` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context)` 两个参数。 |
+| **`:call-function`** | `(:function #'your-function :args (...))` | 调用一个您自己定义的 Emacs Lisp 函数。这是实现复杂逻辑的“终极武器”。函数会接收 `(node-id context &rest args)` 参数。 |
 | **`:create-node`** | `(:title "..." :tags '("...") ...)` | 创建一个全新的节点。 |
+| **`:update-field`** | `(:tag "tag-id" :field "field-name" :value v)` | 更新遗留 tag-field（按 tag 作用域存储的字段值）。 |
 | **`:case`** | `(:on (:field "层级") :branches '((:equals "20" :actions ((:action :update-field ...))) (:default t :actions ((:action :call-function ...)))))` | 根据 `:on` 解析出的值执行首个匹配分支。每个分支可使用 `:equals`、`:in`、`:match`（正则/函数）或 `:test` 进行匹配，并包含自己的 `:actions` 列表。通过 `:default t` 指定兜底分支。 |
+
+#### 事件上下文（重要）
+
+规则执行时会收到一个 `context` plist，描述当前事件：
+
+- 值变化事件通常包含：
+  - `:path` —— 结构化路径，描述“哪里发生了变化”
+  - `:old` / `:new` —— 对应路径的旧值/新值
+- 标签事件通常包含：
+  - `:tag-event` —— `:added/:removed`（旧链路）或 `:add-tag/:remove-tag`（sync bridge）
+  - `:tag` —— 标签名（字符串）
+
+引擎常见的 `:path` 形态：
+
+- 节点属性变化：`(:nodes NODE-ID :properties :some-prop)`
+- 遗留 tag-field 变化：`(:fields NODE-ID TAG-ID "field-name")`
+- 全局字段值变化：`(:field-values NODE-ID "field-id")`
+
+`(property-changed ...)` 依赖 `:path` 足够精确（例如 `(:nodes NODE-ID :properties :hours)`），因此事件路由链路必须保留这种精度。
+
+提示：一个常用的内置 helper 是 `supertag-service-org-move-node-to-file-action`，用于把节点 subtree 非交互式移动到目标文件：
+
+```elisp
+(:action :call-function
+ :params (:function #'supertag-service-org-move-node-to-file-action
+         :args ("~/org/archive.org" t 1)))
+```
 
 ---
 
@@ -329,11 +377,11 @@ graph LR
    :condition (and
                (has-tag "task")
                (property-changed :hours)
-               (:formula "(> (get-property :hours) 8)"))
+               (property-test :hours #'> 8))
    :actions '((:action :update-property
               :params (:property :priority :value "High")))))
 ```
-*(注: `property-changed` 和 `get-property` 是设想中更丰富的条件函数，用以清晰表达意图)*
+*(提示：把 `:on-property-change` 与 `property-changed`/`property-test` 搭配使用，可以让规则更精确。)*
 
 **规则 B：当一个任务完成后，自动解锁下一个依赖它的任务**
 
@@ -488,7 +536,7 @@ graph LR
 
 这是新自动化引擎强大能力的最佳体现：一条规则可以按顺序执行多个动作。
 
-**场景**: 当一个任务的状态被设置为 `Done` 时，自动记录完成日期，并为其打上 `#archived` 标签。
+**场景**: 当一个任务的状态被设置为 `Done` 时，自动记录完成日期，为其打上 `#archived` 标签，并把节点移动到归档文件。
 
 ```elisp
 (supertag-automation-create
@@ -500,7 +548,10 @@ graph LR
    '((:action :update-property
       :params (:property :completed_date :value (current-time)))
      (:action :add-tag
-      :params (:tag "archived")))))
+      :params (:tag "archived"))
+     (:action :call-function
+      :params (:function #'supertag-service-org-move-node-to-file-action
+              :args ("~/org/archive.org" t 1))))))
 ```
 
 #### 模拟效果
@@ -510,6 +561,7 @@ graph LR
 *   **操作后**:
     1.  该节点新增了 `:completed_date:` 属性，其值为当前时间。
     2.  该节点被自动添加了 `#archived` 标签。
+    3.  该节点 subtree 会被移动到 `~/org/archive.org`（并在原位置留下一个 `id:` 链接）。
 
 ---
 
@@ -541,6 +593,72 @@ graph LR
 (hash-table-count supertag--rule-index)
 ```
 
+### 最小验证矩阵（手动）
+
+下面的矩阵提供一些“小而可重复”的场景，用于确认规则引擎的事件/索引/执行链路是否打通。
+在加载 `org-supertag` 后，您可以在 `*scratch*` 里执行这些片段。
+
+#### 1) 标签触发：`(:on-tag-added "task")`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-tag-added"
+   :trigger (:on-tag-added "task")
+   :actions '((:action :add-tag :params (:tag "verified")))))
+
+(let ((node-id (supertag-node-create :title "Verify tag-added" :tags nil)))
+  (supertag-ops-add-tag-to-node node-id "task" :create-if-needed t)
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; 预期：tags 包含 "task" 与 "verified"。
+```
+
+#### 2) 标签触发：`(:on-tag-removed "task")`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-tag-removed"
+   :trigger (:on-tag-removed "task")
+   :actions '((:action :add-tag :params (:tag "removed-task")))))
+
+(let ((node-id (supertag-node-create :title "Verify tag-removed" :tags '("task"))))
+  (supertag-with-transaction
+    (supertag-node-remove-tag node-id "task"))
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; 预期：tags 包含 "removed-task"，且不包含 "task"。
+```
+
+#### 3) 属性变化 + `property-changed`
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-property-changed"
+   :trigger :on-property-change
+   :condition (property-changed :hours)
+   :actions '((:action :update-property :params (:property :verified_hours :value t)))))
+
+(let ((node-id (supertag-node-create :title "Verify property-changed" :tags nil)))
+  (supertag-node-update-property node-id :hours 10)
+  (message "verified_hours=%S"
+           (supertag-node-get-property node-id :verified_hours)))
+;; 预期：verified_hours 为非 nil。
+```
+
+#### 4) 属性测试（`property-test`）
+
+```elisp
+(supertag-automation-create
+ '(:name "verify-property-test"
+   :trigger :on-property-change
+   :condition (property-test :hours #'> 8)
+   :actions '((:action :add-tag :params (:tag "gt8")))))
+
+(let ((node-id (supertag-node-create :title "Verify property-test" :tags nil)))
+  (supertag-node-update-property node-id :hours 7)
+  (supertag-node-update-property node-id :hours 9)
+  (message "tags=%S" (plist-get (supertag-node-get node-id) :tags)))
+;; 预期：在 9 这次更新后 tags 才包含 "gt8"。
+```
+
 ### 调试技巧
 
 - **添加日志**：使用 `message` 函数在规则中添加日志输出
@@ -558,7 +676,10 @@ graph LR
 (supertag-node-get node-id)
 
 ;; 检查规则是否正确索引
-(gethash "your-trigger-key" supertag--rule-index)
+;; - property key（keyword）：例如 :hours
+;; - tag name（string）：例如 "task"
+(gethash :hours supertag--rule-index)
+(gethash "task" supertag--rule-index)
 ```
 
 ### 测试工作流
@@ -592,12 +713,13 @@ Automation System 2.0 提供了一系列维护命令来确保系统的健康运�
 ;; 重新计算所有 rollup 值
 (supertag-automation-recalculate-all-rollups)
 
-;; 同步所有属性关系
-(supertag-automation-sync-all-properties)
+;; 同步所有字段同步关系
+(supertag-automation-sync-all-fields)
 
 ;; 清理和重建索引
 (supertag-automation-cleanup)
 (supertag-automation-init)
+(supertag-rebuild-rule-index)
 ```
 
 ### 批量数据操作
@@ -691,23 +813,27 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 (defun supertag-check-index-status ()
   "检查规则索引的状态和统计信息。"
   (interactive)
-  (let ((total-rules (hash-table-count supertag--rule-index))
-        (trigger-types (make-hash-table :test 'equal)))
-    (maphash (lambda (key value)
-               (let ((trigger-type (car (split-string key ":"))))
-                 (puthash trigger-type (1+ (gethash trigger-type trigger-types 0)) trigger-types)))
+  (let ((entry-count (hash-table-count supertag--rule-index))
+        (by-type (make-hash-table :test 'eq)))
+    (maphash (lambda (key _value)
+               (let ((tkey (cond
+                            ((keywordp key) :keyword)
+                            ((stringp key) :string)
+                            ((symbolp key) :symbol)
+                            (t :other))))
+                 (puthash tkey (1+ (gethash tkey by-type 0)) by-type)))
              supertag--rule-index)
-    (message "Total indexed rules: %d" total-rules)
+    (message "Index entries: %d" entry-count)
     (maphash (lambda (type count)
-               (message "  %s: %d rules" type count))
-             trigger-types)))
+               (message "  %s: %d" type count))
+             by-type)))
 
 ;; 测试规则查找性能
 (defun supertag-benchmark-rule-lookup (iterations)
   "基准测试规则查找性能。"
   (interactive "nIterations: ")
   (let ((start-time (current-time))
-        (test-key "on-property-change:status"))
+        (test-key :status))
     (dotimes (i iterations)
       (gethash test-key supertag--rule-index))
     (let ((elapsed (float-time (time-subtract (current-time) start-time))))
@@ -720,6 +846,9 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 #### 1. 触发器优化
 
 ```elisp
+;; 注意：`:trigger` 必须拼写正确且能匹配当前事件，否则规则不会执行。
+;; （例如写成 `:on-field-chang` 会被视为未知 trigger，从而不会触发。）
+
 ;; 好的做法：使用具体的触发器
 (supertag-automation-create
  '(:name "specific-trigger"
@@ -744,7 +873,7 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
    :condition (and 
                (property-equals :priority "High")  ; 具体值匹配，快速失败
                (has-tag "task")                    ; 标签检查
-               (:formula "(> (get-property :hours) 8)"))  ; 复杂计算放最后
+               (property-test :hours #'> 8))  ; 数值测试放最后
    :actions '((:action :add-tag :params (:tag "urgent")))))
 ```
 
@@ -756,16 +885,27 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
  '(:name "potential-loop"
    :trigger :on-property-change
    :condition (property-equals :status "Done")
-   :actions '((:action :update-property :params (:property :completed_date :value (current-time)))
-              (:action :update-property :params (:property :status :value "Archived")))))  ; 这会再次触发规则
+   :actions '((:action :call-function
+              :params (:function #'my-app-mark-completed-and-archive)))))  ; 不加保护会自触发
 
-;; 安全的做法：使用不同的触发条件或避免修改触发属性
+;; 示例函数（可按需加入保护逻辑）
+(defun my-app-mark-completed-and-archive (node-id _context)
+  "设置完成时间并归档（示例）。"
+  (supertag-node-update-property node-id :completed_date (current-time))
+  (supertag-node-update-property node-id :status "Archived"))
+
+;; 安全的做法：通过条件防止重复触发
 (supertag-automation-create
  '(:name "safe-completion"
    :trigger :on-property-change
    :condition (and (property-equals :status "Done")
-                   (not (property-exists :completed_date)))  ; 防止重复触发
-   :actions '((:action :update-property :params (:property :completed_date :value (current-time))))))
+                   (property-test :completed_date #'null))  ; 防止重复触发
+   :actions '((:action :call-function
+              :params (:function #'my-app-mark-completed))))))
+
+(defun my-app-mark-completed (node-id _context)
+  "只设置一次 :completed_date（示例）。"
+  (supertag-node-update-property node-id :completed_date (current-time)))
 ```
 
 ### 性能监控工具
@@ -846,7 +986,10 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 **诊断步骤**：
 ```elisp
 ;; 1. 检查规则是否正确索引
-(gethash "your-trigger-key" supertag--rule-index)
+;; - property key（keyword）：例如 :hours
+;; - tag name（string）：例如 "task"
+(gethash :hours supertag--rule-index)
+(gethash "task" supertag--rule-index)
 
 ;; 2. 检查触发器类型是否正确
 (supertag-check-index-status)
@@ -923,14 +1066,11 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
 启用调试模式以获取更详细的日志信息：
 
 ```elisp
-;; 启用调试模式
-(setq supertag-automation-debug t)
+;; 启用 automation 的 verbose 诊断日志（常规 trace、SKIP/no-op 等）
+(setq supertag-automation-verbose t)
 
-;; 设置日志级别
-(setq supertag-log-level 'debug)
-
-;; 查看调试日志
-(switch-to-buffer "*supertag-debug*")
+;; 可选：打印 sync bridge 的字段事件日志
+(setq supertag-debug-log-field-events t)
 ```
 
 ### 系统健康检查
@@ -1140,17 +1280,10 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
  '(:name "flag-urgent-tasks"
    :trigger :on-property-change
    :condition (and (has-tag "task")
-                   (:formula "(is-task-urgent-p (current-node))"))
+                   (property-equals :priority "High")
+                   (property-test :hours #'> 8)
+                   (not (property-equals :status "Done")))
    :actions '((:action :add-tag :params (:tag "urgent")))))
-
-(defun is-task-urgent-p (node)
-  "检查任务是否紧急。"
-  (let ((priority (supertag-node-get-property node :priority))
-        (due-date (supertag-node-get-property node :due-date))
-        (days-left (days-until due-date)))
-    (and (equal priority "High")
-         (< days-left 3)
-         (not (equal (supertag-node-get-property node :status) "Done")))))
 
 ;; 避免的做法：复杂的嵌套条件
 (supertag-automation-create
@@ -1158,7 +1291,7 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
    :trigger :on-property-change
    :condition (and (has-tag "task")
                    (property-equals :priority "High")
-                   (:formula "(< (days-until (get-property :due-date)) 3)")
+                   (property-test :hours #'> 8)
                    (not (property-equals :status "Done")))
    :actions '((:action :add-tag :params (:tag "urgent")))))
 ```
@@ -1177,7 +1310,7 @@ Automation System 2.0 的核心性能优势来自于智能索引系统：
                (property-equals :priority "Critical")  ; 最具选择性的条件
                (has-tag "task")                        ; 标签检查
                (not (property-equals :status "Done"))  ; 状态检查
-               (:formula "(< (days-until (get-property :due-date)) 1)"))  ; 复杂计算最后
+               (property-test :hours #'> 8))  ; 数值测试放最后
    :actions '((:action :call-function :params (:function #'send-urgent-alert)))))
 ```
 

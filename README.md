@@ -258,6 +258,11 @@ Vault mode notes:
 - Shows a mode line hint `ST[<vault>]` for the current file (when multiple sync directories are configured).
 - Manually switch with `M-x supertag-vault-activate` (vault mode only).
 
+Smart scan (sync safety):
+- Each sync computes a content hash and compares it with the last synced hash.
+- If the hash is unchanged, parsing is skipped and the database stays untouched.
+- This prevents accidental database clears caused by mtime-only touches or redundant sync triggers.
+
 With AI features (optional):
 
 ```emacs-lisp

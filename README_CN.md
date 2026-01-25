@@ -205,6 +205,11 @@ M-x supertag-batch-convert-properties-to-fields
 - mode line 会显示 `ST[<vault>]` 提示当前文件属于哪个 Vault。
 - 也可以手动执行 `M-x supertag-vault-activate` 切换。
 
+智能扫描（同步安全）：
+- 同步时会计算文件内容 hash，并与上次同步的 hash 对比。
+- hash 未变化则跳过解析，数据库不会被改写。
+- 这能防止仅时间戳变化或重复触发导致的数据库意外清空。
+
 ---
 
 _为 Emacs 用户设计的 Notion 级知识管理_

@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 5.2.0
+;; Version: 5.6.3
 ;; URL: https://github.com/yibie/org-supertag
 
 ;; This file is NOT part of GNU Emacs.
@@ -91,6 +91,88 @@ file belongs to (based on its path)."
   :init-value nil
   :lighter (:eval (or supertag-vault--buffer-indicator "")))
 
+(defvar supertag--initialized nil
+  "Non-nil after `supertag-init` completes.")
+
+(defvar supertag--config-guard-enabled nil
+  "When non-nil, prevent manual runtime changes to vault persistence variables.")
+
+(defvar supertag--config-guard-allow nil
+  "When non-nil, allow guarded variable updates for vault switching.")
+
+(defvar supertag--config-guard--reverting nil
+  "Internal guard flag used while reverting blocked config changes.")
+
+(defvar supertag--config-guard-state nil
+  "Expected runtime values for vault persistence variables.")
+
+(defun supertag-config-guard--key (symbol)
+  "Return guard key for SYMBOL, or nil when untracked."
+  (pcase symbol
+    ('supertag-data-directory :data-directory)
+    ('supertag-db-file :db-file)
+    ('supertag-db-backup-directory :backup-directory)
+    ('supertag-sync-state-file :sync-state-file)
+    ('org-supertag-sync-directories :sync-directories)
+    ('org-supertag-active-sync-directory :active-sync-directory)
+    (_ nil)))
+
+(defun supertag-config-guard--capture ()
+  "Capture current vault persistence settings."
+  (setq supertag--config-guard-state
+        (list :data-directory supertag-data-directory
+              :db-file supertag-db-file
+              :backup-directory supertag-db-backup-directory
+              :sync-state-file (when (boundp 'supertag-sync-state-file)
+                                 supertag-sync-state-file)
+              :sync-directories (when (boundp 'org-supertag-sync-directories)
+                                  org-supertag-sync-directories)
+              :active-sync-directory (when (boundp 'org-supertag-active-sync-directory)
+                                       org-supertag-active-sync-directory))))
+
+(defun supertag-config-guard--update (symbol newval)
+  "Update guard state for SYMBOL to NEWVAL."
+  (let ((key (supertag-config-guard--key symbol)))
+    (when key
+      (setq supertag--config-guard-state
+            (plist-put supertag--config-guard-state key newval)))))
+
+(defun supertag-config-guard--watch (symbol newval operation _where)
+  "Block manual runtime changes to guarded variables."
+  (when (and supertag--config-guard-enabled
+             supertag--initialized
+             (memq operation '(set let))
+             (not supertag--config-guard--reverting))
+    (let ((key (supertag-config-guard--key symbol)))
+      (when key
+        (if supertag--config-guard-allow
+            (supertag-config-guard--update symbol newval)
+          (let ((expected (plist-get supertag--config-guard-state key)))
+            (unless (equal newval expected)
+              (let ((supertag--config-guard--reverting t))
+                (set symbol expected))
+              (message "Supertag: manual config change blocked. Use M-x supertag-vault-activate to switch vaults."))))))))
+
+(defun supertag-config-guard-enable ()
+  "Enable runtime guard for vault persistence variables."
+  (supertag-config-guard--capture)
+  (unless supertag--config-guard-enabled
+    (setq supertag--config-guard-enabled t)
+    (when (fboundp 'add-variable-watcher)
+      (dolist (var '(supertag-data-directory
+                     supertag-db-file
+                     supertag-db-backup-directory
+                     supertag-sync-state-file
+                     org-supertag-sync-directories
+                     org-supertag-active-sync-directory))
+        (add-variable-watcher var #'supertag-config-guard--watch)))))
+
+(defmacro supertag-config-guard--with-allow (&rest body)
+  "Execute BODY while allowing guarded config changes."
+  (declare (indent 0))
+  `(let ((supertag--config-guard-allow t))
+     ,@body))
+
 (defun supertag-vault--normalize-path (path)
   "Return a canonical directory PATH for matching and IO."
   (when (and (stringp path) (not (string-empty-p path)))
@@ -164,15 +246,16 @@ file belongs to (based on its path)."
 
 (defun supertag-vault--apply (vault)
   "Apply VAULT persistence and sync configuration without loading data."
-  (let* ((data-dir (file-name-as-directory (plist-get vault :data-directory)))
-         (root (plist-get vault :root)))
-    (setq supertag-data-directory data-dir)
-    (setq supertag-db-file (expand-file-name "supertag-db.el" data-dir))
-    (setq supertag-db-backup-directory (expand-file-name "backups" data-dir))
-    (setq supertag-sync-state-file (expand-file-name "sync-state.el" data-dir))
-    ;; Backup date is per-vault; reset to allow correct daily backup decisions.
-    (when (boundp 'supertag-db--last-backup-date)
-      (setq supertag-db--last-backup-date nil))))
+  (supertag-config-guard--with-allow
+    (let* ((data-dir (file-name-as-directory (plist-get vault :data-directory))))
+      (setq supertag-data-directory data-dir)
+      (setq supertag-db-file (expand-file-name "supertag-db.el" data-dir))
+      (setq supertag-db-backup-directory (expand-file-name "backups" data-dir))
+      (setq supertag-sync-state-file (expand-file-name "sync-state.el" data-dir))
+      ;; Backup date is per-vault; reset to allow correct daily backup decisions.
+      (when (boundp 'supertag-db--last-backup-date)
+        (setq supertag-db--last-backup-date nil))))
+  (supertag-config-guard--capture))
 
 (defun supertag-vault--current-id ()
   "Return current vault ID or nil."
@@ -255,8 +338,9 @@ active vault when `supertag-sync-auto-start` is non-nil."
       (ignore-errors (supertag-sync--cancel-auto-start)))
     (when (fboundp 'supertag-sync-stop-auto-sync)
       (ignore-errors (supertag-sync-stop-auto-sync)))
-    (setq supertag-vault--current vault)
-    (setq org-supertag-active-sync-directory (plist-get vault :root))
+    (supertag-config-guard--with-allow
+      (setq supertag-vault--current vault)
+      (setq org-supertag-active-sync-directory (plist-get vault :root)))
     (supertag-vault--apply vault)
     (when (fboundp 'supertag-persistence-ensure-data-directory)
       (supertag-persistence-ensure-data-directory))
@@ -385,6 +469,14 @@ This function loads all necessary components and sets up the environment."
     
     ;; Step 4: Load data from persistent storage
     (supertag-load-store)
+    (when (and (boundp 'supertag--store-origin)
+               (eq (plist-get supertag--store-origin :status) :new)
+               (file-exists-p supertag-db-file))
+      (message "Supertag: DB exists (%s) but store origin is :new (candidates=%S); retrying."
+               (abbreviate-file-name supertag-db-file)
+               (mapcar #'abbreviate-file-name
+                       (or (plist-get supertag--store-origin :load-candidates) '())))
+      (supertag-load-store supertag-db-file))
     
     ;; Step 5: Validate loaded data and sync directories
     (supertag--validate-initialization)
@@ -418,7 +510,11 @@ This function loads all necessary components and sets up the environment."
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (derived-mode-p 'org-mode)
-          (supertag-ui-completion-mode 1)))))
+          (supertag-ui-completion-mode 1))))
+
+    ;; Step 13: Enable runtime config guard after successful init
+    (setq supertag--initialized t)
+    (supertag-config-guard-enable))
 
   ;; Optionally auto-show Node View side window and follow context
   (when (and (boundp 'supertag-view-node-auto-show)

@@ -21,6 +21,7 @@
 (require 'supertag-view-helper)
 (require 'supertag-services-ui)
 (require 'supertag-view-api)
+(declare-function supertag-view--resolve-node-tags "supertag-services-ui" (node-id))
 
 ;;; --- Variables ---
 
@@ -302,7 +303,7 @@ NEW-VALUE is the value after change (nil for deletions)."
                      relation-data
                      (or (equal (plist-get relation-data :from) supertag-view-node--current-node-id)
                          (equal (plist-get relation-data :to) supertag-view-node--current-node-id)))
-                (and (eq entity-type :fields)
+                (and (memq entity-type '(:fields :field-values))
                      (equal entity-id supertag-view-node--current-node-id)))
         ;; Refresh after a short delay to batch multiple rapid changes
         (run-with-idle-timer 0.1 nil #'supertag-view-node-refresh)))))
@@ -322,8 +323,7 @@ NEW-VALUE is the value after change (nil for deletions)."
 (defun supertag-view-node--count-fields (node-id)
   "Count the total number of fields for NODE-ID."
   (when node-id
-    (let* ((relations (supertag-relation-find-by-from node-id :node-tag))
-           (tag-ids (mapcar (lambda (rel) (plist-get rel :to)) relations))
+    (let* ((tag-ids (supertag-view--resolve-node-tags node-id))
            (seen (make-hash-table :test 'equal))
            (count 0))
       (dolist (tag-id tag-ids)
@@ -404,8 +404,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
 
 (defun supertag-view-node--insert-simple-metadata-section (node-id)
   "Insert a simple metadata section for NODE-ID."
-  (let* ((relations (supertag-relation-find-by-from node-id :node-tag))
-         (tag-ids (sort (mapcar (lambda (rel) (plist-get rel :to)) relations) #'string<))
+  (let* ((tag-ids (sort (supertag-view--resolve-node-tags node-id) #'string<))
          (deleted-tags '())
          (valid-tags '()))
     

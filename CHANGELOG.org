@@ -1,4 +1,51 @@
 * Changelog
+* [5.6.3] - 2026-01-21
+** Improvements
+*** Sync
+- Smart sync detection is now always on; content-hash checks skip unchanged files and prevent accidental database clears from mtime-only touches.
+
+** Docs
+*** Sync
+- Documented smart scan behavior and safety note in README and README_CN.
+
+* [5.6.2] - 2026-01-16
+** Improvements
+*** Persistence / Vault Safety
+- Hardened DB loading with candidate fallback and `read-circle` support; record store-origin metadata for diagnostics.
+- Added safeguards to refuse unsafe saves when runtime persistence configuration appears inconsistent.
+- Added a runtime config guard to prevent manual changes to vault persistence variables; use vault activation APIs for switching.
+
+*** Automation
+- Added trigger matching and opt-in commit-hook integration to avoid double-triggering; improved verbose logging.
+
+*** References / View
+- Added reference field ownership helpers to keep node-reference fields consistent with :reference relations.
+
+** Tests
+*** Persistence
+- Added ERT coverage for load-store fallback and `print-circle` scenarios.
+
+** Docs
+*** Architecture
+- Added an ontology architecture overview (data/logic/behavior) and clarified trigger spelling pitfalls in automation docs.
+
+* [5.6.1] - 2025-12-26
+** Improvements
+*** Sync Integrity
+- Added snapshot guard (availability/completeness) to block destructive sync when directories are unavailable or partial.
+- Deferred orphan verification and GC remember pending files; full rescan now aborts if snapshot is not complete.
+- Bound sync-state to the active data directory (per-vault) and auto-reload on data-dir changes to prevent state mismatch.
+- Added `supertag-sync-snapshot-guard` toggle.
+
+*** View/Fields Resilience
+- Resolve node tags via relations with fallback to node `:tags`, improving field rendering when relations are missing.
+- Node view refreshes on `:field-values` change events.
+- Table view pins a "Refs" node-reference field at the end (auto-created/associated in global-field mode) so references can be edited in-table; it merges `add-reference` relations into display/selection; `C-o` jumps to referenced nodes.
+
+** Bug Fixes
+*** Inline Tag Parsing
+- Broadened inline `#tag` matching to support non-ASCII and slash-containing tags across parsing, capture, and migration.
+
 * [5.6.0] - 2025-12-17
 ** Features
 *** View Data API and Plugin System

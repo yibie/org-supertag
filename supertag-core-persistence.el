@@ -68,6 +68,9 @@ Older backups will be automatically cleaned up."
 (defvar supertag-db--last-backup-date nil
   "Date of last backup in YYYY-MM-DD format.")
 
+(defvar supertag--store-origin nil
+  "Metadata about the loaded store and its originating persistence state.")
+
 ;;; --- Backup Functions ---
 
 (defun supertag-get-backup-filename (date-str)
@@ -134,6 +137,201 @@ This function can be called interactively by users."
 (defun supertag-dirty-p ()
   "Check if database has unsaved changes."
   supertag-db--dirty)
+
+(defun supertag--count-nodes ()
+  "Return the number of node entries in the store."
+  (let ((nodes-table (supertag-store-get-collection :nodes)))
+    (if (hash-table-p nodes-table)
+        (hash-table-count nodes-table)
+      0)))
+
+(defun supertag--count-field-values ()
+  "Return the total number of field values stored."
+  (let ((root (supertag-store-get-collection :field-values))
+        (count 0))
+    (when (hash-table-p root)
+      (maphash
+       (lambda (_node-id node-table)
+         (when (hash-table-p node-table)
+           (cl-incf count (hash-table-count node-table))))
+       root))
+    count))
+
+(defun supertag--persistence--normalize-path (path)
+  "Normalize PATH for comparison, or nil when PATH is invalid."
+  (when (and (stringp path) (> (length path) 0))
+    (expand-file-name path)))
+
+(defun supertag--persistence--expected-sync-state-file ()
+  "Return expected sync-state path derived from current data directory."
+  (when (and (boundp 'supertag-data-directory)
+             (stringp supertag-data-directory)
+             (> (length supertag-data-directory) 0))
+    (expand-file-name "sync-state.el"
+                      (file-name-as-directory
+                       (expand-file-name supertag-data-directory)))))
+
+(defun supertag--persistence--data-dir ()
+  "Return normalized `supertag-data-directory`, or nil when unset."
+  (when (and (boundp 'supertag-data-directory)
+             (stringp supertag-data-directory)
+             (> (length supertag-data-directory) 0))
+    (file-name-as-directory
+     (expand-file-name supertag-data-directory))))
+
+(defun supertag--persistence--default-db-file ()
+  "Return the default DB file path derived from `supertag-data-directory`."
+  (let ((dir (supertag--persistence--data-dir)))
+    (when dir
+      (expand-file-name "supertag-db.el" dir))))
+
+(defun supertag--persistence--newest-db-snapshot (&optional dir)
+  "Return newest DB snapshot file under DIR (or `supertag-data-directory`).
+
+This is a best-effort fallback for legacy filenames like `supertag-db-YYYY-MM-DD.el`
+or files with a `.db` extension that still contain an Emacs-lisp printed store."
+  (let* ((dir (or dir (supertag--persistence--data-dir))))
+    (when (and dir (file-directory-p dir))
+      (let* ((candidates (directory-files dir t "^supertag-db-.*\\.\\(el\\|db\\)$" t))
+             (dated (delq nil
+                          (mapcar (lambda (path)
+                                    (let ((attrs (ignore-errors (file-attributes path))))
+                                      (when attrs
+                                        (cons path (nth 5 attrs)))))
+                                  candidates)))
+             (sorted (sort dated (lambda (a b) (time-less-p (cdr b) (cdr a))))))
+        (car (car sorted))))))
+
+(defun supertag--persistence--db-file-candidates (&optional file)
+  "Return a de-duplicated list of DB file candidates for FILE/current config."
+  (let* ((explicit (supertag--persistence--normalize-path file))
+         (configured (supertag--persistence--normalize-path supertag-db-file))
+         (default (supertag--persistence--default-db-file))
+         (legacy (let ((dir (supertag--persistence--data-dir)))
+                   (when dir
+                     (expand-file-name "supertag-db.db" dir))))
+         (snapshot (supertag--persistence--newest-db-snapshot)))
+    (cl-delete-duplicates (delq nil (list explicit configured default legacy snapshot))
+                          :test #'string=)))
+
+(defun supertag--persistence--pick-readable-file (paths)
+  "Return the first readable regular file in PATHS, or nil."
+  (cl-loop for path in paths
+           for expanded = (and (stringp path)
+                               (> (length path) 0)
+                               (ignore-errors (expand-file-name path)))
+           when (and expanded
+                     (file-exists-p expanded)
+                     (not (file-directory-p expanded))
+                     (file-readable-p expanded))
+           return expanded))
+
+(defun supertag--persistence--set-db-file (path)
+  "Set `supertag-db-file` to PATH, respecting config guard when available."
+  (when (and (stringp path) (> (length path) 0))
+    (if (fboundp 'supertag-config-guard--with-allow)
+        (supertag-config-guard--with-allow
+          (setq supertag-db-file path))
+      (setq supertag-db-file path))))
+
+(defun supertag--persistence--try-read-store (path)
+  "Return store data read from PATH.
+
+Signals an error if the file cannot be read or parsed."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (goto-char (point-min))
+    (let ((read-circle t))
+      (read (current-buffer)))))
+
+(defun supertag--persistence--canonicalize-store-root (store)
+  "Normalize STORE root keys to canonical keyword collections."
+  (when (hash-table-p store)
+    (dolist (spec '((:nodes nodes "nodes")
+                    (:tags tags "tags")
+                    (:relations relations "relations")
+                    (:embeds embeds "embeds")
+                    (:fields fields "fields")
+                    (:field-definitions field-definitions "field-definitions")
+                    (:tag-field-associations tag-field-associations "tag-field-associations")
+                    (:field-values field-values "field-values")
+                    (:meta meta "meta")))
+      (let ((canonical (car spec))
+            (aliases (cdr spec)))
+        (when (and (not (ht-contains? store canonical)))
+          (catch 'moved
+            (dolist (alias aliases)
+              (when (ht-contains? store alias)
+                (puthash canonical (gethash alias store) store)
+                (remhash alias store)
+                (throw 'moved t))))))))
+  store)
+
+(defun supertag--record-store-origin (status &optional context)
+  "Record metadata about the current in-memory store origin."
+  (setq supertag--store-origin
+        (append
+         (list :status status
+               :db-file supertag-db-file
+               :data-directory supertag-data-directory
+               :sync-state-file (when (boundp 'supertag-sync-state-file)
+                                  supertag-sync-state-file)
+               :sync-state-source (when (boundp 'supertag-sync--state-source)
+                                    supertag-sync--state-source)
+               :sync-directories (when (boundp 'org-supertag-sync-directories)
+                                   org-supertag-sync-directories)
+               :active-sync-directory (when (boundp 'org-supertag-active-sync-directory)
+                                        org-supertag-active-sync-directory)
+               :nodes-count (supertag--count-nodes)
+               :field-values-count (supertag--count-field-values)
+               :captured-at (current-time))
+         context)))
+
+(defun supertag--persistence-guard-violations (&optional file)
+  "Return a list of reasons to refuse saving the store."
+  (let* ((origin supertag--store-origin)
+         (db-file (or file supertag-db-file))
+         (state-file (supertag--persistence--expected-sync-state-file))
+         (state-source (when (boundp 'supertag-sync--state-source)
+                         supertag-sync--state-source))
+         (origin-status (plist-get origin :status))
+         (origin-db (plist-get origin :db-file))
+         (origin-state (plist-get origin :sync-state-file))
+         (origin-field-count (plist-get origin :field-values-count))
+         (current-field-count (supertag--count-field-values))
+         (current-nodes (supertag--count-nodes))
+         (reasons '()))
+    (unless origin
+      (push "store origin missing (store not loaded)" reasons))
+    (let ((db-now (supertag--persistence--normalize-path db-file))
+          (db-origin (supertag--persistence--normalize-path origin-db)))
+      (when (and db-now db-origin (not (string= db-now db-origin)))
+        (push "db-file mismatch (manual switch detected)" reasons)))
+    (let ((state-now (supertag--persistence--normalize-path state-file))
+          (state-origin (supertag--persistence--normalize-path origin-state)))
+      (when (and state-now state-origin (not (string= state-now state-origin)))
+        (push "sync-state file mismatch (manual switch detected)" reasons)))
+    (let ((source-now (supertag--persistence--normalize-path state-file))
+          (source-loaded (supertag--persistence--normalize-path state-source)))
+      (cond
+       ((and source-now (not source-loaded))
+        (push "sync-state not loaded for current vault" reasons))
+       ((and source-now source-loaded (not (string= source-now source-loaded)))
+        (push "sync-state not loaded for current vault" reasons))))
+    (when (memq origin-status '(:failed :empty-file))
+      (push (format "last load status %s" origin-status) reasons))
+    (when (and (numberp origin-field-count)
+               (> origin-field-count 0)
+               (= current-field-count 0)
+               (> current-nodes 0))
+      (push "field-values dropped to 0 (possible data loss)" reasons))
+    (nreverse reasons)))
+
+(defun supertag--persistence-refuse-save (reasons)
+  "Refuse saving and explain the correct flow."
+  (let ((msg (format "Supertag refused to save: %s. Proper flow: use M-x supertag-vault-activate to switch vaults and reload state/store before saving."
+                     (mapconcat #'identity reasons "; "))))
+    (user-error "%s" msg)))
 
 (defun supertag-persistence-ensure-data-directory ()
   "Ensure database and backup directories exist."
@@ -205,6 +403,9 @@ This function ensures all levels are proper hash tables."
 FILE is the optional file path. Defaults to `supertag-db-file`."
   (interactive)
   (let ((file-to-save (or file supertag-db-file)))
+    (let ((reasons (supertag--persistence-guard-violations file-to-save)))
+      (when reasons
+        (supertag--persistence-refuse-save reasons)))
     (supertag-persistence-ensure-data-directory) ; Ensure directory exists before saving
     (when (supertag-dirty-p) ; Only save if dirty
       ;; Safety guard: avoid overwriting a non-trivial on-disk DB with an empty in-memory store
@@ -228,6 +429,7 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
                   (print-circle t))          ; Handle circular structures
               (prin1 supertag--store (current-buffer))))
           (supertag-clear-dirty)
+          (supertag--record-store-origin :ok)
           ;; Check if daily backup is needed after successful save
           (supertag-check-daily-backup))))))
 
@@ -301,41 +503,59 @@ data corruption is suspected."
 
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
-This function ONLY loads data and does not perform any migration
-or normalization. For data migration, use the command
+This function loads and coerces the persisted store data, but does not
+run version migrations. For migrations/normalization, use the command
 `supertag-db-migrate-and-normalize` after loading.
 FILE is the optional file path. Defaults to supertag-db-file."
   (interactive)
-  (let ((file-to-load (or file supertag-db-file)))
-    (supertag-persistence-ensure-data-directory) ; Ensure directory exists before loading
-    (if (file-exists-p file-to-load)
+  (let* ((candidates (supertag--persistence--db-file-candidates file))
+         (file-to-load nil)
+         (load-status nil)
+         (failures '()))
+    ;; Ensure directory exists before loading (best-effort; does not depend on DB presence).
+    (ignore-errors (supertag-persistence-ensure-data-directory))
+
+    ;; Do not rely on a pre-check alone: try reading candidates until one succeeds.
+    (dolist (candidate candidates)
+      (let ((expanded (and (stringp candidate)
+                           (> (length candidate) 0)
+                           (ignore-errors (expand-file-name candidate)))))
+        (when (and expanded
+                   (file-exists-p expanded)
+                   (not (file-directory-p expanded))
+                   (file-readable-p expanded)
+                   (null file-to-load))
+          (condition-case err
+              (let* ((loaded-data (supertag--persistence--try-read-store expanded))
+                     (coerced (supertag--coerce-store-table loaded-data)))
+                (setq file-to-load expanded)
+                (setq supertag--store (supertag--persistence--canonicalize-store-root coerced))
+                (supertag--ensure-store)
+                (setq load-status :ok))
+            (error
+             (push (cons expanded (error-message-string err)) failures))))))
+
+    (if (and file-to-load (eq load-status :ok))
         (progn
-          (with-temp-buffer
-            (insert-file-contents file-to-load)
-            (goto-char (point-min))
-            ;; Check if file is empty or malformed
-            (if (= (point-min) (point-max))
-                (progn
-                  (message "Warning: Database file %s is empty, initializing new store" file-to-load)
-                  (setq supertag--store (ht-create)))
-              (condition-case err
-                  (let ((loaded-data (read (current-buffer))))
-                    (unless (hash-table-p loaded-data)
-                      (message "Warning: Legacy data format detected in %s. Coercing to hash-table."
-                               file-to-load))
-                    (setq supertag--store loaded-data))
-                (error
-                 (message "Error reading database file %s: %s. Initializing empty store."
-                          file-to-load (error-message-string err))
-                 (setq supertag--store (ht-create))))))
+          (supertag--persistence--set-db-file file-to-load)
           (supertag-clear-dirty)
-          (message "Database loaded. For data migration, run M-x supertag-db-migrate-and-normalize."))
-      (unless (hash-table-p supertag--store)
-        (setq supertag--store (ht-create))
-        (message "Initialized empty Org-Supertag store."))))
-  ;; Rebuild global field caches if the feature is loaded and enabled.
-  (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
-    (supertag--maybe-rebuild-global-field-caches)))
+          (supertag--record-store-origin :ok
+                                         (list :loaded-from file-to-load
+                                               :load-candidates candidates
+                                               :load-failures (nreverse failures)))
+          (message "Database loaded from %s. For migrations, run M-x supertag-db-migrate-and-normalize."
+                   (abbreviate-file-name file-to-load)))
+      (setq supertag--store (ht-create))
+      (setq load-status :new)
+      (supertag-clear-dirty)
+      (supertag--record-store-origin load-status (list :loaded-from nil
+                                                       :load-candidates candidates
+                                                       :load-failures (nreverse failures)))
+      (message "Initialized empty Org-Supertag store (no readable DB found; candidates=%S)."
+               (mapcar #'abbreviate-file-name candidates)))
+	;; Rebuild global field caches if the feature is loaded and enabled.
+	(when (fboundp 'supertag--maybe-rebuild-global-field-caches)
+	  (supertag--maybe-rebuild-global-field-caches))))
 
 (defun supertag-schedule-save ()
   "Schedule a delayed save.
@@ -497,13 +717,18 @@ initialized: it will treat that case as an empty collection and exit cleanly."
   "Inspect the database file and report its structure.
 Useful for diagnosing why nodes aren't loading properly."
   (interactive)
-  (if (not (file-exists-p supertag-db-file))
-      (message "Database file does not exist: %s" supertag-db-file)
-    (with-temp-buffer
-      (insert-file-contents supertag-db-file)
+  (let* ((candidates (supertag--persistence--db-file-candidates nil))
+         (file-to-inspect (or (supertag--persistence--pick-readable-file candidates)
+                              supertag-db-file)))
+    (if (not (and file-to-inspect (file-exists-p file-to-inspect)))
+        (message "Database file does not exist. Candidates: %S"
+                 (mapcar #'abbreviate-file-name candidates))
+      (with-temp-buffer
+        (insert-file-contents file-to-inspect)
       (goto-char (point-min))
       (condition-case err
-          (let* ((data (read (current-buffer)))
+          (let* ((read-circle t)
+                 (data (read (current-buffer)))
                  (is-hash (hash-table-p data))
                  (nodes-key (if is-hash (gethash :nodes data) nil))
                  (nodes-count (if (hash-table-p nodes-key)
@@ -515,8 +740,9 @@ Useful for diagnosing why nodes aren't loading properly."
             
             (with-output-to-temp-buffer "*Supertag DB Inspection*"
               (princ "=== Database File Inspection ===\n\n")
-              (princ (format "File: %s\n" supertag-db-file))
-              (princ (format "File size: %d bytes\n" (file-attribute-size (file-attributes supertag-db-file))))
+              (princ (format "File: %s\n" file-to-inspect))
+              (princ (format "File size: %d bytes\n"
+                             (file-attribute-size (file-attributes file-to-inspect))))
               (princ (format "Data is hash-table: %s\n" is-hash))
               (princ (format "Nodes collection exists: %s\n" (if nodes-key "YES" "NO")))
               (princ (format "Nodes collection is hash-table: %s\n" (hash-table-p nodes-key)))
@@ -560,7 +786,7 @@ Useful for diagnosing why nodes aren't loading properly."
                   (princ "3. Incomplete migration\n\n")
                   (princ "Solution: Run M-x supertag-sync-full-rescan to rebuild the database.\n")))))
         (error
-         (message "Error reading database file: %s" (error-message-string err)))))))
+         (message "Error reading database file: %s" (error-message-string err))))))))
 
 ;;; --- Time Format Standardization ---
 

@@ -19,6 +19,204 @@
 (require 'supertag-view-helper)
 (require 'supertag-core-scan)
 
+(defgroup supertag-org-link nil
+  "Org link integration for Org-Supertag."
+  :group 'org-supertag)
+
+(defcustom supertag-org-id-open-link-auto-enable t
+  "When non-nil, let `org-id-open-link` resolve IDs via Org-Supertag first.
+
+This avoids depending on `org-id-locations` when the target node exists in the
+Supertag store. The fallback remains the original Org behavior when the node is
+unknown to Supertag or the recorded file is missing."
+  :type 'boolean
+  :group 'supertag-org-link)
+
+(defun supertag-service-org--goto-id-in-current-buffer (node-id)
+  "Jump to NODE-ID by searching `:ID:` in the current buffer.
+
+This intentionally does not consult `org-id-locations`."
+  (when (and (stringp node-id) (not (string-empty-p node-id)))
+    (org-with-wide-buffer
+      (goto-char (point-min))
+      (when (re-search-forward
+             (concat "^[ \t]*:ID:[ \t]*" (regexp-quote node-id) "[ \t]*$")
+             nil t)
+        (org-back-to-heading t)
+        t))))
+
+(defun supertag-service-org-follow-id (node-id)
+  "Open NODE-ID using Org-Supertag's node location and a robust `:ID:` search.
+
+Returns non-nil when NODE-ID was handled, nil otherwise."
+  (let* ((node (and (stringp node-id) (supertag-node-get node-id)))
+         (file (and (listp node) (plist-get node :file))))
+    (when (and (stringp file)
+               (file-exists-p file)
+               ;; Only apply to files in sync scope.
+               (or (not (fboundp 'supertag-sync--in-sync-scope-p))
+                   (supertag-sync--in-sync-scope-p file)))
+      (let ((buffer (find-file-noselect file)))
+        (pop-to-buffer buffer)
+        (when (supertag-service-org--goto-id-in-current-buffer node-id)
+          (org-show-context)
+          (recenter)
+          t)))))
+
+(defun supertag-service-org--org-id-open-link-advice (orig-fn &rest args)
+  "Advice for `org-id-open-link` that prefers Org-Supertag lookup when available."
+  (let ((node-id (car args)))
+    (if (and supertag-org-id-open-link-auto-enable
+             (bound-and-true-p supertag--initialized)
+             (stringp node-id)
+             (supertag-service-org-follow-id node-id))
+        t
+      (apply orig-fn args))))
+
+(defun supertag-service-org--adjust-subtree-level (content from-level to-level)
+  "Adjust Org subtree CONTENT from FROM-LEVEL to TO-LEVEL.
+
+Only headline lines are adjusted (lines starting with `*`)."
+  (let ((delta (- to-level from-level)))
+    (if (or (not (stringp content)) (= delta 0))
+        content
+      (with-temp-buffer
+        (insert content)
+        (goto-char (point-min))
+        (while (re-search-forward "^\\(\\*+\\)\\(\\s-\\)" nil t)
+          (let* ((stars (match-string 1))
+                 (sep (match-string 2))
+                 (new-count (max 1 (+ (length stars) delta)))
+                 (new-stars (make-string new-count ?*)))
+            (replace-match (concat new-stars sep) t t)))
+        (buffer-string)))))
+
+(defun supertag-service-org--extract-ids-from-content (content)
+  "Return a de-duplicated list of Org IDs found in CONTENT."
+  (let ((ids '()))
+    (when (stringp content)
+      (with-temp-buffer
+        (insert content)
+        (goto-char (point-min))
+        (while (re-search-forward "^[ \t]*:ID:[ \t]*\\(.+\\)$" nil t)
+          (let ((id (string-trim (match-string 1))))
+            (when (and (stringp id) (not (string-empty-p id)))
+              (push id ids))))))
+    (cl-delete-duplicates (nreverse ids) :test #'string=)))
+
+(defun supertag-service-org-move-node-to-file (node-id target-file &optional leave-link target-level)
+  "Move NODE-ID's subtree to TARGET-FILE without prompting.
+
+This does not trust stored character positions. It locates the subtree via
+an in-buffer `:ID:` search, moves the full subtree text (including all child headings), and
+updates Supertag store location for all Org IDs found in that subtree.
+
+When LEAVE-LINK is non-nil, replace the original subtree with a single headline
+containing an `id:` link to the moved node.
+
+When TARGET-LEVEL is non-nil, adjust the subtree so the top headline becomes
+that outline level in TARGET-FILE."
+  (unless (and (stringp node-id) (not (string-empty-p node-id)))
+    (error "node-id must be a non-empty string"))
+  (unless (and (stringp target-file) (not (string-empty-p target-file)))
+    (error "target-file must be a non-empty string"))
+
+  (let* ((node (supertag-node-get node-id))
+         (source-file (and (listp node) (plist-get node :file))))
+    (unless (and (stringp source-file) (file-exists-p source-file))
+      (error "Source file missing for node %s (file=%S)" node-id source-file))
+
+    (let ((source-buf (find-file-noselect source-file))
+          (target-buf (find-file-noselect target-file))
+          (subtree-content nil)
+          (ids-in-subtree nil)
+          (from-level nil)
+          (title nil)
+          (begin nil)
+          (end nil)
+          (insert-pos nil))
+      ;; Extract subtree from source buffer.
+      (with-current-buffer source-buf
+        (org-with-wide-buffer
+          (goto-char (point-min))
+          (unless (supertag-service-org--goto-id-in-current-buffer node-id)
+            (error "ID %s not found in %s" node-id (abbreviate-file-name source-file)))
+          (setq from-level (org-outline-level))
+          (setq title (org-get-heading t t t t))
+          (setq begin (point))
+          (setq end (save-excursion (org-end-of-subtree t t) (point)))
+          (setq subtree-content (buffer-substring-no-properties begin end))
+          (setq ids-in-subtree (supertag-service-org--extract-ids-from-content subtree-content))))
+
+      (unless (stringp subtree-content)
+        (error "Failed to extract subtree for %s" node-id))
+
+      ;; Insert into target file.
+      (with-current-buffer target-buf
+        (org-with-wide-buffer
+          (goto-char (point-max))
+          (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+          (setq insert-pos (point))
+          (let ((content (if (integerp target-level)
+                             (supertag-service-org--adjust-subtree-level
+                              subtree-content from-level target-level)
+                           subtree-content)))
+            (insert content)
+            (unless (looking-back "\n" 1) (insert "\n")))
+          (when (buffer-file-name)
+            (supertag--mark-internal-modification (buffer-file-name)))
+          (let ((inhibit-message t))
+            (save-buffer))))
+
+      ;; Remove from source (or leave link).
+      (with-current-buffer source-buf
+        (org-with-wide-buffer
+          (goto-char begin)
+          (delete-region begin end)
+          (when leave-link
+            (insert (make-string from-level ?*) " "
+                    (format "[[id:%s][%s]]\n" node-id (or title node-id))))
+          (when (buffer-file-name)
+            (supertag--mark-internal-modification (buffer-file-name)))
+          (let ((inhibit-message t))
+            (save-buffer))))
+
+      ;; Update store/org-id locations for all IDs moved.
+      (dolist (moved-id ids-in-subtree)
+        (when (supertag-node-get moved-id)
+          (supertag-node-set-location moved-id target-file insert-pos))
+        (when (fboundp 'org-id-add-location)
+          (ignore-errors (org-id-add-location moved-id target-file))))
+
+      (message "[supertag] moved node %s (%d ids) -> %s"
+               node-id
+               (length ids-in-subtree)
+               (abbreviate-file-name target-file))
+      t)))
+
+(defun supertag-service-org-move-node-to-file-action (node-id _context target-file &optional leave-link target-level)
+  "Automation adapter for `supertag-service-org-move-node-to-file`."
+  (supertag-service-org-move-node-to-file node-id target-file leave-link target-level))
+
+(defun supertag-enable-org-id-open-link-integration ()
+  "Enable Org-Supertag integration for `org-id-open-link`."
+  (interactive)
+  (setq supertag-org-id-open-link-auto-enable t)
+  (when (fboundp 'org-id-open-link)
+    (advice-add 'org-id-open-link :around #'supertag-service-org--org-id-open-link-advice))
+  (message "[supertag] org-id-open-link integration enabled"))
+
+(defun supertag-disable-org-id-open-link-integration ()
+  "Disable Org-Supertag integration for `org-id-open-link`."
+  (interactive)
+  (setq supertag-org-id-open-link-auto-enable nil)
+  (when (fboundp 'org-id-open-link)
+    (advice-remove 'org-id-open-link #'supertag-service-org--org-id-open-link-advice))
+  (message "[supertag] org-id-open-link integration disabled"))
+
+(when supertag-org-id-open-link-auto-enable
+  (supertag-enable-org-id-open-link-integration))
+
 (defun supertag-service-org--normalize-plist (data)
   "Return DATA as a plist. Convert hash tables into plists."
   (if (hash-table-p data)
@@ -71,21 +269,32 @@ If NODE-ID is already a top-level heading, return nil."
 
 (defun supertag-service-org--update-buffer-and-resync (node-id buffer-update-func)
   "Generic function to run a buffer-updating function and then trigger a resync."
-  (supertag-service-org--with-node-buffer node-id
-					  (lambda ()
-					    (funcall buffer-update-func)
-					    ;; Sync to update memory from the modified buffer
-					    (when (fboundp 'supertag-node-sync-at-point)
-					      (supertag-node-sync-at-point))
-					    (save-buffer)
-					    ;; Mark as internal modification AFTER saving
-					    (when (buffer-file-name)
-					      (supertag--mark-internal-modification (buffer-file-name))))))
+  (supertag-service-org--with-node-buffer
+   node-id
+   (lambda ()
+     (let ((before-tick (buffer-chars-modified-tick)))
+       (funcall buffer-update-func)
+       ;; Only sync/save when buffer actually changed, to avoid noisy no-op runs.
+       (unless (eq before-tick (buffer-chars-modified-tick))
+         ;; Sync to update memory from the modified buffer.
+         (when (fboundp 'supertag-node-sync-at-point)
+           (supertag-node-sync-at-point))
+         ;; Mark internal modification BEFORE save so after-save hook can skip.
+         (when (buffer-file-name)
+           (supertag--mark-internal-modification (buffer-file-name)))
+         (let ((inhibit-message t))
+           (save-buffer)))))))
 
 (defun supertag-service-org-set-todo-state (node-id state)
-  "Sets the TODO state for NODE-ID in the buffer and triggers a resync."
-  (supertag-service-org--update-buffer-and-resync node-id
-						  (lambda () (org-todo state))))
+  "Set the TODO STATE for NODE-ID in the buffer and trigger a resync."
+  (supertag-service-org--update-buffer-and-resync
+   node-id
+   (lambda ()
+     (let ((inhibit-message t)
+           (current (when (fboundp 'org-get-todo-state)
+                      (org-get-todo-state))))
+       (unless (equal current state)
+         (org-todo state))))))
 
 (defun supertag-service-org-add-tag (node-id tag-name)
   "Adds #TAG-NAME text to the headline for NODE-ID and triggers a resync."

@@ -15,6 +15,39 @@
 (require 'supertag-core-schema)
 (declare-function supertag-tag--normalize-field-def "supertag-ops-tag" (field-def))
 
+(defun supertag--assoc-entry-field-id (entry)
+  "Return field-id string from association ENTRY.
+ENTRY may be a plist like (:field-id \"refs\" ...) or a bare string \"refs\"."
+  (cond
+   ((and (listp entry) (plist-member entry :field-id))
+    (plist-get entry :field-id))
+   ((stringp entry) entry)
+   (t nil)))
+
+(defun supertag--normalize-tag-field-associations (entries)
+  "Normalize association ENTRIES into a list of plists.
+Accepts both legacy string lists and plist entries."
+  (let ((result '())
+        (idx 0))
+    (dolist (entry (or entries '()) (nreverse result))
+      (let ((fid (supertag--assoc-entry-field-id entry)))
+        (when (and fid (stringp fid) (not (string-empty-p fid)))
+          (push (if (and (listp entry) (plist-member entry :field-id))
+                    entry
+                  (list :field-id fid :order idx))
+                result)
+          (setq idx (1+ idx)))))))
+
+(defun supertag--dedupe-tag-field-associations (entries)
+  "Deduplicate association ENTRIES by :field-id, preserving first occurrence."
+  (let ((seen (make-hash-table :test 'equal))
+        (result '()))
+    (dolist (entry (supertag--normalize-tag-field-associations entries) (nreverse result))
+      (let ((fid (plist-get entry :field-id)))
+        (unless (gethash fid seen)
+          (puthash fid t seen)
+          (push entry result))))))
+
 (defun supertag-global-field--normalize (props)
   "Normalize PROPS for global field creation/update."
   (unless (fboundp 'supertag-tag--normalize-field-def)
@@ -87,7 +120,8 @@
 (defun supertag-tag-associate-field (tag-id field-id &optional order)
   "Associate FIELD-ID with TAG-ID. ORDER defaults to append."
   (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
-         (entries (or (gethash tag-id assoc-table) '()))
+         (raw (gethash tag-id assoc-table))
+         (entries (supertag--dedupe-tag-field-associations raw))
          (existing (cl-find field-id entries :key (lambda (e) (plist-get e :field-id)) :test #'equal))
          (next-order (length entries))
          (new-order (or order next-order))
@@ -109,10 +143,11 @@
 
 (defun supertag-tag-disassociate-field (tag-id field-id)
   "Remove association of FIELD-ID from TAG-ID."
-  (let* ((entries (supertag-store-get-tag-field-associations tag-id))
-         (filtered (and (listp entries)
-                        (cl-remove field-id entries :key (lambda (e) (plist-get e :field-id)) :test #'equal))))
-    (when filtered
+  (let* ((raw (supertag-store-get-tag-field-associations tag-id))
+         (entries (supertag--dedupe-tag-field-associations raw))
+         (filtered (cl-remove field-id entries :key (lambda (e) (plist-get e :field-id)) :test #'equal)))
+    (when (listp raw)
+      ;; Important: persist even when FILTERED is empty, otherwise last-entry removal is impossible.
       (supertag-store-put-tag-field-associations tag-id filtered t)
       (supertag-schema-rebuild-global-field-caches))
     filtered))
