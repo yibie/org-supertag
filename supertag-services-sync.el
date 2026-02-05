@@ -114,8 +114,9 @@ Takes precedence over `org-supertag-sync-directories`."
 
 
 (defcustom supertag-sync-hash-props
-  '(:raw-value :tags :todo-type :priority)
-  "Properties to include when calculating node hash values."
+  '(:raw-value :olp :tags :todo :priority :content :properties)
+  "Properties to include when calculating node hash values.
+`:id' is always included. `:todo-type' is treated as `:todo'."
   :type '(repeat symbol)
   :group 'supertag-sync)
 
@@ -787,33 +788,60 @@ Returns the loaded or initialized sync state."
    ((stringp value) value)
    (t (format "%s" value))))
 
+(defun supertag--node-hash--value (node key)
+  "Return normalized string value for NODE's KEY."
+  (pcase key
+    ((or :todo :todo-type)
+     (or (plist-get node :todo) ""))
+    (:raw-value
+     (or (plist-get node :raw-value) ""))
+    (:olp
+     (let ((olp (plist-get node :olp)))
+       (cond
+        ((listp olp) (string-join olp "/"))
+        ((stringp olp) olp)
+        (t ""))))
+    (:content
+     (or (plist-get node :content) ""))
+    (:tags
+     (let ((tag-list (plist-get node :tags)))
+       (cond
+        ((listp tag-list) (mapconcat #'identity (sort (copy-sequence tag-list) #'string<) "|"))
+        ((stringp tag-list) tag-list)
+        (t ""))))
+    (:priority
+     (or (plist-get node :priority) ""))
+    (:properties
+     (let* ((raw-props (plist-get node :properties))
+            (props-alist (supertag--node-hash--properties-to-alist raw-props)))
+       (if (null props-alist)
+           ""
+         (let* ((sorted (sort (cl-copy-list props-alist)
+                              (lambda (a b)
+                                (string< (supertag--node-hash--property-key-string (car a))
+                                         (supertag--node-hash--property-key-string (car b)))))))
+           (mapconcat (lambda (pair)
+                        (format "%s=%s"
+                                (supertag--node-hash--property-key-string (car pair))
+                                (supertag--node-hash--property-value-string (cdr pair))))
+                      sorted
+                      "|")))))
+    (_
+     (supertag--node-hash--property-value-string (plist-get node key)))))
+
 (defun supertag-node-hash (node)
   "Calculate hash value for NODE.
 Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
   (let* ((id (or (plist-get node :id) "")) ; Ensure ID is part of the hash
-         (raw-value (or (plist-get node :raw-value) ""))
-         (content (or (plist-get node :content) "")) ; Include content in hash
-         (tags (let ((tag-list (plist-get node :tags)))
-                 (if (listp tag-list)
-                     (mapconcat #'identity (sort (copy-sequence tag-list) #'string<) "|")
-                   (or tag-list ""))))
-         (todo-type (or (plist-get node :todo) "")) ; Use :todo for schema consistency
-         (priority (or (plist-get node :priority) ""))
-         (properties (let* ((raw-props (plist-get node :properties))
-                            (props-alist (supertag--node-hash--properties-to-alist raw-props)))
-                       (if (null props-alist)
-                           ""
-                         (let* ((sorted (sort (cl-copy-list props-alist)
-                                              (lambda (a b)
-                                                (string< (supertag--node-hash--property-key-string (car a))
-                                                         (supertag--node-hash--property-key-string (car b)))))))
-                           (mapconcat (lambda (pair)
-                                        (format "%s=%s"
-                                                (supertag--node-hash--property-key-string (car pair))
-                                                (supertag--node-hash--property-value-string (cdr pair))))
-                                      sorted
-                                      "|"))))))
-    (secure-hash 'sha1 (format "%s|%s|%s|%s|%s|%s|%s" id raw-value content tags todo-type priority properties))))
+         (hash-props (or supertag-sync-hash-props '()))
+         (payload (mapconcat
+                   (lambda (key)
+                     (format "%s=%s"
+                             (supertag--node-hash--property-key-string key)
+                             (supertag--node-hash--value node key)))
+                   hash-props
+                   "|")))
+    (secure-hash 'sha1 (format "%s|%s" id payload))))
 
 (defun supertag-node-mark-deleted-from-file (id)
   "Mark a node as deleted from its file by setting its :file property to nil.
@@ -865,7 +893,7 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
 NEW-PROPS is the source of truth for file-based properties.
 OLD-PROPS is the source of truth for database-only fields."
   (let ((merged-props (copy-sequence new-props))
-        (standard-keys '(:id :title :raw-value :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type)))
+        (standard-keys '(:id :title :raw-value :olp :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type)))
     (cl-loop for (key value) on old-props by #'cddr
              do (unless (member key standard-keys)
                   (plist-put merged-props key value)))
@@ -1890,7 +1918,13 @@ Uses minimal side effects to avoid interfering with other packages."
              (end (save-excursion (org-end-of-subtree t t) (point)))
              (subtree-text (buffer-substring-no-properties begin end))
              (current-file (and (buffer-file-name)
-                                (file-truename (expand-file-name (buffer-file-name))))))
+                                (file-truename (expand-file-name (buffer-file-name)))))
+             ;; Capture TODO keywords and relevant regexps from the source buffer
+             (source-todo-keywords-1 org-todo-keywords-1)
+             (source-todo-regexp org-todo-regexp)
+             (source-not-done-regexp org-not-done-regexp)
+             (source-complex-heading-regexp org-complex-heading-regexp)
+             (source-todo-line-regexp org-todo-line-regexp))
         (with-temp-buffer
           ;; Disable hooks that might interfere
           (let ((org-mode-hook nil)
@@ -1899,6 +1933,13 @@ Uses minimal side effects to avoid interfering with other packages."
                 (inhibit-modification-hooks t))
             (insert subtree-text)
             (org-mode)
+            ;; Restore TODO keywords and regexps to the temp buffer
+            (setq-local org-todo-keywords-1 source-todo-keywords-1)
+            (setq-local org-todo-regexp source-todo-regexp)
+            (setq-local org-not-done-regexp source-not-done-regexp)
+            (setq-local org-complex-heading-regexp source-complex-heading-regexp)
+            (setq-local org-todo-line-regexp source-todo-line-regexp)
+            
             ;; Ensure tab-width is 8 as required by org-current-text-column
             (setq-local tab-width 8)
             (let ((ast (org-element-parse-buffer)))
