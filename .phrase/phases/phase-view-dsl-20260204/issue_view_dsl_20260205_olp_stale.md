@@ -51,7 +51,7 @@
 
 - Resolved At: 2026-02-05
 - Resolved By: codex
-- Commit: (pending)
+- Commit: 587c4de
 
 ## Related
 
