@@ -550,7 +550,11 @@ content region, this function does nothing."
                 (goto-char insertion-point)
                 (insert (format "[[id:%s][%s]]" to-id to-title)))
               (message "Reference added."))
-        (user-error "Failed to add reference to database."))))))
+        (let* ((err (and (fboundp 'supertag-relation-last-error)
+                         (supertag-relation-last-error)))
+               (msg (or (plist-get err :message)
+                        "Failed to add reference to database.")))
+          (user-error "%s" msg)))))))
 
 (defun supertag-add-reference-and-create (beg end)
   "Create a new node from the selected region and replace it with a link.
@@ -591,7 +595,11 @@ Interactively asks for a target location to save the new node."
           (when from-id
             (supertag-ui--ensure-node-synced from-id)
             (unless (supertag-relation-add-reference from-id new-node-id)
-              (user-error "Failed to create reference in database")))
+              (let* ((err (and (fboundp 'supertag-relation-last-error)
+                               (supertag-relation-last-error)))
+                     (msg (or (plist-get err :message)
+                              "Failed to create reference in database.")))
+                (user-error "%s" msg))))
           ;; 5. Replace original text with a link
           (delete-region beg end)
           (insert (format "[[id:%s][%s]]" new-node-id title))

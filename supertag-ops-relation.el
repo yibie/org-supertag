@@ -30,6 +30,23 @@
 (defvar supertag-reference--materializing nil
   "Non-nil while lazily materializing reference fields into relations.")
 
+(defvar supertag-relation--last-error nil
+  "Last error produced by `supertag-relation-add-reference`.
+Value is a plist:
+  :reason  symbol keyword for programmatic branching
+  :message human-readable error message
+  :detail  optional low-level detail.")
+
+(defun supertag-relation-last-error ()
+  "Return the last error payload from `supertag-relation-add-reference`."
+  supertag-relation--last-error)
+
+(defun supertag-relation--set-last-error (reason message &optional detail)
+  "Store structured relation error with REASON, MESSAGE and DETAIL."
+  (setq supertag-relation--last-error
+        (list :reason reason :message message :detail detail))
+  nil)
+
 (defun supertag-reference--normalize-id-list (value)
   "Normalize VALUE into a list of non-empty string ids."
   (let* ((candidates (cond
@@ -313,26 +330,56 @@ This involves:
 Returns t on success, nil on failure."
   (require 'org)
   (require 'org-id)
-  ;; 1. Create relation in DB
-  (let ((relation-result (supertag-relation-create `(:type :reference :from ,from-id :to ,to-id))))
-    (when relation-result
-      ;; 2. DB write succeeded, now insert reciprocal link.
-      (let* ((from-node (supertag-node-get from-id))
-             ;; Prefer a cleaned title, fallback to raw/title/ID
-             (from-title (or (plist-get from-node :title)
-                             (plist-get from-node :raw-value)
-                             from-id))
-             (marker (org-id-find to-id 'marker)))
-        (when (and marker (marker-buffer marker))
-          (with-current-buffer (marker-buffer marker)
-            (org-with-wide-buffer
-              (save-excursion
-                (goto-char marker)
-                (condition-case err
-                    (progn
-                      ;; Ensure we are on the heading for TO-ID
-                      (org-back-to-heading t)
-                      (when (org-at-heading-p)
+  (setq supertag-relation--last-error nil)
+  (cond
+   ((or (not (stringp from-id)) (string-empty-p from-id))
+    (supertag-relation--set-last-error :invalid-from
+                                       "Failed to add reference: source node ID is missing or invalid."))
+   ((or (not (stringp to-id)) (string-empty-p to-id))
+    (supertag-relation--set-last-error :invalid-to
+                                       "Failed to add reference: target node ID is missing or invalid."))
+   ((null (supertag-node-get from-id))
+    (supertag-relation--set-last-error :from-node-missing
+                                       (format "Failed to add reference: source node %s does not exist in store." from-id)))
+   ((null (supertag-node-get to-id))
+    (supertag-relation--set-last-error :to-node-missing
+                                       (format "Failed to add reference: target node %s does not exist in store." to-id)))
+   (t
+    (catch 'done
+      (condition-case rel-err
+          (let* ((existing-before (cl-find-if #'identity
+                                              (supertag-relation-find-between from-id to-id :reference)))
+                 ;; 1. Create relation in DB
+                 (relation-result (supertag-relation-create `(:type :reference :from ,from-id :to ,to-id)))
+                 (created-new (null existing-before)))
+            (unless relation-result
+              (throw 'done
+                     (supertag-relation--set-last-error :db-create-failed
+                                                        "Failed to add reference: relation creation returned nil.")))
+            ;; 2. DB write succeeded, now insert reciprocal link.
+            (let* ((from-node (supertag-node-get from-id))
+                   (relation-id (plist-get relation-result :id))
+                   ;; Prefer a cleaned title, fallback to raw/title/ID
+                   (from-title (or (plist-get from-node :title)
+                                   (plist-get from-node :raw-value)
+                                   from-id))
+                   (marker (org-id-find to-id 'marker)))
+              (unless (and marker (marker-buffer marker))
+                (when (and created-new relation-id)
+                  (ignore-errors (supertag-relation-delete relation-id)))
+                (throw 'done
+                       (supertag-relation--set-last-error
+                        :backlink-target-unresolved
+                        (format "Failed to add reference: cannot locate target node %s in Org buffers." to-id))))
+              (condition-case backlink-err
+                  (with-current-buffer (marker-buffer marker)
+                    (org-with-wide-buffer
+                      (save-excursion
+                        (goto-char marker)
+                        ;; Ensure we are on the heading for TO-ID
+                        (org-back-to-heading t)
+                        (unless (org-at-heading-p)
+                          (error "Target marker is not on an Org heading"))
                         ;; Skip metadata and go to end of own content (before children)
                         (org-end-of-meta-data t)
                         (let* ((content-start (point))
@@ -347,17 +394,27 @@ Returns t on success, nil on failure."
                           (unless (re-search-forward pattern content-end t)
                             (goto-char content-end)
                             (unless (bolp) (insert "\n"))
-                            (insert (format "[[id:%s][%s]]\n" from-id from-title)))))
-                      
-                      ;; Mark as internal modification to prevent sync loop
-                      (when (fboundp 'supertag--mark-internal-modification)
-                        (supertag--mark-internal-modification (buffer-file-name)))
-                      (save-buffer))
-                  (error
-                   (message "[org-supertag] Failed to insert backlink for reference %s -> %s: %s"
-                            from-id to-id (error-message-string err)))))))))
-      ;; 3. Return t for success
-      t)))
+                            (insert (format "[[id:%s][%s]]\n" from-id from-title))))
+                        ;; Mark as internal modification to prevent sync loop
+                        (when (fboundp 'supertag--mark-internal-modification)
+                          (supertag--mark-internal-modification (buffer-file-name)))
+                        (save-buffer))))
+                (error
+                 (when (and created-new relation-id)
+                   (ignore-errors (supertag-relation-delete relation-id)))
+                 (throw 'done
+                        (supertag-relation--set-last-error
+                         :backlink-insert-failed
+                         (format "Failed to add reference: backlink insert failed for %s -> %s." from-id to-id)
+                         (error-message-string backlink-err)))))
+              ;; 3. Return t for success
+              (throw 'done t)))
+        (error
+         (throw 'done
+                (supertag-relation--set-last-error :exception
+                                                   (format "Failed to add reference: %s"
+                                                           (error-message-string rel-err))
+                                                   (error-message-string rel-err)))))))))
 ;; 5.3 Relation Query Operations
 
 (defun supertag-relation-find-by-from (from-id &optional type)
