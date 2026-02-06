@@ -237,10 +237,12 @@ Returns the created relation data."
     (supertag--validate-relation-data relation-plist)
 
     ;; Check if relation already exists
-    (let ((existing-relations (supertag-relation-find-between from to type)))
-      (if existing-relations
-          ;; Return the first existing relation
-          (car existing-relations)
+    (let* ((existing-relations (supertag-relation-find-between from to type))
+           ;; Be defensive against malformed/nil entries in relation buckets.
+           (existing-relation (cl-find-if #'identity existing-relations)))
+      (if existing-relation
+          ;; Return the first valid existing relation.
+          existing-relation
         ;; Create new relation if none exists
         ;; Use unified commit system
         (supertag-ops-commit
@@ -368,7 +370,8 @@ Returns a list of relations."
       (let ((result '()))
         (maphash
          (lambda (id relation)
-           (when (and (equal (plist-get relation :from) from-id)
+           (when (and relation
+                      (equal (plist-get relation :from) from-id)
                       (or (null type) (eq (plist-get relation :type) type)))
              (push relation result)))
          relations)
@@ -384,7 +387,8 @@ Returns a list of relations."
       (let ((result '()))
         (maphash
          (lambda (id relation)
-           (when (and (equal (plist-get relation :to) to-id)
+           (when (and relation
+                      (equal (plist-get relation :to) to-id)
                       (or (null type) (eq (plist-get relation :type) type)))
              (push relation result)))
          relations)
@@ -401,7 +405,8 @@ Returns a list of relations."
       (let ((result '()))
         (maphash
          (lambda (id relation)
-           (when (and (equal (plist-get relation :from) from-id)
+           (when (and relation
+                      (equal (plist-get relation :from) from-id)
                       (equal (plist-get relation :to) to-id)
                       (or (null type) (eq (plist-get relation :type) type)))
              (push relation result)))
