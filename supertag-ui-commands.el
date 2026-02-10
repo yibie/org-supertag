@@ -985,15 +985,16 @@ HEADLINE is optional headline text."
           ;; Phase 4: Auto field enrichment for tags with fields
           (when selected-tags
             (let ((fields (supertag-capture--get-fields-for-tags selected-tags)))
-               (when fields
-                 (let* ((field-values (supertag-capture--prompt-for-field-values fields))
-                        (batch-entries (cl-loop for fv in field-values append
-                                                (cl-loop for tag-id in selected-tags
-                                                         collect (list :tag tag-id
-                                                                       :field (car fv)
-                                                                       :value (cdr fv)))))))
-                   (when batch-entries
-                     (supertag-field-set-many node-id batch-entries)))))))
+              (when fields
+                (let* ((field-values (supertag-capture--prompt-for-field-values fields))
+                       (batch-entries
+                        (cl-loop for fv in field-values append
+                                 (cl-loop for tag-id in selected-tags
+                                          collect (list :tag tag-id
+                                                        :field (car fv)
+                                                        :value (cdr fv))))))
+                  (when batch-entries
+                    (supertag-field-set-many node-id batch-entries)))))))
           
           ;; Phase 5: Optional manual field enrichment
           (when (y-or-n-p "Add additional properties to this node? ")
