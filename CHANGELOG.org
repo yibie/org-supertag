@@ -33,6 +33,15 @@
 - Ignored/untracked local beads and phrase artifacts.
 - Added agent-relay Gemini snippet lock metadata.
 
+* [5.6.3] - 2026-01-21
+** Improvements
+*** Sync
+- Smart sync detection is now always on; content-hash checks skip unchanged files and prevent accidental database clears from mtime-only touches.
+
+** Docs
+*** Sync
+- Documented smart scan behavior and safety note in README and README_CN.
+
 * [5.6.2] - 2026-01-16
 ** Improvements
 *** Persistence / Vault Safety
