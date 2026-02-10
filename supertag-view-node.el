@@ -252,7 +252,7 @@ Key Bindings:
                     (propertize (truncate-string-to-width node-id 20 nil nil "...") 
                                'face '(:weight bold)))))
           " | 🏷️ "
-          (:eval (let ((count (supertag-view-node--count-fields supertag-view-node--current-node-id)))
+          (:eval (let ((count (or (supertag-view-node--count-fields supertag-view-node--current-node-id) 0)))
                   (propertize (format "%d" count)
                               'face (if (> count 0) '(:foreground "#22C55E" :weight bold) '(:foreground "gray")))))
           " | 🔗 "
