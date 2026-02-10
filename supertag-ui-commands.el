@@ -1000,7 +1000,7 @@ HEADLINE is optional headline text."
           (when (y-or-n-p "Add additional properties to this node? ")
             (supertag-capture-enrich-node node-id))
           
-          node-id)))
+          node-id))))
 
 
 
