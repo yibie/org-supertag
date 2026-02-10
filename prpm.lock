@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "packages": {
+    "@agent-relay/agent-relay-snippet#agents.md:CLAUDE.md": {
+      "version": "1.1.5",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.5.tar.gz",
+      "integrity": "sha256-e974f6d237510a784569d017fddd06644f56f920d8a573f44eb6999758b098f4",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "CLAUDE.md",
+      "snippetMetadata": {
+        "targetPath": "CLAUDE.md",
+        "config": {
+          "target": "CLAUDE.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#agents.md:GEMINI.md": {
+      "version": "1.1.5",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.5.tar.gz",
+      "integrity": "sha256-e974f6d237510a784569d017fddd06644f56f920d8a573f44eb6999758b098f4",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "GEMINI.md",
+      "snippetMetadata": {
+        "targetPath": "GEMINI.md",
+        "config": {
+          "target": "GEMINI.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#agents.md:AGENTS.md": {
+      "version": "1.1.5",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.5.tar.gz",
+      "integrity": "sha256-e974f6d237510a784569d017fddd06644f56f920d8a573f44eb6999758b098f4",
+      "format": "agents.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    }
+  },
+  "generated": "2026-02-06T10:03:09.345Z"
+}
