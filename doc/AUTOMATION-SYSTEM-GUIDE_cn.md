@@ -310,6 +310,23 @@ graph LR
 | **全局字段发生变化** | `(global-field-changed "field-id")` | 检查本次事件是否改变了该全局字段。 |
 | **全局字段测试** | `(global-field-test "field-id" #'pred ...)` | 使用函数测试全局字段值。 |
 
+#### `:condition`（规则字段）
+
+在规则 plist 中，`:condition` 是 **IF** 部分。它是可选字段，并且必须是 Lisp 列表形式：
+
+```elisp
+(supertag-automation-create
+ '(:name "only-when-hours-changed"
+   :trigger :on-property-change
+   :condition (and (has-tag "task") (property-changed :hours))
+   :actions '((:action :add-tag :params (:tag "touched")))))
+```
+
+- 可选：省略或设为 `nil` 表示永远通过（只要 `:trigger` 匹配就会执行）。
+- 形式：引擎只支持一组内置谓词（`has-tag`、`property-equals` 等）以及 `and/or/not`（不是任意 `eval`）。
+- 引号：`:condition (and ...)` 和 `:condition '(and ...)` 都可用；引擎会自动解开最外层的一次 `quote`。如果整个规则已经用 `'(...)` 引用，一般不需要再给 `:condition` 单独加 `'`。
+- `property-changed` / `field-changed` 这类“依赖事件”的条件会读取事件的 `:path`（见下方“事件上下文”），因此要配合正确的 `:trigger`（如 `:on-property-change` / `:on-field-change`）使用。
+
 > 本指南不定义“条件级公式 DSL”。复杂逻辑建议用现有条件组合，或迁移到 `:call-function` 动作中实现。
 
 ### 3. 动作 (Actions) - `THEN`

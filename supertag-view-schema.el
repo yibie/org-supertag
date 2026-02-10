@@ -15,6 +15,8 @@
 (require 'supertag-ops-schema)
 (require 'supertag-ops-global-field)
 (require 'supertag-view-api)
+(require 'supertag-virtual-column)
+(require 'supertag-view-framework)
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -127,38 +129,47 @@ Returns a list containing two items: the children-by-id map and the list of root
               (message "Field rename cancelled."))))))))
 
 (defun supertag-schema--edit-field-definition-at-point ()
-  "Interactively edit the definition (name, type, options) of the field at point."
+  "Interactively edit the definition of the field at point with pre-filled values.
+For global fields, uses `supertag-global-field-edit-interactive' for full editing.
+For inherited fields, jumps to the parent tag definition."
   (interactive)
   (let ((context (supertag-schema--get-context-at-point)))
     (if (not (and context (eq (plist-get context :type) :field)))
         (message "Not on a valid field line.")
       (let* ((tag-id (plist-get context :tag-id))
              (field-name (plist-get context :field-name))
-             (inherited-from (plist-get context :inherited-from)))
+             (inherited-from (plist-get context :inherited-from))
+             (field-def (supertag-tag-get-field tag-id field-name))
+             (field-id (plist-get field-def :id)))
         
         (if inherited-from
-            ;; Inherited Field: Only option is to jump to definition.
+            ;; Inherited Field: Jump to parent definition
             (progn
               (message "Field '%s' is inherited from '%s'. Jumping to definition..." field-name inherited-from)
               (supertag-schema--goto-tag inherited-from))
           
-          ;; Own Field: Original workflow for editing name or type/options.
-          (let* ((field-def (supertag-tag-get-field tag-id field-name))
-                 (action (completing-read "Edit Field: " '("Name" "Type/Options") nil t nil nil "Name")))
-            (cond
-             ((string= action "Name")
-              (supertag-schema--rename-field-at-point))
-             ((string= action "Type/Options")
-              (let* ((current-type (plist-get field-def :type))
-                     (type-and-options (supertag-field-read-type-with-options current-type))
-                     (new-type (car type-and-options))
-                     (options (cdr type-and-options))
-                     (new-field-def (plist-put (list :name field-name) :type new-type)))
-                (when (eq new-type :options)
-                  (setq new-field-def (plist-put new-field-def :options options)))
-                (supertag-tag-add-field tag-id new-field-def)
-                (message "Field '%s' updated. Refreshing..." field-name)
-                (supertag-schema-refresh))))))))))
+          ;; Own Field: Use new interactive editor with pre-filled values
+          (if (and supertag-use-global-fields field-id)
+              ;; Global field mode: full editing with pre-filled values
+              (progn
+                (supertag-global-field-edit-interactive field-id)
+                (supertag-schema-refresh))
+            ;; Legacy mode: simple type/options editing
+            (let ((action (completing-read "Edit Field: " '("Name" "Type/Options") nil t nil nil "Name")))
+              (cond
+               ((string= action "Name")
+                (supertag-schema--rename-field-at-point))
+               ((string= action "Type/Options")
+                (let* ((current-type (plist-get field-def :type))
+                       (type-and-options (supertag-field-read-type-with-options current-type))
+                       (new-type (car type-and-options))
+                       (options (cdr type-and-options))
+                       (new-field-def (plist-put (list :name field-name) :type new-type)))
+                  (when (eq new-type :options)
+                    (setq new-field-def (plist-put new-field-def :options options)))
+                  (supertag-tag-add-field tag-id new-field-def)
+                  (message "Field '%s' updated. Refreshing..." field-name)
+                  (supertag-schema-refresh)))))))))))
 
 ;;; --- Rendering ---
 
@@ -173,10 +184,11 @@ Returns a list containing two items: the children-by-id map and the list of root
       (dolist (root-tag tag-tree)
         (supertag-schema--render-tag-node root-tag))
       (supertag-view-helper-insert-simple-footer
-       "Add:   [a f] Field | [a t] Child Tag | [a r] Root Tag"
-       "Item:  [r] Rename | [d] Delete | [e] Set Parent | [C-e] Edit Field | [M-↑/↓] Move Field"
-       "Batch: [m] Mark | [u] Unmark | [U] Clear Marks | [D] Delete Marked | [E] Extend Marked"
-       "Global: [g] Refresh | [q] Quit")
+       "Add:    [a f] Field | [a c] Child Tag (new/existing) | [a r] Root Tag"
+       "Edit:   [e e] Edit Field | [e r] Rename | [e p] Parent | [e b] Bind Field"
+       "Delete: [d d] Delete | [d m] Delete Marked"
+       "Mark:   [m m] Mark | [m u] Unmark | [m U] Unmark All | [m e] Extend Marked"
+       "Move:   [M-↑/↓] Move Field | [?] Full Help | [q] Quit")
       (goto-char (point-min)))))
 
 (defun supertag-schema--get-own-fields (tag-id)
@@ -287,34 +299,63 @@ This function handles both legacy and global field modes."
   "A major mode for viewing the Org-Supertag schema."
   (setq-local buffer-read-only t)
   (let ((map (make-sparse-keymap)))
-    ;; Create a prefix map for 'add' commands
+    ;; ========== Add Commands (a prefix) ==========
     (let ((add-map (make-sparse-keymap "Add...")))
-      (define-key add-map "f" #'supertag-schema--add-field-at-point)
-      (define-key add-map "t" #'supertag-schema--add-child-tag-at-point)
-      (define-key add-map "r" #'supertag-schema--add-new-tag)
+      (define-key add-map "f" #'supertag-schema--add-field-at-point)      ; a f: Add Field
+      (define-key add-map "c" #'supertag-schema--add-child-tag-at-point)  ; a c: Add Child Tag
+      (define-key add-map "r" #'supertag-schema--add-new-tag)             ; a r: Add Root Tag
       (define-key map "a" add-map))
-    ;; Marking
-    (define-key map "m" #'supertag-schema--mark-item)
-    (define-key map "u" #'supertag-schema--unmark-item)
-    (define-key map "U" #'supertag-schema--unmark-all)
-    ;; Batch Actions
-    (define-key map "D" #'supertag-schema--batch-delete-marked-items)
-    (define-key map "E" #'supertag-schema--batch-extends-marked-tags)
-    ;; Single-item Actions
-    (define-key map "B" #'supertag-schema--bind-existing-field-at-point)
-    (define-key map "r" #'supertag-schema--rename-at-point)
-    (define-key map "d" #'supertag-schema--delete-at-point)
-    (define-key map "e" #'supertag-view-schema-set-extends)
-    (define-key map (kbd "C-e") #'supertag-schema--edit-field-definition-at-point) ; C-e to edit field
-    (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)
-    (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)
-    (define-key map "g" #'supertag-schema-refresh)
-    (define-key map "q" #'quit-window)
-    ;; Navigation
-    (define-key map "n" #'next-line)
-    (define-key map "p" #'previous-line)
-    (define-key map "j" #'next-line)
-    (define-key map "k" #'previous-line)
+    
+    ;; ========== Edit Commands (e prefix) ==========
+    (let ((edit-map (make-sparse-keymap "Edit...")))
+      (define-key edit-map "e" #'supertag-schema--edit-field-definition-at-point)  ; e e: Edit Field
+      (define-key edit-map "r" #'supertag-schema--rename-at-point)                  ; e r: Rename
+      (define-key edit-map "p" #'supertag-view-schema-set-extends)                  ; e p: Edit Parent (extends)
+      (define-key edit-map "b" #'supertag-schema--bind-existing-field-at-point)     ; e b: Bind Field
+      (define-key map "e" edit-map))
+    
+    ;; ========== Delete Commands (d prefix) ==========
+    (let ((delete-map (make-sparse-keymap "Delete...")))
+      (define-key delete-map "d" #'supertag-schema--delete-at-point)      ; d d: Delete at point
+      (define-key delete-map "m" #'supertag-schema--batch-delete-marked-items) ; d m: Delete Marked
+      (define-key map "d" delete-map))
+    
+    ;; ========== Mark Commands (m prefix) ==========
+    (let ((mark-map (make-sparse-keymap "Mark...")))
+      (define-key mark-map "m" #'supertag-schema--mark-item)              ; m m: Mark
+      (define-key mark-map "u" #'supertag-schema--unmark-item)            ; m u: Unmark
+      (define-key mark-map "U" #'supertag-schema--unmark-all)             ; m U: Unmark All
+      (define-key mark-map "e" #'supertag-schema--batch-extends-marked-tags) ; m e: Extend Marked
+      (define-key map "m" mark-map))
+    
+    ;; ========== Virtual Column Commands (v prefix) ==========
+    (let ((vc-map (make-sparse-keymap "Virtual Column...")))
+      (define-key vc-map "c" #'supertag-virtual-column-create-interactive)   ; v c: Create
+      (define-key vc-map "e" #'supertag-virtual-column-edit-interactive)     ; v e: Edit
+      (define-key vc-map "d" #'supertag-virtual-column-delete-interactive)   ; v d: Delete
+      (define-key vc-map "l" #'supertag-virtual-column-list-interactive)     ; v l: List
+      (define-key vc-map "v" #'supertag-view-select-from-schema)             ; v v: Select View
+      (define-key map "v" vc-map))
+    
+    ;; ========== Move Commands ==========
+    (define-key map (kbd "M-<up>") #'supertag-schema--move-field-up)      ; M-up: Move Field Up
+    (define-key map (kbd "M-<down>") #'supertag-schema--move-field-down)  ; M-down: Move Field Down
+    
+    ;; ========== Misc ==========
+    (define-key map "g" #'supertag-schema-refresh)                        ; g: Refresh
+    (define-key map "q" #'quit-window)                                    ; q: Quit
+    (define-key map "?" #'supertag-schema--show-help)                     ; ?: Help
+    
+    ;; ========== Navigation (vim + emacs style) ==========
+    (define-key map "n" #'next-line)                                      ; n: Next line
+    (define-key map "p" #'previous-line)                                  ; p: Previous line
+    (define-key map "j" #'next-line)                                      ; j: Next line (vim)
+    (define-key map "k" #'previous-line)                                  ; k: Previous line (vim)
+    
+    ;; ========== Legacy shortcuts (for backward compatibility) ==========
+    (define-key map "r" #'supertag-schema--rename-at-point)               ; r: Rename (legacy)
+    (define-key map "D" #'supertag-schema--batch-delete-marked-items)     ; D: Delete Marked (legacy)
+    
     (use-local-map map))
   (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh))))
 
@@ -373,19 +414,56 @@ This function handles both legacy and global field modes."
           (supertag-schema-refresh)))))))
 
 (defun supertag-schema--add-child-tag-at-point ()
-  "Interactively create a new tag that extends the tag at point."
+  "Interactively add a child tag to the tag at point.
+Offers choice between creating a new tag or selecting an existing tag."
   (interactive)
   (let ((context (supertag-schema--get-context-at-point)))
     (if (not (and context (eq (plist-get context :type) :tag)))
         (message "Not on a valid tag line to add a child to.")
       (let* ((parent-id (plist-get context :tag-id))
-             (child-name (read-string (format "New child tag name for '%s': " parent-id))))
-        (if (and child-name (not (string-empty-p child-name)))
-            (progn
-              (supertag-tag-create `(:name ,child-name :extends ,parent-id))
-              (message "Child tag '%s' created under '%s'. Refreshing..." child-name parent-id)
-              (supertag-schema-refresh))
-          (message "Tag creation cancelled."))))))
+             (action (completing-read "Add child: "
+                                     '("Create new tag" "Select existing tag")
+                                     nil t)))
+        (cond
+         ;; Option 1: Create new tag
+         ((string= action "Create new tag")
+          (let ((child-name (read-string (format "New child tag name for '%s': " parent-id))))
+            (if (and child-name (not (string-empty-p child-name)))
+                (progn
+                  (supertag-tag-create `(:name ,child-name :extends ,parent-id))
+                  (message "Child tag '%s' created under '%s'. Refreshing..." child-name parent-id)
+                  (supertag-schema-refresh))
+              (message "Tag creation cancelled."))))
+         
+         ;; Option 2: Select existing tag
+         ((string= action "Select existing tag")
+          (let* ((all-tags (let (tags)
+                             (maphash (lambda (id _) (push id tags))
+                                     (supertag-store-get-collection :tags))
+                             tags))
+                 ;; Exclude current tag and its existing children
+                 (existing-children (let (children)
+                                     (maphash (lambda (id tag)
+                                               (when (string= (plist-get tag :extends) parent-id)
+                                                 (push id children)))
+                                             (supertag-store-get-collection :tags))
+                                     children))
+                 (available-tags (cl-remove-if (lambda (tag)
+                                                (or (string= tag parent-id)
+                                                    (member tag existing-children)))
+                                              all-tags)))
+            (if (null available-tags)
+                (message "No available tags to add as child (all tags are already children or is the parent).")
+              (let ((child-id (completing-read (format "Select tag to add as child of '%s': " parent-id)
+                                              available-tags nil t)))
+                (if (and child-id (not (string-empty-p child-id)))
+                    (progn
+                      (supertag--set-tag-parent child-id parent-id)
+                      (message "Tag '%s' is now a child of '%s'. Refreshing..." child-id parent-id)
+                      (supertag-schema-refresh))
+                  (message "No tag selected."))))))
+         
+         (t (message "Action cancelled.")))))))
 
 (defun supertag-schema--add-field-at-point ()
   "Interactively add a new field to the tag at the current line."
@@ -718,6 +796,65 @@ a parent tag and a child tag."
       (insert (format "%S\n" (supertag-schema--get-own-fields tag-id)))
       (goto-char (point-min))
       (display-buffer (current-buffer)))))
+
+;;; --- Help System ---
+
+(defun supertag-schema--show-help ()
+  "Display full keyboard help for Schema View."
+  (interactive)
+  (with-help-window "*Supertag Schema Help*"
+    (princ "Supertag Schema View - Full Keyboard Reference
+================================================\n\n")
+    
+    (princ "Navigation:\n")
+    (princ "  n, j    Next line\n")
+    (princ "  p, k    Previous line\n")
+    (princ "  M-<up>  Move field up (reorder)\n")
+    (princ "  M-<down> Move field down (reorder)\n\n")
+    
+    (princ "Add Commands (prefix: a):\n")
+    (princ "  a f     Add Field to current tag\n")
+    (princ "  a t     Add Child Tag (create new OR select existing)\n")
+    (princ "  a r     Add Root Tag (no parent)\n\n")
+    
+    (princ "Edit Commands (prefix: e):\n")
+    (princ "  e e     Edit Field definition (with pre-filled values)\n")
+    (princ "  e r     Rename tag or field\n")
+    (princ "  e p     Edit Parent (set extends)\n")
+    (princ "  e b     Bind existing global field\n")
+    (princ "  r       Rename (legacy shortcut)\n\n")
+    
+    (princ "Delete Commands (prefix: d):\n")
+    (princ "  d d     Delete item at point\n")
+    (princ "  d m     Delete all marked items\n")
+    (princ "  D       Delete marked (legacy shortcut)\n\n")
+    
+    (princ "Mark Commands (prefix: m):\n")
+    (princ "  m m     Mark item at point\n")
+    (princ "  m u     Unmark item at point\n")
+    (princ "  m U     Unmark all items\n")
+    (princ "  m e     Extend all marked tags\n")
+    (princ "  m       Mark (legacy shortcut)\n")
+    (princ "  u       Unmark (legacy shortcut)\n")
+    (princ "  U       Unmark all (legacy shortcut)\n")
+    (princ "  E       Extend marked (legacy shortcut)\n\n")
+    
+    (princ "View Commands (prefix: v):\n")
+    (princ "  v c     Create virtual column\n")
+    (princ "  v e     Edit virtual column\n")
+    (princ "  v d     Delete virtual column\n")
+    (princ "  v l     List virtual columns\n")
+    (princ "  v v     Select view\n\n")
+    
+    (princ "Global Commands:\n")
+    (princ "  g       Refresh view\n")
+    (princ "  q       Quit window\n")
+    (princ "  ?       Show this help\n\n")
+    
+    (princ "Notes:\n")
+    (princ "  - Field editing now uses pre-filled values from existing definition\n")
+    (princ "  - Inherited fields cannot be edited directly; jump to parent instead\n")
+    (princ "  - Batch operations work on marked items across the entire schema\n")))
 
 (provide 'supertag-view-schema)
 

@@ -309,6 +309,23 @@ The `condition` field defines the "preconditions" that must be met for the rule 
 | **Global Field Changed** | `(global-field-changed "field-id")` | Check if the current event changed that global field-id. |
 | **Global Field Test** | `(global-field-test "field-id" #'pred ...)` | Test a global field value via a function. |
 
+#### `:condition` (rule field)
+
+In the rule plist, `:condition` is the **IF** part. It is optional, and it must be a Lisp list form:
+
+```elisp
+(supertag-automation-create
+ '(:name "only-when-hours-changed"
+   :trigger :on-property-change
+   :condition (and (has-tag "task") (property-changed :hours))
+   :actions '((:action :add-tag :params (:tag "touched")))))
+```
+
+- Optional: omit it or set it to `nil` to always pass (rule runs whenever `:trigger` matches).
+- Form: the engine evaluates a small set of built-in predicates (`has-tag`, `property-equals`, …) plus `and/or/not` (not arbitrary `eval`).
+- Quoting: both `:condition (and ...)` and `:condition '(and ...)` work; the engine unwraps one leading `quote`. If the whole rule is already quoted (`'(...)`), you typically do **not** need to quote `:condition` again.
+- Event-sensitive helpers like `property-changed` / `field-changed` rely on the event `:path` (see “Event Context”), so pair them with the appropriate `:trigger` (e.g. `:on-property-change` / `:on-field-change`).
+
 > This guide does not define a condition-level “formula DSL”. For complex logic, compose existing conditions and/or move complexity into `:call-function` actions.
 
 ### 3. Actions - `THEN`

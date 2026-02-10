@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 5.6.3
+;; Version: 5.7.0
 ;; URL: https://github.com/yibie/org-supertag
 
 ;; This file is NOT part of GNU Emacs.
@@ -434,6 +434,11 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-ui-completion)
 
 ;; --- View ---
+(require 'supertag-view-framework)
+;; (require 'supertag-view-examples-simple)
+(require 'supertag-view-progress-dashboard)
+(require 'supertag-view-effort-distribution)
+(require 'supertag-view-priority-matrix)
 (require 'supertag-view-schema)
 (require 'supertag-view-helper)
 (require 'supertag-view-node)

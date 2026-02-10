@@ -25,6 +25,7 @@
 (require 'supertag-services-ui)
 (require 'supertag-view-helper)
 (require 'supertag-view-api)
+(require 'supertag-virtual-column)
 (require 'org)
 
 ;;; Faces
@@ -538,7 +539,23 @@ Automatically detects virtual databases and uses their database fields."
                                           :width 20)))
                                  ;; Keep the full field definition (type/options etc.)
                                  (append col field-def)))))
-          (append base-columns field-columns refs-column))))))
+          (append base-columns field-columns refs-column
+                  ;; Add virtual columns
+                  (supertag-view-table--get-virtual-columns)))))))
+
+(defun supertag-view-table--get-virtual-columns ()
+  "Get virtual columns as table column definitions."
+  (when (fboundp 'supertag-virtual-column-list)
+    (let ((vcols (supertag-virtual-column-list)))
+      (cl-loop for vcol in vcols
+               for id = (plist-get vcol :id)
+               for name = (plist-get vcol :name)
+               for type = (plist-get vcol :type)
+               collect (list :name name
+                           :key (intern (concat ":" id))
+                           :virtual-column id
+                           :type :virtual-column
+                           :width 15)))))
 
 (defun supertag-view-table--default-columns ()
   "Return default column configuration."
@@ -877,8 +894,12 @@ Uses improved styling from old version."
                  (_
                   (let* ((node-id (plist-get entity-data :id))
                          (tag-id (supertag-view-table--get-current-tag-id))
-                         (field-name (supertag-view-table--field-name-for-column column key)))
+                         (field-name (supertag-view-table--field-name-for-column column key))
+                         (vc-id (plist-get column :virtual-column)))
                     (cond
+                     ;; Virtual columns
+                     ((and vc-id (fboundp 'supertag-virtual-column-get))
+                      (supertag-virtual-column-get node-id vc-id))
                      ((or (null node-id) (null tag-id)) nil)
                      ;; Formula fields are computed at render time and are not persisted.
                      ((eq col-type :formula)
@@ -1824,6 +1845,7 @@ With prefix argument INDEX, switch to specific table number."
     
     
     (define-key map (kbd "g") #'supertag-view-table-refresh)
+    (define-key map (kbd "G") #'supertag-view-table-force-refresh)
     (define-key map (kbd "q") #'quit-window)
     (define-key map (kbd "n") #'supertag-view-table-next-line)
     (define-key map (kbd "p") #'supertag-view-table-previous-line)
@@ -1908,6 +1930,16 @@ With prefix argument INDEX, switch to specific table number."
         ))
       (message "Table refreshed.")))
 
+(defun supertag-view-table-force-refresh ()
+  "Force refresh the grid view, clearing virtual column cache first."
+  (interactive)
+  ;; Clear virtual column cache
+  (when (fboundp 'supertag-virtual-column-clear-cache)
+    (supertag-virtual-column-clear-cache))
+  ;; Then do normal refresh
+  (supertag-view-table-refresh)
+  (message "Table force-refreshed (virtual column cache cleared)."))
+
 (defun supertag-view-table-help ()
   "Show help information about table view commands and image support."
   (interactive)
@@ -1926,6 +1958,7 @@ With prefix argument INDEX, switch to specific table number."
     (princ "  C-c C-i     - Insert image into current cell\n\n")
     (princ "View Management:\n")
     (princ "  g           - Refresh view\n")
+    (princ "  G           - Force refresh (clear virtual column cache)\n")
     (princ "  t           - Switch between tables (multi-table view)\n")
     (princ "  w           - Adjust image column width\n")
     (princ "  q           - Quit window\n\n")

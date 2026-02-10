@@ -58,6 +58,8 @@ commands/
 .kiro/
 dev-note/
 .phrase/
+.phase/
+.beads/
 .qoder/
 .ruff_cache/
 IMPROVEMENT_PLAN.md
@@ -74,4 +76,3 @@ docs/
 hooks/
 logs/
 qoder/
-

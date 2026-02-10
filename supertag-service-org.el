@@ -115,83 +115,119 @@ When LEAVE-LINK is non-nil, replace the original subtree with a single headline
 containing an `id:` link to the moved node.
 
 When TARGET-LEVEL is non-nil, adjust the subtree so the top headline becomes
-that outline level in TARGET-FILE."
+that outline level in TARGET-FILE.
+
+This implementation uses `org-element-at-point' for precise range extraction,
+preventing data loss from incorrect position calculations."
   (unless (and (stringp node-id) (not (string-empty-p node-id)))
     (error "node-id must be a non-empty string"))
   (unless (and (stringp target-file) (not (string-empty-p target-file)))
     (error "target-file must be a non-empty string"))
 
-  (let* ((node (supertag-node-get node-id))
-         (source-file (and (listp node) (plist-get node :file))))
-    (unless (and (stringp source-file) (file-exists-p source-file))
-      (error "Source file missing for node %s (file=%S)" node-id source-file))
+  (let* ((marker (org-id-find node-id 'marker))
+         (source-file (when marker (buffer-file-name (marker-buffer marker)))))
+    
+    (unless marker
+      (error "Node %s not found" node-id))
+    (unless (and source-file (file-exists-p source-file))
+      (error "Source file missing for node %s" node-id))
+    
+    ;; Security check: don't move to same file
+    (when (string= source-file target-file)
+      (error "Cannot move node to the same file"))
 
-    (let ((source-buf (find-file-noselect source-file))
-          (target-buf (find-file-noselect target-file))
-          (subtree-content nil)
-          (ids-in-subtree nil)
-          (from-level nil)
-          (title nil)
-          (begin nil)
-          (end nil)
-          (insert-pos nil))
-      ;; Extract subtree from source buffer.
-      (with-current-buffer source-buf
-        (org-with-wide-buffer
-          (goto-char (point-min))
-          (unless (supertag-service-org--goto-id-in-current-buffer node-id)
-            (error "ID %s not found in %s" node-id (abbreviate-file-name source-file)))
-          (setq from-level (org-outline-level))
-          (setq title (org-get-heading t t t t))
-          (setq begin (point))
-          (setq end (save-excursion (org-end-of-subtree t t) (point)))
-          (setq subtree-content (buffer-substring-no-properties begin end))
-          (setq ids-in-subtree (supertag-service-org--extract-ids-from-content subtree-content))))
-
-      (unless (stringp subtree-content)
-        (error "Failed to extract subtree for %s" node-id))
-
-      ;; Insert into target file.
-      (with-current-buffer target-buf
-        (org-with-wide-buffer
-          (goto-char (point-max))
-          (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
-          (setq insert-pos (point))
-          (let ((content (if (integerp target-level)
-                             (supertag-service-org--adjust-subtree-level
-                              subtree-content from-level target-level)
-                           subtree-content)))
-            (insert content)
+    ;; Step 1: Collect node data using org-element for precise range
+    (let ((node-info nil)
+          (node-start-pos nil))
+      
+      (with-current-buffer (marker-buffer marker)
+        (save-restriction
+          (widen)
+          (save-excursion
+            (goto-char (marker-position marker))
+            
+            ;; Navigate to heading and verify position
+            (org-back-to-heading t)
+            (unless (org-at-heading-p)
+              (error "Cannot locate heading for node %s" node-id))
+            
+            ;; Use org-element-at-point for precise range extraction
+            (when (fboundp 'org-element-at-point)
+              (let* ((element (org-element-at-point))
+                     (begin (org-element-property :begin element))
+                     (end (org-element-property :end element))
+                     (level (org-element-property :level element))
+                     (title (org-get-heading t t t t))
+                     (content (buffer-substring-no-properties begin end)))
+                
+                ;; Safety checks
+                (unless (string-match-p "^\\*+ " content)
+                  (error "Invalid content extraction for node %s" node-id))
+                (when (<= end begin)
+                  (error "Invalid range for node %s" node-id))
+                
+                ;; Check if moving would delete entire file
+                (save-excursion
+                  (goto-char (point-min))
+                  (let ((first-heading (when (re-search-forward "^\\*+ " nil t)
+                                         (match-beginning 0))))
+                    (when (and first-heading (= begin first-heading)
+                               (save-excursion (goto-char end) (eobp)))
+                      (error "Refusing to move: would delete entire file"))))
+                
+                (setq node-info (list :id node-id
+                                      :file source-file
+                                      :begin begin
+                                      :end end
+                                      :level level
+                                      :title title
+                                      :content content)))))))
+      
+      (unless node-info
+        (error "Failed to collect node data for %s" node-id))
+      
+      ;; Step 2: Insert into target file
+      (let* ((content (plist-get node-info :content))
+             (original-level (plist-get node-info :level))
+             (adjusted-content (if (integerp target-level)
+                                   (supertag-service-org--adjust-subtree-level
+                                    content original-level target-level)
+                                 content)))
+        
+        (with-current-buffer (find-file-noselect target-file)
+          (save-restriction
+            (widen)
+            (goto-char (point-max))
+            (unless (or (bobp) (looking-back "\n" 1)) (insert "\n"))
+            (setq node-start-pos (point))
+            (insert adjusted-content)
             (unless (looking-back "\n" 1) (insert "\n")))
           (when (buffer-file-name)
             (supertag--mark-internal-modification (buffer-file-name)))
-          (let ((inhibit-message t))
+          (save-buffer)))
+      
+      ;; Step 3: Remove from source (or leave link)
+      (let* ((begin (plist-get node-info :begin))
+             (end (plist-get node-info :end))
+             (title (plist-get node-info :title))
+             (level (plist-get node-info :level)))
+        
+        (with-current-buffer (find-file-noselect source-file)
+          (save-restriction
+            (widen)
+            (delete-region begin end)
+            (when leave-link
+              (insert (make-string level ?*) " "
+                      (format "[[id:%s][%s]]\n" node-id (or title "MOVED"))))
+            (when (buffer-file-name)
+              (supertag--mark-internal-modification (buffer-file-name)))
             (save-buffer))))
-
-      ;; Remove from source (or leave link).
-      (with-current-buffer source-buf
-        (org-with-wide-buffer
-          (goto-char begin)
-          (delete-region begin end)
-          (when leave-link
-            (insert (make-string from-level ?*) " "
-                    (format "[[id:%s][%s]]\n" node-id (or title node-id))))
-          (when (buffer-file-name)
-            (supertag--mark-internal-modification (buffer-file-name)))
-          (let ((inhibit-message t))
-            (save-buffer))))
-
-      ;; Update store/org-id locations for all IDs moved.
-      (dolist (moved-id ids-in-subtree)
-        (when (supertag-node-get moved-id)
-          (supertag-node-set-location moved-id target-file insert-pos))
-        (when (fboundp 'org-id-add-location)
-          (ignore-errors (org-id-add-location moved-id target-file))))
-
-      (message "[supertag] moved node %s (%d ids) -> %s"
-               node-id
-               (length ids-in-subtree)
-               (abbreviate-file-name target-file))
+      
+      ;; Step 4: Update database
+      (supertag-node-set-location node-id target-file node-start-pos)
+      
+      (message "[supertag] moved node %s -> %s"
+               node-id (abbreviate-file-name target-file))
       t)))
 
 (defun supertag-service-org-move-node-to-file-action (node-id _context target-file &optional leave-link target-level)

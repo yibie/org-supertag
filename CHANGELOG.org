@@ -1,4 +1,38 @@
 * Changelog
+* [5.7.0] - 2026-02-10
+** Features
+*** Virtual Columns & Views
+- Added virtual column runtime and built-in virtual views.
+- Table view now supports virtual columns and force refresh.
+- Core now loads dashboard and view framework modules.
+
+*** Schema / Field Editing
+- Added interactive global-field editor with defaults.
+- Improved schema-view keymap layout and field edit workflows.
+
+*** Automation
+- Added multi-tag predicates and a `move-node` action.
+
+** Fixes
+*** Node / Capture / Relations
+- Guarded node-view field count against nil values.
+- Kept capture `batch-entries` within `let*` scope.
+- Hardened relation lookups against nil entries.
+- Propagated `add-reference` failure reasons.
+- Refreshed node hash when OLP changes.
+
+*** Service Org Safety
+- Hardened node move extraction and safety checks.
+
+** Docs
+- Added view framework and virtual columns guides.
+- Clarified automation `:condition` semantics and quoting.
+- Recorded issue007 resolution commit.
+
+** Chore
+- Ignored/untracked local beads and phrase artifacts.
+- Added agent-relay Gemini snippet lock metadata.
+
 * [5.6.3] - 2026-01-21
 ** Improvements
 *** Sync
