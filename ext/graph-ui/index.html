@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>org-supertag Graph</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/force-graph@1.47.2/dist/force-graph.min.js"></script>
+</head>
+<body>
+  <div id="controls">
+    <div class="control-group">
+      <input type="text" id="search" placeholder="Search nodes..." autocomplete="off">
+    </div>
+    <div class="control-group" id="type-filters"></div>
+    <div class="control-group">
+      <label><input type="checkbox" id="show-labels" checked> Labels</label>
+      <label><input type="checkbox" id="show-orphans" checked> Orphans</label>
+      <button id="theme-toggle" title="Toggle theme">&#9681;</button>
+    </div>
+    <div class="control-group status">
+      <span id="status">Connecting...</span>
+      <span id="stats"></span>
+    </div>
+  </div>
+  <div id="graph"></div>
+  <div id="tooltip"></div>
+  <script src="graph.js"></script>
+</body>
+</html>
