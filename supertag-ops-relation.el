@@ -269,7 +269,8 @@ Returns the created relation data."
          :new relation-plist
          :perform (lambda ()
                     (supertag-store-put-entity :relations rel-id relation-plist)
-                    (when (eq type :reference)
+                    (when (or (eq type :reference)
+                              (supertag-relation-type-get type))
                       (supertag--relation-update-node-references from to 'add))
                     relation-plist))))))
 
@@ -312,7 +313,8 @@ Returns the deleted relation data."
        :previous previous
        :perform (lambda ()
                   (supertag-store-remove-entity :relations id)
-                  (when (eq (plist-get previous :type) :reference)
+                  (when (or (eq (plist-get previous :type) :reference)
+                            (supertag-relation-type-get (plist-get previous :type)))
                     (let ((from-id (plist-get previous :from))
                           (to-id (plist-get previous :to)))
                       (supertag--relation-update-node-references from-id to-id 'remove)))

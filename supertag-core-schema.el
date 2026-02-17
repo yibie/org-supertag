@@ -108,10 +108,9 @@ Lowercase, trim whitespace, convert internal whitespace to underscores."
 
 ;;; --- Relation Types ---
 
-(defconst supertag-relation-types
-  "List of supported relation types including Notion-style relations."
+(defvar supertag-relation-types
   '(:node-tag      ; Node-tag relationship
-    :node-node     ; Node-node relationship  
+    :node-node     ; Node-node relationship
     :tag-tag       ; Tag-tag relationship
     :node-field    ; Node-field relationship
     :tag-field     ; Tag-field relationship
@@ -125,7 +124,19 @@ Lowercase, trim whitespace, convert internal whitespace to underscores."
     :rollup        ; Rollup calculation relationship
     :formula       ; Formula-based relationship
     :sync-field ; Field synchronization relationship
-    :automation))  ; Automation trigger relationship
+    :automation)   ; Automation trigger relationship
+  "List of supported relation types.
+New semantic types can be added via `supertag-register-relation-type'.")
+
+(defvar supertag--registered-relation-types (make-hash-table :test 'eq)
+  "Registry of user-defined semantic relation type metadata.
+Keys are keyword symbols, values are plists with:
+  :name         - Display name (e.g., \"Supports\")
+  :inverse-name - Inverse display name (e.g., \"Supported By\")
+  :description  - Optional description
+  :color        - Optional color string
+  :icon         - Optional icon string
+  :style        - Optional display style (:solid or :dashed)")
 
 ;;; --- Behavior Types ---
 
@@ -590,6 +601,40 @@ CONVERTER is an optional conversion function."
 
   (when converter
     (put type 'supertag-converter converter)))
+
+;; 4.2.1 Custom Relation Type Registration
+(defun supertag-register-relation-type (type &rest props)
+  "Register a new semantic relation TYPE with metadata PROPS.
+TYPE is a keyword (e.g., :supports).
+PROPS is a plist with keys:
+  :name         - Display name (required, e.g., \"Supports\")
+  :inverse-name - Inverse display name (e.g., \"Supported By\")
+  :description  - Optional description
+  :color        - Optional color string
+  :icon         - Optional icon string
+  :style        - Optional display style (:solid or :dashed)
+
+If TYPE is not already in `supertag-relation-types', it is appended.
+Metadata is stored in `supertag--registered-relation-types'."
+  (unless (keywordp type)
+    (error "Relation type must be a keyword, got: %S" type))
+  (unless (plist-get props :name)
+    (error "Relation type must have a :name, got: %S" props))
+  (unless (memq type supertag-relation-types)
+    (setq supertag-relation-types (append supertag-relation-types (list type))))
+  (puthash type props supertag--registered-relation-types)
+  type)
+
+(defun supertag-relation-type-get (type)
+  "Get metadata plist for registered relation TYPE, or nil."
+  (gethash type supertag--registered-relation-types))
+
+(defun supertag-relation-type-list-semantic ()
+  "Return list of registered semantic relation types as (TYPE . METADATA) pairs."
+  (let (result)
+    (maphash (lambda (k v) (push (cons k v) result))
+             supertag--registered-relation-types)
+    (nreverse result)))
 
 ;; 4.3 Custom Validation Rules
 (defun supertag-register-validator (field-name validator)
