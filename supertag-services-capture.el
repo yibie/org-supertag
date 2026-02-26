@@ -221,14 +221,14 @@ Supported placeholders:
     (setq template (replace-regexp-in-string "%week" (format-time-string "W%U" current-time) template t t))
     (setq template (replace-regexp-in-string "%month" (format-time-string "%B" current-time) template t t))
     (setq template (replace-regexp-in-string "%year" (format-time-string "%Y" current-time) template t t))
-    
+
     ;; User information
     (setq template (replace-regexp-in-string "%user" (or (getenv "USER") (getenv "USERNAME") "unknown") template t t))
     (setq template (replace-regexp-in-string "%fullname" (or (user-full-name) "Unknown User") template t t))
-    
+
     ;; System information
     (setq template (replace-regexp-in-string "%hostname" (or (system-name) "localhost") template t t))
-    
+
     ;; File context
     (setq template (replace-regexp-in-string "%filename"
                                            (or (when (buffer-file-name) (file-name-nondirectory (buffer-file-name))) "")
@@ -237,7 +237,7 @@ Supported placeholders:
     (setq template (replace-regexp-in-string "%directory"
                                            (or (when (buffer-file-name) (file-name-directory (buffer-file-name))) "")
                                            template t t))
-    
+
     ;; Current node context (if at heading)
     (setq template (replace-regexp-in-string "%current-node-title"
                                            (or (when (org-at-heading-p) (org-get-heading t t)) "")
@@ -254,12 +254,12 @@ Supported placeholders:
                                                          (mapconcat 'identity (plist-get node :tags) ", "))))))
                                                "")
                                            template t t))
-    
+
     ;; Content and utility
     (setq template (replace-regexp-in-string "%clipboard" (or (current-kill 0) "") template t t))
     (setq template (replace-regexp-in-string "%random" (format "%04d" (random 10000)) template t t))
     (setq template (replace-regexp-in-string "%uuid" (org-id-new) template t t))
-    
+
     ;; Interactively fill placeholders like %^{Prompt}
     (while (string-match "%^{\\([^}]*\\)}" template)
       (let* ((prompt (match-string 1 template))

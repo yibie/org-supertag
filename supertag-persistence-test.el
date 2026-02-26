@@ -1,3 +1,4 @@
+
 ;;; supertag-persistence-test.el --- ERT tests for persistence -*- lexical-binding: t; -*-
 
 ;;; Commentary:
@@ -101,4 +102,3 @@
 (provide 'supertag-persistence-test)
 
 ;;; supertag-persistence-test.el ends here
-

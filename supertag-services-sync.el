@@ -657,7 +657,7 @@ Returns the loaded or initialized sync state."
   "Ensure sync directories are properly configured."
   (unless (supertag-sync--effective-directories)
     (message "Warning: `org-supertag-sync-directories` is not set. Auto-sync will not occur.")))
-    
+
 (defvar supertag-sync--timer nil
   "Timer for periodic sync checks.")
 
@@ -732,13 +732,13 @@ Returns the loaded or initialized sync state."
 ;; Use this when experiencing persistent timer-related errors."
 ;;   (interactive)
 ;;   (message "Starting emergency recovery for sync system...")
-  
+
 ;;   ;; Cancel our timer
 ;;   (when (timerp supertag-sync--timer)
 ;;     (cancel-timer supertag-sync--timer)
 ;;     (setq supertag-sync--timer nil)
 ;;     (message "Canceled supertag-sync--timer"))
-  
+
 ;;   ;; Clean up any other timers that might be calling our function
 ;;   (let ((all-timers (timer-list))
 ;;         (cleaned-count 0))
@@ -752,15 +752,15 @@ Returns the loaded or initialized sync state."
 ;;     (when (> cleaned-count 0)
 ;;       ;;(message "Cleaned up %d additional timers" cleaned-count))
 ;;     )
-  
+
 ;;   ;; Reset sync state
 ;;   (setq supertag-sync--state (make-hash-table :test 'equal))
 ;;   (message "Reset sync state")
-  
+
 ;;   ;; Verify function is defined
 ;;   (if (fboundp 'supertag-sync--check-and-sync)
 ;;       (message "Function supertag-sync--check-and-sync is properly defined")
-;;     (message "WARNING: Function supertag-sync--check-and-sync is NOT defined")) 
+;;     (message "WARNING: Function supertag-sync--check-and-sync is NOT defined"))
 ;;   (message "Emergency recovery completed. You can now try M-x supertag-sync-start-auto-sync"))
 
 ;;; Core Functions - Node Hash Support (from org-supertag-old/org-supertag-sync.el)
@@ -1041,12 +1041,12 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
   This is the main sync function called periodically.
   It enqueues modified files for asynchronous processing."
   ;;(message "DEBUG: supertag-sync--check-and-sync function called at %s" (current-time))
-  
+
   ;; Pre-check: Warn if sync directories are not configured
   (unless (supertag-sync--effective-directories)
     (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
     (cl-return-from supertag-sync--check-and-sync-legacy nil))
-  
+
   (let ((files-to-remove nil)
         (modified-files (supertag-get-modified-files))
         (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0 :references-created 0 :references-deleted 0)))
@@ -1098,7 +1098,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (dolist (file all-files-in-scope)
         (unless (gethash file state-table)
           (supertag-async-enqueue file))))
-      
+
     ;; 5. Report if needed (mostly handled by async worker now)
     (let ((idle-run (and (null modified-files) (null files-to-remove))))
       (when idle-run
@@ -1308,7 +1308,7 @@ COUNTERS is a plist for tracking changes."
            (supertag-node-mark-deleted-from-file id)
            (when counters
              (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))))))
-  
+
 
 ;; --- Org Parser ---
 (defun supertag--parse-properties (headline)
@@ -1487,7 +1487,7 @@ IMPORTANT: This function NEVER modifies existing tags - it only creates new ones
   (let ((tag-ids '()))
     (dolist (tag-name tag-names)
       (let* ((sanitized-name (supertag-sanitize-tag-name tag-name))
-             (tag-id sanitized-name) 
+             (tag-id sanitized-name)
              (existing-tag (supertag-tag-get tag-id)))
         ;; CRITICAL: Only create if tag doesn't exist
         ;; Never modify existing tags to preserve their field definitions
@@ -1745,13 +1745,13 @@ Processes FILE for synchronization."
         (supertag-sync--process-single-file file counters)
         ;; Also run orphan cleanup on the file's nodes if necessary
         (supertag-sync--verify-file-nodes file counters))
-      
+
       ;; If changes happened, save state
       (when (> (+ (plist-get counters :nodes-created)
                   (plist-get counters :nodes-updated)
                   (plist-get counters :nodes-deleted))
                0)
-        ;; (message "Async processed %s: +%d ~%d -%d" 
+        ;; (message "Async processed %s: +%d ~%d -%d"
         ;;          (file-name-nondirectory file)
         ;;          (plist-get counters :nodes-created)
         ;;          (plist-get counters :nodes-updated)
@@ -1764,11 +1764,11 @@ Processes FILE for synchronization."
   "Start automatic synchronization with INTERVAL seconds.
 If INTERVAL is nil, use `supertag-sync-auto-interval`."
   (interactive)
-  
+
   ;; Safety check: ensure function is defined before setting timer
   (unless (fboundp 'supertag-sync--check-and-sync)
     (error "supertag-sync--check-and-sync function is not defined. Cannot start auto-sync."))
-  
+
   ;; Cancel existing timer
   (when supertag-sync--timer
     (message "DEBUG: Canceling existing timer")
@@ -1879,13 +1879,13 @@ This command runs two key maintenance functions in sequence:
 This is a safe operation that helps maintain database integrity."
   (interactive)
   (message "Starting database cleanup...")
-  
+
   ;; Step 1: Validate all nodes and mark zombies as orphaned
   (let ((counters '(:nodes-deleted 0)))
     (supertag-sync-validate-nodes counters)
-    (message "Node validation complete. %d nodes marked as orphaned." 
+    (message "Node validation complete. %d nodes marked as orphaned."
              (plist-get counters :nodes-deleted))
-    
+
     ;; Step 2: Garbage collect all orphaned nodes
     (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes)))
       (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count))))
@@ -1915,7 +1915,7 @@ external modifications (by user/other tools) to avoid unnecessary re-parsing."
           ;; External modification: enqueue for async sync
           (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file-norm))
           (supertag-async-enqueue file-norm))))))
-        
+
 
 (defun supertag-sync-setup-realtime-hooks ()
   "Add hooks for real-time node synchronization."
@@ -1954,7 +1954,7 @@ Uses minimal side effects to avoid interfering with other packages."
             (setq-local org-not-done-regexp source-not-done-regexp)
             (setq-local org-complex-heading-regexp source-complex-heading-regexp)
             (setq-local org-todo-line-regexp source-todo-line-regexp)
-            
+
             ;; Ensure tab-width is 8 as required by org-current-text-column
             (setq-local tab-width 8)
             (let ((ast (org-element-parse-buffer)))
@@ -1976,9 +1976,9 @@ Parses the current state of the headline and updates the store."
 
 ;;;###autoload
 (defun supertag-migrate-org-files-to-database (path &optional counters allow-no-id)
-  "One-time migration function to import nodes and tags from Org files 
+  "One-time migration function to import nodes and tags from Org files
 into the database.
-PATH can be a file or a directory path. If it is a directory, all .org files 
+PATH can be a file or a directory path. If it is a directory, all .org files
 will be processed recursively.
 
 COUNTERS is an optional plist for tracking migration statistics.
@@ -1997,10 +1997,10 @@ It will create entities of type :node and :tag, and establish relations between 
                       (list path)))
          (all-nodes '())
          (all-tags '()))
-    
+
     (message "Migrating org files to database...")
     (message "Found %d org files" (length org-files))
-    
+
     ;; First phase: Parse all files, collect nodes and tags
     (dolist (file org-files)
       (condition-case err
@@ -2021,18 +2021,18 @@ It will create entities of type :node and :tag, and establish relations between 
          (message "Failed to parse file %s: %s" file (error-message-string err))
          (setf (plist-get counters :errors)
                (1+ (plist-get counters :errors))))))
-    
+
     ;; Remove duplicate tags
     (setq all-tags (cl-delete-duplicates all-tags :test #'equal))
-    
-    (message "Parsing completed: %d nodes, %d unique tags" 
+
+    (message "Parsing completed: %d nodes, %d unique tags"
              (length all-nodes) (length all-tags))
-    
+
     ;; Second phase: Create tag entities
     (message "Creating tag entities...")
     (let ((tag-ids (supertag--create-tag-entities all-tags)))
       (setf (plist-get counters :tags-created) (length tag-ids)))
-    
+
     ;; Third phase: Create node entities and relations
     (message "Creating node entities and relations...")
     (dolist (node all-nodes)
@@ -2042,7 +2042,7 @@ It will create entities of type :node and :tag, and establish relations between 
             (supertag-node-create node)
             (setf (plist-get counters :nodes-created)
                   (1+ (plist-get counters :nodes-created)))
-            
+
             ;; Create node-tag relations
             (let ((node-id (plist-get node :id))
                   (node-tags (plist-get node :tags)))
@@ -2056,7 +2056,7 @@ It will create entities of type :node and :tag, and establish relations between 
          (message "Failed to create node %s: %s" (plist-get node :id) (error-message-string err))
          (setf (plist-get counters :errors)
                (1+ (plist-get counters :errors))))))
-    
+
     ;; Return statistics
     (message "Migration completed!")
     (message "Statistics: files=%d, nodes=%d, tags=%d, relations=%d, errors=%d"
@@ -2065,7 +2065,7 @@ It will create entities of type :node and :tag, and establish relations between 
              (plist-get counters :tags-created)
              (plist-get counters :relations-created)
              (plist-get counters :errors))
-    
+
     counters)
 
 (defun supertag--find-org-files (directory)
@@ -2077,7 +2077,7 @@ Returns a list of .org file paths."
       (when (file-readable-p file)
         (push file org-files)))
     (nreverse org-files)))
-    
+
 (defun supertag--diagnose-empty-sync (&optional quiet)
   "Diagnose why sync found no files to process.
 QUIET suppresses benign \"all clear\" diagnostics.
@@ -2087,18 +2087,18 @@ Provides helpful hints to the user about configuration issues."
         (state-count (if (hash-table-p (supertag-sync--get-state-table))
                          (hash-table-count (supertag-sync--get-state-table))
                        0)))
-    
+
     (cond
      ;; Case 1: No sync directories configured
      ((null sync-dirs)
       (message "DIAGNOSTIC: No sync directories configured. Set org-supertag-sync-directories."))
-     
+
      ;; Case 2: Sync directories don't exist
      ((not (cl-some #'file-directory-p sync-dirs))
       (message "DIAGNOSTIC: None of the configured sync directories exist:")
       (dolist (dir sync-dirs)
         (message "  - %s [%s]" dir (if (file-exists-p dir) "exists but not a directory" "does not exist"))))
-     
+
      ;; Case 3: Directories exist but contain no matching files
      ((= state-count 0)
       (message "DIAGNOSTIC: Sync directories exist but no .org files found or tracked:")

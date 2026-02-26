@@ -121,7 +121,7 @@ This handles the old nested field storage format (:fields node-id tag-id field-n
                        operation node-id tag-id field-name old-value new-value))
             ;; 1. Trigger field synchronization for relations
             (supertag-automation-sync-all-relations node-id field-name new-value)
-            
+
             ;; 2. Trigger automation rules for field changes
             (supertag-automation-sync--process-field-change node-id tag-id field-name old-value new-value)))))))
 
@@ -142,7 +142,7 @@ The field-id is extracted from the event path in metadata."
                      operation node-id field-id old-value new-value))
           ;; 1. Trigger field synchronization for relations
           (supertag-automation-sync-all-relations node-id field-id new-value)
-          
+
           ;; 2. Trigger automation rules for global field changes
           (supertag-automation-sync--process-global-field-change node-id field-id old-value new-value))))))
 

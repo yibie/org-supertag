@@ -480,7 +480,7 @@ Keeps the first relation for each unique (from, to, type) combination."
         (relation-groups (make-hash-table :test 'equal))
         (duplicates-found 0)
         (removed-count 0))
-    
+
     ;; Group relations by (from, to, type)
     (when (hash-table-p relations)
       (maphash (lambda (id relation-data)
@@ -497,7 +497,7 @@ Keeps the first relation for each unique (from, to, type) combination."
                              (cl-incf duplicates-found))
                          (puthash key (list (cons id relation-data)) relation-groups))))))
                relations))
-    
+
     ;; Process duplicate groups
     (maphash (lambda (key relation-list)
                (when (> (length relation-list) 1)
@@ -511,7 +511,7 @@ Keeps the first relation for each unique (from, to, type) combination."
                      (supertag-store-remove-entity :relations (car dup-relation))
                      (cl-incf removed-count)))))
              relation-groups)
-    
+
     (message "Duplicate relation cleanup complete. Found %d duplicates, removed %d relations."
              duplicates-found removed-count)
     removed-count))
@@ -558,7 +558,7 @@ Returns the number of deleted relations."
 RELATION-DATA should contain:
 - :type - Relation type (:one-to-one, :one-to-many, :many-to-many, etc.)
 - :from - Source entity ID
-- :to - Target entity ID  
+- :to - Target entity ID
 - :sync-direction - :unidirectional or :bidirectional
 - :sync-fields - List of fields to sync
 - :rollup-field - Field name for rollup calculations
@@ -573,11 +573,11 @@ Returns the created relation data."
            (sync-fields (plist-get relation-data :sync-fields))
            (rollup-field (plist-get relation-data :rollup-field))
            (rollup-function (plist-get relation-data :rollup-function)))
-      
+
       ;; Validate Notion-style relation types
       (unless (memq type '(:one-to-one :one-to-many :many-to-many :rollup :formula :sync-field))
         (error "Invalid Notion-style relation type: %s" type))
-      
+
       ;; Create enhanced relation data
       (let ((enhanced-relation
              (list :type type
@@ -588,10 +588,10 @@ Returns the created relation data."
                    :rollup-field rollup-field
                    :rollup-function rollup-function
                    :props (plist-get relation-data :props))))
-        
+
         ;; Use existing creation function with enhanced data
         (let ((relation (supertag-relation-create enhanced-relation)))
-          
+
           ;; If bidirectional sync is enabled, create reverse relation
           (when (eq sync-direction :bidirectional)
             (supertag-relation-create
@@ -601,15 +601,15 @@ Returns the created relation data."
                    :sync-direction :unidirectional
                    :sync-fields sync-fields
                    :props (list :reverse-of (plist-get relation :id)))))
-          
+
           ;; Trigger initial sync if fields are specified
           (when sync-fields
             (supertag-relation-sync-fields (plist-get relation :id)))
-          
+
           ;; Calculate initial rollup if specified
           (when rollup-field
             (supertag-relation-calculate-rollup (plist-get relation :id)))
-          
+
           relation)))))
 
 (defun supertag-relation-sync-fields (relation-id)
@@ -661,7 +661,7 @@ RELATION-ID is the identifier of the rollup relation."
              (rollup-field (plist-get relation :rollup-field))
              (rollup-function (plist-get relation :rollup-function))
              (related-entities (supertag-relation-find-by-from from-id)))
-        
+
         (when (and rollup-field rollup-function)
           ;; Collect values from related entities
           (let ((values '()))
@@ -675,7 +675,7 @@ RELATION-ID is the identifier of the rollup relation."
                               (plist-get entity-plist value-key))))
                 (when value
                   (push value values))))
-            
+
             ;; Calculate rollup result
               (let ((result (funcall rollup-function values)))
                 ;; Update target entity with rollup result
@@ -724,7 +724,7 @@ Returns the created relation."
          (to-prop (plist-get relation-config :to-property))
          (sync-props (plist-get relation-config :sync-fields))
          (rollup-config (plist-get relation-config :rollup-config)))
-    
+
     ;; Create the database relation
     (supertag-relation-create-notion-style
      (list :type relation-type

@@ -143,7 +143,7 @@ This is a safe wrapper around org-at-commented-p."
   "Toggle supertag-view-style-mode in the current buffer."
   (interactive)
   (supertag-view-style-mode 'toggle)
-  (message "Supertag styling %s" 
+  (message "Supertag styling %s"
            (if supertag-view-style-mode "enabled" "disabled")))
 
 ;; For backward compatibility
@@ -351,7 +351,7 @@ TEXT can be any value convertible to string."
   "Insert a simple header with TITLE and optional STATS."
   (insert (propertize title 'face `(:weight bold :height 1.3 :foreground ,(supertag-view-helper-get-emphasis-color))))
   (when stats
-    (insert (propertize (format "    %s" stats) 
+    (insert (propertize (format "    %s" stats)
                         'face `(:foreground ,(supertag-view-helper-get-muted-color)))))
   (insert "\n")
   (insert (propertize (make-string 60 ?─) 'face `(:foreground ,(supertag-view-helper-get-border-color))))
@@ -383,7 +383,7 @@ TEXT can be any value convertible to string."
     (insert (propertize (format "%s %s" type-icon field-name)
                         'face `(:weight bold :foreground ,(supertag-view-helper-get-emphasis-color))))
     (let* ((dots-length (max 3 (- 35 (length field-name)))))
-      (insert (propertize (concat " " (make-string dots-length ?.)) 
+      (insert (propertize (concat " " (make-string dots-length ?.))
                           'face `(:foreground ,(supertag-view-helper-get-muted-color)))))
     (insert " ")
     (let ((value-start (point)))
@@ -418,7 +418,7 @@ TEXT can be any value convertible to string."
                       'tag-id tag-id
                       'field-name nil
                       'id tag-id))
-  
+
   (if (or (null fields) (zerop (length fields)))
       (supertag-view-helper-insert-simple-empty-state "No fields defined")
     (dolist (field-def fields)
@@ -485,7 +485,7 @@ TEXT can be any value convertible to string."
                         'face `(:weight bold :foreground ,(supertag-view-helper-get-emphasis-color))))
     ;; Separator dots
     (let ((dots-length (max 2 (- 25 (length field-name)))))
-      (insert (propertize (concat " " (make-string dots-length ?.)) 
+      (insert (propertize (concat " " (make-string dots-length ?.))
                           'face `(:foreground ,(supertag-view-helper-get-muted-color)))))
     ;; Field value (mark the value region so views can place point directly here)
     (let ((value-start (1+ (point)))) ; after the separating space
@@ -643,7 +643,7 @@ Returns the position where tags should be inserted."
         (goto-char existing-tag-line)
         (end-of-line)
         (point))
-       
+
        ;; If there's a drawer, position after it
        (drawer-end
         (goto-char drawer-end)
@@ -655,7 +655,7 @@ Returns the position where tags should be inserted."
           (forward-line 1))
         (beginning-of-line)
         (point))
-       
+
        ;; No drawer, position directly after headline
        (t
         (end-of-line)
@@ -704,7 +704,7 @@ Returns the position where tags should be inserted."
       ;; Start searching from the drawer end position, or from the heading if no drawer
       (goto-char (or drawer-end (progn (end-of-line) (point))))
       (forward-line 1)
-      
+
       ;; Search for lines containing #tags within the node range
       (while (and (< (point) section-end)
                  (not (org-at-heading-p))
@@ -715,7 +715,7 @@ Returns the position where tags should be inserted."
                   (not (looking-at-p "^[ \t]*#\\+")))  ; Exclude org keywords
           (setq tag-line-pos (point)))
         (forward-line 1))
-      
+
       tag-line-pos)))
 
 (defun supertag-view-helper-insert-tag-text (tag-name &optional position)
@@ -750,13 +750,13 @@ This function works in any location within a node - heading or content area."
                    (and (>= next-char ?0) (<= next-char ?9))
                    ;; Chinese/Japanese/Korean characters
                    (and (>= next-char ?\u4e00) (<= next-char ?\u9fff))))))
-    
+
     ;; Insert space before tag if needed
     (when need-space-before
       (insert " "))
     ;; Insert the tag
     (insert (concat "#" tag-name))
-    
+
     ;; Insert space after tag if needed
     (when need-space-after
       (insert " "))))
@@ -793,7 +793,7 @@ Returns the tag name (without #) if found, nil otherwise."
           ;; Check if the point is within the found match
           (when (and (<= (match-beginning 0) start)
                      (> (match-end 0) start))
-            ;; Extract the tag name, removing the leading '#' 
+            ;; Extract the tag name, removing the leading '#'
             (substring (match-string 0) 1)))))))
 
 (defun supertag-view-helper-rename-tag-text-in-node (old-tag-name new-tag-name)
@@ -911,7 +911,7 @@ Returns the total number of instances renamed."
               (when (> renamed-count 0)
                 (save-buffer)
                 (setq total-renamed (+ total-renamed renamed-count))
-                (message "Renamed %s instances from #%s to #%s in %s" 
+                (message "Renamed %s instances from #%s to #%s in %s"
                          renamed-count old-tag-name new-tag-name (file-name-nondirectory file)))))))
     ;; Ensure we always return a number, never nil
     (or total-renamed 0))))
