@@ -357,7 +357,7 @@ Keys are keyword symbols, values are plists with:
                         (_ (error "Unknown schema type: %s" type))))))
         (puthash type schema supertag--schema-cache)
         schema)))
- 
+
 
 (defun supertag--convert-type (value type)
   "Convert VALUE to the specified TYPE."
@@ -555,11 +555,11 @@ schema retrievable by `supertag--get-schema'."
   "Validate if VALUE is a valid tag field reference.
   VALUE can be a single tag name (string) or a list of tag names."
   (if (listp value)
-      (cl-every (lambda (v) 
-                  (and (stringp v) 
+      (cl-every (lambda (v)
+                  (and (stringp v)
                        (not (string-empty-p v))
                        (not (string-match-p "[: \t\n\r]" v)))) value)
-    (and (stringp value) 
+    (and (stringp value)
          (not (string-empty-p value))
          (not (string-match-p "[: \t\n\r]" value)))))
 
@@ -646,7 +646,7 @@ VALIDATOR is the validation function."
 ;;; --- 5. Performance Considerations ---
 
 ;; 5.1 Caching Schema Definitions (already integrated above)
-;; Note: In hybrid architecture, schema caching is still useful for 
+;; Note: In hybrid architecture, schema caching is still useful for
 ;; type conversion functions that may be used by validation functions.
 
 

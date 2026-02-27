@@ -107,34 +107,34 @@ DATA is an alist of (label . value)."
 (define-supertag-view effort-distribution "Effort Distribution"
   ;; Analyzes effort distribution by status and related tags.
   (tag nodes)
-  
+
   (let* ((by-status (supertag-view-effort--collect-by-status tag))
          (total-effort (cl-reduce #'+ by-status :key #'cdr :initial-value 0))
          (by-related-tags (supertag-view-effort--collect-by-tag tag))
          (top-tags (cl-subseq by-related-tags 0 (min 5 (length by-related-tags)))))
-    
+
     (supertag-view--with-buffer "Effort Distribution" tag
       ;; Header
       (supertag-view--header (format "Effort Distribution - #%s" tag))
-      
+
       ;; Overall stats
       (supertag-view--subheader "Overview")
       (supertag-view--stat-row
        `(("Total Effort" . ,(format "%d hours" total-effort))
          ("Nodes Analyzed" . ,(length nodes))
          ("Related Tags" . ,(length by-related-tags))))
-      
+
       ;; By status
       (supertag-view--subheader "By Status")
       (if (= total-effort 0)
           (insert "No effort data found.\n")
         (supertag-view-effort--pie-chart-text by-status))
-      
+
       ;; By related tags (if any)
       (when (> (length by-related-tags) 0)
         (supertag-view--subheader "By Related Tags (Top 5)")
         (supertag-view-effort--pie-chart-text top-tags))
-      
+
       ;; Summary insights
       (supertag-view--separator)
       (insert "Insights:\n")
@@ -142,13 +142,13 @@ DATA is an alist of (label . value)."
             (in-progress-effort (cdr (assoc "in-progress" by-status))))
         (if (= total-effort 0)
             (insert "  No effort data available.\n")
-          (insert (format "  • Completion rate: %.1f%%\n" 
+          (insert (format "  • Completion rate: %.1f%%\n"
                          (/ (* done-effort 100.0) total-effort)))
           (insert (format "  • In progress: %.1f%%\n"
                          (/ (* in-progress-effort 100.0) total-effort)))
           (when (> done-effort 0)
             (insert (format "  • Delivered value: %d hours\n" done-effort))))))
-      
+
       ;; Help
       (insert "\n")
       (insert "Tip: Ensure nodes have 'effort' or 'effort_hours' field.\n")))
@@ -168,7 +168,7 @@ DATA is an alist of (label . value)."
                 (cons "task-3" (list :title "Task 3" :status "in-progress" :tags '("project" "frontend") :effort 6))
                 (cons "task-4" (list :title "Task 4" :status "todo" :tags '("project" "backend") :effort 10))
                 (cons "task-5" (list :title "Task 5" :status "in-progress" :tags '("project" "backend") :effort 8)))))
-    
+
     (supertag-view-render 'effort-distribution
                          (list :tag "project"
                                :nodes nil)))))  ; nodes are fetched by the mock

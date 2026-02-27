@@ -141,7 +141,7 @@ MAX-TITLE-LEN is the maximum title length."
 (define-supertag-view priority-matrix "Priority Matrix"
   ;; Eisenhower Matrix: prioritize tasks by urgency and importance.
   (tag nodes)
-  
+
   (let* ((matrix (supertag-view-priority--build-matrix tag))
          (do-tasks (cdr (assoc 'do matrix)))
          (plan-tasks (cdr (assoc 'plan matrix)))
@@ -149,12 +149,12 @@ MAX-TITLE-LEN is the maximum title length."
          (delete-tasks (cdr (assoc 'delete matrix)))
          (total-tasks (+ (length do-tasks) (length plan-tasks)
                         (length delegate-tasks) (length delete-tasks))))
-    
+
     (supertag-view--with-buffer "Priority Matrix" tag
       ;; Header
       (supertag-view--header (format "Priority Matrix - #%s" tag))
       (insert "Eisenhower Matrix: Urgency × Importance\n\n")
-      
+
       ;; Summary
       (supertag-view--stat-row
        `(("Total Tasks" . ,total-tasks)
@@ -162,21 +162,21 @@ MAX-TITLE-LEN is the maximum title length."
          ("PLAN (Important)" . ,(length plan-tasks))
          ("DELEGATE (Urgent)" . ,(length delegate-tasks))
          ("DELETE (Neither)" . ,(length delete-tasks))))
-      
+
       ;; The Matrix (2x2 grid)
       (supertag-view--subheader "The Matrix")
-      
+
       ;; Show each quadrant
       (dolist (quadrant '(do plan delegate delete))
         (let ((tasks (cdr (assoc quadrant matrix)))
               (title (supertag-view-priority--quadrant-title quadrant)))
-          
+
           ;; Quadrant header with color
           (insert (propertize (format "\n%s\n" title)
                              'face (supertag-view-priority--quadrant-color quadrant)))
           (insert (make-string (+ 2 (length title)) ?─))
           (insert "\n")
-          
+
           ;; Tasks in this quadrant
           (if (null tasks)
               (insert "  (no tasks)\n")
@@ -185,7 +185,7 @@ MAX-TITLE-LEN is the maximum title length."
               (insert "\n"))
             (when (> (length tasks) 10)
               (insert (format "  ... and %d more\n" (- (length tasks) 10))))))
-      
+
       ;; Legend and help
       (supertag-view--separator)
       (insert "How to use:\n")
@@ -218,7 +218,7 @@ MAX-TITLE-LEN is the maximum title length."
                 ;; DELETE: Low urgency, low importance
                 (cons "task-7" (list :title "Check social media" :urgency 1 :importance 1))
                 (cons "task-8" (list :title "Organize desktop" :urgency 2 :importance 2)))))
-    
+
     (supertag-view-render 'priority-matrix
                          (list :tag "task"
                                :nodes nil)))))

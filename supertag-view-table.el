@@ -226,8 +226,8 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
   (interactive
    (let* ((tag (completing-read "View table for tag: " (supertag-view-table--get-available-tags) nil t)))
      (list (list :type :tag :value tag))))
-  
-  (let* ((query-objs (if (listp data-source) 
+
+  (let* ((query-objs (if (listp data-source)
                         (if (plistp (car data-source)) data-source (list data-source))
                       (list data-source)))
          (entity-ids (supertag-view-table--get-entities (car query-objs)))
@@ -236,7 +236,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
                       (format "*Supertag Multi-Table*")
                     (format "*Supertag Table: %s*" (plist-get (car query-objs) :value))))
          (buf (get-buffer-create buf-name)))
-    
+
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -266,16 +266,16 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
 
         ;; Subscribe to updates
         (supertag-view-table--subscribe-updates)
-        
+
         ;; Render initial grid via new dispatcher
         (let ((state (supertag-view-table--build-state)))
           (supertag-view-table-render supertag-view-table-default-layout state))
 
         ;; Move cursor to the first cell for better UX
         (supertag-view-table--goto-first-cell)
-        
+
         (message "Rendered table with %d entities" (length entity-ids))))
-    
+
     (let* ((current-window (selected-window))
            (target-window (if (window-parameter current-window 'window-side)
                                (or (when (fboundp 'window-main-window)
@@ -294,7 +294,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
     (let ((visible-fields (plist-get view-config :visible-fields))
           (sort-config (plist-get view-config :sort))
           (filter-config (plist-get view-config :filter)))
-      
+
       ;; Filter columns based on visible fields
       (when visible-fields
         (setq-local supertag-view-table--columns
@@ -303,12 +303,12 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
                      (or (memq (plist-get col :key) '(:title :refs))
                          (member (symbol-name (plist-get col :key)) visible-fields)))
                    supertag-view-table--columns)))
-      
+
       ;; Apply sorting
       (when sort-config
         (setq-local supertag-view-table--entity-ids
                   (supertag-view-table--apply-sorting supertag-view-table--entity-ids sort-config)))
-      
+
       ;; Apply filtering
       (when filter-config
         (setq-local supertag-view-table--entity-ids
@@ -318,7 +318,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
   "Apply sorting to ENTITY-IDS based on SORT-CONFIG."
   (let ((sort-field (plist-get sort-config :field))
         (sort-order (or (plist-get sort-config :order) :asc)))
-    
+
     (sort entity-ids
           (lambda (a b)
             (let* ((entity-a (supertag-view-table--get-entity-data a))
@@ -369,15 +369,15 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
      (cl-every (lambda (sub-condition)
                  (supertag-view-table--evaluate-filter-condition entity-data sub-condition))
                (cdr condition)))
-    
+
     ('or
      (cl-some (lambda (sub-condition)
                 (supertag-view-table--evaluate-filter-condition entity-data sub-condition))
               (cdr condition)))
-    
+
     ('not
      (not (supertag-view-table--evaluate-filter-condition entity-data (cadr condition))))
-    
+
     ('field
      (let* ((field-name (cadr condition))
             (operator (caddr condition))
@@ -400,13 +400,13 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
                  (let ((props (plist-get entity-data :properties)))
                    (plist-get props (intern field-name)))))))
        (supertag-view-table--compare-values actual-value operator expected-value)))
-    
+
     ('title
      (let* ((operator (cadr condition))
             (expected-value (caddr condition))
             (actual-value (plist-get entity-data :title)))
        (supertag-view-table--compare-values actual-value operator expected-value)))
-    
+
     ('tag
      (let* ((operator (cadr condition))
             (expected-tag (caddr condition))
@@ -415,7 +415,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
          ('has (member expected-tag tags))
          ('not-has (not (member expected-tag tags)))
          (_ nil))))
-    
+
     (_ nil)))
 
 (defun supertag-view-table--compare-values (actual operator expected)
@@ -748,7 +748,7 @@ Returns a list of integers representing the calculated width for each column."
 Table information is now displayed separately above the table."
   (let ((header-parts (cl-loop for col in supertag-view-table--columns
                              for width in (mapcar (lambda (c) (plist-get c :width)) supertag-view-table--columns)
-                             collect (propertize 
+                             collect (propertize
                                       (format " %s " (supertag-view-table--pad-string (plist-get col :name) width))
                                       'face 'bold))))
     (insert (format "│%s│" (string-join header-parts "│")))))
@@ -1135,17 +1135,17 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
     ;; Process file path encoding issues (particularly Chinese filenames)
     (let* ((normalized-file (expand-file-name file))
            (original-type (image-type-from-file-name normalized-file)))
-      
+
       ;; Debug information from old version
       (message "DEBUG: Processing image file: %s" normalized-file)
       (message "DEBUG: Detected image type: %s" original-type)
-      
+
       (cond
        ;; Strategy 1: Check if Emacs natively supports this image type
        ((and original-type (image-type-available-p original-type))
         (message "DEBUG: Using native image support for type: %s" original-type)
         (list normalized-file original-type))
-       
+
        ;; Strategy 2: If type detection fails, try extension-based inference
        ((null original-type)
         (message "DEBUG: Image type detection failed, trying extension-based detection")
@@ -1175,7 +1175,7 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
            (t
             (message "DEBUG: Unknown file extension: %s" extension)
             nil))))
-       
+
        ;; Strategy 3: If not supported and on macOS, call sips for conversion
        ((eq system-type 'darwin)
         (message "DEBUG: Image type '%s' not directly supported, trying conversion with 'sips'..." original-type)
@@ -1188,7 +1188,7 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
             (progn
               (message "!!! ERROR: External conversion (sips) failed for %s (exit code: %s)" normalized-file exit-code)
               nil))))
-       
+
        ;; Strategy 4: On other systems, if not supported then fail directly
        (t
         (message "!!! ERROR: Image type '%s' not supported and no conversion available on this system" original-type)
@@ -1205,7 +1205,7 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
     (if existing
         (setcdr existing width)
       (push (cons tag width) supertag-view-table-per-tag-image-widths))
-    (customize-save-variable 'supertag-view-table-per-tag-image-widths 
+    (customize-save-variable 'supertag-view-table-per-tag-image-widths
                             supertag-view-table-per-tag-image-widths)))
 
 (defun supertag-view-table--adjust-image-column-width ()
@@ -1214,8 +1214,8 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
   (let* ((query-obj (supertag-view-table--get-current-query-obj))
          (current-tag (plist-get query-obj :value))
          (current-width (supertag-view-table--get-image-column-width-for-tag current-tag))
-         (new-width (read-number (format "Image column width (tag: %s, current: %d characters): " 
-                                        current-tag current-width) 
+         (new-width (read-number (format "Image column width (tag: %s, current: %d characters): "
+                                        current-tag current-width)
                                 current-width)))
     (supertag-view-table--set-image-column-width-for-tag current-tag new-width)
     (supertag-view-table-refresh)
@@ -1230,15 +1230,15 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
              (col-key (plist-get coords :col-key))
              (query-obj (supertag-view-table--get-current-query-obj))
              (image-file (read-file-name "Select image: " nil nil t nil
-                                        (lambda (f) 
+                                        (lambda (f)
                                           (and (file-exists-p f)
                                                (string-match-p "\\.\\(png\\|jpe?g\\|gif\\|svg\\|webp\\|bmp\\)$" f))))))
         (when image-file
           (pcase (plist-get query-obj :type)
             (:tag
-             (supertag-field-set entity-id 
-                                (supertag-view-table--get-current-tag-id) 
-                                (symbol-name col-key) 
+             (supertag-field-set entity-id
+                                (supertag-view-table--get-current-tag-id)
+                                (symbol-name col-key)
                                 image-file))
             (_
              (let* ((entity-data (supertag-view-table--get-entity-data entity-id))
@@ -1254,7 +1254,7 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
   (let ((view-id (format "%s" (current-buffer))))
     ;; Store view reference
     (puthash view-id (current-buffer) supertag-view-table--active-views)
-    
+
     ;; Subscribe to entity updates
     (supertag-view-api-subscribe
      :node-updated
@@ -1290,7 +1290,7 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
           (let ((state (supertag-view-table--build-state)))
             (supertag-view-table-render supertag-view-table-default-layout state)
             ))
-          
+
           ;; Visual feedback for automated updates
           (supertag-view-table--flash-cell line-number)))))
 
@@ -1617,7 +1617,7 @@ Uses robust coordinate detection from old version."
     (when coords
       (let* ((col-index (plist-get coords :col-index))
              (col-key (plist-get coords :col-key))
-             (valid-index (and col-index (numberp col-index) 
+             (valid-index (and col-index (numberp col-index)
                               (< col-index (length supertag-view-table--columns))))
              (col-def (when valid-index
                        (nth col-index supertag-view-table--columns))))
@@ -1640,18 +1640,18 @@ With prefix argument INDEX, switch to specific table number."
            (new-index (if index
                          (min (max (1- (prefix-numeric-value index)) 0) (1- num-tables))
                        (mod (1+ supertag-view-table--current-table-index) num-tables))))
-      
+
       (setq-local supertag-view-table--current-table-index new-index)
-      (setq-local supertag-view-table--entity-ids 
+      (setq-local supertag-view-table--entity-ids
                  (supertag-view-table--get-entities (supertag-view-table--get-current-query-obj)))
-      (setq-local supertag-view-table--columns 
+      (setq-local supertag-view-table--columns
                  (supertag-view-table--get-columns (supertag-view-table--get-current-query-obj)))
-      
+
       (let ((state (supertag-view-table--build-state)))
         (supertag-view-table-render supertag-view-table-default-layout state)
         ))
-      
-      (message "Switched to table: %s" 
+
+      (message "Switched to table: %s"
                (plist-get (supertag-view-table--get-current-query-obj) :value))))
 
 (defun supertag-view-table-show-tag ()
@@ -1702,7 +1702,7 @@ With prefix argument INDEX, switch to specific table number."
       (message "View '%s' saved." new-name)
       (let ((state (supertag-view-table--build-state)))
         (supertag-view-table-render supertag-view-table-default-layout state)
-        )))) 
+        ))))
 
 (defun supertag-view-table-delete-named-view ()
   "Delete a named view."
@@ -1842,8 +1842,8 @@ With prefix argument INDEX, switch to specific table number."
     (define-key map (kbd "z") #'supertag-view-table-toggle-row-details)
     (define-key map (kbd "C-c v e") #'supertag-view-table-expand-all-rows)
     (define-key map (kbd "C-c v c") #'supertag-view-table-collapse-all-rows)
-    
-    
+
+
     (define-key map (kbd "g") #'supertag-view-table-refresh)
     (define-key map (kbd "G") #'supertag-view-table-force-refresh)
     (define-key map (kbd "q") #'quit-window)
@@ -2005,7 +2005,7 @@ With prefix argument INDEX, switch to specific table number."
 
          (task-tag (completing-read "Select task tag: " available-tags nil t)))
     (when (and project-tag task-tag)
-      (supertag-view-table 
+      (supertag-view-table
        (list (list :type :tag :value project-tag)
              (list :type :tag :value task-tag))))))
 
@@ -2016,7 +2016,7 @@ With prefix argument INDEX, switch to specific table number."
   (interactive)
   (let ((view-id (format "%s" (current-buffer))))
     (remhash view-id supertag-view-table--active-views)
-    
+
     ))
 
 (add-hook 'kill-buffer-hook #'supertag-view-table-cleanup)

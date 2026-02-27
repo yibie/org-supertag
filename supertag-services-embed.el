@@ -6,7 +6,7 @@
 (require 'supertag-ops-node)
 (require 'supertag-ops-embed)
 (require 'supertag-ui-embed)
-(require 'supertag-services-sync) 
+(require 'supertag-services-sync)
 
 ;;; --- Core DB-driven Sync Logic (with extensive debugging) ---
 

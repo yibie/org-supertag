@@ -101,7 +101,7 @@ Returns (START . END) where START is right after the # character."
         ;; Found a #, so the tag starts right after it
         (setq start (point))
         (setq result (cons start end)))
-      
+
       result)))
 
 (defun supertag-completion--get-completion-table (prefix)
@@ -118,7 +118,7 @@ Returns (START . END) where START is right after the # character."
          (should-add-new (and (not (string-empty-p safe-prefix))
                              (not (member safe-prefix matching-tags))
                              (not (member safe-prefix current-tags)))))
-    
+
     ;; Return all matching tags, plus [Create New Tag] if applicable
     (if should-add-new
         (cons new-tag-candidate matching-tags)
@@ -171,7 +171,7 @@ completion candidate and correcting the buffer if necessary."
     (let* ((start (car bounds))
            (end (cdr bounds))
            (prefix (buffer-substring-no-properties start end)))
-      
+
       (list start end
             ;; 1. The completion table. Returns a custom completion function
             ;;    that always includes [Create New Tag] in results

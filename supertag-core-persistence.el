@@ -374,7 +374,7 @@ This function ensures all levels are proper hash tables."
              (puthash node-id node-table fields-root)
              (setq node-data node-table)
              (cl-incf normalized-count)))
-         
+
          ;; Ensure tag-level is a hash table
          (when (hash-table-p node-data)
            (maphash
@@ -424,7 +424,7 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
           (with-temp-file file-to-save
             (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
             (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
-                  (print-length nil)         ; Unlimited print length 
+                  (print-length nil)         ; Unlimited print length
                   (print-level nil)          ; No limit print level
                   (print-circle t))          ; Handle circular structures
               (prin1 supertag--store (current-buffer))))
@@ -553,9 +553,9 @@ FILE is the optional file path. Defaults to supertag-db-file."
                                                        :load-failures (nreverse failures)))
       (message "Initialized empty Org-Supertag store (no readable DB found; candidates=%S)."
                (mapcar #'abbreviate-file-name candidates)))
-	;; Rebuild global field caches if the feature is loaded and enabled.
-	(when (fboundp 'supertag--maybe-rebuild-global-field-caches)
-	  (supertag--maybe-rebuild-global-field-caches))))
+        ;; Rebuild global field caches if the feature is loaded and enabled.
+        (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
+          (supertag--maybe-rebuild-global-field-caches))))
 
 (defun supertag-schedule-save ()
   "Schedule a delayed save.
@@ -626,31 +626,31 @@ Merges relations from duplicate tags to the kept tag."
          (name-to-tags (make-hash-table :test 'equal))
          (duplicates-found 0)
          (tags-removed 0))
-    
+
     (if (not (hash-table-p tags-table)) ; defensive, though collection is always hash-table
         (message "Tags collection is missing or invalid; nothing to purge.")
-      
+
       ;; Step 1: Group tags by name
       (maphash (lambda (tag-id tag-data)
                  (when (and tag-data (plist-get tag-data :name))
                    (let ((tag-name (plist-get tag-data :name)))
                      (unless (gethash tag-name name-to-tags)
                        (puthash tag-name '() name-to-tags))
-                     (puthash tag-name 
+                     (puthash tag-name
                              (cons (cons tag-id tag-data) (gethash tag-name name-to-tags))
                              name-to-tags))))
                tags-table)
-      
+
       ;; Step 2: Find and resolve duplicates
       (maphash (lambda (tag-name tag-list)
                  (when (> (length tag-list) 1)
                    (cl-incf duplicates-found)
-                   (message "Found %d duplicate tags for name '%s': %s" 
-                           (length tag-list) tag-name 
+                   (message "Found %d duplicate tags for name '%s': %s"
+                           (length tag-list) tag-name
                            (mapcar #'car tag-list))
-                   
+
                    ;; Choose the "best" tag (with most fields or first created)
-                   (let* ((sorted-tags (sort tag-list 
+                   (let* ((sorted-tags (sort tag-list
                                            (lambda (a b)
                                              (let ((fields-a (length (or (plist-get (cdr a) :fields) '())))
                                                    (fields-b (length (or (plist-get (cdr b) :fields) '()))))
@@ -658,20 +658,20 @@ Merges relations from duplicate tags to the kept tag."
                           (keeper (car sorted-tags))
                           (duplicates (cdr sorted-tags))
                           (keeper-id (car keeper)))
-                     
-                    (message "Keeping tag '%s', removing duplicates: %s" 
+
+                    (message "Keeping tag '%s', removing duplicates: %s"
                             keeper-id (mapcar #'car duplicates))
-                    
+
                     ;; Remove duplicate tags
                     (dolist (duplicate duplicates)
                       (let ((duplicate-id (car duplicate)))
                         (supertag-store-remove-entity :tags duplicate-id)
                         (cl-incf tags-removed))))))
                name-to-tags)
-      
+
       (if (> duplicates-found 0)
           (progn
-            (message "Duplicate tag cleanup complete. %d tag names had duplicates, %d duplicate tags removed." 
+            (message "Duplicate tag cleanup complete. %d tag names had duplicates, %d duplicate tags removed."
                     duplicates-found tags-removed)
             (supertag-save-store)
             (message "Database saved."))
@@ -737,7 +737,7 @@ Useful for diagnosing why nodes aren't loading properly."
                  (sample-nodes '())
                  (nodes-without-type 0)
                  (nodes-with-type 0))
-            
+
             (with-output-to-temp-buffer "*Supertag DB Inspection*"
               (princ "=== Database File Inspection ===\n\n")
               (princ (format "File: %s\n" file-to-inspect))
@@ -747,7 +747,7 @@ Useful for diagnosing why nodes aren't loading properly."
               (princ (format "Nodes collection exists: %s\n" (if nodes-key "YES" "NO")))
               (princ (format "Nodes collection is hash-table: %s\n" (hash-table-p nodes-key)))
               (princ (format "Node count in file: %d\n\n" nodes-count))
-              
+
               (when (hash-table-p nodes-key)
                 (princ "=== Node Analysis ===\n")
                 (maphash (lambda (id node-data)
@@ -757,10 +757,10 @@ Useful for diagnosing why nodes aren't loading properly."
                            (when (< (length sample-nodes) 3)
                              (push (cons id node-data) sample-nodes)))
                          nodes-key)
-                
+
                 (princ (format "Nodes with :type property: %d\n" nodes-with-type))
                 (princ (format "Nodes WITHOUT :type property: %d\n\n" nodes-without-type))
-                
+
                 (when sample-nodes
                   (princ "=== Sample Nodes ===\n")
                   (dolist (sample (reverse sample-nodes))
@@ -774,7 +774,7 @@ Useful for diagnosing why nodes aren't loading properly."
                                                            (cl-loop for (k v) on data by #'cddr
                                                                     do (push k props))
                                                            (nreverse props)))))))
-                
+
                 (when (> nodes-without-type 0)
                   (princ "\n=== WARNING ===\n")
                   (princ (format "%d nodes are missing the :type property!\n" nodes-without-type))
@@ -845,23 +845,23 @@ Returns t if migration was performed, nil otherwise."
         (message "Migrating data from version %s to %s..." current-version supertag-data-version)
         (supertag--migrate-4x-to-5x data)
         (message "Data migration completed to version %s" supertag-data-version))
-       
+
        ;; Other version migrations can be added here
        (t
         (when (not (string= current-version supertag-data-version))
-          (message "Warning: Unknown data version %s, setting to current version %s" 
+          (message "Warning: Unknown data version %s, setting to current version %s"
                    current-version supertag-data-version))))
-      
+
       ;; Update version number
       (supertag--set-data-version data supertag-data-version)
       t)))
-      
+
 (defun supertag--migrate-4x-to-5x (data)
   "Migrate from version 4.x to 5.0.0.
 Main changes include data format standardization and field name normalization."
   ;; Specific migration steps can be added here
   ;; For example, field renaming, data format conversion, etc.
-  
+
   ;; Example: Ensure all time fields use standard format
   (let ((nodes-table (gethash :nodes data)))
     (when (hash-table-p nodes-table)
@@ -872,7 +872,7 @@ Main changes include data format standardization and field name normalization."
                      (setq node-data (plist-put node-data :created-at (supertag-current-time))))
                    (unless (plist-get node-data :modified-at)
                      (setq node-data (plist-put node-data :modified-at (supertag-current-time))))
-                   
+
                    ;; Update node data
                    (puthash node-id node-data nodes-table)))
                nodes-table))))
@@ -930,7 +930,7 @@ Returns t if all references are valid, otherwise returns nil."
         (nodes-table (supertag-store-get-collection :nodes))
         (valid-p t)
         (error-count 0))
-    
+
     (when (and (hash-table-p tags-table) (hash-table-p nodes-table))
       (maphash (lambda (node-id node-data)
                  (when (eq (plist-get node-data :type) :node)
@@ -943,11 +943,11 @@ Returns t if all references are valid, otherwise returns nil."
                            (message "Invalid tag reference: node %s references non-existent tag %s"
                                    node-id tag-id)))))))
                nodes-table))
-    
+
     (if valid-p
         (message "Tag reference validation passed")
       (message "Tag reference validation failed with %d errors" error-count))
-    
+
     valid-p))
 
 (provide 'supertag-core-persistence)

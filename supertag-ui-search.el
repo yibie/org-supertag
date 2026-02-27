@@ -24,8 +24,8 @@
   :group 'org-supertag)
 
 (defcustom supertag-search-history-file
-  (expand-file-name "search-history.el" 
-                    (or (bound-and-true-p org-supertag-data-directory) 
+  (expand-file-name "search-history.el"
+                    (or (bound-and-true-p org-supertag-data-directory)
                         user-emacs-directory))
   "File to store search history."
   :type 'file
@@ -64,19 +64,19 @@
          (existing-entry (cl-find query-str supertag-search--history
                                 :key (lambda (x) (plist-get x :query))
                                 :test #'equal)))
-    
+
     (when existing-entry
       (setq supertag-search--history
             (cl-remove query-str supertag-search--history
                       :key (lambda (x) (plist-get x :query))
                       :test #'equal)))
-    
+
     (let ((entry (or existing-entry
                     `(:query ,query-str :count 0 :last-used ,now))))
       (plist-put entry :count (1+ (plist-get entry :count)))
       (plist-put entry :last-used now)
       (push entry supertag-search--history)))
-  
+
   (setq supertag-search--history
         (sort supertag-search--history
               (lambda (a b)
@@ -84,11 +84,11 @@
                     (and (= (plist-get a :count) (plist-get b :count))
                          (supertag-search--time-less-p (plist-get b :last-used)
                                 (plist-get a :last-used)))))))
-  
+
   (when (> (length supertag-search--history) supertag-search-history-max-items)
     (setq supertag-search--history
           (seq-take supertag-search--history supertag-search-history-max-items)))
-  
+
   (supertag-search--save-history))
 
 (defun supertag-search--time-less-p (time-a time-b)
@@ -480,8 +480,8 @@ Handles both time stamps (list) and date strings."
                    (dolist (node-id selected-nodes)
                      (when-let* ((node-data (supertag-node-get node-id))
                                 (title (plist-get node-data :title))
-                                (clean-title 
-                                 (substring-no-properties 
+                                (clean-title
+                                 (substring-no-properties
                                   (if (stringp title)
                                       title
                                     (prin1-to-string title)))))
@@ -490,7 +490,7 @@ Handles both time stamps (list) and date strings."
                                      clean-title))))
                    (buffer-string))))
             (insert content)
-            (message "Inserted %d node links at original position" 
+            (message "Inserted %d node links at original position"
                      (length selected-nodes)))))
       (kill-buffer))))
 
@@ -501,17 +501,17 @@ Handles both time stamps (list) and date strings."
     (if (not selected-nodes)
         (message "No items selected")
       (let* ((default-name "export.org")
-             (file (read-file-name 
-                   "Export to new file: " 
-                   nil nil nil 
+             (file (read-file-name
+                   "Export to new file: "
+                   nil nil nil
                    default-name)))
         (unless (string-match-p "\\.org$" file)
           (error "Export target must be an org file: %s" file))
         (when (and (file-exists-p file)
-                  (not (y-or-n-p 
+                  (not (y-or-n-p
                         (format "File %s exists. Overwrite? " file))))
           (error "Export cancelled by user"))
-        
+
         (with-current-buffer (find-file-noselect file)
           (erase-buffer)
           (org-mode)
@@ -531,7 +531,7 @@ Handles both time stamps (list) and date strings."
               (insert (format "- [[id:%s][%s]]\n" node-id clean-title))))
           (save-buffer)
           (find-file file)
-          (message "Export of %d links completed successfully to %s" 
+          (message "Export of %d links completed successfully to %s"
                   (length selected-nodes) file))))))
 
 (defun supertag-search-export-results-to-file ()
@@ -569,14 +569,14 @@ This is the main entry point for the renamed search functionality."
   ;; Save current position
   (setq supertag-search--original-buffer (current-buffer)
         supertag-search--original-point (point))
-  
+
   (unless supertag--store
     (message "Supertag store not initialized. Please run supertag sync first.")
     (user-error "Supertag store not initialized"))
-  
+
   ;; Load history
   (supertag-search--load-history)
-  
+
   (let* ((keywords (supertag-search--get-keywords))
          (nodes (supertag-search-find-nodes keywords)))
     (supertag-search-show-results keywords nodes)))

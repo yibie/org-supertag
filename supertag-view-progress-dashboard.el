@@ -40,7 +40,7 @@ Returns a list of project data plists."
               (total-tasks (supertag-view--get-vc node-id "total-tasks" 0))
               (done-tasks (supertag-view--get-vc node-id "done-tasks" 0))
               (total-effort (supertag-view--get-vc node-id "total-effort" 0)))
-         
+
          (list :id node-id
                :title title
                :progress progress
@@ -83,18 +83,18 @@ Returns a list of project data plists."
   ;; A dashboard showing project progress with task counts and effort totals.
   ;; Requires virtual columns: progress, total-tasks, done-tasks, total-effort
   (tag nodes)
-  
+
   ;; Collect real data from the database
   (let* ((projects (supertag-view-progress--collect-data tag))
          (total-projects (length projects))
          (completed-count (cl-count-if (lambda (p) (eq (plist-get p :status) 'completed)) projects))
          (in-progress-count (cl-count-if (lambda (p) (memq (plist-get p :status) '(on-track in-progress))) projects))
          (total-effort-all (cl-reduce #'+ projects :key (lambda (p) (plist-get p :total-effort)) :initial-value 0)))
-    
+
     (supertag-view--with-buffer "Progress Dashboard" tag
       ;; Header
       (supertag-view--header (format "Progress Dashboard - #%s" tag))
-      
+
       ;; Summary section
       (supertag-view--subheader "Summary")
       (supertag-view--stat-row
@@ -102,17 +102,17 @@ Returns a list of project data plists."
          ("Completed" . ,completed-count)
          ("In Progress" . ,in-progress-count)
          ("Total Effort" . ,(format "%d hours" total-effort-all))))
-      
+
       ;; Projects list
       (supertag-view--subheader "Projects")
-      
+
       (if (null projects)
           (insert "No projects found.\n")
-        
+
         ;; Table header
         (insert "Status  Project                    Progress    Tasks      Effort\n")
         (insert "──────  ─────────────────────────  ──────────  ─────────  ───────\n")
-        
+
         ;; Each project
         (dolist (project projects)
           (let* ((status (plist-get project :status))
@@ -132,14 +132,14 @@ Returns a list of project data plists."
                  (effort-str (if (> effort 0)
                                 (format "%d h" effort)
                               "N/A")))
-            
+
             ;; Status indicator
             (insert (format "  %s    " indicator))
-            
+
             ;; Title
             (insert display-title)
             (insert "  ")
-            
+
             ;; Progress bar (short)
             (let ((bar-width 10))
               (insert "[")
@@ -148,15 +148,15 @@ Returns a list of project data plists."
                 (insert (make-string filled ?█))
                 (insert (make-string empty ?░)))
               (insert (format "] %3d%%  " progress)))
-            
+
             ;; Tasks
             (insert (format "%-8s  " task-str))
-            
+
             ;; Effort
             (insert effort-str)
-            
+
             (insert "\n"))))
-      
+
       ;; Help text
       (supertag-view--separator)
       (insert "Legend: ✓ Completed  ▶ On Track  ○ In Progress  ◐ Started  · Not Started\n")
@@ -197,7 +197,7 @@ Returns a list of project data plists."
                             ("total-effort" 60)
                             (_ default)))
                  (_ default)))))
-    
+
     (supertag-view-render 'progress-dashboard
                          (list :tag "project"
                                :nodes (list

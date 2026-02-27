@@ -126,12 +126,12 @@ preventing data loss from incorrect position calculations."
 
   (let* ((marker (org-id-find node-id 'marker))
          (source-file (when marker (buffer-file-name (marker-buffer marker)))))
-    
+
     (unless marker
       (error "Node %s not found" node-id))
     (unless (and source-file (file-exists-p source-file))
       (error "Source file missing for node %s" node-id))
-    
+
     ;; Security check: don't move to same file
     (when (string= source-file target-file)
       (error "Cannot move node to the same file"))
@@ -139,18 +139,18 @@ preventing data loss from incorrect position calculations."
     ;; Step 1: Collect node data using org-element for precise range
     (let ((node-info nil)
           (node-start-pos nil))
-      
+
       (with-current-buffer (marker-buffer marker)
         (save-restriction
           (widen)
           (save-excursion
             (goto-char (marker-position marker))
-            
+
             ;; Navigate to heading and verify position
             (org-back-to-heading t)
             (unless (org-at-heading-p)
               (error "Cannot locate heading for node %s" node-id))
-            
+
             ;; Use org-element-at-point for precise range extraction
             (when (fboundp 'org-element-at-point)
               (let* ((element (org-element-at-point))
@@ -159,13 +159,13 @@ preventing data loss from incorrect position calculations."
                      (level (org-element-property :level element))
                      (title (org-get-heading t t t t))
                      (content (buffer-substring-no-properties begin end)))
-                
+
                 ;; Safety checks
                 (unless (string-match-p "^\\*+ " content)
                   (error "Invalid content extraction for node %s" node-id))
                 (when (<= end begin)
                   (error "Invalid range for node %s" node-id))
-                
+
                 ;; Check if moving would delete entire file
                 (save-excursion
                   (goto-char (point-min))
@@ -174,7 +174,7 @@ preventing data loss from incorrect position calculations."
                     (when (and first-heading (= begin first-heading)
                                (save-excursion (goto-char end) (eobp)))
                       (error "Refusing to move: would delete entire file"))))
-                
+
                 (setq node-info (list :id node-id
                                       :file source-file
                                       :begin begin
@@ -182,10 +182,10 @@ preventing data loss from incorrect position calculations."
                                       :level level
                                       :title title
                                       :content content)))))))
-      
+
       (unless node-info
         (error "Failed to collect node data for %s" node-id))
-      
+
       ;; Step 2: Insert into target file
       (let* ((content (plist-get node-info :content))
              (original-level (plist-get node-info :level))
@@ -193,7 +193,7 @@ preventing data loss from incorrect position calculations."
                                    (supertag-service-org--adjust-subtree-level
                                     content original-level target-level)
                                  content)))
-        
+
         (with-current-buffer (find-file-noselect target-file)
           (save-restriction
             (widen)
@@ -205,13 +205,13 @@ preventing data loss from incorrect position calculations."
           (when (buffer-file-name)
             (supertag--mark-internal-modification (buffer-file-name)))
           (save-buffer)))
-      
+
       ;; Step 3: Remove from source (or leave link)
       (let* ((begin (plist-get node-info :begin))
              (end (plist-get node-info :end))
              (title (plist-get node-info :title))
              (level (plist-get node-info :level)))
-        
+
         (with-current-buffer (find-file-noselect source-file)
           (save-restriction
             (widen)
@@ -222,10 +222,10 @@ preventing data loss from incorrect position calculations."
             (when (buffer-file-name)
               (supertag--mark-internal-modification (buffer-file-name)))
             (save-buffer))))
-      
+
       ;; Step 4: Update database
       (supertag-node-set-location node-id target-file node-start-pos)
-      
+
       (message "[supertag] moved node %s -> %s"
                node-id (abbreviate-file-name target-file))
       t)))
@@ -335,17 +335,17 @@ If NODE-ID is already a top-level heading, return nil."
 (defun supertag-service-org-add-tag (node-id tag-name)
   "Adds #TAG-NAME text to the headline for NODE-ID and triggers a resync."
   (supertag-service-org--update-buffer-and-resync node-id
-						  (lambda ()
-						    (end-of-line)
-						    (insert (concat " #" tag-name)))))
+                                                  (lambda ()
+                                                    (end-of-line)
+                                                    (insert (concat " #" tag-name)))))
 
 (defun supertag-service-org-remove-tag (node-id tag-name)
   "Removes #TAG-NAME text from the headline for NODE-ID and triggers a resync."
   (supertag-service-org--update-buffer-and-resync node-id
-						  (lambda ()
-						    (let ((tag-regexp (concat "\\s-?#" (regexp-quote tag-name) "\\b")))
-						      (when (re-search-forward tag-regexp (line-end-position) t)
-							(replace-match ""))))))
+                                                  (lambda ()
+                                                    (let ((tag-regexp (concat "\\s-?#" (regexp-quote tag-name) "\\b")))
+                                                      (when (re-search-forward tag-regexp (line-end-position) t)
+                                                        (replace-match ""))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Field export helpers (DB -> Org properties)

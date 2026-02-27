@@ -85,7 +85,7 @@ Returns the new queue length."
 (defun supertag-async--worker ()
   "Process the next batch of items from the queue."
   (setq supertag-async--timer nil) ;; Timer has fired, so it's gone
-  
+
   (when (and supertag-async--queue supertag-async--processor-fn)
     (condition-case err
         (let ((count 0))
@@ -96,13 +96,13 @@ Returns the new queue length."
               (when item
                 (funcall supertag-async--processor-fn item)
                 (cl-incf count))))
-          
-          ;;(message "Async worker processed %d items. Remaining: %d" 
+
+          ;;(message "Async worker processed %d items. Remaining: %d"
           ;;         count (length supertag-async--queue))
           )
       (error
        (message "Error in supertag async worker: %s" (error-message-string err))))
-    
+
     ;; If work remains, re-schedule
     (when supertag-async--queue
       (supertag-async--ensure-timer))))

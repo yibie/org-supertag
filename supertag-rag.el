@@ -81,7 +81,7 @@ Supported Query Operators Table:
 
 Date Formats:
 - Relative: \"-7d\" (7 days ago), \"+2w\" (2 weeks later), \"-1m\" (1 month ago)
-- Absolute: \"2024-01-01\" (YYYY-MM-DD)  
+- Absolute: \"2024-01-01\" (YYYY-MM-DD)
 - Special: \"now\", \"today\", \"yesterday\"
 
 Critical Rules:
@@ -258,7 +258,7 @@ ARGS is a property list that can contain the following keys:
                                 (let ((s-exp (car (read-from-string s-exp-string))))
                                   (funcall callback s-exp))
                               (funcall callback nil))
-                          (error 
+                          (error
                            (message "Supertag RAG: Failed to parse LLM response: %s. Response: %s" err s-exp-string)
                            (funcall callback nil)))))
                    (if supertag-rag-model `(:model ,supertag-rag-model) nil)))))
@@ -301,10 +301,10 @@ ARGS is a property list that can contain the following keys:
             (modified-at (plist-get node-data :modified-at)))
         (message "Title: %s" title)
         (message "Content type: %s, length: %d" (type-of content) (if content (length content) 0))
-        (message "Content value: %s" (if (and content (stringp content)) 
-                                         (if (> (length content) 100) 
-                                             (concat (substring content 0 100) "...") 
-                                           content) 
+        (message "Content value: %s" (if (and content (stringp content))
+                                         (if (> (length content) 100)
+                                             (concat (substring content 0 100) "...")
+                                           content)
                                        "Not a string or nil"))
         (message "Tags: %s" tags)
         (message "Properties: %s" properties)
@@ -325,7 +325,7 @@ ARGS is a property list that can contain the following keys:
                (content (plist-get node-data :content))
                (created-at (plist-get node-data :created-at))
                (tags (plist-get node-data :tags)))
-           (message "Node ID: %s, Title: %s, Content length: %d, Created: %s, Tags: %s" 
+           (message "Node ID: %s, Title: %s, Content length: %d, Created: %s, Tags: %s"
                     id (or title "No title") (if content (length content) 0)
                     (if created-at (format-time-string "%Y-%m-%d %H:%M:%S" created-at) "Unknown")
                     (if tags (mapconcat 'identity tags ", ") "None"))))
@@ -357,7 +357,7 @@ ARGS is a property list that can contain the following keys:
                             ((null raw-content) "")
                             (t (format "%s" raw-content)))))
               ;; Debug: Print content and title
-              (message "Supertag RAG Debug: Node ID %s title: %s, content type: %s, content length: %d" 
+              (message "Supertag RAG Debug: Node ID %s title: %s, content type: %s, content length: %d"
                        id title (type-of raw-content) (length content))
               (if (and content (> (length content) 0))
                   (let ((excerpt (if (> (length content) supertag-rag-max-document-excerpt)
@@ -398,7 +398,7 @@ ARGS is a property list that can contain the following keys:
         (when (and metadata (plist-get metadata :error))
           (setq error-occurred t)
           (message "Supertag RAG: Error in response stream: %s" (plist-get metadata :error)))
-        
+
         (let ((is-done (and metadata (plist-get metadata :done))))
           (when (and (not (string-empty-p content-str)) (not error-occurred))
             (with-current-buffer buffer
@@ -412,10 +412,10 @@ ARGS is a property list that can contain the following keys:
               ;; Ensure the buffer is visible
               (when-let* ((win (get-buffer-window buffer)))
                 (set-window-point win (point-max)))))
-          
+
           (when (and is-done (not error-occurred))
             (message "Supertag RAG: Answer stream complete."))
-          
+
           (when (and is-done error-occurred)
             (message "Supertag RAG: Answer stream completed with errors.")))))))
 
@@ -473,15 +473,15 @@ ARGS is a property list that can contain the following keys:
   "Helper function to recursively validate S-expression."
   (when (listp sexp)
     (let ((op (car sexp))
-          (generic-nouns '("note" "notes" "document" "documents" "article" "articles" 
-                           "task" "tasks" "entry" "entries" "list" "show" "find" "provide" 
-                           "give" "access" "where" "which" "what" "how" "can" "could" 
-                           "would" "should" "will" "do" "does" "did" "may" "might" 
-                           "why" "when" "whom" "whose" "笔记" "文章" "任务" "条目" 
-                           "列表" "显示" "查找" "提供" "给我" "访问" "哪里" "哪些" 
-                           "什么" "如何" "能够" "可以" "为什么" "什么时候" "谁" "怎样" 
-                           "是否" "帮忙" "帮助" "请" "总结" "帮我总结" "总结一下" 
-                           "summarize" "summarize for me" "help me" "help" "please" 
+          (generic-nouns '("note" "notes" "document" "documents" "article" "articles"
+                           "task" "tasks" "entry" "entries" "list" "show" "find" "provide"
+                           "give" "access" "where" "which" "what" "how" "can" "could"
+                           "would" "should" "will" "do" "does" "did" "may" "might"
+                           "why" "when" "whom" "whose" "笔记" "文章" "任务" "条目"
+                           "列表" "显示" "查找" "提供" "给我" "访问" "哪里" "哪些"
+                           "什么" "如何" "能够" "可以" "为什么" "什么时候" "谁" "怎样"
+                           "是否" "帮忙" "帮助" "请" "总结" "帮我总结" "总结一下"
+                           "summarize" "summarize for me" "help me" "help" "please"
                            "give me a summary" "provide summary" "summary")))
       (cond
        ((eq op 'and)
@@ -530,7 +530,7 @@ ARGS is a property list that can contain the following keys:
           nil  ; Remove this term entirely
         expr)))
    ((eq (car expr) 'and)
-    (let ((filtered-terms (cl-remove-if-not 
+    (let ((filtered-terms (cl-remove-if-not
                           (lambda (x) (not (null x)))
                           (mapcar (lambda (x) (supertag-rag--remove-generic-terms x generic-nouns))
                                   (cdr expr)))))
@@ -539,7 +539,7 @@ ARGS is a property list that can contain the following keys:
        ((= (length filtered-terms) 1) (car filtered-terms))
        (t (cons 'and filtered-terms)))))
    ((eq (car expr) 'or)
-    (let ((filtered-terms (cl-remove-if-not 
+    (let ((filtered-terms (cl-remove-if-not
                           (lambda (x) (not (null x)))
                           (mapcar (lambda (x) (supertag-rag--remove-generic-terms x generic-nouns))
                                   (cdr expr)))))
@@ -548,7 +548,7 @@ ARGS is a property list that can contain the following keys:
        ((= (length filtered-terms) 1) (car filtered-terms))
        (t (cons 'or filtered-terms)))))
    (t
-    (cons (car expr) 
+    (cons (car expr)
           (mapcar (lambda (x) (supertag-rag--remove-generic-terms x generic-nouns))
                   (cdr expr))))))
 
@@ -566,13 +566,13 @@ ARGS is a property list that can contain the following keys:
 
 (defun supertag-rag--convert-terms-to-tags (expr)
   "Convert term expressions to tag expressions when appropriate."
-  (let ((common-tags '("work" "urgent" "important" "todo" "task" "project" 
+  (let ((common-tags '("work" "urgent" "important" "todo" "task" "project"
                        "meeting" "note" "document" "article" "plan" "idea"
                        "question" "answer" "solution" "bug" "feature" "fix"
                        "reminder" "schedule" "event" "goal" "objective"
-                       "工作" "紧急" "重要" "待办" "任务" "项目" "会议" 
-                       "笔记" "文档" "文章" "计划" "想法" "问题" "答案" 
-                       "解决方案" "错误" "功能" "修复" "提醒" "日程" "事件" 
+                       "工作" "紧急" "重要" "待办" "任务" "项目" "会议"
+                       "笔记" "文档" "文章" "计划" "想法" "问题" "答案"
+                       "解决方案" "错误" "功能" "修复" "提醒" "日程" "事件"
                        "目标" "目的")))
     (cond
      ((null expr) nil)
@@ -584,18 +584,18 @@ ARGS is a property list that can contain the following keys:
             (list 'tag term-value)  ; Convert to tag query
           expr)))
      ((eq (car expr) 'and)
-      (cons 'and 
+      (cons 'and
             (mapcar (lambda (x) (supertag-rag--convert-terms-to-tags x))
                     (cdr expr))))
      ((eq (car expr) 'or)
-      (cons 'or 
+      (cons 'or
             (mapcar (lambda (x) (supertag-rag--convert-terms-to-tags x))
                     (cdr expr))))
      ((eq (car expr) 'not)
-      (cons 'not 
+      (cons 'not
             (list (supertag-rag--convert-terms-to-tags (cadr expr)))))
      (t
-      (cons (car expr) 
+      (cons (car expr)
             (mapcar (lambda (x) (supertag-rag--convert-terms-to-tags x))
                     (cdr expr)))))))
 

@@ -94,32 +94,32 @@ This function is compatible with the old query syntax."
      ((eq op 'and) `(:type and :children ,(mapcar #'supertag-query--parse-sexp args)))
      ((eq op 'or) `(:type or :children ,(mapcar #'supertag-query--parse-sexp args)))
      ((eq op 'not)
-      (unless (= (length args) 1) 
+      (unless (= (length args) 1)
         (error "'not' operator expects exactly one argument, but got %S" args))
       `(:type not :child ,(supertag-query--parse-sexp (car args))))
      ((eq op 'tag)
-      (unless (= (length args) 1) 
+      (unless (= (length args) 1)
         (error "'tag' operator expects exactly one argument, but got %S" args))
       `(:type tag :value ,(if (stringp (car args)) (car args) (symbol-name (car args)))))
      ((eq op 'field)
-      (unless (= (length args) 2) 
+      (unless (= (length args) 2)
         (error "'field' operator expects exactly two arguments, but got %S" args))
       `(:type field :key ,(if (stringp (car args)) (car args) (symbol-name (car args)))
               :value ,(if (stringp (cadr args)) (cadr args) (symbol-name (cadr args)))))
      ((eq op 'after)
-      (unless (= (length args) 1) 
+      (unless (= (length args) 1)
         (error "'after' operator expects one date string argument, but got %S" args))
       `(:type after :date ,(car args)))
      ((eq op 'before)
-      (unless (= (length args) 1) 
+      (unless (= (length args) 1)
         (error "'before' operator expects one date string argument, but got %S" args))
       `(:type before :date ,(car args)))
      ((eq op 'between)
-      (unless (= (length args) 2) 
+      (unless (= (length args) 2)
         (error "'between' operator expects two date string arguments, but got %S" args))
       `(:type between :start-date ,(car args) :end-date ,(cadr args)))
      ((eq op 'term)
-      (unless (= (length args) 1) 
+      (unless (= (length args) 1)
         (error "'term' operator expects exactly one argument, but got %S" args))
       `(:type term :value ,(if (stringp (car args)) (car args) (symbol-name (car args)))))
      (t (error "Invalid query operator: %S" op)))))
@@ -136,16 +136,16 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
                      (cl-intersection result next-list :test #'equal))
                    child-results
                    :initial-value all-node-ids)))
-     
+
      ((eq ast-type 'or)
       (let ((child-results (mapcar #'supertag-query--execute-ast (plist-get ast :children))))
         (cl-reduce #'cl-union child-results :initial-value '())))
-     
+
      ((eq ast-type 'not)
       (let ((all-node-ids (supertag-query--get-all-node-ids))
             (nodes-to-exclude (supertag-query--execute-ast (plist-get ast :child))))
         (cl-set-difference (or all-node-ids '()) nodes-to-exclude :test #'equal)))
-     
+
      ;; Fast index-based lookups below
      ((eq ast-type 'tag)
       (let ((tag-value (plist-get ast :value)))
@@ -153,10 +153,10 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
         (let ((result (supertag-index-get-nodes-by-tag tag-value)))
           ;;(message "Supertag Query Debug: Tag lookup returned %d nodes: %s" (length result) result)
           result)))
-     
+
      ((eq ast-type 'field)
       (supertag-query--find-nodes-by-field-indexed (plist-get ast :key) (plist-get ast :value)))
-     
+
      ((eq ast-type 'after)
       (let ((query-time (supertag-query--resolve-date-string (plist-get ast :date))))
         (unless query-time (error "Invalid date format for 'after': %s" (plist-get ast :date)))
@@ -167,17 +167,17 @@ This uses indexes for O(1) lookups instead of O(n) table scans."
       (let ((query-time (supertag-query--resolve-date-string (plist-get ast :date))))
         (unless query-time (error "Invalid date format for 'before': %s" (plist-get ast :date)))
         (supertag-index-get-nodes-by-date-range nil query-time)))
-     
+
      ((eq ast-type 'between)
       (let ((start-time (supertag-query--resolve-date-string (plist-get ast :start-date)))
             (end-time (supertag-query--resolve-date-string (plist-get ast :end-date))))
         (unless start-time (error "Invalid start date for 'between': %s" (plist-get ast :start-date)))
         (unless end-time (error "Invalid end date for 'between': %s" (plist-get ast :end-date)))
         (supertag-index-get-nodes-by-date-range start-time end-time)))
-     
+
      ((eq ast-type 'term)
       (supertag-index-get-nodes-by-word (plist-get ast :value)))
-     
+
      (t '()))))
 
 (defun supertag-query--get-all-node-ids ()
@@ -294,7 +294,7 @@ Returns list of (related-id . related-data) pairs."
                        (require 'supertag-ops-relation)
                        (supertag-relation-find-by-to entity-id relation-type)))
         (results '()))
-    
+
     ;; Collect related entities from outgoing relations
     (dolist (relation relations-from)
       (let* ((related-id (plist-get relation :to))
@@ -302,7 +302,7 @@ Returns list of (related-id . related-data) pairs."
                                (supertag-tag-get related-id))))
         (when related-data
           (push (cons related-id related-data) results))))
-    
+
     ;; Collect related entities from incoming relations
     (dolist (relation relations-to)
       (let* ((related-id (plist-get relation :from))
@@ -310,7 +310,7 @@ Returns list of (related-id . related-data) pairs."
                                (supertag-tag-get related-id))))
         (when related-data
           (push (cons related-id related-data) results))))
-    
+
     (cl-remove-duplicates results :test (lambda (a b) (equal (car a) (car b))))))
 
 (defun supertag-query-database-records (database-id &optional view-config)
@@ -319,10 +319,10 @@ DATABASE-ID is the database tag identifier.
 VIEW-CONFIG is optional view configuration for filtering/sorting.
 Returns list of (node-id . node-data) pairs."
   (require 'supertag-ops-tag)
-  
+
   (let* ((all-nodes (supertag-query '(:nodes)))
          (database-records '()))
-    
+
     ;; Find all nodes that belong to this database
     (dolist (node-pair all-nodes)
       (let* ((node-id (car node-pair))
@@ -330,7 +330,7 @@ Returns list of (node-id . node-data) pairs."
              (tags (plist-get node-data :tags)))
         (when (member database-id tags)
           (push node-pair database-records))))
-    
+
     ;; Apply view configuration if provided
     (if view-config
         (supertag-query--apply-view-config database-records view-config)
@@ -344,21 +344,21 @@ VIEW-CONFIG contains filter, sort, and grouping options."
          (group-config (plist-get view-config :group-by))
          (limit (plist-get view-config :limit))
          (filtered-records records))
-    
+
     ;; Apply filters
     (when filter-config
-      (setq filtered-records 
+      (setq filtered-records
             (supertag-query--apply-filters filtered-records filter-config)))
-    
+
     ;; Apply sorting
     (when sort-config
-      (setq filtered-records 
+      (setq filtered-records
             (supertag-query--apply-sorting filtered-records sort-config)))
-    
+
     ;; Apply limit
     (when limit
       (setq filtered-records (cl-subseq filtered-records 0 (min limit (length filtered-records)))))
-    
+
     ;; Apply grouping (returns grouped structure)
     (if group-config
         (supertag-query--apply-grouping filtered-records group-config)
@@ -379,15 +379,15 @@ VIEW-CONFIG contains filter, sort, and grouping options."
      (cl-every (lambda (sub-condition)
                  (supertag-query--evaluate-filter-condition node-data sub-condition))
                (cdr condition)))
-    
+
     ('or
      (cl-some (lambda (sub-condition)
                 (supertag-query--evaluate-filter-condition node-data sub-condition))
               (cdr condition)))
-    
+
     ('not
      (not (supertag-query--evaluate-filter-condition node-data (cadr condition))))
-    
+
     ('org-property
      (let* ((prop-name (cadr condition))
             (operator (caddr condition))
@@ -395,13 +395,13 @@ VIEW-CONFIG contains filter, sort, and grouping options."
             (props (plist-get node-data :properties))
             (actual-value (plist-get props (intern prop-name))))
        (supertag-query--compare-values actual-value operator expected-value)))
-    
+
     ('title
      (let* ((operator (cadr condition))
             (expected-value (caddr condition))
             (actual-value (plist-get node-data :title)))
        (supertag-query--compare-values actual-value operator expected-value)))
-    
+
     ('tag
      (let* ((operator (cadr condition))
             (expected-tag (caddr condition))
@@ -410,7 +410,7 @@ VIEW-CONFIG contains filter, sort, and grouping options."
          ('has (member expected-tag tags))
          ('not-has (not (member expected-tag tags)))
          (_ nil))))
-    
+
     (_ nil)))
 
 (defun supertag-query--compare-values (actual operator expected)
@@ -433,7 +433,7 @@ VIEW-CONFIG contains filter, sort, and grouping options."
   "Apply sorting to RECORDS based on SORT-CONFIG."
   (let ((sort-field (plist-get sort-config :field))
         (sort-order (or (plist-get sort-config :order) :asc)))
-    
+
     (sort records
           (lambda (a b)
             (let* ((node-a (cdr a))
@@ -478,7 +478,7 @@ VIEW-CONFIG contains filter, sort, and grouping options."
 Returns alist of (group-value . records-list)."
   (let ((group-field (plist-get group-config :field))
         (groups (make-hash-table :test 'equal)))
-    
+
     ;; Group records by field value
     (dolist (record records)
       (let* ((node-data (cdr record))
@@ -486,7 +486,7 @@ Returns alist of (group-value . records-list)."
              (group-key (or group-value "__ungrouped__")))
         (let ((existing-group (gethash group-key groups)))
           (puthash group-key (cons record existing-group) groups))))
-    
+
     ;; Convert to alist and sort groups
     (let ((result '()))
       (maphash (lambda (key value)
@@ -505,20 +505,20 @@ Returns enriched results with related data."
             (let* ((entity-id (car record))
                    (entity-data (cdr record))
                    (enriched-data (cl-copy-list entity-data)))
-              
+
               ;; Add related data for each relation config
               (dolist (relation-config relation-configs)
                 (let* ((relation-name (plist-get relation-config :name))
                        (relation-type (plist-get relation-config :type))
                        (direction (plist-get relation-config :direction))
                        (related-entities (supertag-query-related entity-id relation-type direction)))
-                  
+
                   ;; Add related entities to the record
-                  (setq enriched-data 
-                        (plist-put enriched-data 
+                  (setq enriched-data
+                        (plist-put enriched-data
                                   (intern (format ":related-%s" relation-name))
                                   related-entities))))
-              
+
               (cons entity-id enriched-data)))
           base-query))
 
@@ -529,19 +529,19 @@ Returns aggregated results."
          (aggregate-function (plist-get aggregate-config :function))
          (group-by (plist-get aggregate-config :group-by))
          (values '()))
-    
+
     ;; Collect values
     (dolist (record records)
       (let* ((node-data (cdr record))
              (value (supertag-query--get-sort-value node-data aggregate-field)))
         (when value
           (push value values))))
-    
+
     ;; Apply aggregation function
     (pcase aggregate-function
       ('count (length values))
       ('sum (when (cl-every #'numberp values) (cl-reduce #'+ values :initial-value 0)))
-      ('avg (when (and values (cl-every #'numberp values)) 
+      ('avg (when (and values (cl-every #'numberp values))
               (/ (cl-reduce #'+ values :initial-value 0.0) (length values))))
       ('min (when values (apply #'min values)))
       ('max (when values (apply #'max values)))
@@ -589,26 +589,26 @@ Returns a query builder object that can be chained."
          (sorts (plist-get builder :sorts))
          (limit (plist-get builder :limit))
          (results (supertag-query (list collection))))
-    
+
     ;; Apply filters
     (when filters
-      (setq results 
+      (setq results
             (cl-remove-if-not
              (lambda (record)
                (cl-every (lambda (filter)
                           (supertag-query--evaluate-filter-condition (cdr record) filter))
                         filters))
              results)))
-    
+
     ;; Apply sorting
     (when sorts
       (dolist (sort-config (reverse sorts))
         (setq results (supertag-query--apply-sorting results sort-config))))
-    
+
     ;; Apply limit
     (when limit
       (setq results (cl-subseq results 0 (min limit (length results)))))
-    
+
     results))
 
 (defun supertag-query-get-all-data ()

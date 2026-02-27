@@ -153,7 +153,7 @@ If nil, titles will be displayed as-is with TODO keywords."
   :group 'org-supertag)
 
 (defcustom supertag-view-node-todo-keywords
-  '("TODO" "DONE" "NEXT" "WAITING" "HOLD" "CANCELLED" "CANCELED" 
+  '("TODO" "DONE" "NEXT" "WAITING" "HOLD" "CANCELLED" "CANCELED"
     "STARTED" "DELEGATED" "DEFERRED" "SOMEDAY")
   "List of TODO keywords to strip from node titles.
 Only used when `supertag-view-node-strip-todo-keywords' is non-nil.
@@ -192,10 +192,10 @@ You can customize this list to match your org-mode TODO keywords."
     (define-key map (kbd "C-v") 'scroll-up-command)
     (define-key map (kbd "M-<") 'beginning-of-buffer)
     (define-key map (kbd "M->") 'end-of-buffer)
-    
+
     ;; Field value editing
     (define-key map (kbd "RET") 'supertag-view-node-edit-at-point)
-    
+
     ;; Utility
     (define-key map (kbd "g") 'supertag-view-node-refresh)
     (define-key map (kbd "q") #'supertag-view-node--posframe-hide)
@@ -249,7 +249,7 @@ Key Bindings:
           (:eval (let ((node-id (or supertag-view-node--current-node-id "None")))
                   (if (string= node-id "None")
                       (propertize node-id 'face '(:foreground "gray"))
-                    (propertize (truncate-string-to-width node-id 20 nil nil "...") 
+                    (propertize (truncate-string-to-width node-id 20 nil nil "...")
                                'face '(:weight bold)))))
           " | 🏷️ "
           (:eval (let ((count (or (supertag-view-node--count-fields supertag-view-node--current-node-id) 0)))
@@ -297,7 +297,7 @@ NEW-VALUE is the value after change (nil for deletions)."
       ;; 1. The changed entity is the current node
       ;; 2. The changed entity is a relation involving the current node (create/update/delete)
       ;; 3. The changed entity is a field of the current node
-      (when (or (and (eq entity-type :nodes) 
+      (when (or (and (eq entity-type :nodes)
                      (equal entity-id supertag-view-node--current-node-id))
                 (and (eq entity-type :relations)
                      relation-data
@@ -375,7 +375,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
   (if (not supertag-view-node-strip-todo-keywords)
       title
     (let ((keywords-regexp (concat "^\\("
-                                   (mapconcat #'regexp-quote 
+                                   (mapconcat #'regexp-quote
                                              supertag-view-node-todo-keywords
                                              "\\|")
                                    "\\)\\s-+")))
@@ -393,7 +393,7 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
          (ref-count (+ (length (supertag-view-node--get-references node-id))
                        (length (supertag-view-node--get-referenced-by node-id))))
          (stats (format "⚡ %d fields | 🔗 %d refs" field-count ref-count)))
-    (supertag-view-helper-insert-simple-header 
+    (supertag-view-helper-insert-simple-header
      (format "📄 %s" (supertag-view-helper-render-org-links title))
      stats)
     (when file
@@ -407,14 +407,14 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
   (let* ((tag-ids (sort (supertag-view--resolve-node-tags node-id) #'string<))
          (deleted-tags '())
          (valid-tags '()))
-    
+
     ;; Separate valid and deleted tags
     (dolist (tag-id tag-ids)
       (let ((tag-data (supertag-tag-get tag-id)))
         (if tag-data
             (push tag-id valid-tags)
           (push tag-id deleted-tags))))
-    
+
     ;; IMPORTANT: Do not mutate datastore from view rendering.
     ;; Previously, this section attempted to "clean up" relations to tags
     ;; considered deleted (missing in the current store). However, during
@@ -423,13 +423,13 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
     ;; unintended deletions. We keep a passive notice instead.
     ;; If cleanup is needed, it should be performed by an explicit ops/migration
     ;; command, not by a view.
-    
+
     ;; Display content with simple styling
     (if (and (not valid-tags) (not deleted-tags))
         (progn
           (supertag-view-helper-insert-section-title "Metadata" "🏷️")
           (supertag-view-helper-insert-simple-empty-state "No metadata found."))
-      
+
       ;; Display valid tags with simple blocks
       (supertag-view-helper-insert-section-title "Metadata" "🏷️")
       (let ((seen (make-hash-table :test 'equal)))
@@ -445,10 +445,10 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
             ;; Defensively ensure `fields` is a list to prevent rendering errors.
             (when filtered
               (supertag-view-helper-insert-tag-block tag-id filtered node-id)))))
-      
+
       ;; Show a passive warning for tags currently not found (no deletion here)
       (when deleted-tags
-        (insert (propertize (format "⚠️ %d tag%s not found (skipped cleanup)\n\n" 
+        (insert (propertize (format "⚠️ %d tag%s not found (skipped cleanup)\n\n"
                                     (length deleted-tags)
                                     (if (= (length deleted-tags) 1) "" "s"))
                             'face `(:foreground ,(supertag-view-helper-get-warning-color))))))))

@@ -170,7 +170,7 @@ Returns the deleted tag data."
        :perform (lambda ()
                   (supertag-store-remove-entity :tags id)
                   (supertag-ops-schema-rebuild-cache)
-                  nil))))) 
+                  nil)))))
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)
   "Delete a tag and all its uses from the database and all org files.
@@ -335,7 +335,7 @@ Returns a list of tag IDs that may have lost their field definitions."
          (when (null extends)
            (push tag-id missing-extends))))
      tags-table)
-    
+
     (let ((report (format "=== Tag Field Status Report ===\nTotal tags: %d\nTags with nil :fields: %d\nTags with nil :extends: %d\n\nTags missing :fields:\n%s\n"
                          total-tags
                          (length missing-fields)
@@ -416,7 +416,7 @@ and the tag text in all relevant Org files."
       ;; 5. Update the text in all relevant Org files
       (require 'supertag-view-helper)
       (let ((total-renamed (supertag-view-helper-rename-tag-text-in-files old-id sanitized-new-id files)))
-        (message "Tag renamed from '%s' to '%s' (%s total instances)." 
+        (message "Tag renamed from '%s' to '%s' (%s total instances)."
                  old-id sanitized-new-id total-renamed))
 
       ;; 6. Rebuild schema cache to reflect all changes
@@ -462,7 +462,7 @@ Returns the field definition, or nil if not found."
                  :test #'equal))
     (let ((all-fields (supertag-tag-get-all-fields tag-id)))
       (when all-fields
-        (cl-find field-name all-fields :key (lambda (f) (plist-get f :name)) :test #'equal))))) 
+        (cl-find field-name all-fields :key (lambda (f) (plist-get f :name)) :test #'equal)))))
 
 (defun supertag-tag-move-field-up (tag-id field-name)
   "Move a field definition up in the tag's field list.
@@ -562,7 +562,7 @@ In global field mode, this uses the resolved schema to include inherited fields.
             (message "Warning: Tag '%s' not found, returning empty field list." tag-id)
             (cl-return-from supertag-tag-get-all-fields '()))
           (let ((plist-tag (supertag--ensure-plist tag)))
-            (or (plist-get plist-tag :fields) '())))))))) 
+            (or (plist-get plist-tag :fields) '()))))))))
 
 (defun supertag-sanitize-tag-name (name)
   "Sanitize a string into a valid tag name.
