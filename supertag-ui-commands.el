@@ -1071,7 +1071,7 @@ setup or when rebuilding the entire database."
              (message "WARNING: No nodes were created. Please check:")
              (message "  - org-supertag-sync-directories: %s" org-supertag-sync-directories)
              (message "  - supertag-sync-file-pattern: %s" supertag-sync-file-pattern)
-             (message "  - File contents have proper org headings with IDs"))))))))
+             (message "  - File contents have proper org headings with IDs")))))))))
 
 ;;;###autoload
 (defun supertag-sync-force-resync-file (&optional file)
