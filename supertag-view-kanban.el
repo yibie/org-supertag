@@ -243,14 +243,14 @@ Returns plist with :node-id, :current-value, and other card info."
         (list :node-id node-id
               :current-value current-value
               :base-tag (plist-get supertag-view-kanban--config :base-tag)
-              :group-field (plist-get supertag-view-kanban--config :group-field)))))) 
+              :group-field (plist-get supertag-view-kanban--config :group-field))))))
 
 (defun supertag-view-kanban-move-card (direction)
   "Move the current card in DIRECTION (:left or :right)."
   (interactive)
   (let* ((info (supertag-view-kanban--get-card-info))
          (config supertag-view-kanban--config))
-    
+
     (when info
       (let* ((node-id (plist-get info :node-id))
              (current-value (plist-get info :current-value))
@@ -265,7 +265,7 @@ Returns plist with :node-id, :current-value, and other card info."
               (supertag-view-kanban-refresh node-id)
               (message "Moved card to '%s'" new-value))
           (message "Cannot move further in that direction."))))))
-          
+
 (defun supertag-view-kanban-move-card-left ()
   "Move current card to the left column."
   (interactive)

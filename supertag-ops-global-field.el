@@ -180,55 +180,55 @@ Prompts for field properties with current values as defaults."
                     (supertag-store-get-collection :field-definitions))
            (cdr (assoc (completing-read "Select field to edit: " fields nil t)
                       fields)))))
-  
+
   (let* ((current-def (supertag-global-field-get field-id))
          (current-name (plist-get current-def :name))
          (current-type (plist-get current-def :type))
          (current-options (plist-get current-def :options))
          (current-default (plist-get current-def :default)))
-    
+
     (unless current-def
       (error "Field '%s' not found" field-id))
-    
+
     ;; Edit name (with current as default)
     (let ((name (read-string "Field name: " current-name)))
       (if (or (null name) (string-empty-p name))
           (message "Field edit cancelled.")
-        
+
         ;; Edit type (with current as default)
-        (let* ((type-keywords (mapcar (lambda (sym) (substring (symbol-name sym) 1)) 
+        (let* ((type-keywords (mapcar (lambda (sym) (substring (symbol-name sym) 1))
                                       supertag-field-types))
                (current-type-str (substring (symbol-name current-type) 1))
-               (type-str (completing-read "Field type: " 
-                                          type-keywords 
+               (type-str (completing-read "Field type: "
+                                          type-keywords
                                           nil t nil nil current-type-str))
                (type (supertag-global-field--sanitize-type-input type-str))
                (options nil)
                (default nil))
-          
+
           (when type
             ;; Edit options if :options type
             (when (eq type :options)
-              (let* ((current-options-str (if current-options 
+              (let* ((current-options-str (if current-options
                                              (string-join current-options ", ")
                                            ""))
                      (options-input (read-string "Options (comma separated): "
                                                 current-options-str)))
                 (setq options (split-string options-input "," t "[ \t\n\r]+"))))
-            
+
             ;; Edit default value
             (let ((default-input (read-string "Default value (optional): "
                                               (or current-default ""))))
               (unless (string-empty-p default-input)
                 (setq default default-input)))
-            
+
             ;; Update the field
             (let ((field-def (list :name name :type type)))
               (when default
                 (setq field-def (plist-put field-def :default default)))
               (when (eq type :options)
                 (setq field-def (plist-put field-def :options options)))
-              
+
               (supertag-global-field-update field-id (lambda (_) field-def))
               (message "Field '%s' updated successfully!" field-id))))))))
 

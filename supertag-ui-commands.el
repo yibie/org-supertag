@@ -1,6 +1,6 @@
 ;;; org-supertag/ui/commands.el --- User command interface for Org-Supertag -*- lexical-binding: t; -*-
 
-;;nn; Commentary:
+;;; Commentary:
 ;; This file provides the user-facing interactive commands for Org-Supertag.
 ;; These commands act as the entry points for user interaction, calling the
 ;; underlying operations and services.
@@ -42,7 +42,7 @@
 (defun supertag-set-tag-parent (parent-tag child-tags)
   "Set one or more CHILD-TAGS to extend a PARENT-TAG.
 This command modifies the `:extends` property of the child tags.
-When invoked interactively, allows selecting multiple child tags." 
+When invoked interactively, allows selecting multiple child tags."
   (interactive
    (let* ((tags (mapcar #'car (supertag-query :tags))))
      (when (null tags)
@@ -94,7 +94,7 @@ Only includes headings whose starting position is within [BEG, END)."
       ;; Move to the beginning of the first heading in or after BEG
       (unless (org-at-heading-p)
         (org-next-visible-heading 1))
-      
+
       ;; Collect all headings that start within the region
       (while (and (not (eobp))
                   (org-at-heading-p)
@@ -152,7 +152,7 @@ Returns the node ID, creating one if it doesn't exist."
   (let* ((available-tags (supertag-view-kanban--get-all-tags))
          (tag-name (completing-read "Select a tag to build Kanban from: " available-tags nil t))
          (tag-id (when tag-name (supertag-tag-get-id-by-name tag-name))))
-    
+    ;;
     (if (not tag-id)
         (message "No valid tag selected.")
       (let* ((tag-data (supertag-tag-get tag-id))
@@ -168,26 +168,22 @@ Returns the node ID, creating one if it doesn't exist."
                     (when (and dedupe (not (gethash dedupe seen)))
                       (puthash dedupe t seen)
                       (push (plist-get f :name) names)))))))
-        
         (if (not field-names)
             (message "Tag '%s' has no fields to group by." tag-name-from-data)
           (let* ((field-name (completing-read "Group columns by which field: " field-names nil t))
                  (config (supertag-view-kanban-create-config tag-id field-name)))
-            
             (when field-name
               (let* ((buf-name (format "*Supertag Kanban: %s by %s*" tag-name-from-data field-name))
                      (buf (get-buffer-create buf-name)))
-                
                 (with-current-buffer buf
                   (supertag-view-kanban-mode)
                   (supertag-view-kanban-render config)
                   (supertag-view-kanban--subscribe-updates))
-                
                 (switch-to-buffer buf)
                 (message "Kanban board created for tag '%s' grouped by '%s'" tag-name-from-data field-name)))))))))
 
 
-;;; --- Node Commands: Create, move, find, delete 
+;;; --- Node Commands: Create, move, find, delete
 (defun supertag-create-node ()
   "Interactive command to create a new node.
 If at an Org heading, it will create a node from that heading.
@@ -225,7 +221,7 @@ Otherwise, it will prompt for a title and create a new heading."
   (let ((node-id (supertag-ui-select-node "Find node: " t))) ; Use cache for better performance
     (when node-id
       (supertag-goto-node node-id))))
- 
+
 (defun supertag-find-node-other-window ()
   "Find a node by its title/path, with live preview in another window.
 Jumps to the selected node in another window."
@@ -293,7 +289,7 @@ current file and inserted into the target file at a chosen position."
   (interactive
    (when (use-region-p)
      (list (region-beginning) (region-end))))
-  
+
   (let ((node-ids (if (and beg end)
                       ;; Batch mode: get all nodes in region
                       (supertag-ui--get-nodes-in-region beg end)
@@ -304,10 +300,10 @@ current file and inserted into the target file at a chosen position."
                       (unless node-id
                         (user-error "Current heading does not have an ID, it is not a node."))
                       (list node-id)))))
-    
+
     (unless node-ids
       (user-error "No nodes found to move."))
-    
+
     ;; 1. Prompt for target file and position
     (let* ((target-file (read-file-name "Move node(s) to file: "))
            (insert-info (supertag-ui-select-insert-position target-file))
@@ -325,7 +321,7 @@ current file and inserted into the target file at a chosen position."
         (supertag-with-transaction
           (let ((current-target-pos target-pos)
                 (nodes-to-move '()))
-            
+
             ;; 2. First pass: collect all node data before any modifications
             ;;    Read directly from current buffer to avoid database dependency
             (dolist (node-id node-ids)
@@ -352,9 +348,9 @@ current file and inserted into the target file at a chosen position."
                                         :level original-level
                                         :content content)
                                   nodes-to-move)))))))))
-            
+
             (setq nodes-to-move (nreverse nodes-to-move))
-            
+
             ;; 3. Second pass: group nodes by file and delete from each file
             ;;    (in reverse position order to preserve positions)
             (let ((nodes-by-file (make-hash-table :test 'equal)))
@@ -362,7 +358,7 @@ current file and inserted into the target file at a chosen position."
               (dolist (node-info nodes-to-move)
                 (let ((file (plist-get node-info :file)))
                   (push node-info (gethash file nodes-by-file))))
-              
+
               ;; Delete from each file (nodes in reverse position order)
               (maphash
                (lambda (file nodes-in-file)
@@ -379,7 +375,7 @@ current file and inserted into the target file at a chosen position."
                            (delete-region begin end))))
                      (save-buffer))))
                nodes-by-file))
-            
+
             ;; 4. Third pass: insert into target file and update database
             (dolist (node-info nodes-to-move)
               (let* ((node-id (plist-get node-info :id))
@@ -387,7 +383,7 @@ current file and inserted into the target file at a chosen position."
                      (original-level (plist-get node-info :level))
                      (adjusted-content (supertag-ui--adjust-content-level content original-level target-level))
                      (node-start-pos nil))
-                
+
                 (with-current-buffer (find-file-noselect target-file)
                   (save-restriction
                     (widen)
@@ -399,10 +395,10 @@ current file and inserted into the target file at a chosen position."
                     ;; Update position for next node (after current insertion)
                     (setq current-target-pos (point)))
                   (save-buffer))
-                
+
                 ;; Update the database with the new location (use node start position)
                 (supertag-node-set-location node-id target-file node-start-pos)))
-            
+
             (message "%d node(s) successfully moved to %s."
                      (length nodes-to-move)
                      (file-name-nondirectory target-file)))))))))
@@ -512,7 +508,7 @@ content region, this function does nothing."
                 (insert (format "[[id:%s][%s]]\n"
                                 link-node-id
                                 (or link-title link-node-id))))
-              (save-buffer)))))))) 
+              (save-buffer))))))))
 
 (defun supertag-add-reference ()
   "Add a reference from the current node to another selected node."
@@ -522,7 +518,7 @@ content region, this function does nothing."
          (insertion-point (point)))
     (unless from-id
       (user-error "Point must be inside an Org heading or its content."))
-    
+
     (supertag-ui--ensure-node-synced from-id)
 
     (setq to-id (supertag-ui-select-node "Add reference to: " t))
@@ -605,8 +601,8 @@ Interactively asks for a target location to save the new node."
           (insert (format "[[id:%s][%s]]" new-node-id title))
           (message "Node '%s' created and linked." title))))))
 
-(defun supertag-remove-reference () 
-  "Interactively remove a reference from the current node." 
+(defun supertag-remove-reference ()
+  "Interactively remove a reference from the current node."
   (interactive)
   (let ((from-id (supertag-ui--get-containing-node-at-point)))
     (unless from-id
@@ -671,7 +667,7 @@ new tag name, bypassing fuzzy completion matching."
   (interactive
    (when (use-region-p)
      (list (region-beginning) (region-end))))
-  
+
   (let* ((batch-mode (and beg end))
          (current-point (point))  ; Save current cursor position for single mode
          (node-ids (if batch-mode
@@ -688,10 +684,10 @@ new tag name, bypassing fuzzy completion matching."
                                             (length node-ids))
                                     all-tags nil nil))
          (literal-tag (and (> (length raw-name) 0) (eq (aref raw-name 0) ?=))))
-    
+
     (unless node-ids
       (user-error "No nodes found to add tag to."))
-    
+
     (when (and raw-name (not (string-empty-p raw-name)))
       (let* ((tag-name (if literal-tag
                           (substring raw-name 1) ; Remove the '=' prefix
@@ -712,7 +708,7 @@ new tag name, bypassing fuzzy completion matching."
                         (with-current-buffer (marker-buffer marker)
                           (goto-char (marker-position marker))
                           (supertag-node-sync-at-point)))))
-                  
+
                   (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
                     ;; Insert #tag text
                     (let* ((marker (org-id-find node-id 'marker)))
@@ -755,7 +751,7 @@ new tag name, bypassing fuzzy completion matching."
                         (with-current-buffer (marker-buffer marker)
                           (goto-char (marker-position marker))
                           (supertag-node-sync-at-point)))))
-                  
+
                   (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed nil)
                     ;; Insert #tag text
                     (let* ((marker (org-id-find node-id 'marker)))
@@ -797,7 +793,7 @@ new tag name, bypassing fuzzy completion matching."
                           (with-current-buffer (marker-buffer marker)
                             (goto-char (marker-position marker))
                             (supertag-node-sync-at-point)))))
-                    
+
                     (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
                       ;; Insert #tag text
                       (let* ((marker (org-id-find node-id 'marker)))
@@ -890,7 +886,7 @@ This command reads the authoritative list of tags from the database."
          (current-tag (supertag-ui-select-tag-on-node node-id)))
     (unless current-tag
       (user-error "No tag selected."))
-    
+
     (let* ((all-tags (mapcar #'car (supertag-query :tags)))
            (new-tag-raw (completing-read (format "Change tag '%s' to: " current-tag) all-tags nil nil))
            (new-tag (supertag-sanitize-tag-name new-tag-raw)))
@@ -899,7 +895,7 @@ This command reads the authoritative list of tags from the database."
         (unless (supertag-tag-get new-tag)
           (when (yes-or-no-p (format "Tag '%s' does not exist. Create it? " new-tag))
             (supertag-tag-create `(:name ,new-tag :id ,new-tag))))
-        
+
         (when (supertag-tag-get new-tag)
           ;; 2. Update database relationships and node data
           (supertag-with-transaction
@@ -922,10 +918,10 @@ This command reads the authoritative list of tags from the database."
             (supertag-relation-create `(:type :node-tag :from ,node-id :to ,new-tag))
             ;; Add new tag to node's list
             (supertag-node-add-tag node-id new-tag))
-          
+
           ;; 3. Replace all instances of the old tag text with the new one in the buffer
           (supertag-view-helper-rename-tag-text-in-node current-tag new-tag)
-          
+
           (message "Tag changed from '%s' to '%s'." current-tag new-tag))))))
 
 ;;; --- Tag Inheritance Model ---
@@ -951,7 +947,7 @@ Creates a new node with optional tags and field values.
 TARGET-FILE is optional file path to capture to.
 HEADLINE is optional headline text."
   (interactive)
-  
+
   ;; Phase 1: Get capture details
   (let* ((capture-info (supertag-capture-interactive-headline))
          (full-title (plist-get capture-info :headline))
@@ -962,10 +958,10 @@ HEADLINE is optional headline text."
          (insert-info (supertag-ui-select-insert-position target-file))
          (insert-pos (plist-get insert-info :position))
          (insert-level (plist-get insert-info :level)))
-    
+
     (unless insert-info
       (user-error "No valid insert position selected"))
-    
+
     ;; Phase 2: Create the node in the file
     (let ((new-node-id (org-id-new)))
       (supertag-capture--insert-node-into-buffer
@@ -981,7 +977,7 @@ HEADLINE is optional headline text."
                                       :tags selected-tags
                                       :file target-file))
           (message "Node %s created in %s" node-id (file-name-nondirectory target-file))
-          
+
           ;; Phase 4: Auto field enrichment for tags with fields
           (when selected-tags
             (let ((fields (supertag-capture--get-fields-for-tags selected-tags)))
@@ -995,11 +991,11 @@ HEADLINE is optional headline text."
                                                         :value (cdr fv))))))
                   (when batch-entries
                     (supertag-field-set-many node-id batch-entries)))))))
-          
+
           ;; Phase 5: Optional manual field enrichment
           (when (y-or-n-p "Add additional properties to this node? ")
             (supertag-capture-enrich-node node-id))
-          
+
           node-id)))
 
 
@@ -1015,12 +1011,12 @@ setup or when rebuilding the entire database."
  (interactive)
  (when (yes-or-no-p "This will clear all sync state and reimport all files. Continue? ")
    (message "Starting full initialization sync...")
-   
+
    ;; Step 1: Clear sync state
    (message "Step 1: Clearing sync state...")
    (setq supertag-sync--state (make-hash-table :test 'equal))
    (supertag-sync-save-state)
-   
+
    ;; Step 2: Get all files in sync directories
    (message "Step 2: Scanning all files in sync directories...")
    (let ((all-files (supertag-scan-sync-directories t)) ; Force scan all files
@@ -1028,10 +1024,10 @@ setup or when rebuilding the entire database."
                      :references-created 0 :references-deleted 0))
          (total-files 0)
          (processed-files 0))
-     
+
      (setq total-files (length all-files))
      (message "Found %d files to process" total-files)
-     
+
      (if (= total-files 0)
          (message "No files found in sync directories: %s" org-supertag-sync-directories)
        (progn
@@ -1042,7 +1038,7 @@ setup or when rebuilding the entire database."
              (setq processed-files (1+ processed-files))
              (message "Processing file %d/%d: %s" processed-files total-files
                       (file-name-nondirectory file))
-             
+
              (condition-case err
                  (progn
                    ;; Force process the file (ignore existing state)
@@ -1051,22 +1047,22 @@ setup or when rebuilding the entire database."
                    (supertag-sync-update-state file))
                (error
                 (message "ERROR processing file %s: %s" file err)))))
-         
+
          ;; Step 4: Save state and report results
          (supertag-sync-save-state)
-         
+
          (let ((nodes-created (plist-get counters :nodes-created))
                (nodes-updated (plist-get counters :nodes-updated))
                (refs-created (or (plist-get counters :references-created) 0)))
            (message "Full initialization completed!")
            (message "Results: %d files processed, %d nodes created, %d nodes updated, %d references created"
                     processed-files nodes-created nodes-updated refs-created)
-           
+
            ;; Show summary
            (when (> nodes-created 0)
              (message "Database successfully initialized with %d nodes from %d files."
                       nodes-created processed-files))
-           
+
            (when (= nodes-created 0)
              (message "WARNING: No nodes were created. Please check:")
              (message "  - org-supertag-sync-directories: %s" org-supertag-sync-directories)
@@ -1082,27 +1078,27 @@ If FILE is not provided, prompt user to select a file."
                         (read-file-name "Force resync file: " nil nil t))))
    (unless (file-exists-p target-file)
      (user-error "File does not exist: %s" target-file))
-   
+
    (unless (supertag-sync--in-sync-scope-p target-file)
      (user-error "File is not in sync scope: %s" target-file))
-   
+
    (when (yes-or-no-p (format "Force resync file %s? " (file-name-nondirectory target-file)))
      (message "Force resyncing file: %s" target-file)
-     
+
      ;; Remove from sync state to force processing
      (let ((state-table (supertag-sync--get-state-table)))
        (remhash target-file state-table))
-     
+
      ;; Process the file
      (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
                        :references-created 0 :references-deleted 0)))
        (supertag-with-transaction
          (supertag-sync--process-single-file target-file counters))
-       
+
        ;; Update state and report
        (supertag-sync-update-state target-file)
        (supertag-sync-save-state)
-       
+
        (message "Force resync completed: %d created, %d updated, %d deleted"
                 (plist-get counters :nodes-created)
                 (plist-get counters :nodes-updated)
@@ -1161,7 +1157,7 @@ If INTERVAL is provided, use it as the sync interval in seconds."
         (modified-files (supertag-get-modified-files))
         (num-modified (length modified-files))
         (timer-active (and supertag-sync--timer (not (null supertag-sync--timer)))))
-   
+
    (message "=== Supertag Sync Status ===")
    (message "Sync directories: %s" org-supertag-sync-directories)
    (message "Exclude directories: %s" supertag-sync-exclude-directories)
@@ -1169,7 +1165,7 @@ If INTERVAL is provided, use it as the sync interval in seconds."
    (message "Auto-sync: %s" (if timer-active "ACTIVE" "INACTIVE"))
    (message "Tracked files: %d" num-tracked-files)
    (message "Modified files: %d" num-modified)
-   
+
    (when (> num-modified 0)
      (message "Modified files:")
      (dolist (file modified-files)
@@ -1181,13 +1177,13 @@ If INTERVAL is provided, use it as the sync interval in seconds."
  (interactive)
  (when (yes-or-no-p "This will validate all nodes and clean up orphaned data. Continue? ")
    (message "Starting database cleanup...")
-   
+
    ;; Step 1: Validate all nodes and mark zombies as orphaned
    (let ((counters '(:nodes-deleted 0)))
      (supertag-sync-validate-nodes counters)
      (message "Node validation complete. %d nodes marked as orphaned."
               (plist-get counters :nodes-deleted))
-     
+
      ;; Step 2: Garbage collect all orphaned nodes
      (let ((deleted-count (supertag-sync-garbage-collect-orphaned-nodes)))
        (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count)))))

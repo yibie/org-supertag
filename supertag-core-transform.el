@@ -121,7 +121,7 @@ MATCHES is the list to collect matching paths."
              (supertag--traverse-store-matches
               v rest-pattern (cons k current-path) matches)))
          store))
-       
+
        ;; Exact match: continue with specific key
        (t
         (let ((value (gethash key store)))

@@ -508,14 +508,14 @@ Returns a comma-separated string of selected tags."
         (if (string-empty-p choice)
             (setq continue nil)
           (push choice selected-tags))))
-    
+
     ;; Allow manual input via comma-separated string as fallback
     (when (and (null selected-tags) (not (string-empty-p (or current-value ""))))
       (let ((manual-input (read-string "Enter tags (comma-separated) or leave empty: "
                                        (if (stringp current-value) current-value ""))))
         (unless (string-empty-p manual-input)
           (setq selected-tags (split-string manual-input "," t "[ \t\n\r]+")))))
-    
+
     ;; Return as comma-separated string for storage
     (if selected-tags
         (string-join (nreverse selected-tags) ",")

@@ -100,28 +100,28 @@ returns updated node properties with required location fields."
         (raw-value (plist-get node-props :raw-value))
         (file-path (plist-get node-props :file-path))
         (pos (plist-get node-props :pos)))
-    
+
     ;; Migrate old field names to new ones
     (when (and file-path (not file))
       (setq node-props (plist-put node-props :file file-path))
       (setq file file-path))
-    
+
     (when (and pos (not position))
       (setq node-props (plist-put node-props :position pos))
       (setq position pos))
-    
+
     ;; If we don't have :raw-value but have :title, copy it
     (unless raw-value
       (let ((title (plist-get node-props :title)))
         (when title
           (setq node-props (plist-put node-props :raw-value title)))))
-    
+
     ;; Warn only if we still don't have location data after migration attempt
     (unless file
       (message "Warning: Node missing :file attribute, navigation may not work"))
     (unless position
       (message "Warning: Node missing :position attribute, navigation may not work"))
-    
+
     node-props))
 
 (defun supertag-migrate--safely-load-data (file)
@@ -309,8 +309,8 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                                                    ;; If not, create a minimal one on-demand, preserving any existing fields.
                                                    (unless (gethash sanitized-tag tags-ht)
                                                      (puthash sanitized-tag
-                                                              `(:id ,sanitized-tag 
-                                                                :name ,tag-name 
+                                                              `(:id ,sanitized-tag
+                                                                :name ,tag-name
                                                                 :type :tag
                                                                 :fields nil
                                                                 :extends nil)
@@ -331,13 +331,13 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                        ;; Preserve existing fields and extends, or set to nil if not present
                        (fields (plist-get cleaned-props :fields))
                        (extends (plist-get cleaned-props :extends))
-                       (final-props (plist-put 
-                                    (plist-put 
+                       (final-props (plist-put
+                                    (plist-put
                                      (plist-put cleaned-props :id new-tag-id)
                                      :fields (or fields nil))
                                     :extends (or extends nil))))
-                  (message "Migrating tag: %s -> %s (fields: %s, extends: %s)" 
-                          id new-tag-id 
+                  (message "Migrating tag: %s -> %s (fields: %s, extends: %s)"
+                          id new-tag-id
                           (if fields "yes" "no")
                           (if extends "yes" "no"))
                   (puthash new-tag-id final-props tags-ht)
@@ -411,22 +411,22 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
   "Build all performance indexes from the STORE."
   (unless (hash-table-p store)
     (error "Invalid store: expected hash table, got %s" (type-of store)))
-  
+
   (let ((indexes (ht-create))
         (nodes-ht (gethash :nodes store)))
-    
+
     ;; Validate nodes-ht
     (unless (hash-table-p nodes-ht)
       (error "Invalid nodes hash table: expected hash table, got %s" (type-of nodes-ht)))
-    
+
     (puthash :tags (ht-create) indexes)
     (puthash :words (ht-create) indexes)
     (puthash :dates (ht-create) indexes)
-    
+
     (let ((tag-idx (gethash :tags indexes))
           (word-idx (gethash :words indexes))
           (date-idx (gethash :dates indexes)))
-        
+
       ;; Only proceed if nodes-ht is valid and not empty
       (when (and (hash-table-p nodes-ht) (> (hash-table-count nodes-ht) 0))
         (maphash
@@ -439,7 +439,7 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                    (let ((nodes-list (gethash tag tag-idx '())))
                      (unless (member node-id nodes-list)
                        (puthash tag (cons node-id nodes-list) tag-idx)))))))
-           
+
            ;; 2. Build word index from title and content
            (dolist (text (list (plist-get node-data :title)
                                (plist-get node-data :content)))
@@ -449,7 +449,7 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
                    (let ((nodes-list (gethash word word-idx '())))
                      (unless (member node-id nodes-list)
                        (puthash word (cons node-id nodes-list) word-idx)))))))
-           
+
            ;; 3. Build date index
            (let ((created (plist-get node-data :created-at))
                  (modified (plist-get node-data :modified-at)))
@@ -507,7 +507,7 @@ When DRY-RUN is non-nil, do not modify the file; only report changes."
           (prin1 (ht-deep-copy-table indexes) (current-buffer))
           (insert "\n"))))
     (message "Data migration successfully completed!")
-    (message "New database file is at: %s" new-db-file))) 
+    (message "New database file is at: %s" new-db-file)))
 
 ;;;###autoload
 (defun supertag-migrate-database-to-new-arch ()
@@ -925,21 +925,21 @@ This function:
      (unless prop-names
        (user-error "No org properties found in the database"))
      (list (completing-read "Property to convert: " prop-names nil t))))
-  
+
   ;; Validate property name
   (unless (and property-name (not (string-empty-p property-name)))
     (user-error "Property name is required"))
-  
+
   ;; Prompt for tag (allow creating new ones)
   (let* ((all-tags (mapcar #'car (supertag-query :tags)))
          (tag-input (completing-read
                      (format "Associate '%s' with tag (or enter new tag name): " property-name)
                      all-tags nil nil))
          (tag-id (supertag-sanitize-tag-name tag-input)))
-    
+
     (unless (and tag-id (not (string-empty-p tag-id)))
       (user-error "Tag name is required"))
-    
+
     ;; Create tag if it doesn't exist
     (unless (supertag-tag-get tag-id)
       (if (yes-or-no-p (format "Tag '%s' doesn't exist. Create it? " tag-id))
@@ -947,7 +947,7 @@ This function:
             (supertag-tag-create `(:id ,tag-id :name ,tag-id))
             (message "Created tag '%s'" tag-id))
         (user-error "Tag '%s' was not created" tag-id)))
-    
+
     ;; Now do the conversion
     (let* ((props-table (supertag-migration--collect-all-properties))
            (occurrences (supertag-migration--nodes-with-property props-table property-name))
@@ -956,30 +956,30 @@ This function:
            (values-set 0)
            (tags-added 0)
            (nodes-skipped 0))
-      
+
       (unless occurrences
         (user-error "Property '%s' not found in any nodes" property-name))
-      
+
       ;; Show confirmation with inferred type
       (unless (yes-or-no-p
                (format "Convert property '%s' (found in %d nodes) to field type '%s' on tag '%s'? "
                        property-name (length occurrences) field-type tag-id))
         (user-error "Conversion cancelled"))
-      
+
       ;; Step 1: Create or update field definition on the tag
       (message "Creating field '%s' (type: %s) on tag '%s'..."
                property-name field-type tag-id)
-      
+
       (let ((field-def `(:name ,property-name
                          :id ,field-id
                          :type ,field-type)))
         ;; Use supertag-tag-add-field which handles both global and legacy models
         (supertag-tag-add-field tag-id field-def))
-      
+
       ;; Step 2: For each node with this property, set the field value
       ;; but ONLY if the node also has the specified tag
       (message "Migrating property values to field values...")
-      
+
       (dolist (occurrence occurrences)
         (let* ((node-id (car occurrence))
                (value (cdr occurrence))
@@ -1003,11 +1003,11 @@ This function:
                       (cl-incf values-set))
                   (cl-incf nodes-skipped)))
             (cl-incf nodes-skipped))))
-      
+
       ;; Report results
       (message "Conversion complete on tag '%s': %d values migrated, %d tags added automatically (in DB and org files), %d nodes skipped (missing node data or failed tag assignment)"
                tag-id values-set tags-added nodes-skipped)
-      
+
       (list :property property-name
             :tag tag-id
             :field-id field-id
@@ -1034,48 +1034,48 @@ For each selected property:
                           prop-names nil t))
          (results '())
          (cancelled nil))
-    
+
     (unless prop-names
       (user-error "No org properties found in the database"))
-    
+
     (unless selected-props
       (user-error "No properties selected"))
-    
+
     (message "Starting batch conversion of %d properties..." (length selected-props))
-    
+
     ;; Process each property one by one
     (catch 'batch-cancelled
       (dolist (prop selected-props)
         (when cancelled
           (throw 'batch-cancelled nil))
-        
+
         (let* ((all-tags (mapcar #'car (supertag-query :tags)))
                (occurrences (supertag-migration--nodes-with-property props-table prop))
                (field-type (supertag-migration--infer-field-type occurrences)))
-          
+
           (unless occurrences
             (message "Skipping '%s': not found in any nodes" prop)
             (push (list :property prop :status 'skipped :reason "No occurrences") results)
             (cl-return))
-          
+
           ;; Show property info and ask for tag
           (message "\n--- Property: %s (found in %d nodes, inferred type: %s) ---"
                    prop (length occurrences) field-type)
-          
+
           (let ((tag-input (completing-read
                             (format "[%s] Associate with tag (or enter new, or C-g to skip): "
                                     prop)
                             all-tags nil nil)))
-            
+
             (if (or (null tag-input) (string-empty-p tag-input))
                 ;; User cancelled or entered empty string - skip this property
                 (progn
                   (message "Skipped property: %s" prop)
                   (push (list :property prop :status 'skipped :reason "User skipped") results))
-              
+
               ;; Process this property
               (let ((tag-id (supertag-sanitize-tag-name tag-input)))
-                
+
                 ;; Create tag if it doesn't exist
                 (unless (supertag-tag-get tag-id)
                   (if (yes-or-no-p (format "Tag '%s' doesn't exist. Create it? " tag-id))
@@ -1086,26 +1086,26 @@ For each selected property:
                              tag-id prop)
                     (push (list :property prop :status 'skipped :reason "Tag not created") results)
                     (cl-return)))
-                
+
                 ;; Convert the property
                 (condition-case err
-                    (let ((result (supertag-migration--convert-single-property 
+                    (let ((result (supertag-migration--convert-single-property
                                    prop tag-id props-table)))
                       (push result results)
                       (message "✓ Converted: %s → tag '%s' (%d values migrated, %d tags added, %d nodes skipped)"
-                               prop tag-id 
+                               prop tag-id
                                (plist-get result :values-set)
                                (or (plist-get result :tags-added) 0)
                                (plist-get result :nodes-skipped)))
                   (error
                    (message "✗ Error converting '%s': %s" prop (error-message-string err))
-                   (push (list :property prop 
-                               :status 'error 
-                               :error (error-message-string err)) 
+                   (push (list :property prop
+                               :status 'error
+                               :error (error-message-string err))
                          results)))))))))
-    
+
     ;; Summary
-    (let* ((completed (cl-count-if (lambda (r) 
+    (let* ((completed (cl-count-if (lambda (r)
                                      (and (plist-get r :values-set)
                                           (>= (plist-get r :values-set) 0)))
                                    results))
@@ -1157,16 +1157,16 @@ PROPS-TABLE is the pre-collected properties table."
          (values-set 0)
          (tags-added 0)
          (nodes-skipped 0))
-    
+
     (unless occurrences
       (error "Property '%s' not found in any nodes" property-name))
-    
+
     ;; Create field definition on the tag
     (let ((field-def `(:name ,property-name
                        :id ,field-id
                        :type ,field-type)))
       (supertag-tag-add-field tag-id field-def))
-    
+
     ;; For each node with this property, set the field value
     (dolist (occurrence occurrences)
       (let* ((node-id (car occurrence))
@@ -1191,7 +1191,7 @@ PROPS-TABLE is the pre-collected properties table."
                     (cl-incf values-set))
                 (cl-incf nodes-skipped)))
           (cl-incf nodes-skipped))))
-    
+
     (list :property property-name
           :tag tag-id
           :field-id field-id

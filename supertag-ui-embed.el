@@ -65,7 +65,7 @@ Returns ONLY the content part, without the headline."
     (unless node-data
       (cl-return-from supertag-ui-embed-generate-node-content
         "** Error: Node not found in DB **"))
-    
+
     (let* ((content (plist-get node-data :content)))
       ;; Return only the content, filtered and cleaned
       (let* ((content-text (if (and content (not (string-empty-p (string-trim content))))
@@ -74,7 +74,7 @@ Returns ONLY the content part, without the headline."
              (normalized-content (replace-regexp-in-string "\n*\\'" "\n" content-text))
              (filtered-content (supertag-ui-embed--filter-embed-markers normalized-content))
              (clean-content (string-trim-right filtered-content)))
-        
+
         ;; Ensure content ends with exactly one newline if not empty
         (if (string-empty-p clean-content)
             ""
@@ -108,21 +108,21 @@ This is an internal function and should not be called directly by users."
   (let ((link-info (supertag-ui-embed-get-link-at-point)))
     (unless link-info
       (user-error "Point is not on an org id: link"))
-    
+
     (let* ((node-id (plist-get link-info :id))
            (begin (plist-get link-info :begin))
            (end (plist-get link-info :end))
            (node-data (supertag-node-get node-id))))
-      
+
       (unless node-data
         (user-error "Node %s not found in database" node-id))
-      
+
       ;; Generate embed block content
       (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
             (title (plist-get node-data :title)))
         (unless embed-content
           (user-error "Failed to generate embed content for node %s" node-id))
-        
+
         ;; Replace the link with embed block
         (delete-region begin end)
         (goto-char begin)
@@ -132,7 +132,7 @@ This is an internal function and should not be called directly by users."
         (unless (string-suffix-p "\n" embed-content)
           (insert "\n"))
         (insert "#+end_embed\n")
-        
+
         (message "Converted link to embed block for node %s" node-id))))
 
 (defun supertag-ui-embed--insert-block ()
@@ -142,36 +142,36 @@ It will prompt you to select a node from the database and then insert the
 embed block at the current position. This is an internal function and should
 not be called directly by users."
   (require 'supertag-services-ui)
-  
+
   ;; Use the existing node selection UI with cache for better performance
   (let ((node-id (supertag-ui-select-node "Insert embed block for node: " t)))
     (unless node-id
       (user-error "No node selected"))
-    
+
     ;; Verify node exists in database
     (let ((node-data (supertag-node-get node-id))))
       (unless node-data
         (user-error "Node %s not found in database" node-id))
-      
+
       ;; Generate embed block content
       (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
             (title (plist-get node-data :title)))
         (unless embed-content
           (user-error "Failed to generate embed content for node %s" node-id))
-        
+
         ;; Insert embed block at current position
         (let ((start-pos (point)))
           ;; Ensure we're at the beginning of a line
           (unless (bolp)
             (insert "\n"))
-          
+
           ;; Include title in the begin_embed line for reference
           (insert (format "#+begin_embed: %s [%s]\n" node-id (or title "Untitled")))
           (insert embed-content)
           (unless (string-suffix-p "\n" embed-content)
             (insert "\n"))
           (insert "#+end_embed\n")
-          
+
           (message "Inserted embed block for node %s" node-id)))))
 
 (provide 'supertag-ui-embed)

@@ -130,7 +130,7 @@ Should be called once during Supertag initialization."
     (maphash (lambda (id task)
                (push (format "- %s: %s" id task) tasks))
              supertag-scheduler--tasks)
-    (message "[Supertag Scheduler] Registered tasks:\n%s" 
+    (message "[Supertag Scheduler] Registered tasks:\n%s"
              (mapconcat #'identity (nreverse tasks) "\n"))))
 
 ;;; === Core Scheduling Logic ===

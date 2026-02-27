@@ -20,7 +20,7 @@ This function searches all open buffers for embed blocks that reference nodes fr
       ;; First, find all nodes that belong to this source file
       (let ((file-nodes (supertag-find-nodes-by-file source-file)))
         (setq nodes-in-file (mapcar #'car file-nodes))) ; Extract node IDs
-      
+
       ;; Then, search all open buffers for embed blocks referencing these nodes
       (dolist (buf (buffer-list))
         (when (buffer-live-p buf)
@@ -33,7 +33,7 @@ This function searches all open buffers for embed blocks that reference nodes fr
                     ;; Check if this embed-id is one of the nodes from source-file
                     (when (member embed-id nodes-in-file)
                       (push embed-id source-ids)))))))))
-      
+
       ;; Return unique list of source-ids
       (cl-delete-duplicates source-ids :test #'equal))))
 
