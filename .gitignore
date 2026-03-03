@@ -72,6 +72,12 @@ ext/board-ui/out/
 # allow ext/board-ui/hooks (overrides the global hooks/ rule above)
 !ext/board-ui/hooks/
 
+# ext/graph-ui build artifacts and dependencies
+ext/graph-ui/node_modules/
+ext/graph-ui/build/
+ext/graph-ui/.next/
+ext/graph-ui/out/
+
 # YoYo AI version control directory
 .yoyo/
 
