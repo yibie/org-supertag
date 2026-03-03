@@ -13,6 +13,16 @@
 - New =supertag-graph-ui.el=: graph visualization bridge.
 - Added =:boards= collection to core store schema.
 
+*** Force-Directed Graph Visualization
+- Added =ext/graph-ui/=: org-roam-ui inspired graph visualization frontend.
+  - Force-directed graph layout with d3-force via react-force-graph.
+  - Sidebar with node preview, backlinks, and tag bar.
+  - Tweaks panel: physics, visual, filter, behavior settings.
+  - Theme support (light/dark) with customizable colors.
+  - Tag-based node coloring and filtering.
+  - WebSocket integration for real-time Emacs communication.
+  - Org content rendering via uniorg parser.
+
 *** Semantic Relation Types
 - Added =supertag-relation-type-register= for user-defined semantic relation types.
 
