@@ -1,4 +1,40 @@
 * Changelog
+* [5.8.0] - 2026-03-03
+** Features
+*** Board (Whiteboard) Subsystem
+- Added =ext/board-ui/=: React Flow based whiteboard UI (Next.js).
+  - BoardCanvas, BoardNode, BoardGroup, FloatingEdge components.
+  - NodePalette for drag-and-drop node creation.
+  - EdgeRelationMenu for edge type selection.
+  - Toolbar with zoom/layout controls.
+  - Zustand store for board state management.
+- New =supertag-board.el=: board data model and rendering in Emacs.
+- New =supertag-board-ops.el=: board CRUD operations.
+- New =supertag-graph-ui.el=: graph visualization bridge.
+- Added =:boards= collection to core store schema.
+
+*** Semantic Relation Types
+- Added =supertag-relation-type-register= for user-defined semantic relation types.
+
+** Performance
+*** In-Memory Relation Indexes (O(N) → O(1))
+- New =supertag-core-index.el=: secondary hash-table indexes over =:relations= collection.
+  - Two indexes: =from-id → {relation-ids}= and =to-id → {relation-ids}=.
+  - Maintained incrementally on create/update/delete; full rebuild on store load.
+- =supertag-relation-find-by-from=, =supertag-relation-find-by-to=, =supertag-relation-find-between= now O(k) instead of O(N) full-table scans.
+- =supertag-relation-delete-for-node=, =supertag-relation-delete-for-tag=, =supertag-relation-get-database-relations= also accelerated.
+- Benchmark (1000 iterations avg):
+  |  Relations | Scan (μs) | Index (μs) | Speedup |
+  |-----------+-----------+------------+---------|
+  |       500 |        90 |        0.5 |   ~180x |
+  |     5,000 |       720 |        0.7 | ~1,100x |
+  |    20,000 |     2,880 |        0.7 | ~4,000x |
+  |    50,000 |     7,300 |        0.8 | ~10,000x |
+- Index rebuild cost: 0.1ms (500 rels) to 62ms (50k rels), once on load.
+
+** Fixes
+- Fixed grammar error in codebase.
+
 * [5.7.0] - 2026-02-10
 ** Features
 *** Virtual Columns & Views
