@@ -10,6 +10,7 @@
 (require 'ht)
 (require 'supertag-core-notify) ; For supertag-subscribe and supertag-emit-event
 (require 'supertag-core-store) ; For supertag--store
+(require 'supertag-core-index) ; For relation index rebuild after load
 
 ;;; --- Persistence Configuration ---
 ;; Note: supertag-data-directory is defined in org-supertag.el
@@ -539,6 +540,7 @@ FILE is the optional file path. Defaults to supertag-db-file."
         (progn
           (supertag--persistence--set-db-file file-to-load)
           (supertag-clear-dirty)
+          (supertag-index-rebuild-relations)
           (supertag--record-store-origin :ok
                                          (list :loaded-from file-to-load
                                                :load-candidates candidates

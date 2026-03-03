@@ -400,6 +400,9 @@ a collection entity (:nodes \"id\")."
 This is primarily intended for testing and system resets."
   (interactive)
   (setq supertag--store (ht-create))
+  ;; Clear relation indexes if loaded
+  (when (fboundp 'supertag-index-rebuild-relations)
+    (supertag-index-rebuild-relations))
   (message "Supertag store has been cleared."))
 
 ;;; --- Unified Commit Pipeline ---
