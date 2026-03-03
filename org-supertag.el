@@ -454,6 +454,26 @@ active vault when `supertag-sync-auto-start` is non-nil."
 ;; --- Compat ---
 (require 'supertag-compat)
 
+;; --- Graph UI (optional) ---
+;; Requires `websocket' and `simple-httpd' packages.
+;; Not loaded by default; use M-x supertag-graph-ui-mode to activate.
+(autoload 'supertag-graph-ui-mode "supertag-graph-ui"
+  "Enable org-supertag graph visualization." t)
+(autoload 'supertag-graph-ui-open "supertag-graph-ui"
+  "Open the graph UI in the default browser." t)
+(autoload 'supertag-graph-ui-follow-mode "supertag-graph-ui"
+  "Sync the graph UI focus to the current node in Emacs." t)
+
+;; --- Board UI (optional) ---
+;; Heptabase-style whiteboard. Requires `websocket' package.
+;; Not loaded by default; use M-x supertag-board-mode to activate.
+(autoload 'supertag-board-mode "supertag-board"
+  "Enable org-supertag whiteboard visualization." t)
+(autoload 'supertag-board-open "supertag-board"
+  "Open the board UI in the default browser." t)
+(autoload 'supertag-board-follow-mode "supertag-board"
+  "Sync the board UI focus to the current node in Emacs." t)
+
 ;; --- Initialization ---
 (defun supertag-init ()
  "Initialize the Org-Supertag system.

@@ -30,6 +30,7 @@ Data is stored in a tree-like structure using nested hash tables.")
     :field-definitions          ; field-id -> field plist
     :tag-field-associations     ; tag-id -> ordered list of association plists
     :field-values               ; node-id -> field-id -> value
+    :boards                     ; board-id -> board plist (whiteboard layouts)
     :meta)
   "Canonical root collections maintained in `supertag--store'.")
 
