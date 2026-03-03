@@ -499,6 +499,48 @@ The line looks like `📄 Title' and is clickable with RET/mouse-1."
       ;; Else, show empty state
       (supertag-view-helper-insert-simple-empty-state "No references found."))))
 
+(defun supertag-view-node--insert-semantic-relations-section (node-id)
+  "Insert semantic relations section for NODE-ID.
+Groups relations by type, showing outgoing and incoming with display names."
+  (let ((semantic-types (supertag-relation-type-list-semantic)))
+    (when semantic-types
+      (let ((has-any nil))
+        ;; First pass: check if there are any semantic relations
+        (dolist (entry semantic-types)
+          (let* ((rel-type (car entry))
+                 (outgoing (supertag-relation-find-by-from node-id rel-type))
+                 (incoming (supertag-relation-find-by-to node-id rel-type)))
+            (when (or outgoing incoming)
+              (setq has-any t))))
+        (when has-any
+          (supertag-view-helper-insert-section-title "Relations" "🔗")
+          (dolist (entry semantic-types)
+            (let* ((rel-type (car entry))
+                   (meta (cdr entry))
+                   (name (plist-get meta :name))
+                   (inverse-name (or (plist-get meta :inverse-name) name))
+                   (outgoing (supertag-relation-find-by-from node-id rel-type))
+                   (incoming (supertag-relation-find-by-to node-id rel-type)))
+              ;; Outgoing relations
+              (when outgoing
+                (insert (format "  %s (%d)\n" name (length outgoing)))
+                (dolist (rel outgoing)
+                  (supertag-view-node--insert-node-link-line (plist-get rel :to))
+                  (let ((note (plist-get (plist-get rel :props) :context-note)))
+                    (when (and note (not (string-empty-p note)))
+                      (insert (format "      ╰ %s\n"
+                                      (propertize note 'face 'font-lock-comment-face)))))))
+              ;; Incoming relations
+              (when incoming
+                (insert (format "  %s (%d)\n" inverse-name (length incoming)))
+                (dolist (rel incoming)
+                  (supertag-view-node--insert-node-link-line (plist-get rel :from))
+                  (let ((note (plist-get (plist-get rel :props) :context-note)))
+                    (when (and note (not (string-empty-p note)))
+                      (insert (format "      ╰ %s\n"
+                                      (propertize note 'face 'font-lock-comment-face)))))))))
+          (insert "\n"))))))
+
 ;; Add advanced editing functions
 (defun supertag-view-node-debug-field-at-point ()
   "Debug function to show field information at point."
@@ -553,6 +595,9 @@ STATE 应由 `supertag-view-build-node-state' 构造，只包含数据，不做�
 
       ;; Simple references section
       (supertag-view-node--insert-simple-references-section node-id)
+
+      ;; Semantic relations section
+      (supertag-view-node--insert-semantic-relations-section node-id)
 
       ;; Complete footer with all available shortcuts
       (supertag-view-helper-insert-simple-footer

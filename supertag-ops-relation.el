@@ -11,6 +11,7 @@
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
+(require 'supertag-core-index)
 (require 'sha1)
 
 (declare-function supertag-node-update "supertag-ops-node" (id updater))
@@ -269,7 +270,10 @@ Returns the created relation data."
          :new relation-plist
          :perform (lambda ()
                     (supertag-store-put-entity :relations rel-id relation-plist)
-                    (when (eq type :reference)
+                    ;; Maintain relation indexes
+                    (supertag-index--on-relation-added rel-id from to)
+                    (when (or (eq type :reference)
+                              (supertag-relation-type-get type))
                       (supertag--relation-update-node-references from to 'add))
                     relation-plist))))))
 
@@ -296,6 +300,15 @@ Returns the updated relation data."
                     (when updated-relation
                       (let ((final-relation (plist-put updated-relation :modified-at (current-time))))
                         (supertag--validate-relation-data final-relation)
+                        ;; Update relation indexes if :from or :to changed
+                        (let ((old-from (plist-get previous :from))
+                              (old-to   (plist-get previous :to))
+                              (new-from (plist-get final-relation :from))
+                              (new-to   (plist-get final-relation :to)))
+                          (when (or (not (equal old-from new-from))
+                                    (not (equal old-to new-to)))
+                            (supertag-index--on-relation-removed id old-from old-to)
+                            (supertag-index--on-relation-added id new-from new-to)))
                         (supertag-store-put-entity :relations id final-relation)
                         final-relation))))))))
 
@@ -312,9 +325,12 @@ Returns the deleted relation data."
        :previous previous
        :perform (lambda ()
                   (supertag-store-remove-entity :relations id)
-                  (when (eq (plist-get previous :type) :reference)
-                    (let ((from-id (plist-get previous :from))
-                          (to-id (plist-get previous :to)))
+                  ;; Maintain relation indexes
+                  (let ((from-id (plist-get previous :from))
+                        (to-id (plist-get previous :to)))
+                    (supertag-index--on-relation-removed id from-id to-id)
+                    (when (or (eq (plist-get previous :type) :reference)
+                              (supertag-relation-type-get (plist-get previous :type)))
                       (supertag--relation-update-node-references from-id to-id 'remove)))
                   nil)))))
 
@@ -421,54 +437,26 @@ Returns t on success, nil on failure."
   "Find all relations originating from a specific entity.
 FROM-ID is the unique identifier of the source entity.
 TYPE is an optional relation type filter.
-Returns a list of relations."
-  (let ((relations (supertag-store-get-collection :relations)))
-    (when relations
-      (let ((result '()))
-        (maphash
-         (lambda (id relation)
-           (when (and relation
-                      (equal (plist-get relation :from) from-id)
-                      (or (null type) (eq (plist-get relation :type) type)))
-             (push relation result)))
-         relations)
-        result))))
+Returns a list of relations.
+Uses the in-memory from-index for O(k) lookup instead of O(N) scan."
+  (supertag-index-find-by-from from-id type))
 
 (defun supertag-relation-find-by-to (to-id &optional type)
   "Find all relations targeting a specific entity.
 TO-ID is the unique identifier of the target entity.
 TYPE is an optional relation type filter.
-Returns a list of relations."
-  (let ((relations (supertag-store-get-collection :relations)))
-    (when relations
-      (let ((result '()))
-        (maphash
-         (lambda (id relation)
-           (when (and relation
-                      (equal (plist-get relation :to) to-id)
-                      (or (null type) (eq (plist-get relation :type) type)))
-             (push relation result)))
-         relations)
-        result))))
+Returns a list of relations.
+Uses the in-memory to-index for O(k) lookup instead of O(N) scan."
+  (supertag-index-find-by-to to-id type))
 
 (defun supertag-relation-find-between (from-id to-id &optional type)
   "Find all relations connecting two specific entities.
 FROM-ID is the unique identifier of the source entity.
 TO-ID is the unique identifier of the target entity.
 TYPE is an optional relation type filter.
-Returns a list of relations."
-  (let ((relations (supertag-store-get-collection :relations)))
-    (when relations
-      (let ((result '()))
-        (maphash
-         (lambda (id relation)
-           (when (and relation
-                      (equal (plist-get relation :from) from-id)
-                      (equal (plist-get relation :to) to-id)
-                      (or (null type) (eq (plist-get relation :type) type)))
-             (push relation result)))
-         relations)
-        result))))
+Returns a list of relations.
+Uses the in-memory from-index for O(k) lookup instead of O(N) scan."
+  (supertag-index-find-between from-id to-id type))
 
 ;; 5.3 Relation Cleanup Operations
 
@@ -520,35 +508,54 @@ Keeps the first relation for each unique (from, to, type) combination."
   "Delete all relations associated with a specific node.
 NODE-ID is the unique identifier of the node.
 Returns the number of deleted relations."
-  (let ((relations (supertag-store-get-collection :relations))
-        (count 0))
-    (when relations
-      (maphash
-       (lambda (id relation)
-         (when (or (equal (plist-get relation :from) node-id)
-                   (equal (plist-get relation :to) node-id))
-           (supertag-relation-delete id) ; Use the enhanced delete function
-           (setq count (1+ count))))
-       relations))
+  (let ((count 0)
+        ;; Collect relation ids first to avoid modifying indexes while iterating.
+        (ids-to-delete '()))
+    (let ((from-set (gethash node-id supertag--index-relations-by-from)))
+      (when from-set
+        (maphash (lambda (rel-id _v) (push rel-id ids-to-delete)) from-set)))
+    (let ((to-set (gethash node-id supertag--index-relations-by-to)))
+      (when to-set
+        (maphash (lambda (rel-id _v)
+                   (unless (member rel-id ids-to-delete)
+                     (push rel-id ids-to-delete)))
+                 to-set)))
+    (dolist (id ids-to-delete)
+      (supertag-relation-delete id)
+      (setq count (1+ count)))
     count))
 
 (defun supertag-relation-delete-for-tag (tag-id)
   "Delete all relations associated with a specific tag.
 TAG-ID is the unique identifier of the tag.
 Returns the number of deleted relations."
-  (let ((relations (supertag-store-get-collection :relations))
-        (count 0))
-    (when relations
-      (maphash
-       (lambda (id relation)
-         (when (or (equal (plist-get relation :from) tag-id)
-                   (equal (plist-get relation :to) tag-id)
-                   ;; For node-field relations, check if tag-id is in props
-                   (and (eq (plist-get relation :type) :node-field)
-                        (equal (plist-get (plist-get relation :props) :tag-id) tag-id)))
-           (supertag-relation-delete id) ; Use the enhanced delete function
-           (setq count (1+ count))))
-       relations))
+  (let ((count 0)
+        (ids-to-delete '()))
+    ;; Collect from index-based lookups
+    (let ((from-set (gethash tag-id supertag--index-relations-by-from)))
+      (when from-set
+        (maphash (lambda (rel-id _v) (push rel-id ids-to-delete)) from-set)))
+    (let ((to-set (gethash tag-id supertag--index-relations-by-to)))
+      (when to-set
+        (maphash (lambda (rel-id _v)
+                   (unless (member rel-id ids-to-delete)
+                     (push rel-id ids-to-delete)))
+                 to-set)))
+    ;; Also scan for :node-field relations where tag-id is in :props
+    ;; (these won't be found by from/to index since tag-id is in props, not from/to)
+    (let ((relations (supertag-store-get-collection :relations)))
+      (when relations
+        (maphash
+         (lambda (id relation)
+           (when (and relation
+                      (eq (plist-get relation :type) :node-field)
+                      (equal (plist-get (plist-get relation :props) :tag-id) tag-id)
+                      (not (member id ids-to-delete)))
+             (push id ids-to-delete)))
+         relations)))
+    (dolist (id ids-to-delete)
+      (supertag-relation-delete id)
+      (setq count (1+ count)))
     count))
 
 ;;; --- Notion-style Relation Operations ---
@@ -741,17 +748,17 @@ Returns the created relation."
 (defun supertag-relation-get-database-relations (tag-id)
   "Get all database relations for a tag (virtual database).
 TAG-ID is the tag identifier.
-Returns list of database relations."
-  (let ((relations (supertag-store-get-collection :relations))
-        (result '()))
-    (when relations
-      (maphash
-       (lambda (id relation)
-         (when (and (or (equal (plist-get relation :from) tag-id)
-                       (equal (plist-get relation :to) tag-id))
-                   (plist-get (plist-get relation :props) :database-relation))
-           (push relation result)))
-       relations))
+Returns list of database relations.
+Uses relation indexes for O(k) lookup instead of O(N) scan."
+  (let ((result '()))
+    (dolist (rel (supertag-index-find-by-from tag-id))
+      (when (plist-get (plist-get rel :props) :database-relation)
+        (push rel result)))
+    (dolist (rel (supertag-index-find-by-to tag-id))
+      (when (and (plist-get (plist-get rel :props) :database-relation)
+                 ;; Avoid duplicates if tag-id is both from and to
+                 (not (equal (plist-get rel :from) tag-id)))
+        (push rel result)))
     result))
 
 (defun supertag-relation-update-all-rollups ()

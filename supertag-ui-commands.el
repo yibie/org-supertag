@@ -996,7 +996,7 @@ HEADLINE is optional headline text."
           (when (y-or-n-p "Add additional properties to this node? ")
             (supertag-capture-enrich-node node-id))
 
-          node-id)))
+          node-id))))
 
 
 
@@ -1067,7 +1067,7 @@ setup or when rebuilding the entire database."
              (message "WARNING: No nodes were created. Please check:")
              (message "  - org-supertag-sync-directories: %s" org-supertag-sync-directories)
              (message "  - supertag-sync-file-pattern: %s" supertag-sync-file-pattern)
-             (message "  - File contents have proper org headings with IDs")))))))))
+             (message "  - File contents have proper org headings with IDs"))))))))
 
 ;;;###autoload
 (defun supertag-sync-force-resync-file (&optional file)
@@ -1211,5 +1211,90 @@ cause inconsistencies in the system. This command cleans them up."
             (supertag-store-remove-entity :tags tag-id))
           (message "Ghost tag cleanup complete."))
       (message "No ghost tags found."))))
+
+;;; --- Semantic Relations ---
+
+(defun supertag-ui-add-semantic-relation ()
+  "Add a semantic relation from the current node to another node.
+Prompts for relation type (from registered semantic types),
+target node, and optional context note."
+  (interactive)
+  (let ((from-id (supertag-ui--get-containing-node-at-point)))
+    (unless from-id
+      (user-error "Point must be inside an Org heading."))
+    (supertag-ui--ensure-node-synced from-id)
+    (let ((semantic-types (supertag-relation-type-list-semantic)))
+      (unless semantic-types
+        (user-error "No semantic relation types registered. Use `supertag-register-relation-type' first."))
+      ;; 1. Select relation type
+      (let* ((type-candidates
+              (mapcar (lambda (entry)
+                        (cons (plist-get (cdr entry) :name) (car entry)))
+                      semantic-types))
+             (type-name (completing-read "Relation type: " type-candidates nil t))
+             (rel-type (cdr (assoc type-name type-candidates))))
+        ;; 2. Select target node
+        (let ((to-id (supertag-ui-select-node "Target node: ")))
+          (unless to-id
+            (user-error "No target node selected."))
+          (when (equal from-id to-id)
+            (user-error "Cannot create a relation from a node to itself."))
+          (supertag-ui--ensure-node-synced to-id)
+          ;; 3. Optional context note
+          (let* ((context-note (read-string "Context note (optional): "))
+                 (props (unless (string-empty-p context-note)
+                          (list :context-note context-note)))
+                 (relation-data (append (list :type rel-type
+                                              :from from-id
+                                              :to to-id)
+                                        (when props (list :props props)))))
+            (supertag-relation-create relation-data)
+            (let* ((to-node (supertag-node-get to-id))
+                   (to-title (or (plist-get to-node :title) to-id)))
+              (message "%s → %s" type-name to-title))))))))
+
+(defun supertag-ui-remove-semantic-relation ()
+  "Interactively remove a semantic relation from the current node."
+  (interactive)
+  (let ((node-id (supertag-ui--get-containing-node-at-point)))
+    (unless node-id
+      (user-error "Point must be inside an Org heading."))
+    (supertag-ui--ensure-node-synced node-id)
+    ;; Collect all semantic relations (outgoing + incoming)
+    (let* ((semantic-types (supertag-relation-type-list-semantic))
+           (type-keywords (mapcar #'car semantic-types))
+           (all-relations
+            (cl-loop for rel-type in type-keywords
+                     append (mapcar (lambda (r) (cons :outgoing r))
+                                    (supertag-relation-find-by-from node-id rel-type))
+                     append (mapcar (lambda (r) (cons :incoming r))
+                                    (supertag-relation-find-by-to node-id rel-type))))
+           (candidates
+            (mapcar
+             (lambda (entry)
+               (let* ((direction (car entry))
+                      (rel (cdr entry))
+                      (rel-type (plist-get rel :type))
+                      (meta (supertag-relation-type-get rel-type))
+                      (other-id (if (eq direction :outgoing)
+                                    (plist-get rel :to)
+                                  (plist-get rel :from)))
+                      (other-node (supertag-node-get other-id))
+                      (other-title (or (and other-node (plist-get other-node :title))
+                                       other-id))
+                      (type-name (if (eq direction :outgoing)
+                                     (plist-get meta :name)
+                                   (or (plist-get meta :inverse-name)
+                                       (plist-get meta :name))))
+                      (label (format "[%s] %s" type-name other-title)))
+                 (cons label (plist-get rel :id))))
+             all-relations)))
+      (unless candidates
+        (user-error "No semantic relations on this node."))
+      (let* ((selected (completing-read "Remove relation: " candidates nil t))
+             (rel-id (cdr (assoc selected candidates))))
+        (when rel-id
+          (supertag-relation-delete rel-id)
+          (message "Relation removed."))))))
 
 (provide 'supertag-ui-commands)
