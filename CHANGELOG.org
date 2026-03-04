@@ -1,4 +1,18 @@
 * Changelog
+* [5.8.1] - 2026-03-04
+** Fixes
+*** Board UI
+- Fixed stale tag field values in board cards: Emacs now pushes fresh
+  =board-data= directly to the frontend on any store change, replacing the
+  fragile =store-changed= → =open-board= round-trip that could silently drop
+  refresh signals.
+- Added =supertag-board--current-board-id= to track the open board on the
+  Emacs side; cleared on WebSocket disconnect and board deletion.
+- Removed orphaned =supertag-board-open= autoload from =org-supertag.el=
+  (function was never implemented; caused autoload errors on startup).
+- Replaced Chinese toggle labels ("展开内容" / "收起内容") in board node
+  cards with English ("Expand" / "Collapse").
+
 * [5.8.0] - 2026-03-03
 ** Features
 *** Board (Whiteboard) Subsystem
