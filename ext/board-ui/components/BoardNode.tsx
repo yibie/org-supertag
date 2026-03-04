@@ -123,7 +123,7 @@ const BoardNodeComponent = ({ id, data }: NodeProps) => {
                 setContentExpanded((prev) => !prev)
               }}
             >
-              {contentExpanded ? '收起内容' : '展开内容'}
+              {contentExpanded ? 'Collapse' : 'Expand'}
             </Text>
           )}
           {!collapsed && contentExpanded && (

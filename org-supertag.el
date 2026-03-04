@@ -4,7 +4,7 @@
 
 ;; Author: Yibie
 ;; Keywords: org-mode, tags, metadata, workflow, automation
-;; Version: 5.7.0
+;; Version: 5.8.1
 ;; URL: https://github.com/yibie/org-supertag
 
 ;; This file is NOT part of GNU Emacs.
@@ -469,8 +469,6 @@ active vault when `supertag-sync-auto-start` is non-nil."
 ;; Not loaded by default; use M-x supertag-board-mode to activate.
 (autoload 'supertag-board-mode "supertag-board"
   "Enable org-supertag whiteboard visualization." t)
-(autoload 'supertag-board-open "supertag-board"
-  "Open the board UI in the default browser." t)
 (autoload 'supertag-board-follow-mode "supertag-board"
   "Sync the board UI focus to the current node in Emacs." t)
 
