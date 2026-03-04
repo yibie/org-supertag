@@ -77,6 +77,9 @@
 (defvar supertag-board--current-node nil
   "Last node ID sent via follow mode.")
 
+(defvar supertag-board--current-board-id nil
+  "Board ID currently open in the frontend.")
+
 ;;; --- MIME Types ---
 
 (defvar supertag-board--mime-types
@@ -336,7 +339,8 @@ Starts HTTP and WebSocket servers to serve the board UI."
 
 (defun supertag-board--ws-on-close (_ws)
   "Handle WebSocket close."
-  (setq supertag-board--ws-socket nil))
+  (setq supertag-board--ws-socket nil)
+  (setq supertag-board--current-board-id nil))
 
 ;;; --- WebSocket Send Helpers ---
 
@@ -373,7 +377,9 @@ Starts HTTP and WebSocket servers to serve the board UI."
       (message "supertag-board: board not found: %s" board-id))
      (t
       (condition-case err
-          (supertag-board--send-board-data board)
+          (progn
+            (setq supertag-board--current-board-id board-id)
+            (supertag-board--send-board-data board))
         (error
          (message "supertag-board: error sending board data for %s: %s" board-id err)))))))
 
@@ -536,6 +542,8 @@ Result shape is an alist: (TAG-ID . [((name . ..) (value . ..)) ...])."
   "Delete board specified in DATA."
   (let ((board-id (alist-get 'boardId data)))
     (when board-id
+      (when (equal board-id supertag-board--current-board-id)
+        (setq supertag-board--current-board-id nil))
       (supertag-board-delete board-id)
       (supertag-board--send-board-list))))
 
@@ -749,10 +757,18 @@ Result shape is an alist: (TAG-ID . [((name . ..) (value . ..)) ...])."
         (run-with-idle-timer 0.5 nil #'supertag-board--on-store-update)))
 
 (defun supertag-board--on-store-update ()
-  "Send updated node data for the current board."
-  (when supertag-board--ws-socket
-    ;; Notify the frontend to refresh node data
-    (supertag-board--ws-send "store-changed" nil)))
+  "Send updated board data to the frontend when the store changes."
+  (when (and supertag-board--ws-socket
+             supertag-board--current-board-id)
+    (let ((board (supertag-board-get supertag-board--current-board-id)))
+      (if board
+          (condition-case err
+              (supertag-board--send-board-data board)
+            (error
+             (message "supertag-board: error pushing board update for %s: %s"
+                      supertag-board--current-board-id err)))
+        ;; Board no longer exists — notify frontend to clear
+        (supertag-board--ws-send "store-changed" nil)))))
 
 ;;; --- Follow Mode ---
 
