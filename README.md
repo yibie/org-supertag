@@ -1,308 +1,300 @@
-# Org-SuperTag
+# Org-SuperTag 5.0 – Structured knowledge, inside Emacs, on your own files
 
-> **⚠️ IMPORTANT (5.3.0 and later):**
-> If you are upgrading from a pre‑5.2.0 version, you **must run the global field database migration** before enabling `supertag-use-global-fields`.
-> See `doc/GLOBAL-FIELD-MIGRATION-GUIDE.md` for step‑by‑step instructions.
->
-> **🆕 NEW (5.3.0):** Property to Field Migration System
-> Convert your existing Org `:PROPERTIES:` to structured database fields for better querying and automation.
-> See the "Property to Field Migration" section below for complete instructions.
+Org-SuperTag turns your plain Org headings into a **structured, queryable knowledge base**.  
+No external services. No Python. No lock-in. Your `.org` files stay yours — we just make them smarter.
 
-[English](./README.md) | [中文](./README_CN.md)
+> **⚠️ Upgrading from 5.2.0 or earlier?**  
+> Before enabling `supertag-use-global-fields`, complete the **global field migration** first.  
+> See [`doc/GLOBAL-FIELD-MIGRATION-GUIDE.md`](doc/GLOBAL-FIELD-MIGRATION-GUIDE.md) for step-by-step instructions.
 
-## ⚡ Intro
-
-Org-SuperTag is a database-backed Org workflow focused on structured tags and fields.
-
-- **Pure Emacs Lisp**: No Python/EPC; load and go
-- **Structured data**: `#tag` + fields on headings (queryable, automatable)
-- **Local database**: One in-memory store persisted to disk (fast reads)
-- **Sync service**: Incremental file sync with safety guards + diagnostics
-- **Views & UX**: Node view, table view, kanban (for data-centric workflows)
-- **Automation hooks**: React to field changes and keep metadata consistent
-- **Optional vault isolation**: Treat each sync directory as its own DB/state (single active vault)
-
-## 🚀 30-Second Quick Start
-
-```emacs-lisp
-;; 1. Install
-(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
-
-;; 2. Configure
-;; Single vault (recommended)
-(setq org-supertag-sync-directories '("~/org/"))
-
-;; Multiple vaults (separate DB/state per directory)
-;; (setq org-supertag-sync-directories '("~/org/" "~/work-notes/"))
-;; (setq org-supertag-sync-directories-mode 'vaults)
-
-;; 3. Initialize (run once)
-M-x supertag-sync-full-initialize
-```
-
-**That's it.** No Python, no virtualenv, no complexity.
-
-## 🎯 Core Concept: Tags as Database Tables
-
-Traditional Org-mode:
-
-```org
-* Project Ideas :project:
-```
-
-Org-SuperTag 5.0:
-
-```org
-* Project Ideas #project
-  - status: planning
-  - priority: high
-  - due: 2024-12-31
-```
-
-Each `#tag` becomes a database table. Each heading becomes a record.
-
-## 📋 Essential Commands
-
-| Command                | Key | What it does                 |
-| ---------------------- | --- | ---------------------------- |
-| `supertag-add-tag`     | -   | Add a tag to current heading |
-| `supertag-view-node`   | -   | View/edit structured data    |
-| `supertag-search`      | -   | Query your knowledge base    |
-| `supertag-capture`     | -   | Quick note capture           |
-| `supertag-view-kanban` | -   | Visual task management       |
-
-## 🔍 Real Examples
-
-### Academic Research
-
-```org
-* Attention Is All You Need #paper
-  - authors: Vaswani et al.
-  - year: 2017
-  - venue: NIPS
-  - status: read
-  - rating: 5
-  - notes: Revolutionary attention mechanism
-```
-
-### Project Management
-
-```org
-* Website Redesign #project
-  - status: in-progress
-  - priority: high
-  - due: 2024-12-15
-  - owner: @team
-```
-
-### Meeting Notes
-
-```org
-* Sprint Planning #meeting
-  - type: planning
-  - date: 2024-11-15
-  - participants: Alice, Bob, Carol
-  - decisions: Use new framework
-```
-
-## 🎨 Smart Queries
-
-Find all high-priority projects due this month:
-
-```lisp
-(supertag-search '(and (tag "project")
-                       (field "priority" "high")
-                       (field "due" "2024-12")))
-```
-
-Find papers you haven't read yet:
-
-```lisp
-(supertag-search '(and (tag "paper")
-                       (field "status" "unread")))
-```
-
-## 🔄 Migration from 4.x
-
-**One-time migration required:**
-
-1. Backup your old database
-2. `M-x load-file RET supertag-migration.el RET`
-3. `M-x supertag-migrate-database-to-new-arch RET`
-4. Restart Emacs
-
-## 🔄 Property to Field Migration
-
-**Convert Org Properties to Structured Fields**
-
-Org-SuperTag 5.3 introduces a powerful migration system to convert your existing Org `:PROPERTIES:` drawers into structured database fields. This enables better querying, automation, and data management.
-
-### Two Migration Paths
-
-#### Path 1: Already Using Org-roam (Headings have `:ID:` properties)
-
-If your Org files already have `:ID:` properties on headings:
-
-1. **Add IDs to all headings** (if missing):
-   ```elisp
-   M-x supertag-migration-add-ids-to-org-headings
-   ```
-   Select your Org directory to add `:ID:` properties to all headings.
-
-2. **Sync to database**:
-   ```elisp
-   M-x supertag-sync-full-rescan
-   ```
-   This imports all nodes with their properties into the database.
-
-3. **Convert properties to fields**:
-   ```elisp
-   M-x supertag-convert-properties-to-field
-   ```
-   Choose a property (e.g., "LOCATION"), select/create a tag, and convert.
-
-#### Path 2: Not Using Org-roam (Headings lack `:ID:` properties)
-
-If your Org files don't have `:ID:` properties:
-
-1. **Add IDs to all headings**:
-   ```elisp
-   M-x supertag-migration-add-ids-to-org-headings
-   ```
-   This adds `:ID:` properties to all headings.
-
-2. **Sync to database**:
-   ```elisp
-   M-x supertag-sync-full-rescan
-   ```
-
-3. **Convert properties to fields**:
-   ```elisp
-   M-x supertag-convert-properties-to-field
-   ```
-
-### What Happens During Conversion
-
-When you convert a property like `:LOCATION: London`:
-
-1. **Database updates**:
-   - Node gets the specified tag (e.g., `#place`)
-   - Field value is stored in database (`LOCATION = "London"`)
-
-2. **Org file updates**:
-   - Tag is inserted in headline: `* My Heading #place`
-   - Properties drawer remains unchanged for compatibility
-
-3. **Query capabilities**:
-   - Find by field: `(field "LOCATION" "London")`
-   - Find by tag: `(tag "place")`
-   - Combined queries work seamlessly
-
-### Batch Conversion
-
-Convert multiple properties at once:
-
-```elisp
-M-x supertag-batch-convert-properties-to-fields
-```
-
-This shows statistics for each property and lets you choose tags for each conversion.
-
-### Before/After Example
-
-**Before**:
-```org
-* Project Meeting
-:PROPERTIES:
-:LOCATION: Conference Room A
-:ATTENDEES: Alice, Bob, Carol
-:END:
-```
-
-**After** (in database):
-- Node has tag: `meeting`
-- Fields: `LOCATION = "Conference Room A"`, `ATTENDEES = "Alice, Bob, Carol"`
-
-**Org file**:
-```org
-* Project Meeting #meeting
-:PROPERTIES:
-:LOCATION: Conference Room A
-:ATTENDEES: Alice, Bob, Carol
-:END:
-```
-
-### Benefits
-
-- **Better queries**: Search by field values, not just text
-- **Automation**: Trigger rules based on field changes
-- **Data integrity**: Structured data with validation
-- **Views**: Table views show field columns automatically
-- **Backward compatibility**: Original properties remain intact
-
-## ⚙️ Configuration
-
-Minimal config:
-
-```emacs-lisp
-;; Single vault (recommended)
-(setq org-supertag-sync-directories '("~/org/"))
-
-;; Multiple vaults (separate DB/state per directory)
-;; (setq org-supertag-sync-directories '("~/org/" "~/work-notes/"))
-;; (setq org-supertag-sync-directories-mode 'vaults)
-```
-
-Vault mode notes:
-- Auto-switch is disabled by default; enable with `(setq org-supertag-vault-auto-switch t)`.
-- Shows a mode line hint `ST[<vault>]` for the current file (when multiple sync directories are configured).
-- Manually switch with `M-x supertag-vault-activate` (vault mode only).
-
-Smart scan (sync safety):
-- Each sync computes a content hash and compares it with the last synced hash.
-- If the hash is unchanged, parsing is skipped and the database stays untouched.
-- This prevents accidental database clears caused by mtime-only touches or redundant sync triggers.
-
-With AI features (optional):
-
-```emacs-lisp
-(setq org-supertag-bridge-enable-ai t)  ; Uses gptel
-```
-
-## 🆚 Why Not Use...
-
-| Tool | What it’s best at | How Org-SuperTag differs |
-| --- | --- | --- |
-| Org-roam | Zettelkasten + backlinks + graph | Org-SuperTag is **data-first**: tags-as-tables, fields, database queries, and views, while still providing a rich reference system (`supertag-add-reference`) that shows up in views (node/table). |
-| Denote | Minimal, file-based note organization | Org-SuperTag adds a **database layer**: structured fields, rich queries, and views; Denote stays intentionally lightweight and file-centric. |
-
-## 🐛 Troubleshooting
-
-**Database corrupted?**
-
-```lisp
-M-x supertag-sync-cleanup-database
-```
-
-**Want to see what's in your database?**
-
-```lisp
-M-x supertag-search
-```
-
-**Need to debug sync issues?**
-
-```lisp
-M-x supertag-sync-analyze-file
-```
-
-## 📊 Technical Details
-
-- **Lines of code**: ~16K (down from ~30K)
-- **Dependencies**: Just Emacs
-- **Data storage**: ~/.emacs.d/org-supertag/
-- **Backup**: Automatic daily snapshots
+> **Why this matters**: Ever tried to find "all papers I haven't read yet" across your notes? Or "all tasks due this week assigned to @alice"? Plain Org-mode can't do this without painful manual tagging and grep. Org-SuperTag makes it as easy as clicking a column header.
 
 ---
 
-_Made for people who want Notion's structure with Org-mode's soul._
+## What you get (and why it's easier)
+
+| Without Org-SuperTag | With Org-SuperTag |
+|---|---|
+| Manually typing `:PROPERTIES:` drawers for every field | Type `#tag` once, define fields once, fill values in a Table View |
+| `grep` + regex to find "high priority tasks this week" | `M-x supertag-search` — structured query, instant results |
+| Copy-pasting between notes to link related items | `M-x supertag-add-reference` — one keystroke, bidirectional |
+| Every new project means rebuilding your tracking system from scratch | Define a `#project` tag schema once, reuse forever |
+| "Where did I write that meeting note?" | Query `#meeting` by date, participant, or decision |
+
+**The core idea**: You keep writing Org files normally. Org-SuperTag reads them, builds a structured index, and gives you database-like views *on top of* your plain text.
+
+---
+
+## 30-second installation
+
+```emacs-lisp
+;; With straight.el
+(straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
+
+;; Tell SuperTag where your Org files are
+(setq org-supertag-sync-directories '("~/org/"))
+
+;; Initialize once — this scans all your files
+M-x supertag-sync-full-initialize
+```
+
+That's it. No API keys, no database server, no configuration wizard. Your existing Org files are already compatible.
+
+---
+
+## The three things you need to know
+
+Org-SuperTag is built on three simple ideas:
+
+### 1. `#tag` turns a heading into a record
+
+```org
+* Attention Is All You Need #paper
+```
+
+The `#paper` tag means "this heading belongs to the 'paper' collection." Like tagging in any system — but with superpowers.
+
+### 2. Tags have fields (like database columns)
+
+Once you've tagged something as `#paper`, you define what information you want to track:
+
+```
+authors  →  text
+year     →  number
+venue    →  text
+status   →  select (unread / reading / done)
+rating   →  number (1–5)
+```
+
+You define these **once per tag** (in the Schema View, `M-x supertag-view-schema`). Every `#paper` node automatically gets these fields.
+
+### 3. Views let you browse, fill, and query your data
+
+- **Table View** (`M-x supertag-view-table`): Like a spreadsheet for your tagged nodes. Sort by any column, filter, bulk edit.
+- **Node View** (`M-x supertag-view-node`): Edit a single node's fields with auto-completion.
+- **Kanban** (`M-x supertag-view-kanban`): Board-style view for workflow tags (`#task`, `#project`).
+
+---
+
+## Step-by-step: your first 5 minutes
+
+Let's say you're a researcher. You have papers scattered across your notes.
+
+### Step 1: Tag a paper
+
+Go to any Org heading and run `M-x supertag-add-tag`, type `paper`:
+
+```org
+* Attention Is All You Need #paper
+```
+
+### Step 2: Define what a "paper" tracks
+
+`M-x supertag-view-schema` → find `paper` → add fields:
+
+| Field | Type |
+|-------|------|
+| `authors` | text |
+| `year` | number |
+| `status` | select: unread, reading, done |
+| `rating` | number 1–5 |
+
+### Step 3: Fill in data
+
+`M-x supertag-view-table` → choose tag `paper`. You'll see a table with all `#paper` nodes. Click any cell to edit. Sort by year to find recent papers. Filter by `status = unread` to see your reading queue.
+
+### Step 4: Tag more papers
+
+Go to other paper headings, add `#paper`. They appear in the table automatically.
+
+**That's it. You now have a queryable research library.** No copy-paste, no PROPERTIES drawers, no manual organization.
+
+---
+
+## Real workflows (with commands you can copy)
+
+### 📚 Academic reading queue
+
+```org
+* Diffusion Models Survey #paper
+* ViT Explained #paper
+* CLIP Paper #paper
+```
+
+Define fields on `#paper`: `authors`, `year`, `status` (unread/reading/done), `rating`.
+
+**Daily workflow**:
+1. `M-x supertag-view-table` → tag `paper` → sort by `status`
+2. Filter to `unread` → pick one → `o` to jump to the heading
+3. After reading: click `status` cell → select `done` → rate it
+
+**Why it's convenient**: You find papers by status and rating, not by scrolling through 50 headings and reading each title.
+
+### 📋 Project task tracking
+
+```org
+* Rewrite sync layer #task #project
+* Fix auth bug #task
+* Deploy v2.1 #task
+```
+
+Define fields on `#task`: `status`, `priority`, `due`, `assignee`.
+
+**Daily workflow**:
+1. `M-x supertag-view-kanban` → tag `task` → columns by `status`
+2. Drag tasks between columns as they progress
+3. `M-x supertag-search` → `(and (tag "task") (field "priority" "high"))` for urgent items
+
+**Why it's convenient**: Your tasks live in their natural Org files (meeting notes, project files), but you see them all in one board.
+
+### 📝 Meeting notes with decisions
+
+```org
+* Sprint Planning 2024-11-15 #meeting
+```
+
+Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`.
+
+**Workflow**:
+1. `M-x supertag-capture` → choose `meeting` template → fill fields
+2. Later: `M-x supertag-search` → `(tag "meeting")` → filter by date range
+3. Find "all decisions from Q4" in seconds
+
+**Why it's convenient**: Meeting notes live where they belong (project files), but you query across all of them at once.
+
+---
+
+## Commands you'll use every day
+
+| What you want to do | Command | What happens |
+|---|---|---|
+| Tag something | `M-x supertag-add-tag` | Adds `#tag` inline, node appears in that tag's table |
+| See all nodes of a tag | `M-x supertag-view-table` | Spreadsheet view. Sort, filter, edit cells |
+| Edit a node's fields | `M-x supertag-view-node` | Form view with completion, pickers, and validation |
+| Board view | `M-x supertag-view-kanban` | Drag-and-drop between columns |
+| Define tag fields | `M-x supertag-view-schema` | Add/remove fields, set types, configure inheritance |
+| Capture new node | `M-x supertag-capture` | Quick entry with template, adds to your Org file |
+| Search | `M-x supertag-search` | Structured query. Save results to file |
+| Link related nodes | `M-x supertag-add-reference` | Bidirectional link between any two nodes |
+| Full database rebuild | `M-x supertag-sync-full-rescan` | Safe — just re-reads your Org files |
+
+---
+
+## Why this doesn't add friction
+
+The most common fear about "structured tools" is: *"Will I spend more time organizing than actually working?"*
+
+Org-SuperTag avoids this in three ways:
+
+### 1. Your files are still plain Org
+
+You never *have* to use the SuperTag views. Write Org normally. The `#tag` markers are just text. If you stop using SuperTag tomorrow, your files are 100% readable Org-mode — you just have some extra `#tag` annotations that don't hurt anything.
+
+### 2. Fields are defined once, used everywhere
+
+You define `status`, `priority`, `due` for `#task` **one time**. Every `#task` node you create from then on gets those fields automatically. The upfront cost is 30 seconds; the payoff is permanent.
+
+### 3. Sync is automatic and safe
+
+Org-SuperTag reads your files on a timer (configurable via `doc/SYNC-CONFIGURATION.md`). It never modifies your Org files unless you explicitly edit through a SuperTag view. If the database gets corrupted, `M-x supertag-sync-full-rescan` rebuilds it from scratch.
+
+### Compare the effort
+
+**Without SuperTag** — tracking papers:
+- Manually write `:PROPERTIES:` drawer with `:authors:`, `:year:`, `:status:`
+- `grep` for `status.*unread` across files
+- No sorting, no filtering, no table view
+
+**With SuperTag** — tracking papers:
+- Add `#paper` to headings (2 seconds each)
+- Define fields once in Schema View (30 seconds)
+- Table View for sorting, filtering, editing (instant)
+
+**The win**: For 10 papers, you save ~5 minutes of PROPERTIES typing and get a live-updating table view for free. For 100 papers, the difference is hours.
+
+---
+
+## When to go deeper
+
+Org-SuperTag grows with you. Start simple, add power when you need it:
+
+| After you're comfortable with... | Try this |
+|---|---|
+| Tags and Table View | **Automation** — rules that auto-fill fields based on conditions (`doc/AUTOMATION-SYSTEM-GUIDE.md`) |
+| Manual capture | **Capture Templates** — predefined forms for common entries (`doc/CAPTURE-GUIDE.md`) |
+| Basic queries | **Query Blocks** — embed live query results inside Org files (`doc/ABOUT-QUERY-BLOCK.md`) |
+| Default views | **Custom Views** — build your own dashboards (`doc/VIEW_FRAMEWORK_DEV_GUIDE.md`) |
+| Single vault | **Multi-Vault** — separate databases for work/personal (`doc/SYNC-CONFIGURATION.md`) |
+| Writing plugins | **Plugin Guide** — extend with your own extractors and services (`doc/ORG-SUPERTAG-PLUGIN-GUIDE.md`) |
+
+---
+
+## Data storage (where things live)
+
+| What | Where | Format |
+|---|---|---|
+| Your Org files | Whatever directories you configure | Plain `.org` text |
+| Structured field values | `~/.emacs.d/org-supertag/supertag-db.el` | Emacs Lisp data |
+| Sync state | `~/.emacs.d/org-supertag/sync-state.el` | File mtimes and hashes |
+| Daily backups | `~/.emacs.d/org-supertag/backups/` | Timestamped DB snapshots |
+
+**Your Org files are always the source of truth.** The database is a cache that can be rebuilt at any time with `M-x supertag-sync-full-rescan`.
+
+---
+
+## Migration from older versions
+
+> **⚠️ 5.2.0 → 5.3.0**: Complete the [global field migration](doc/GLOBAL-FIELD-MIGRATION-GUIDE.md) before enabling `supertag-use-global-fields`.
+
+### From SuperTag 4.x
+
+```emacs-lisp
+;; 1. Back up your data directory (~/.emacs.d/org-supertag/)
+;; 2. Load and run migration
+M-x load-file RET supertag-migration.el RET
+M-x supertag-migrate-database-to-new-arch RET
+```
+
+### From plain Org files
+
+No migration needed. Add `#tag` to headings, define fields, and start using views. Your existing files work as-is.
+
+---
+
+## Troubleshooting quick reference
+
+| Problem | Fix |
+|---|---|
+| Database looks wrong | `M-x supertag-sync-cleanup-database` then `M-x supertag-sync-full-rescan` |
+| Auto-sync not starting | Check `org-supertag-sync-directories` is set correctly |
+| Specific file not syncing | `M-x supertag-sync-analyze-file` |
+| Field values missing after rescan | Fields are DB-only; they survive rescan unless DB was wiped |
+| Sync freezes Emacs | See `doc/SYNC-CONFIGURATION.md` for performance tuning |
+
+---
+
+## Comparison with other tools
+
+| Tool | Org-SuperTag's difference |
+|---|---|
+| **Org-roam** | Org-roam is a graph of linked notes. SuperTag is structured tables on top of Org. They can coexist. |
+| **Notion** | Notion locks your data in a proprietary cloud. SuperTag works offline on your own files. |
+| **Obsidian** | Obsidian is a different editor. SuperTag is native Emacs — no context switching. |
+| **org-ql** | org-ql queries Org properties inline. SuperTag stores field data separately, enabling views, automation, and a query DSL that doesn't litter your Org files. |
+
+---
+
+## Further reading
+
+- **Sync configuration**: `doc/SYNC-CONFIGURATION.md`
+- **Automation rules**: `doc/AUTOMATION-SYSTEM-GUIDE.md`
+- **Capture system**: `doc/CAPTURE-GUIDE.md`
+- **Virtual columns**: `doc/VIRTUAL_COLUMNS.md`
+- **Plugin development**: `doc/ORG-SUPERTAG-PLUGIN-GUIDE.md`
+- **Architecture deep-dive**: `doc/ONTOLOGY-ARCHITECTURE_cn.md`
+- **View framework**: `doc/VIEW_FRAMEWORK_DEV_GUIDE.md`
+- **vs old architecture**: `doc/COMPARE-NEW-OLD-ARCHITECTURE.md`
+
+---
+
+Org-SuperTag is developed as free software under the GPLv3. Contributions, bug reports, and feature requests are welcome on GitHub.
