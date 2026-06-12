@@ -286,6 +286,7 @@ M-x supertag-migrate-database-to-new-arch RET
 ## 延伸阅读
 
 - **同步配置**：`doc/SYNC-CONFIGURATION.md`
+- **📖 Org-SuperTag 的一天**：`doc/A-DAY-WITH-ORG-SUPERTAG.org` — 完整工作流教程，含可 tangle 的 Elisp 配置
 - **自动化规则**：`doc/AUTOMATION-SYSTEM-GUIDE_cn.md`
 - **捕获系统**：`doc/CAPTURE-GUIDE_cn.md`
 - **虚拟列**：`doc/VIRTUAL_COLUMNS.md`

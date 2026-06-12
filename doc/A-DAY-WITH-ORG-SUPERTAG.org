@@ -1,0 +1,695 @@
+#+TITLE: A Day with Org-SuperTag — One Person's Complete Workflow
+#+AUTHOR: Org-SuperTag Community
+#+EMAIL: yibie@users.noreply.github.com
+#+OPTIONS: toc:3 num:t
+
+* How to Use This Document
+
+This is not a feature list.  This is /one person's real daily workflow/ with Org-SuperTag,
+documented in the style of Bernt Hansen's legendary [[http://doc.norang.ca/org-mode.html][org-mode tutorial]].
+
+Every section shows:
+
+1. What I actually do
+2. The exact commands and Elisp I use
+3. Why I chose this way over alternatives
+
+You can load this file in Emacs and tangle it with =C-c C-v C-t= to extract all the
+Elisp examples into =supertag-workflow.el=, then include it in your =init.el=.
+
+This document assumes you have Org-SuperTag installed.  See the [[file:../README.md][README]] for installation.
+
+* My Setup
+
+** My Org Files
+
+I keep my life in a handful of Org files under =~/org/=.  Each file has a clear purpose,
+and Org-SuperTag treats them all as one unified knowledge base.
+
+| File                  | Purpose                                    |
+|-----------------------+--------------------------------------------|
+| =inbox.org=           | Capture bucket — everything lands here first |
+| =projects.org=        | Active projects, each a level-1 heading    |
+| =research.org=        | Papers, reading notes, literature reviews  |
+| =meetings.org=        | Meeting notes with decisions and actions   |
+| =journal.org=         | Daily journal entries, ideas, reflections  |
+
+Why separate files?  Because Org-SuperTag queries /across/ all of them.  The file division
+is for /my/ brain — Org-SuperTag doesn't care which file a heading lives in.  A =#task= in
+=meetings.org= and a =#task= in =projects.org= appear side by side in the Table View.
+
+** Vault Configuration
+
+I use a single vault for everything.  If I wanted work/personal separation, I'd use:
+
+#+begin_src emacs-lisp
+  ;; Single vault (my setup)
+  (setq org-supertag-sync-directories '("~/org/"))
+
+  ;; Multi-vault alternative — separate DBs for work and personal
+  ;; (setq org-supertag-sync-directories '("~/org/work/" "~/org/personal/"))
+  ;; (setq org-supertag-sync-directories-mode 'vaults)
+#+end_src
+
+** Sync Configuration
+
+I want sync to run automatically but not aggressively.  60-second intervals strike a good
+balance — I never wait long for new content to appear, and Emacs stays responsive.
+
+#+begin_src emacs-lisp
+  ;; Auto-sync every 60 seconds
+  (setq org-supertag-sync-directories '("~/org/"))
+  (setq supertag-auto-sync-interval 60)
+
+  ;; Only do full validation every 10th tick (saves CPU)
+  (setq supertag-sync-maintenance-every-n-ticks 10)
+
+  ;; Snapshot guard: if a directory is unavailable (network drive),
+  ;; skip destructive operations instead of treating files as deleted
+  (setq supertag-sync-snapshot-guard t)
+#+end_src
+
+** Tag Hierarchy — My Knowledge Schema
+
+I've thought carefully about my tags.  They form a hierarchy with /inheritance/ —
+child tags automatically get the parent's fields.
+
+#+begin_src emacs-lisp
+  ;; ── Top-level tags ──
+  ;; #project   → has fields: status, priority, deadline, owner
+  ;; #task      → extends nothing, has fields: status, priority, due, project
+  ;; #paper     → has fields: authors, year, venue, status, rating, topic
+  ;; #meeting   → has fields: date, participants, decisions, action-items
+  ;; #idea      → has fields: status, feasibility, related-project
+  ;; #person    → has fields: role, email, notes
+#+end_src
+
+I define these in the Schema View (=M-x supertag-view-schema=) — not in code.  But here's
+what the data structure looks like under the hood:
+
+#+begin_src emacs-lisp
+  ;; Example: registering a tag and its fields programmatically
+  ;; (Normally done via Schema View UI — this is just to show the structure)
+
+  ;; supertag-tag-create creates a tag
+  ;; supertag-schema--add-field-at-point adds a field to a tag in the Schema View
+
+  ;; #paper fields defined:
+  ;;   authors  : text
+  ;;   year     : number
+  ;;   venue    : text
+  ;;   status   : select → unread | reading | done
+  ;;   rating   : number 1–5
+  ;;   topic    : text
+#+end_src
+
+Why inheritance matters:  If I later create a =#paper/ai= tag that /extends/ =#paper=,
+it automatically gets =authors=, =year=, =status=, etc.  I only need to add AI-specific
+fields like =model= or =dataset=.
+
+* Morning: Review and Plan (08:00–08:15)
+
+** Open the Table View for Today's Tasks
+
+I start every morning with one command: =M-x supertag-view-table=, choose tag =task=.
+
+What I see:  a spreadsheet-style view of /all/ =#task= nodes across all my Org files.
+Columns: =status=, =priority=, =due=, =project=, plus any custom fields I've defined.
+
+#+begin_src emacs-lisp
+  ;; Key bindings I use in Table View:
+  ;;   o           → jump to the heading in its Org file
+  ;;   C-o         → jump to referenced node
+  ;;   e           → edit current cell
+  ;;   s           → sort by current column
+  ;;   /           → filter rows
+  ;;   TAB         → expand/collapse row details
+  ;;   ?           → help (all keybindings)
+#+end_src
+
+** Filter to What Matters
+
+First thing I do: filter to =status != done=, sort by =priority=.
+
+#+begin_src emacs-lisp
+  ;; In the Table View:
+  ;;   / → filter → status → != done
+  ;;   s → sort → priority (ascending)
+
+  ;; Equivalent from Elisp:
+  (supertag-search
+   '(and (tag "task")
+         (not (field "status" "done"))))
+#+end_src
+
+I scan the top 10 items.  If anything is overdue (=due= before today), I either reschedule
+it or move it to the top of the list.  Editing a cell takes one keystroke.
+
+** Capture Anything on My Mind
+
+Sometimes during review I remember things.  Instead of switching context, I capture:
+
+#+begin_src emacs-lisp
+  ;; M-x supertag-capture
+  ;; Choose tag: task
+  ;; Fill fields: title, status=todo, priority=medium
+  ;; → Instantly appears in the table
+#+end_src
+
+Fifteen minutes, and I know exactly what I'm working on today.
+
+* Throughout the Day: Capture Without Breaking Flow
+
+This is the biggest win of Org-SuperTag over plain Org-mode.  Capture is /fast/ and
+/structured/ — I don't need to remember field names or syntax.
+
+** Capture a Task Mid-Work
+
+I'm deep in coding, a thought pops up: "need to update the API docs."  I don't switch
+buffers.  I don't find the right file.  I just:
+
+1. =M-x supertag-capture=
+2. Select tag =task=
+3. Type title: "Update API docs for v2.1"
+4. Set =priority=high=, =project=backend=
+5. =C-c C-c= → done.  Back to coding.  8 seconds.
+
+The task is in my =inbox.org= (my configured capture file) with all fields populated.
+It appears in the Table View automatically after the next sync cycle.
+
+** Capture a Meeting Note
+
+In a meeting, I open my =meetings.org= and type:
+
+#+begin_example org
+,* Weekly Standup 2025-06-12 #meeting
+,** Updates
+   - Backend: API v2 deployed, monitoring looks good
+   - Frontend: PR #234 under review
+   - DevOps: CI pipeline speed improved by 30%
+,** Decisions
+   - Move release date to June 20
+   - Use PostgreSQL 16 for the new service
+,** Action Items
+   - @alice: draft release notes
+   - @bob: run load tests on staging
+#+end_example
+
+Org-SuperTag reads this and:
+1. Extracts the =#meeting= tag
+2. Uses the /extractor pipeline/ to pull =todo= keywords, =scheduled=, etc.
+3. Makes it queryable alongside all other =#meeting= nodes
+
+Later, I'll add structured fields (=date=, =participants=, =decisions=) through the
+Node View.  But during the meeting, I type naturally.
+
+** Automation: Let Rules Fill the Gaps
+
+I've set up automation rules so I don't have to manually populate every field.  Here are
+the rules I rely on:
+
+#+begin_src emacs-lisp
+  ;; Rule 1: When a #meeting node is created, auto-set the date to today
+  (supertag-automation-create
+   '(:name "auto-date-for-meetings"
+     :trigger :on-node-create
+     :condition (tag "meeting")
+     :actions ((update-field "date" (format-time-string "%Y-%m-%d")))))
+
+  ;; Rule 2: When a #task's status changes to "done", record the completion time
+  (supertag-automation-create
+   '(:name "record-done-time"
+     :trigger :on-field-changed
+     :condition (and (tag "task")
+                     (property-changed "status"))
+     :actions ((when (equal (field-value "status") "done")
+                 (update-field "completed-at"
+                               (format-time-string "%Y-%m-%d %H:%M"))))))
+
+  ;; Rule 3: New #paper auto-sets status to "unread"
+  (supertag-automation-create
+   '(:name "new-paper-unread"
+     :trigger :on-node-create
+     :condition (tag "paper")
+     :actions ((update-field "status" "unread"))))
+#+end_src
+
+How to manage rules:
+- =M-x supertag-view-table= → choose tag → =?= → =A= (automations) → see all rules for this tag
+- Enable/disable rules without deleting them: =supertag-automation-enable= / =disable=
+- Dry-run a rule to test it: see =doc/AUTOMATION-SYSTEM-GUIDE.md=
+
+Why automation matters:  I define the logic once, and Org-SuperTag applies it every time.
+No more "oops, forgot to set the date on that meeting note."
+
+* Working: Views That Feel Like Apps
+
+** Table View — My Primary Interface
+
+I spend 60% of my Org-SuperTag time in the Table View.  It behaves like a lightweight
+database client, but it's all Emacs.
+
+Things I do regularly:
+
+| Action                          | How                                    |
+|---------------------------------+----------------------------------------|
+| Sort by any column              | =s= → pick column                      |
+| Filter (e.g., status=active)    | =/= → status → = active                |
+| Bulk edit (mark rows, set field)| =m= to mark, then =B= to batch-edit    |
+| Add a new column                | =M-x supertag-view-table-add-column=   |
+| Save this view as a named view  | =M-x supertag-view-table-save-current-view-as-named= |
+| Switch between named views      | =M-x supertag-view-table-switch-view=  |
+| Export to Org file              | =M-x supertag-search-export-results-to-file= |
+
+Named views are a game-changer.  I have:
+
+- =today-tasks=: =#task=, filtered to =status != done=, sorted by =priority=
+- =reading-queue=: =#paper=, filtered to =status = unread=, sorted by =year= desc
+- =active-projects=: =#project=, filtered to =status = active=
+- =recent-meetings=: =#meeting=, filtered to =date >= -7d=
+
+#+begin_src emacs-lisp
+  ;; Named views are stored in supertag--view-configs.
+  ;; They can be saved to file and shared:
+  (supertag-view-config-save-to-file "~/org/supertag-views.el")
+  ;; On another machine:
+  (supertag-view-config-load-from-file "~/org/supertag-views.el")
+#+end_src
+
+** Kanban View — When I Need to See Flow
+
+For =#task= and =#project=, the Table View is great for /querying/, but the Kanban is
+better for /doing/.
+
+=M-x supertag-view-kanban= → choose tag =task= → columns by =status=
+
+#+begin_example
+  ┌──────────┬──────────┬──────────┐
+  │  TODO    │  DOING   │   DONE   │
+  ├──────────┼──────────┼──────────┤
+  │ Fix auth │ Rewrite  │ Deploy   │
+  │ bug      │ sync     │ v2.1     │
+  │ Update   │ layer    │          │
+  │ docs     │          │          │
+  └──────────┴──────────┴──────────┘
+#+end_example
+
+I drag tasks between columns as they progress.  Org-SuperTag updates the =status= field
+automatically.  If I have automation rules on =status= change (like recording completion
+time), they fire immediately.
+
+** Node View — Detailed Editing with Completion
+
+When I need to fill in a single node's fields in detail, I use the Node View:
+
+=M-x supertag-view-node=
+
+This opens a side panel showing every field for the current node, with:
+- Text fields: type freely
+- Select fields: choose from a dropdown
+- Number fields: validated input
+- Date fields: Org date picker
+- Reference fields: =C-o= to jump to referenced node
+
+I use this for papers (filling =authors=, =year=, =venue=, =abstract=) and for meetings
+(adding =participants=, =decisions= post-meeting).
+
+** Virtual Columns — Computed Data Without Storage
+
+Some information I want to see but don't want to store.  Virtual columns compute values
+on the fly.
+
+#+begin_src emacs-lisp
+  ;; Virtual column: "overdue" — true if due date is in the past and task isn't done
+  (supertag-virtual-column-register
+   :name "overdue"
+   :tag "task"
+   :compute (lambda (node)
+              (let ((due (plist-get node :due))
+                    (status (plist-get (supertag-field-value node "task" "status"))))
+                (and due
+                     (not (equal status "done"))
+                     (time-less-p (date-to-time due) (current-time))))))
+
+  ;; Virtual column: "progress" — percentage of subtasks done
+  (supertag-virtual-column-register
+   :name "progress"
+   :tag "project"
+   :compute (lambda (node)
+              (let* ((subtasks (supertag-get-children node))
+                     (total (length subtasks))
+                     (done (cl-count-if (lambda (s) (equal "done" (plist-get s :status)))
+                                        subtasks)))
+                (if (> total 0) (round (* 100.0 (/ done total))) 0))))
+#+end_src
+
+Virtual columns appear in the Table View just like regular fields.  The difference:
+they're computed fresh every time you open the view — zero storage, always up to date.
+
+See =doc/VIRTUAL_COLUMNS.md= for the full API.
+
+* Connecting Knowledge: References and Relations
+
+** Quick Reference: Link Two Ideas Together
+
+I'm reading a paper and realize it's directly relevant to a project.  Instead of copy-pasting
+links, I use:
+
+=M-x supertag-add-reference=
+
+This creates a bidirectional link between the current node and the chosen target node.
+The reference appears in both nodes' =Refs= column in the Table View.
+
+#+begin_src emacs-lisp
+  ;; The reference is stored in the database as a :reference relation.
+  ;; It's separate from Org's [[links]] — which means:
+  ;;   1. It survives file reorganization
+  ;;   2. It's queryable (find all nodes referencing node X)
+  ;;   3. It appears in the Table View Refs column
+  ;;   4. C-o in Table View jumps to the referenced node
+#+end_src
+
+** Schema Relationships — Parent-Child Tags
+
+When I define a tag hierarchy (=#paper/ai= extends =#paper=), I'm creating a /schema
+relationship/.  All =#paper/ai= nodes are also =#paper= nodes — they inherit fields
+and appear in =#paper= queries.
+
+#+begin_src emacs-lisp
+  ;; In Schema View (M-x supertag-view-schema):
+  ;;   - Navigate to #paper/ai
+  ;;   - M-x supertag-view-schema-set-extends → choose #paper
+  ;;   - #paper/ai now inherits: authors, year, venue, status, rating, topic
+  ;;   - Add AI-specific fields: model, dataset, metrics
+#+end_src
+
+Why this matters:  I query =#paper= to see /all/ papers.  I query =#paper/ai= to see
+only AI papers.  Both queries work because of inheritance.
+
+** The Knowledge Board — Visual Exploration
+
+When I want to see how my notes connect spatially, I open the Board UI:
+
+=M-x supertag-board-open=
+
+This opens a web-based canvas (React Flow) in my browser.  It shows:
+- Nodes as cards with title, tags, and fields
+- Edges as lines between related nodes, colored by relation type
+- Groups as visual containers for organized clusters
+
+Features I use:
+- Click a tag on a card → expand to see field values
+- Expand card → see full note content with scroll
+- Drag nodes into groups for visual organization
+- Search bar at top (Ctrl+F) → highlight matching nodes, dim others
+- Layout button → auto-arrange nodes with Sugiyama algorithm
+- Double-click edge → edit relation label
+- Click × on edge → remove relation
+
+The Board UI is best for /exploration/ and /sensemaking/ — when I'm trying to understand
+how ideas connect, not when I'm filling in data.
+
+* Evening: Review and Query (17:00–17:15)
+
+** Search for Today's Decisions
+
+At the end of the day, I want to see what I decided today.  Structured search makes this
+trivial:
+
+=M-x supertag-search=
+
+#+begin_src emacs-lisp
+  ;; Today's meetings
+  (supertag-search
+   '(and (tag "meeting")
+         (after "-1d")))
+
+  ;; High-priority tasks still open
+  (supertag-search
+   '(and (tag "task")
+         (field "priority" "high")
+         (not (field "status" "done"))))
+
+  ;; Papers I read today (if I updated the status)
+  (supertag-search
+   '(and (tag "paper")
+         (field "status" "done")
+         (after "-1d")))
+#+end_src
+
+I can save search results to a file:
+
+=M-x supertag-search-export-results-to-file= → produces an Org file with all matching
+headings and their fields.
+
+** RAG: Ask Questions About My Notes
+
+Sometimes I don't know the right query.  I just have a question.  That's where the
+RAG (Retrieval-Augmented Generation) feature shines:
+
+=M-x supertag-rag-ask=
+
+#+begin_example
+  > What decisions did we make about the API architecture this month?
+
+  Org-SuperTag:
+  - Searches all #meeting nodes from the past month
+  - Finds relevant passages about API architecture
+  - Generates a structured answer with citations
+  - Displays it in a *Supertag RAG Answer* buffer
+#+end_example
+
+For this to work, you need an LLM provider configured:
+
+#+begin_src emacs-lisp
+  ;; Option A: OpenAI
+  (setq supertag-rag-provider
+        (llm-make-openai "gpt-4o" :key "sk-..."))
+
+  ;; Option B: Gemini (free tier available)
+  (setq supertag-rag-provider
+        (llm-make-gemini "gemini-2.5-flash" :key "..."))
+
+  ;; Option C: Ollama (fully local, no API key)
+  (setq supertag-rag-provider
+        (llm-make-ollama "llama3.2" :host "localhost:11434"))
+
+  ;; Option D: Set global default for all llm.el applications
+  (setq llm-chat-default-provider
+        (llm-make-openai "gpt-4o" :key "sk-..."))
+#+end_src
+
+RAG has three modes:
+- =:smart= (default): searches notes first, falls back to general AI if nothing found
+- =:rag-only=: strictly local notes only
+- =:general-only=: skip search, ask AI directly
+
+** Custom Dashboard — My Evening Review View
+
+Using the View Framework, I've built a custom dashboard that shows everything I care
+about in one buffer:
+
+#+begin_src emacs-lisp
+  ;; Define a custom dashboard view
+  (define-supertag-view evening-review "Evening Review Dashboard"
+    (tag "task")
+    ;; Section 1: Today's completed tasks
+    (insert (supertag-view-header "✅ Completed Today"))
+    (dolist (node (supertag-query
+                   '(and (tag "task")
+                         (field "status" "done")
+                         (after "-1d"))))
+      (supertag-view-card node))
+    ;; Section 2: Tomorrow's tasks
+    (insert (supertag-view-header "📅 Tomorrow"))
+    (dolist (node (supertag-query
+                   '(and (tag "task")
+                         (field "due" ,(format-time-string "%Y-%m-%d"
+                                          (time-add (current-time) (days-to-time 1)))))))
+      (supertag-view-card node))
+    ;; Section 3: Papers to read
+    (insert (supertag-view-header "📚 Reading Queue"))
+    (dolist (node (supertag-query
+                   '(and (tag "paper")
+                         (field "status" "unread"))))
+      (supertag-view-card node)))
+
+  ;; Open it
+  ;; M-x supertag-view-evening-review
+#+end_src
+
+See =doc/VIEW_FRAMEWORK_DEV_GUIDE.md= for the full View Framework API.
+
+* Weekly: Maintenance and Refinement (Sunday, 30 min)
+
+** Sync Health Check
+
+=M-x supertag-sync-status= shows me:
+- When the last sync ran
+- How many files are tracked
+- How many nodes are in the database
+- Whether any sync errors occurred
+
+If anything looks off:
+
+#+begin_src emacs-lisp
+  ;; Full validation rebuild from Org files
+  M-x supertag-sync-cleanup-database
+  M-x supertag-sync-full-rescan
+
+  ;; This is safe — it only reads your Org files.  Field values in the
+  ;; database are preserved unless the DB file itself was corrupted.
+#+end_src
+
+** Schema Refinement
+
+I review my tags in the Schema View (=M-x supertag-view-schema=) and ask:
+- Are there fields I never use?  → Remove them
+- Are there fields I wish I had?  → Add them
+- Should any tags be merged or split?
+- Is the inheritance hierarchy still right?
+
+** Database Backup
+
+Org-SuperTag auto-saves snapshots daily (configurable):
+
+#+begin_src emacs-lisp
+  (setq supertag-db-auto-save-interval 300)   ; auto-save every 5 minutes
+  (setq supertag-db-backup-interval 86400)    ; daily backup
+  (setq supertag-db-backup-keep-days 3)       ; keep 3 days of backups
+#+end_src
+
+Backups are stored in =~/.emacs.d/org-supertag/backups/=.
+
+** Automation Review
+
+I check whether my automation rules are still doing what I want:
+- =M-x supertag-view-table= → ? → A → see all automations for this tag
+- Disable rules that are causing noise
+- Add rules for new patterns I've noticed
+
+* My Complete Elisp Configuration
+
+This section contains every Elisp setting referenced above, in one place.  Tangle this
+file with =C-c C-v C-t= to produce =supertag-workflow.el=, then:
+
+#+begin_src emacs-lisp
+  (load "~/path/to/supertag-workflow.el")
+#+end_src
+
+#+begin_src emacs-lisp :tangle supertag-workflow.el
+  ;;; supertag-workflow.el — My Org-SuperTag daily workflow configuration
+
+  ;; ── Installation ──
+  ;; (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
+
+  ;; ── Sync ──
+  (setq org-supertag-sync-directories '("~/org/"))
+  (setq supertag-auto-sync-interval 60)
+  (setq supertag-sync-maintenance-every-n-ticks 10)
+  (setq supertag-sync-snapshot-guard t)
+
+  ;; ── Persistence ──
+  (setq supertag-db-auto-save-interval 300)
+  (setq supertag-db-backup-interval 86400)
+  (setq supertag-db-backup-keep-days 3)
+
+  ;; ── RAG (AI Queries) ──
+  ;; Uncomment and configure ONE of these:
+  ;; (setq supertag-rag-provider (llm-make-openai "gpt-4o" :key "sk-..."))
+  ;; (setq supertag-rag-provider (llm-make-gemini "gemini-2.5-flash" :key "..."))
+  ;; (setq supertag-rag-provider (llm-make-ollama "llama3.2" :host "localhost:11434"))
+
+  ;; ── Automation Rules ──
+
+  ;; Rule 1: Auto-set meeting date
+  (supertag-automation-create
+   '(:name "auto-date-for-meetings"
+     :trigger :on-node-create
+     :condition (tag "meeting")
+     :actions ((update-field "date" (format-time-string "%Y-%m-%d")))))
+
+  ;; Rule 2: Record task completion time
+  (supertag-automation-create
+   '(:name "record-done-time"
+     :trigger :on-field-changed
+     :condition (and (tag "task") (property-changed "status"))
+     :actions ((when (equal (field-value "status") "done")
+                 (update-field "completed-at" (format-time-string "%Y-%m-%d %H:%M"))))))
+
+  ;; Rule 3: New papers default to unread
+  (supertag-automation-create
+   '(:name "new-paper-unread"
+     :trigger :on-node-create
+     :condition (tag "paper")
+     :actions ((update-field "status" "unread"))))
+
+  ;; ── Virtual Columns ──
+  (supertag-virtual-column-register
+   :name "overdue"
+   :tag "task"
+   :compute (lambda (node)
+              (let ((due (plist-get node :due))
+                    (status (plist-get (supertag-field-value node "task" "status"))))
+                (and due
+                     (not (equal status "done"))
+                     (time-less-p (date-to-time due) (current-time))))))
+
+  (provide 'supertag-workflow)
+  ;;; supertag-workflow.el ends here
+#+end_src
+
+* Command Quick Reference
+
+This is /my/ most-used commands, not the full list.  For the complete reference, see the
+README.
+
+| Command                                  | I use it for...                                | Frequency |
+|------------------------------------------+------------------------------------------------+-----------|
+| =M-x supertag-view-table=               | Morning review, paper queue, project overview  | Daily     |
+| =M-x supertag-capture=                  | Quick task/idea capture without leaving flow   | Daily     |
+| =M-x supertag-search=                   | Finding things across all files                | Daily     |
+| =M-x supertag-view-node=                | Detailed editing of one node's fields          | Weekly    |
+| =M-x supertag-view-kanban=              | Dragging tasks through workflow                | Daily     |
+| =M-x supertag-view-schema=              | Adding/removing fields, tag hierarchy          | Weekly    |
+| =M-x supertag-add-reference=            | Linking two related ideas                      | Daily     |
+| =M-x supertag-add-tag=                  | Tagging a heading for the first time           | Daily     |
+| =M-x supertag-rag-ask=                  | "What did I decide about X?"                   | Weekly    |
+| =M-x supertag-board-open=               | Visual knowledge exploration                   | Weekly    |
+| =M-x supertag-sync-status=              | Health check                                   | Weekly    |
+| =M-x supertag-sync-full-rescan=         | Rebuild database from files                    | Monthly   |
+| =M-x supertag-sync-cleanup-database=    | Fix inconsistencies                            | As needed |
+
+* Key Bindings I Actually Use
+
+#+begin_src emacs-lisp
+  (global-set-key (kbd "C-c t") 'supertag-view-table)
+  (global-set-key (kbd "C-c k") 'supertag-view-kanban)
+  (global-set-key (kbd "C-c c") 'supertag-capture)
+  (global-set-key (kbd "C-c s") 'supertag-search)
+  (global-set-key (kbd "C-c r") 'supertag-add-reference)
+  (global-set-key (kbd "C-c g") 'supertag-add-tag)
+#+end_src
+
+* Things I Tried and Don't Use (Anymore)
+
+I document what I /stopped/ using so others don't waste time:
+
+- =org-supertag-sync-directories-mode 'unified= with 10+ directories → switched to vault
+  mode.  Too slow scanning everything every tick.
+- Automation rule with =:on-store-changed= trigger → too noisy.  Switched to specific
+  triggers (=:on-field-changed=, =:on-node-create=).
+- Manual sync only → missed too many updates.  Auto-sync with 60s interval is the sweet spot.
+- Trying to define /all/ fields upfront in Schema View → better to add fields as you
+  discover you need them.
+
+* Further Reading
+
+- [[file:../README.md][README]] — Installation and first 5 minutes
+- [[file:AUTOMATION-SYSTEM-GUIDE.md][Automation Guide]] — Full trigger/condition/action reference
+- [[file:CAPTURE-GUIDE.md][Capture Guide]] — Capture system deep-dive
+- [[file:SYNC-CONFIGURATION.md][Sync Configuration]] — Performance tuning, vault mode, troubleshooting
+- [[file:VIEW_FRAMEWORK_DEV_GUIDE.md][View Framework]] — Build custom dashboards
+- [[file:VIRTUAL_COLUMNS.md][Virtual Columns]] — Computed fields API
+- [[file:ONTOLOGY-ARCHITECTURE_cn.md][Architecture]] — Internal design (Chinese)
+- [[file:ORG-SUPERTAG-PLUGIN-GUIDE.md][Plugin Guide]] — Build your own extractors and services

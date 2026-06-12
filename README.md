@@ -287,6 +287,7 @@ No migration needed. Add `#tag` to headings, define fields, and start using view
 ## Further reading
 
 - **Sync configuration**: `doc/SYNC-CONFIGURATION.md`
+- **📖 A Day with Org-SuperTag**: `doc/A-DAY-WITH-ORG-SUPERTAG.org` — complete workflow tutorial with tangleable Elisp
 - **Automation rules**: `doc/AUTOMATION-SYSTEM-GUIDE.md`
 - **Capture system**: `doc/CAPTURE-GUIDE.md`
 - **Virtual columns**: `doc/VIRTUAL_COLUMNS.md`
