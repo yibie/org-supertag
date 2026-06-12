@@ -27,6 +27,10 @@ interface BoardState {
   // Follow mode
   followedNodeId: string | null
 
+  // Search
+  searchQuery: string
+  setSearchQuery: (query: string) => void
+
   // Actions
   setBoards: (boards: BoardInfo[]) => void
   setBoardData: (data: BoardData) => void
@@ -45,7 +49,9 @@ export const useBoardStore = create<BoardState>((set) => ({
   boards: [],
   availableNodes: [],
   followedNodeId: null,
+  searchQuery: '',
 
+  setSearchQuery: (query) => set({ searchQuery: query }),
   setBoards: (boards) => set({ boards }),
 
   setBoardData: (data) =>
@@ -69,5 +75,6 @@ export const useBoardStore = create<BoardState>((set) => ({
       edges: [],
       groups: [],
       viewport: { x: 0, y: 0, zoom: 1.0 },
+      searchQuery: '',
     }),
 }))

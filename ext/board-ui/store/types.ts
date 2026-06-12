@@ -21,6 +21,7 @@ export interface BoardEdge {
   sourceHandle: string
   targetHandle: string
   isGlobal: boolean
+  relationType?: string
 }
 
 export interface BoardGroup {

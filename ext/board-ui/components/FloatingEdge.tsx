@@ -9,6 +9,18 @@ import {
 import { getNodeCenter, getNodeIntersection } from '../util/edgeUtils'
 import { useBoardContext } from '../store/BoardContext'
 
+// Relation type display config — mirrors RELATION_OPTIONS in EdgeRelationMenu.tsx
+const RELATION_META: Record<string, { label: string; color: string }> = {
+  reference:  { label: 'Reference',  color: '#4a5568' },
+  parent:     { label: 'Parent→Child', color: '#2b6cb0' },
+  related:    { label: 'Related',   color: '#276749' },
+  conflicts:  { label: 'Conflicts', color: '#c53030' },
+}
+
+interface FloatingEdgeData {
+  relationType?: string
+}
+
 const FloatingEdge = ({
   id,
   source,
@@ -17,6 +29,7 @@ const FloatingEdge = ({
   style,
   markerEnd,
   selected,
+  data,
 }: EdgeProps) => {
   const sourceNode = useInternalNode(source)
   const targetNode = useInternalNode(target)
@@ -26,6 +39,10 @@ const FloatingEdge = ({
   const [isHovered, setIsHovered] = useState(false)
   const [labelValue, setLabelValue] = useState((label as string) ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Extract relation type from edge data
+  const relationType: string | undefined = (data as FloatingEdgeData | undefined)?.relationType
+  const relation = relationType ? RELATION_META[relationType] : undefined
 
   // Sync external label changes
   useEffect(() => {
@@ -74,18 +91,45 @@ const FloatingEdge = ({
 
   const hasLabel = labelValue.trim().length > 0
   const showControls = selected || isHovered
+  const hasRelation = Boolean(relation)
 
   return (
     <>
       <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} interactionWidth={20} />
 
       <EdgeLabelRenderer>
+        {/* Relation type badge (shown above the edge label / on the edge line when no label) */}
+        {hasRelation && (
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY + (hasLabel ? -18 : 0)}px)`,
+              pointerEvents: 'none',
+              opacity: showControls ? 1 : 0.55,
+              transition: 'opacity 0.15s',
+              fontSize: 9,
+              fontWeight: 600,
+              color: relation!.color,
+              background: `${relation!.color}15`,
+              border: `1px solid ${relation!.color}40`,
+              borderRadius: 3,
+              padding: '1px 5px',
+              whiteSpace: 'nowrap',
+              letterSpacing: '0.02em',
+              textTransform: 'uppercase',
+            }}
+            className="nodrag nopan"
+          >
+            {relation!.label}
+          </div>
+        )}
+
+        {/* Main label area (editable text + delete button) */}
         <div
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY + (hasRelation ? 10 : 0)}px)`,
             pointerEvents: 'all',
-            // Minimum 24px hit area so hover/click works on label-less edges
             minWidth: 24,
             minHeight: 24,
             display: 'flex',

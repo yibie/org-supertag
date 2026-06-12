@@ -1,6 +1,7 @@
-import React, { memo, useState } from 'react'
+import React, { memo, useState, useMemo } from 'react'
 import { Handle, Position, NodeProps } from '@xyflow/react'
 import { Box, Text, Tag, HStack, Flex, Badge, VStack } from '@chakra-ui/react'
+import { useBoardStore } from '../store/boardStore'
 
 interface BoardNodeData {
   title: string
@@ -21,13 +22,25 @@ const BoardNodeComponent = ({ id, data }: NodeProps) => {
   const [contentExpanded, setContentExpanded] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
 
+  // P2: Search highlighting
+  const searchQuery = useBoardStore((s) => s.searchQuery)
+  const isSearching = searchQuery.trim().length > 0
+
+  const isMatch = useMemo(() => {
+    if (!isSearching) return true
+    const q = searchQuery.toLowerCase()
+    return (
+      title.toLowerCase().includes(q) ||
+      content?.toLowerCase().includes(q) ||
+      tags.some((t) => t.toLowerCase().includes(q))
+    )
+  }, [isSearching, searchQuery, title, content, tags])
+
   const toggleTag = (tag: string) => {
     setExpandedTags((prev) => ({ ...prev, [tag]: !prev[tag] }))
   }
 
   // Bar-shaped handles: only visible on node hover.
-  // The exact handle that's grabbed doesn't matter — ConnectionLine always
-  // starts from the card boundary toward the cursor (via getNodeIntersection).
   const hBar: React.CSSProperties = {
     width: 48,
     height: 8,
@@ -53,11 +66,31 @@ const BoardNodeComponent = ({ id, data }: NodeProps) => {
     pointerEvents: isHovered ? 'all' : 'none',
   }
 
+  // P2: Dynamic border/opacity based on search match
+  const borderColor = isFollowed
+    ? 'blue.400'
+    : isMatch && isSearching
+    ? 'blue.300'
+    : isSearching && !isMatch
+    ? 'gray.100'
+    : 'gray.200'
+  const borderWidth = (isFollowed || (isMatch && isSearching)) ? 2 : 1
+  const boxShadow = isFollowed
+    ? 'md'
+    : isMatch && isSearching
+    ? '0 0 0 2px rgba(49, 130, 206, 0.25), 0 0 8px rgba(49, 130, 206, 0.15)'
+    : 'sm'
+  const nodeOpacity = isSearching && !isMatch ? 0.35 : 1
+
   return (
     <Box
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       position="relative"
+      sx={{
+        transition: 'opacity 0.2s ease',
+        opacity: nodeOpacity,
+      }}
     >
       <Handle type="source" position={Position.Top}    style={hBar} />
       <Handle type="source" position={Position.Bottom} style={hBar} />
@@ -67,14 +100,14 @@ const BoardNodeComponent = ({ id, data }: NodeProps) => {
       <Box
         role="group"
         bg="white"
-        borderWidth={isFollowed ? 2 : 1}
-        borderColor={isFollowed ? 'blue.400' : 'gray.200'}
+        borderWidth={borderWidth}
+        borderColor={borderColor}
         borderRadius="md"
-        boxShadow={isFollowed ? 'md' : 'sm'}
+        boxShadow={boxShadow}
         w="180px"
         cursor="grab"
         onDoubleClick={() => onDoubleClick(id)}
-        _hover={{ boxShadow: 'md', borderColor: 'blue.200' }}
+        _hover={isSearching && !isMatch ? {} : { boxShadow: 'md', borderColor: 'blue.200' }}
         transition="all 0.1s"
         position="relative"
       >
@@ -100,7 +133,7 @@ const BoardNodeComponent = ({ id, data }: NodeProps) => {
           lineHeight="18px"
           textAlign="center"
           opacity={0}
-          _groupHover={{ opacity: 1 }}
+          _groupHover={{ opacity: isSearching && !isMatch ? 0 : 1 }}
           _hover={{ bg: 'red.500' }}
           transition="opacity 0.12s"
           zIndex={2}

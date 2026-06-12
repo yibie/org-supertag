@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -8,7 +8,6 @@ import {
   useEdgesState,
   Node,
   Edge,
-  Connection,
   OnNodeDrag,
   BackgroundVariant,
   EdgeChange,
@@ -24,11 +23,11 @@ import { BoardContext } from '../store/BoardContext'
 import BoardNodeComponent from './BoardNode'
 import BoardGroupNode from './BoardGroup'
 import FloatingEdge from './FloatingEdge'
+import { EdgeRelationMenu, RELATION_OPTIONS, RelationOption } from './EdgeRelationMenu'
 import { PALETTE_DND_TYPE } from './NodePalette'
+import { applyAutoLayout } from '../util/autoLayout'
 
 // Preview line: origin = node-boundary intersection (same as FloatingEdge), end = cursor.
-// Uses fromNode so the line always exits from the card boundary toward the cursor,
-// regardless of which bar handle the user grabbed.
 const ConnectionLine = ({ fromNode, toX, toY }: ConnectionLineComponentProps) => {
   if (!fromNode) return null
   const sp = getNodeIntersection(fromNode as any, toX, toY)
@@ -49,6 +48,13 @@ interface BoardCanvasProps {
 const nodeTypes = { boardNode: BoardNodeComponent, groupNode: BoardGroupNode }
 const edgeTypes = { floating: FloatingEdge }
 
+interface PendingConnection {
+  sourceId: string
+  targetId: string
+  x: number
+  y: number
+}
+
 export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
   const {
     nodes: boardNodes,
@@ -57,8 +63,12 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
     currentBoardId,
     viewport,
     followedNodeId,
-  } =
-    useBoardStore()
+    searchQuery,
+  } = useBoardStore()
+
+  // --- P1: Relation menu state ---
+  const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
+
   const boardNodeIds = useMemo(() => new Set(boardNodes.map((n) => n.id)), [boardNodes])
 
   const groupById = useMemo(() => {
@@ -140,6 +150,7 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
           target: e.to,
           label: e.label || undefined,
           type: 'floating',
+          data: { relationType: e.relationType },
           style: {
             stroke: strokeColor,
             strokeDasharray: e.style === 'dashed' ? '5,5' : undefined,
@@ -238,9 +249,7 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
     []
   )
 
-  // On mouse-up, detect which card is under the cursor via DOM hit-test.
-  // This bypasses ReactFlow's handle-snap (connectionRadius=0) so the preview
-  // line follows the cursor freely and the user can drop anywhere on a card.
+  // On mouse-up, detect which card is under the cursor. Then show relation type menu.
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent) => {
       const sourceId = connectingNodeId.current
@@ -254,22 +263,49 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
         ? (event as TouchEvent).changedTouches[0].clientY
         : (event as MouseEvent).clientY
 
-      // Walk elements at drop position from topmost downward; find first node
       const elements = document.elementsFromPoint(clientX, clientY)
       const nodeEl = elements.find((el) => el.classList.contains('react-flow__node'))
       const targetId = nodeEl?.getAttribute('data-id') ?? null
 
       if (targetId && targetId !== sourceId && boardNodeIds.has(targetId)) {
-        sendCommand('add-edge', {
-          boardId: currentBoardId,
-          from: sourceId,
-          to: targetId,
-          label: '',
-        })
+        // Show relation type menu instead of immediately creating edge
+        setPendingConnection({ sourceId, targetId, x: clientX, y: clientY })
       }
     },
-    [currentBoardId, sendCommand, boardNodeIds]
+    [currentBoardId, boardNodeIds]
   )
+
+  // --- P1: Handle relation type selection ---
+  const handleRelationSelect = useCallback(
+    (relation: RelationOption) => {
+      if (!pendingConnection || !currentBoardId) return
+      sendCommand('add-edge', {
+        boardId: currentBoardId,
+        from: pendingConnection.sourceId,
+        to: pendingConnection.targetId,
+        label: '',
+        relationType: relation.value,
+      })
+      setPendingConnection(null)
+    },
+    [currentBoardId, pendingConnection, sendCommand]
+  )
+
+  const handleRelationDismiss = useCallback(() => {
+    setPendingConnection(null)
+  }, [])
+
+  // --- P1b: Auto-layout ---
+  const handleAutoLayout = useCallback(() => {
+    if (!currentBoardId || boardNodes.length === 0) return
+
+    const layoutResult = applyAutoLayout(boardNodes, boardEdges)
+
+    // Send new positions for each moved node
+    layoutResult.forEach(({ id, x, y }) => {
+      sendCommand('move-node', { boardId: currentBoardId, nodeId: id, x, y })
+    })
+  }, [currentBoardId, boardNodes, boardEdges, sendCommand])
 
   // Edges delete sync
   const onEdgesChangeWithSync = useCallback(
@@ -315,11 +351,6 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
       const nodeId = event.dataTransfer.getData(PALETTE_DND_TYPE)
       if (!nodeId || !currentBoardId || !reactFlowWrapper.current) return
 
-      // Convert screen drop position to flow coordinates
-      // We need the ReactFlow instance here — access it via the context we already expose
-      // onDrop fires on the wrapper div; use clientX/Y relative to the wrapper
-      // We'll attach the instance via a forwarded ref pattern using a small trick:
-      // store it on the wrapper element during onInit
       const rfInstance = (reactFlowWrapper.current as any).__rfInstance
       if (!rfInstance) return
 
@@ -347,8 +378,8 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
   if (!currentBoardId) return null
 
   const contextValue = useMemo(
-    () => ({ sendCommand, currentBoardId }),
-    [sendCommand, currentBoardId]
+    () => ({ sendCommand, currentBoardId, searchQuery, onAutoLayout: handleAutoLayout }),
+    [sendCommand, currentBoardId, searchQuery, handleAutoLayout]
   )
 
   return (
@@ -397,6 +428,15 @@ export const BoardCanvas = ({ sendCommand }: BoardCanvasProps) => {
         </ReactFlow>
       </div>
 
+      {/* P1: Relation type selection menu */}
+      {pendingConnection && (
+        <EdgeRelationMenu
+          x={pendingConnection.x}
+          y={pendingConnection.y}
+          onSelect={handleRelationSelect}
+          onDismiss={handleRelationDismiss}
+        />
+      )}
     </BoardContext.Provider>
   )
 }
