@@ -3,8 +3,8 @@
 ;; Copyright (C) 2025 Supertag Authors
 
 ;; Author: Supertag Team
-;; Version: 0.1
-;; Package-Requires: ((emacs "27.1") (gptel "0.5") (org "9.0"))
+;; Version: 0.2
+;; Package-Requires: ((emacs "27.1") (llm "0.19") (org "9.0"))
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; URL: https://github.com/supertag/org-supertag
 
@@ -26,12 +26,12 @@
 ;;; Commentary:
 
 ;; This package provides RAG (Retrieval-Augmented Generation) functionality
-;; for org-supertag, leveraging gptel for LLM interaction and the existing
+;; for org-supertag, leveraging llm.el for LLM interaction and the existing
 ;; supertag query system for high-performance local retrieval.
 
 ;;; Code:
 
-(require 'gptel)
+(require 'llm)
 (require 'supertag-core-store)
 (require 'supertag-services-query)
 (require 'supertag-ops-node) ;; For supertag-node-get API
@@ -157,8 +157,21 @@ Return ONLY the raw Lisp S-expression. Ensure all string values are properly quo
   :type 'string
   :group 'supertag-rag)
 
+(defcustom supertag-rag-provider nil
+  "LLM provider for RAG queries.
+This should be an llm.el provider object created with e.g. `llm-make-openai',
+`llm-make-gemini', `llm-make-ollama', or similar.
+If nil, falls back to `llm-chat-default-provider' (if set) or an OpenAI provider
+using the value of `supertag-rag-model'."
+  :type '(choice (const :tag "Use default provider" nil)
+                 (sexp :tag "LLM provider"))
+  :group 'supertag-rag)
+
 (defcustom supertag-rag-model nil
-  "The model to use for RAG queries. If nil, gptel's default is used."
+  "DEPRECATED: Model name for the LLM provider.
+Only used when `supertag-rag-provider' is nil and `llm-chat-default-provider'
+is not set.  In that case, an OpenAI provider is created with this model.
+Prefer setting `supertag-rag-provider' instead."
   :type '(or nil string)
   :group 'supertag-rag)
 
@@ -173,6 +186,19 @@ Return ONLY the raw Lisp S-expression. Ensure all string values are properly quo
   "The prompt template used for general questions when no local context is found."
   :type 'string
   :group 'supertag-rag)
+
+;;-----------------------------------------------------------------------------
+;;; Provider Helper
+;;-----------------------------------------------------------------------------
+
+(defun supertag-rag--get-provider ()
+  "Return the llm provider to use for RAG queries."
+  (or supertag-rag-provider
+      (and (boundp 'llm-chat-default-provider)
+           llm-chat-default-provider)
+      (let ((model (or supertag-rag-model "gpt-4o")))
+        (ignore-errors
+          (llm-make-openai model)))))
 
 ;;-----------------------------------------------------------------------------
 ;;; 1. User-facing command
@@ -249,19 +275,18 @@ ARGS is a property list that can contain the following keys:
 
 (defun supertag-rag--generate-sexp-from-question (question callback)
   "Ask LLM to translate a natural language question into a supertag S-expression."
-  (let ((prompt (format supertag-rag-sexp-generation-prompt question)))
-    (apply #'gptel-request prompt
-           (append `(:callback
-                     ,(lambda (s-exp-string &rest _)
-                        (condition-case err
-                            (if (and s-exp-string (not (string-empty-p s-exp-string)))
-                                (let ((s-exp (car (read-from-string s-exp-string))))
-                                  (funcall callback s-exp))
-                              (funcall callback nil))
-                          (error
-                           (message "Supertag RAG: Failed to parse LLM response: %s. Response: %s" err s-exp-string)
-                           (funcall callback nil)))))
-                   (if supertag-rag-model `(:model ,supertag-rag-model) nil)))))
+  (let* ((prompt (format supertag-rag-sexp-generation-prompt question))
+         (chat-prompt (llm-make-simple-chat-prompt prompt))
+         (provider (supertag-rag--get-provider))
+         (response (llm-chat provider chat-prompt)))
+    (condition-case err
+        (if (and response (not (string-empty-p response)))
+            (let ((s-exp (car (read-from-string response))))
+              (funcall callback s-exp))
+          (funcall callback nil))
+      (error
+       (message "Supertag RAG: Failed to parse LLM response: %s. Response: %s" err response)
+       (funcall callback nil)))))
 
 (defun supertag-rag--generate-default-query (question)
   "Generate a default query based on common patterns in the question."
@@ -384,69 +409,61 @@ ARGS is a property list that can contain the following keys:
   (format "The following notes were retrieved from the user's personal knowledge base in response to their question. These notes are RELEVANT and RECENTLY recorded by the user. Pay special attention to them when answering the question.\n\n%s" context))
 
 (defun supertag-rag--create-streaming-display-callback ()
-  "Create a callback function that handles streaming responses."
+  "Create a callback function that handles streaming responses.
+Returns a function that receives the accumulated text so far (llm.el style).
+It computes deltas internally and appends them to the display buffer."
   (let* ((buffer (get-buffer-create "*Supertag RAG Answer*"))
          (first-chunk-p t)
-         (error-occurred nil))
+         (last-length 0))
     (with-current-buffer buffer
       (when (fboundp 'markdown-mode) (markdown-mode)))
 
-    (lambda (content metadata)
-      ;; Ensure content is a string or nil
-      (let ((content-str (if (stringp content) content (if content (format "%s" content) ""))))
-        ;; Handle errors in the stream
-        (when (and metadata (plist-get metadata :error))
-          (setq error-occurred t)
-          (message "Supertag RAG: Error in response stream: %s" (plist-get metadata :error)))
-
-        (let ((is-done (and metadata (plist-get metadata :done))))
-          (when (and (not (string-empty-p content-str)) (not error-occurred))
-            (with-current-buffer buffer
-              (when first-chunk-p
-                (erase-buffer)
-                (when supertag-rag-display-buffer-on-start
-                  (display-buffer buffer))
-                (setq first-chunk-p nil))
-              (goto-char (point-max))
-              (insert content-str)
-              ;; Ensure the buffer is visible
-              (when-let* ((win (get-buffer-window buffer)))
-                (set-window-point win (point-max)))))
-
-          (when (and is-done (not error-occurred))
-            (message "Supertag RAG: Answer stream complete."))
-
-          (when (and is-done error-occurred)
-            (message "Supertag RAG: Answer stream completed with errors.")))))))
+    (lambda (accumulated-text)
+      ;; Compute the delta since last call
+      (let ((current-length (length accumulated-text))
+            (delta (if (> current-length last-length)
+                       (substring accumulated-text last-length)
+                     "")))
+        (setq last-length current-length)
+        (unless (string-empty-p delta)
+          (with-current-buffer buffer
+            (when first-chunk-p
+              (erase-buffer)
+              (when supertag-rag-display-buffer-on-start
+                (display-buffer buffer))
+              (setq first-chunk-p nil))
+            (goto-char (point-max))
+            (insert delta)
+            (when-let* ((win (get-buffer-window buffer)))
+              (set-window-point win (point-max)))))))))
 
 (defun supertag-rag--generate-answer (prompt callback stream-callback)
-  "Generate an answer using gptel, correctly handling its streaming callback."
-  (message "Supertag RAG Debug: Using dedicated buffer for gptel request.")
-  (let ((buffer (get-buffer-create "*supertag-rag-temp-request*"))
-        (response-parts '()))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (text-mode)
-      (insert prompt))
-    (apply #'gptel-request
-           nil ; Prompt is nil, gptel reads from buffer
-           (append `(:buffer ,buffer
-                     :stream t
-                     :callback ,(lambda (response-or-signal &rest _)
-                                 "Handle both string chunks from the stream and the final `t` signal from the sentinel."
-                                 (if (stringp response-or-signal)
-                                     ;; Case 1: It's a string chunk from the stream filter.
-                                     (progn
-                                       (when stream-callback (funcall stream-callback response-or-signal))
-                                       (push response-or-signal response-parts))
-                                   ;; Case 2: It's the final signal (t) from the stream sentinel.
-                                   (when (eq response-or-signal t)
-                                     (when callback
-                                       (let ((final-response (string-join (nreverse response-parts) "")))
-                                         (funcall callback final-response)))
-                                     (kill-buffer buffer))))
-                     )
-                   (if supertag-rag-model `(:model ,supertag-rag-model) nil)))))
+  "Generate an answer using llm.el's streaming API.
+CALLBACK is called with the final complete response string.
+STREAM-CALLBACK is called with each accumulated text chunk (computed delta)
+for real-time display."
+  (let* ((provider (supertag-rag--get-provider))
+         (chat-prompt (llm-make-simple-chat-prompt prompt))
+         (last-stream-length 0))
+    (llm-chat-streaming provider chat-prompt
+      ;; partial-callback: compute deltas and call stream-callback
+      (lambda (accumulated-text)
+        (when (and stream-callback accumulated-text)
+          (let ((current-length (length accumulated-text)))
+            (when (> current-length last-stream-length)
+              (let ((delta (substring accumulated-text last-stream-length)))
+                (setq last-stream-length current-length)
+                (funcall stream-callback delta))))))
+      ;; response-callback: final complete text
+      (lambda (full-response)
+        (when callback
+          (funcall callback (or full-response ""))))
+      ;; error-callback
+      (lambda (err-type err-msg)
+        (message "Supertag RAG: LLM error during answer generation: %s - %s"
+                 err-type err-msg)
+        (when callback
+          (funcall callback ""))))))
 
 (defun supertag-rag--display-answer (answer)
   "Display the final answer in a dedicated buffer."
