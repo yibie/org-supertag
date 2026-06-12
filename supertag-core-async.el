@@ -97,8 +97,6 @@ Returns the new queue length."
                 (funcall supertag-async--processor-fn item)
                 (cl-incf count))))
 
-          ;;(message "Async worker processed %d items. Remaining: %d"
-          ;;         count (length supertag-async--queue))
           )
       (error
        (message "Error in supertag async worker: %s" (error-message-string err))))

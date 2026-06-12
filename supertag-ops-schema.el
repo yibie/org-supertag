@@ -34,11 +34,9 @@
         (count 0))
     (when (hash-table-p raw)
       (maphash (lambda (tag-id data)
-                 ;; (message "[SCHEMA-DEBUG] Raw Tag: %s -> %S" tag-id data)
                  (setq count (1+ count))
                  (puthash tag-id (supertag-ops-schema--ensure-plist data) result))
                raw))
-    ;; (message "[SCHEMA-DEBUG] get-all-raw-tags: Found %d tags." count)
     result))
 
 (defun supertag-ops-schema--detect-cycles (parent-map)
@@ -72,12 +70,10 @@
            (if (gethash parent raw-tags)
                (progn
                  (puthash tag-id parent parent-map)
-                 ;; (message "[SCHEMA-DEBUG] build-parent-map: Found relation: %s -> %s" tag-id parent)
                  )
              (message "[supertag] Warning: parent tag '%s' referenced by '%s' not found. Ignoring extends."
                       parent tag-id)))))
     raw-tags)
-   ;; (message "[SCHEMA-DEBUG] build-parent-map: Final map has %d entries." (hash-table-count parent-map))
     (supertag-ops-schema--detect-cycles parent-map)
     parent-map))
 
@@ -118,7 +114,6 @@ Returns a list of field definition plists."
     (while current
       (push current chain)
       (setq current (gethash current parent-map)))
-    ;; (message "[SCHEMA-DEBUG] resolve-fields: Inheritance chain for %s: %S" tag-id chain)
     (let ((ordered-fields '()))
       (dolist (tid (nreverse chain))
         (let ((fields (supertag-ops-schema--get-tag-fields tid raw-tags)))
@@ -145,7 +140,6 @@ Returns a list of field definition plists."
        (let* ((final-fields (supertag-ops-schema--resolve-fields-for-tag tag-id parent-map raw-tags))
               (materialized (plist-put (copy-sequence (supertag-ops-schema--ensure-plist tag-data))
                                        :fields final-fields)))
-         ;; (message "[SCHEMA-DEBUG] materialize-all: Caching for %s: %S" tag-id materialized)
          (puthash tag-id materialized supertag-ops-schema--resolved-cache)))
      raw-tags)))
 

@@ -1136,55 +1136,36 @@ Returns a list '(FILE-PATH TYPE)' on success, nil on failure."
     (let* ((normalized-file (expand-file-name file))
            (original-type (image-type-from-file-name normalized-file)))
 
-      ;; Debug information from old version
-      (message "DEBUG: Processing image file: %s" normalized-file)
-      (message "DEBUG: Detected image type: %s" original-type)
-
       (cond
        ;; Strategy 1: Check if Emacs natively supports this image type
        ((and original-type (image-type-available-p original-type))
-        (message "DEBUG: Using native image support for type: %s" original-type)
         (list normalized-file original-type))
 
        ;; Strategy 2: If type detection fails, try extension-based inference
        ((null original-type)
-        (message "DEBUG: Image type detection failed, trying extension-based detection")
         (let ((extension (downcase (file-name-extension normalized-file))))
           (cond
            ((member extension '("jpg" "jpeg"))
             (if (image-type-available-p 'jpeg)
-                (progn
-                  (message "DEBUG: Using JPEG based on file extension")
-                  (list normalized-file 'jpeg))
-              (message "DEBUG: JPEG not available, will try conversion")
+                (list normalized-file 'jpeg)
               nil))
            ((member extension '("png"))
             (if (image-type-available-p 'png)
-                (progn
-                  (message "DEBUG: Using PNG based on file extension")
-                  (list normalized-file 'png))
-              (message "DEBUG: PNG not available, will try conversion")
+                (list normalized-file 'png)
               nil))
            ((member extension '("gif"))
             (if (image-type-available-p 'gif)
-                (progn
-                  (message "DEBUG: Using GIF based on file extension")
-                  (list normalized-file 'gif))
-              (message "DEBUG: GIF not available, will try conversion")
+                (list normalized-file 'gif)
               nil))
            (t
-            (message "DEBUG: Unknown file extension: %s" extension)
             nil))))
 
        ;; Strategy 3: If not supported and on macOS, call sips for conversion
        ((eq system-type 'darwin)
-        (message "DEBUG: Image type '%s' not directly supported, trying conversion with 'sips'..." original-type)
         (let* ((temp-file (make-temp-file "supertag-img-" nil ".png"))
                (exit-code (call-process "sips" nil nil nil "-s" "format" "png" normalized-file "--out" temp-file)))
           (if (and (zerop exit-code) (file-exists-p temp-file))
-              (progn
-                (message "DEBUG: External conversion to PNG successful: %s" temp-file)
-                (list temp-file 'png))
+              (list temp-file 'png)
             (progn
               (message "!!! ERROR: External conversion (sips) failed for %s (exit code: %s)" normalized-file exit-code)
               nil))))

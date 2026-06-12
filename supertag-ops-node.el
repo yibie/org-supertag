@@ -61,9 +61,6 @@ Returns the created node data."
          (final-props (plist-put final-props :modified-at (supertag-current-time))))
 
 
-    ;; (message "DEBUG: supertag-node-create: Creating node with ID: %S, file: %S"
-    ;;          id (plist-get final-props :file))
-
     ;; Use unified commit system
     (supertag-ops-commit
      :operation :create

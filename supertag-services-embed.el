@@ -13,17 +13,13 @@
 (defun supertag-services-embed--update-node-in-db (source-id new-embed-content)
   "Update a node's content in the database from an embed block.
 Title is NOT updated from the embed block in this new architecture."
-  ;;(message "DEBUG: (2a) Running update-node-in-db for %s" source-id)
   (when-let ((old-node-data (supertag-node-get source-id)))
     (let ((updated-node-data (cl-copy-list old-node-data)))
       ;; The entire block content is the new node content.
       (setf (plist-get updated-node-data :content) new-embed-content)
       ;; Use the existing transaction-safe operation to update the node
       (supertag-node-create updated-node-data)
-      ;;(message "DEBUG: (2c) DB update called via supertag-node-create.")
-      )
-    ;;(message "DEBUG: ERROR - Could not find node %s in DB during update." source-id)
-    ))
+      )))
 
 (defun supertag-services-embed--render-node-to-file (source-id)
   "Renders a node's CONTENT from the database to its source file.
@@ -120,23 +116,16 @@ This function is designed to minimize interference with other packages."
 (defun supertag-services-embed-on-source-save ()
   "Handle source file saves - refresh all embeds that reference this file.
 This function runs OUTSIDE of inhibit-modification-hooks to allow buffer updates."
-  ;;(message "DEBUG-EMBED: [HOOK] on-source-save called for file: %s" (buffer-file-name))
   (let ((current-file (buffer-file-name)))
     (when current-file
-      ;;(message "DEBUG-EMBED: Checking %d buffers for embed blocks" (length (buffer-list)))
       (dolist (buf (buffer-list))
         (when (buffer-live-p buf)
           (with-current-buffer buf
-            ;;(message "DEBUG-EMBED: Checking buffer: %s, file: %s" (buffer-name) (buffer-file-name))
             (when (and (buffer-file-name)
                        (not (string= (buffer-file-name) current-file)))
-              ;;(message "DEBUG-EMBED: Calling find-by-source-file for: %s" current-file)
               (let ((source-ids (supertag-ops-embed-find-by-source-file current-file)))
-                ;;(message "DEBUG-EMBED: Found %d source-ids: %S" (length source-ids) source-ids)
                 (when source-ids
-                  ;;(message "DEBUG-EMBED: Refreshing %d embed blocks in %s" (length source-ids) (buffer-name))
                   (dolist (source-id source-ids)
-                    ;;(message "DEBUG-EMBED: Refreshing block for source-id: %s" source-id)
                     (supertag-services-embed-refresh-block source-id)))))))))))
 
 ;;; --- System Integration ---

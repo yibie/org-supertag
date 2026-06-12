@@ -346,24 +346,19 @@ This function uses the pre-built supertag--rule-index for O(1) lookups."
                            (nth 3 p))
                           (t (progn
                                (unless (and (eq (car p) :nodes) (= (length p) 2))
-                                 ;; (message "DEBUG-3: Path did not match expected patterns. Path: %S" p)
                                  )
                                nil)))))
          (candidate-rules '()))
 
     ;; 1. Collect rules based on the specific property/field that changed
     (when changed-prop
-      ;; (message "DEBUG-4: Rule lookup key is: %S" changed-prop)
-      ;; (message "DEBUG-4.5: Current rule index keys: %S" (hash-table-keys supertag--rule-index))
       (when-let ((rules (gethash changed-prop supertag--rule-index)))
-        ;; (message "DEBUG-5: Found rules for key: %S" rules)
         (setq candidate-rules (append rules candidate-rules)))
       ;; Also check keyword version for global fields (backward compat)
       (when (stringp changed-prop)
         (when-let ((rules (gethash (intern (concat ":" changed-prop)) supertag--rule-index)))
           (setq candidate-rules (append rules candidate-rules))))
       (unless (gethash changed-prop supertag--rule-index)
-        ;; (message "DEBUG-5.5: No rules found for key %S in index" changed-prop)
         ))
 
     ;; 2. Collect rules based on the tags of the affected node
@@ -1154,7 +1149,6 @@ This is the actual handler that was previously called directly."
                  ;; Field or generic node changes (exclude explicit tag list change)
                  ((or (eq entity-type :fields)
                       (and (eq entity-type :nodes) (not tags-change-under-node)))
-                  ;; (message "DEBUG-EVENT: node/field change path=%S" path)
                   (supertag-automation--handle-node-change path old-value new-value))
                  ;; Tag list changes (explicit :tags path or :nodes ... :tags ...)
                  ((or (eq entity-type :tags) tags-change-under-node)
@@ -1166,7 +1160,6 @@ This is the actual handler that was previously called directly."
                                        new-value
                                      (let ((nd (supertag-node-get node-id)))
                                        (plist-get nd :tags)))))
-                    ;; (message "DEBUG-EVENT: tag change path=%S old=%S new=%S" path old-tags new-tags)
                     (supertag-automation--handle-tag-change node-id old-tags new-tags))))))
           ;; Always remove the node-id from the queue when done.
           (setq supertag-automation--processing-queue
@@ -1175,17 +1168,13 @@ This is the actual handler that was previously called directly."
 (defun supertag-automation--handle-node-change (path old-value new-value)
   "Handle node changes and trigger relevant automation."
   (let ((rule-ids (supertag--get-rules-from-index path)))
-    ;; (message "DEBUG-6: Found %d candidate rules for path %S" (length rule-ids) path)
             (dolist (rule-id rule-ids)
-              ;; (message "DEBUG-6.5: Checking rule %s" rule-id)
               (when-let ((rule (supertag-rule-get rule-id)))
                 (let ((trig (plist-get rule :trigger)))
           ;; Runtime trigger gate: skip tag-only triggers here
           (if (and (consp trig) (memq (car trig) '(:on-tag-added :on-tag-removed)))
-              ;; (message "DEBUG-TRIGGER: skip tag-triggered rule %s for non-tag event %S" rule-id path)
                       nil
                     (let ((supertag-automation--current-event (list :path path :old old-value :new new-value)))
-                      ;; (message "DEBUG-6.7: Evaluating condition for rule %s" rule-id)
                       (if (and (supertag-automation--trigger-match-p trig supertag-automation--current-event)
                                (supertag-automation--evaluate-condition (plist-get rule :condition) (cadr path)))
                           (progn
@@ -1193,7 +1182,6 @@ This is the actual handler that was previously called directly."
                             (supertag-automation--log "INDEX-MATCH: Event %S triggered rule %S" path rule-id)
                             (supertag-rule-execute rule (cadr path)
                                                    (list :path path :old old-value :new new-value)))
-                        ;; (message "DEBUG-6.8: Condition failed for rule %s" rule-id)
                         ))))))))
 
 (defun supertag-automation--handle-tag-change (node-id old-tags new-tags)
@@ -1209,7 +1197,6 @@ This is the actual handler that was previously called directly."
                                     :test 'equal))
          (added (cl-set-difference new old :test 'equal))
          (removed (cl-set-difference old new :test 'equal)))
-    ;; (message "DEBUG-TAGS: node=%s added=%S removed=%S" node-id added removed)
     (dolist (tag added)
       (supertag-automation--execute-tag-trigger node-id tag :added))
     (dolist (tag removed)

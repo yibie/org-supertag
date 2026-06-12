@@ -423,11 +423,8 @@ compatible with `supertag--render-org-headline'."
             (get-spec (plist-get spec :get)))
         (pcase part-type
           (:title
-           (message "DEBUG: Matched :title. Calling get-content...")
-           (setq title (supertag-capture--get-content get-spec))
-           (message "DEBUG: Got title: %S" title))
+           (setq title (supertag-capture--get-content get-spec)))
           (:tags
-           (message "DEBUG: Matched :tags. Calling get-content...")
            (let ((tags-result (supertag-capture--get-content get-spec)))
              (setq tags (if (listp tags-result)
                            (car tags-result)  ; Extract tags list from (tags position)
@@ -436,18 +433,11 @@ compatible with `supertag--render-org-headline'."
                                   (cadr tags-result)))  ; Extract position from (tags position)
              (when (and (stringp tags-result) (not (listp tags-result)))
                ;; Handle case where tags might be a string from old format
-               (setq tags (split-string tags-result "[,;]" t "[ \t\n\r]+")))
-             (message "DEBUG: Got tags: %S, position: %S" tags tag-position)))
+               (setq tags (split-string tags-result "[,;]" t "[ \t\n\r]+")))))
           (:body
-           (message "DEBUG: Matched :body. Calling get-content...")
-           (setq body (supertag-capture--get-content get-spec))
-           (message "DEBUG: Got body: %S" body))
+           (setq body (supertag-capture--get-content get-spec)))
           (:fields
-           (message "DEBUG: Matched :fields. Calling get-content...")
-           (setq fields (supertag-capture--get-content get-spec))
-           (message "DEBUG: Got fields: %S" fields)))
-        (message "DEBUG: Finished processing one spec item.")))
-    (message "DEBUG: --- Exiting process-spec ---")
+           (setq fields (supertag-capture--get-content get-spec))))))
     `(:title ,title :tags ,tags :body ,body :fields ,fields :tag-position ,tag-position)))
 
 ;;; --- NEW: Target Resolution Engine ---
