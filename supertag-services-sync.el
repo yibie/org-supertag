@@ -100,10 +100,6 @@ Takes precedence over `org-supertag-sync-directories`."
   :type 'boolean
   :group 'supertag-sync)
 
-(defcustom supertag-sync-scope-debug nil
-  "When non-nil, log verbose diagnostics for sync scope checks."
-  :type 'boolean
-  :group 'supertag-sync)
 
 (defun supertag-sync--state-file ()
   "Return the resolved sync-state file path for current data directory."
@@ -356,23 +352,6 @@ Does not require the file to exist."
       (let ((result (and included
                          (not excluded)
                          (string-match-p supertag-sync-file-pattern file))))
-        ;; Enhanced debug logging for troubleshooting
-        (when (and supertag-sync-scope-debug (not result))
-          (message "DEBUG-SCOPE: File %s REJECTED - included: %s, excluded: %s, pattern-match: %s"
-                   file
-                   included
-                   excluded
-                   (string-match-p supertag-sync-file-pattern file))
-          (message "DEBUG-SCOPE: expanded-file: %s" expanded-file)
-          (message "DEBUG-SCOPE: file-dir: %s" file-dir)
-          (message "DEBUG-SCOPE: sync-directories: %S" sync-dirs)
-          (when sync-dirs
-            (dolist (dir sync-dirs)
-              (let ((expanded-dir (expand-file-name dir)))
-                (message "DEBUG-SCOPE: Checking dir %s (expanded: %s) - prefix match: %s"
-                         dir
-                         expanded-dir
-                         (string-prefix-p expanded-dir file-dir))))))
         result))))
 
 (defun supertag-sync--in-sync-scope-p (file)
@@ -750,7 +729,6 @@ Returns the loaded or initialized sync state."
 ;;         (cancel-timer timer)
 ;;         (cl-incf cleaned-count)))
 ;;     (when (> cleaned-count 0)
-;;       ;;(message "Cleaned up %d additional timers" cleaned-count))
 ;;     )
 
 ;;   ;; Reset sync state
@@ -861,7 +839,6 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
 (defun supertag-node-mark-deleted-from-file (id)
   "Mark a node as deleted from its file by setting its :file property to nil.
 This does not remove the node from the store immediately."
-  ;;(message "DEBUG: supertag-node-mark-deleted-from-file called for ID: %S" id)
   (supertag-node-update
    id
    (lambda (node)
@@ -1040,8 +1017,6 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
   "Check and synchronize modified files.
   This is the main sync function called periodically.
   It enqueues modified files for asynchronous processing."
-  ;;(message "DEBUG: supertag-sync--check-and-sync function called at %s" (current-time))
-
   ;; Pre-check: Warn if sync directories are not configured
   (unless (supertag-sync--effective-directories)
     (message "WARNING: org-supertag-sync-directories is not configured. Sync will not run.")
@@ -1542,7 +1517,6 @@ This function is called only when a node is actually being created or updated."
                         (setf (plist-get counters :references-created)
                               (1+ (or (plist-get counters :references-created) 0)))))))
               ;; Target node doesn't exist yet - this is normal during batch sync
-              ;; (message "DEBUG: Target node %s not found yet, reference relation will be created when target is processed." target-id)
               )))))))
 
 (defun supertag--cleanup-orphaned-references (node-id current-refs counters)
@@ -1555,7 +1529,6 @@ COUNTERS is a plist for tracking relation statistics."
       (let ((target-id (plist-get relation :to)))
         ;; If this relation's target is not in current refs, delete it
         (unless (member target-id current-refs)
-          (message "DEBUG: Removing orphaned reference relation (%s -> %s)." node-id target-id)
           (supertag-relation-delete (plist-get relation :id))
           (setf (plist-get counters :references-deleted)
                 (1+ (or (plist-get counters :references-deleted) 0))))))))
@@ -1612,17 +1585,78 @@ Returns a string containing only the node's own content."
         ;; Extract content from contents-begin to the adjusted content-end
         (buffer-substring-no-properties contents-begin content-end)))))
 
-  (defun supertag--convert-element-to-node-plist (headline file &optional migration-mode)
-  "Convert a headline ELEMENT from org-element into a node plist.
-This is the core reusable parser for a single headline.
-NOTE: This function only parses data, it does NOT create tag entities or relations.
-MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generation)."
-  (let* ((id (org-element-property :ID headline))
-         (contents-begin (org-element-property :contents-begin headline))
-         (contents-end (org-element-property :contents-end headline))
-         (original-raw-title (org-element-property :raw-value headline))
+;;; --- Extractor Plugin System ---
+
+(defvar supertag-extractor--registry nil
+  "Ordered list of registered extractors.
+Each entry is a plist with :name, :priority, and :fn keywords.
+Sorted by :priority (ascending, lower runs first).")
+
+(cl-defun supertag-extractor-register (&key name priority fn)
+  "Register an extractor FN with NAME and PRIORITY.
+If an extractor with the same NAME already exists, replace it.
+Lower PRIORITY runs first; later extractors override earlier ones
+when they produce the same key."
+  (declare (indent 0))
+  (setq supertag-extractor--registry
+        (cl-remove name supertag-extractor--registry
+                   :key (lambda (e) (plist-get e :name)) :test #'equal))
+  (push (list :name name :priority priority :fn fn)
+        supertag-extractor--registry)
+  (setq supertag-extractor--registry
+        (cl-sort supertag-extractor--registry #'<
+                 :key (lambda (e) (plist-get e :priority)))))
+
+(defun supertag-extractor-unregister (name)
+  "Remove the extractor with NAME from the registry."
+  (setq supertag-extractor--registry
+        (cl-remove name supertag-extractor--registry
+                   :key (lambda (e) (plist-get e :name)) :test #'equal)))
+
+(defun supertag-extractor-list ()
+  "Return a copy of the current extractor registry, sorted by priority."
+  (copy-sequence supertag-extractor--registry))
+
+(defun supertag-extractor--run (element file ctx)
+  "Run all registered extractors on ELEMENT and return merged plist.
+ELEMENT is the org-element headline.
+FILE is the absolute file path of the buffer.
+CTX is a plist with parse-context flags (e.g. :full-rescan-p).
+Extractors are called in priority order; for any key produced by
+multiple extractors, the one with the highest priority (called last)
+wins."
+  (let ((result '()))
+    (dolist (entry supertag-extractor--registry)
+      (let* ((fn (plist-get entry :fn))
+             (patch (funcall fn element file ctx)))
+        (when patch
+          (cl-loop for (key val) on patch by #'cddr
+                   do (setq result (plist-put result key val))))))
+    result))
+
+;;; --- Built-in Extractors ---
+
+(defun supertag-extractor--core-structure (headline _file _ctx)
+  "Extract core structural fields from a headline element.
+Returns: :level, :todo, :priority, :scheduled, :deadline,
+:position, :pos."
+  (list :level (org-element-property :level headline)
+        :todo (org-element-property :todo-keyword headline)
+        :priority (let ((p (org-element-property :priority headline)))
+                    (and p (format "#%c" p)))
+        :scheduled (let ((ts (org-element-property :scheduled headline)))
+                     (and ts (org-element-interpret-data ts)))
+        :deadline (let ((ts (org-element-property :deadline headline)))
+                    (and ts (org-element-interpret-data ts)))
+        :position (org-element-property :begin headline)
+        :pos (org-element-property :begin headline)))
+
+(defun supertag-extractor--title (headline _file _ctx)
+  "Extract and clean the title from a headline element.
+Returns: :title (cleaned, user-visible title),
+:raw-value (same cleaned title, used for hashing)."
+  (let* ((original-raw-title (org-element-property :raw-value headline))
          (todo-keyword (org-element-property :todo-keyword headline))
-         ;; Clean title: remove TODO keyword, :tags:, and inline #tags while keeping display text
          (cleaned-title
           (when original-raw-title
             (let ((title original-raw-title))
@@ -1635,23 +1669,84 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
               (string-trim title))))
          (final-title (if (or (null cleaned-title) (string-empty-p cleaned-title))
                           original-raw-title
-                        cleaned-title))
-         ;; Extract outline path (olp) - list of ancestor titles from root to current
-         (olp (supertag--extract-outline-path headline))
+                        cleaned-title)))
+    (list :title (or final-title "Untitled Node")
+          :raw-value final-title)))
+
+(defun supertag-extractor--olp (headline _file _ctx)
+  "Extract the outline path from a headline element.
+Returns: :olp (list of ancestor titles from root to current)."
+  (list :olp (supertag--extract-outline-path headline)))
+
+(defun supertag-extractor--tags (headline _file ctx)
+  "Extract tags from a headline element.
+Reads inline #tags from title and content, optionally reads native
+org :tags: during full rescan.
+Returns: :tags (list of sanitized tag strings)."
+  (let* ((original-raw-title (org-element-property :raw-value headline))
          (headline-tags (supertag--extract-inline-tags original-raw-title))
          (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
-         (org-native-tags (if supertag-sync--is-full-rescan-p
+         (org-native-tags (if (plist-get ctx :full-rescan-p)
                               (or (supertag--extract-org-headline-tags headline) '())
                             '()))
          (all-tags (supertag--merge-and-sanitize-tags
-                   (cl-union headline-tags content-tags :test #'equal)
-                     org-native-tags))
-         (properties (supertag--parse-properties headline))
+                    (cl-union headline-tags content-tags :test #'equal)
+                    org-native-tags)))
+    (list :tags all-tags)))
+
+(defun supertag-extractor--properties (headline _file _ctx)
+  "Extract user-defined properties from a headline element.
+Returns: :properties (plist of keyword-value pairs)."
+  (list :properties (supertag--parse-properties headline)))
+
+(defun supertag-extractor--content (headline _file _ctx)
+  "Extract the body content of a headline, excluding sub-headlines.
+Strips any :PROPERTIES: drawers found in the content area.
+Returns: :content (string)."
+  (let* ((contents-begin (org-element-property :contents-begin headline))
+         (contents-end (org-element-property :contents-end headline))
+         (raw-content (if (and contents-begin contents-end)
+                          (supertag--extract-node-own-content
+                           headline contents-begin contents-end)
+                        "")))
+    (list :content (replace-regexp-in-string
+                    ":PROPERTIES:\n\\(.\\|\n\\)*?:END:\n?"
+                    "" raw-content))))
+
+(defun supertag-extractor--refs (headline _file _ctx)
+  "Extract id: link references from a headline's direct content.
+Only extracts from non-headline children.
+Returns: :ref-to (list of UUID strings)."
+  (let* ((contents-begin (org-element-property :contents-begin headline))
          (refs-to (supertag--extract-refs
                    (when contents-begin
-                     ;; Filter out child headlines to only extract links from the node's direct content.
                      (cl-remove-if (lambda (el) (eq (org-element-type el) 'headline))
                                    (org-element-contents headline))))))
+    (list :ref-to (cl-delete-duplicates refs-to :test #'equal))))
+
+(defun supertag-extractor--setup-defaults ()
+  "Register all built-in extractors with default priorities."
+  (supertag-extractor-register :name 'core-structure :priority 0
+                               :fn #'supertag-extractor--core-structure)
+  (supertag-extractor-register :name 'title :priority 5
+                               :fn #'supertag-extractor--title)
+  (supertag-extractor-register :name 'olp :priority 10
+                               :fn #'supertag-extractor--olp)
+  (supertag-extractor-register :name 'tags :priority 20
+                               :fn #'supertag-extractor--tags)
+  (supertag-extractor-register :name 'properties :priority 30
+                               :fn #'supertag-extractor--properties)
+  (supertag-extractor-register :name 'content :priority 40
+                               :fn #'supertag-extractor--content)
+  (supertag-extractor-register :name 'refs :priority 50
+                               :fn #'supertag-extractor--refs))
+
+(defun supertag--convert-element-to-node-plist (headline file &optional migration-mode)
+  "Convert a headline ELEMENT from org-element into a node plist.
+This is the core reusable parser for a single headline.
+NOTE: This function only parses data, it does NOT create tag entities or relations.
+MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generation)."
+  (let* ((id (org-element-property :ID headline)))
     ;; Handle ID generation based on mode
     (let ((final-id (if migration-mode
                         ;; Migration mode: only use existing IDs
@@ -1661,34 +1756,15 @@ MIGRATION-MODE when t, only processes nodes with existing IDs (no auto-generatio
                                (org-id-new))))))
       ;; Only create node if we have a valid ID
       (when final-id
-        ;; NOTE: Tag creation and relationship establishment have been moved to the
-        ;; supertag--process-node-tags function, so these actions are only performed
-        ;; when a node actually needs to be created or updated.
-
-        (list :id final-id
-             :title (or final-title "Untitled Node")
-             :raw-value final-title ;; Use final title for hashing
-             :tags all-tags
-             :properties properties
-             :ref-to (cl-delete-duplicates refs-to :test #'equal)
-            :file file
-            :olp olp ;; Add outline path
-            :content (let ((raw-content (if (and contents-begin contents-end)
-                                             ;; Extract only content up to first child headline
-                                             (supertag--extract-node-own-content headline contents-begin contents-end)
-                                           "")))
-                       ;; Aggressively remove any properties drawers found in the content area.
-                       ;; This is necessary because drawers in the content area are parsed as
-                       ;; plain paragraphs, so they cannot be filtered by element type.
-                       (replace-regexp-in-string ":PROPERTIES:\n\\(.\\|\n\\)*?:END:\n?"
-                                                 "" raw-content))
-            :level (org-element-property :level headline)
-           :todo (org-element-property :todo-keyword headline)
-           :priority (let ((p (org-element-property :priority headline))) (and p (format "#%c" p)))
-           :scheduled (let ((ts (org-element-property :scheduled headline))) (and ts (org-element-interpret-data ts)))
-           :deadline (let ((ts (org-element-property :deadline headline))) (and ts (org-element-interpret-data ts)))
-           :position (org-element-property :begin headline)
-           :pos (org-element-property :begin headline))))))
+        ;; Run the extractor pipeline to collect all per-headline fields.
+        ;; The CTX plist carries parse-context flags shared across extractors.
+        (let* ((ctx (list :file file
+                          :full-rescan-p supertag-sync--is-full-rescan-p))
+               (extracted (supertag-extractor--run headline file ctx)))
+          ;; Build final plist: :id and :file are non-pluggable dispatcher
+          ;; fields; everything else comes from the extractor pipeline.
+          (append (list :id final-id :file file)
+                  extracted))))))
 
 (defun supertag--map-headlines (parsed-ast file &optional migration-mode)
   "Map over headlines in PARSED-AST and parse them into nodes.
@@ -1771,7 +1847,6 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
 
   ;; Cancel existing timer
   (when supertag-sync--timer
-    (message "DEBUG: Canceling existing timer")
     (cancel-timer supertag-sync--timer)
     (setq supertag-sync--timer nil))
 
@@ -2111,5 +2186,8 @@ Provides helpful hints to the user about configuration issues."
      ;; Case 4: Files tracked but all up-to-date
      ((not quiet)
       (message "DIAGNOSTIC: %d files tracked." state-count)))))
+
+;;; --- Register Built-in Extractors ---
+(supertag-extractor--setup-defaults)
 
 (provide 'supertag-services-sync)
