@@ -1,0 +1,660 @@
+#+TITLE: Org-SuperTag 的一天 — 一个人的完整工作流
+#+AUTHOR: Org-SuperTag 社区
+#+EMAIL: yibie@users.noreply.github.com
+#+OPTIONS: toc:3 num:t
+
+* 如何使用本文档
+
+这不是功能列表。这是 /一个人真实使用 Org-SuperTag 的日常/，仿照 Bernt Hansen 的经典 [[http://doc.norang.ca/org-mode.html][org-mode 教程]] 风格写成。
+
+每个章节都告诉你：
+
+1. 我实际上做了什么
+2. 具体的命令和 Elisp 代码
+3. 为什么我选这种方式，而不是其他方式
+
+你可以在 Emacs 中加载这个文件，用 =C-c C-v C-t= 将所有 Elisp 示例提取到 =supertag-workflow.el=，然后 =require= 到你的 =init.el= 中。
+
+本文档假设你已经安装了 Org-SuperTag。安装说明见 [[file:../README_CN.md][README]]。
+
+如果你想看英文版：[[file:A-DAY-WITH-ORG-SUPERTAG.org][A Day with Org-SuperTag (English)]]
+
+* 我的环境配置
+
+** 我的 Org 文件
+
+我把生活放在 =~/org/= 下的几个文件中。每个文件有清晰的目的，而 Org-SuperTag 把它们当作一个统一的知识库。
+
+| 文件                  | 用途                                       |
+|-----------------------+--------------------------------------------|
+| =inbox.org=           | 捕获桶——所有东西先落在这里                 |
+| =projects.org=        | 进行中的项目，每个是一级标题                |
+| =research.org=        | 论文、阅读笔记、文献综述                    |
+| =meetings.org=        | 会议记录，包含决议和待办                    |
+| =journal.org=         | 日记、想法、反思                            |
+
+为什么分开多个文件？因为 Org-SuperTag 可以 /跨所有文件/ 查询。文件分隔是为了 /我/ 的脑袋——Org-SuperTag 不在乎标题在哪个文件里。=meetings.org= 里的 =#task= 和 =projects.org= 里的 =#task= 在表格视图中并列显示。
+
+** Vault 配置
+
+我目前用一个 vault 管理所有东西。如果以后想区分工作和个人，我会这样配：
+
+#+begin_src emacs-lisp
+  ;; 单 vault（我现在的配置）
+  (setq org-supertag-sync-directories '("~/org/"))
+
+  ;; 多 vault 方案——工作和个人分开的独立数据库
+  ;; (setq org-supertag-sync-directories '("~/org/work/" "~/org/personal/"))
+  ;; (setq org-supertag-sync-directories-mode 'vaults)
+#+end_src
+
+** 同步配置
+
+我希望同步自动运行但不要太激进。60 秒间隔是一个很好的平衡——新内容不会等太久，Emacs 也保持响应。
+
+#+begin_src emacs-lisp
+  ;; 每 60 秒自动同步
+  (setq org-supertag-sync-directories '("~/org/"))
+  (setq supertag-auto-sync-interval 60)
+
+  ;; 每 10 次 tick 才做一次全量校验（节省 CPU）
+  (setq supertag-sync-maintenance-every-n-ticks 10)
+
+  ;; 快照保护：如果目录不可用（如网络盘断开），
+  ;; 不会误判为"文件被删除"而破坏数据库
+  (setq supertag-sync-snapshot-guard t)
+#+end_src
+
+** 标签层级——我的知识 Schema
+
+我对标签做了精心设计，形成层级结构，子标签自动 /继承/ 父标签的字段。
+
+#+begin_src emacs-lisp
+  ;; ── 顶层标签 ──
+  ;; #project   → 字段：status, priority, deadline, owner
+  ;; #task      → 不继承任何标签，字段：status, priority, due, project
+  ;; #paper     → 字段：authors, year, venue, status, rating, topic
+  ;; #meeting   → 字段：date, participants, decisions, action-items
+  ;; #idea      → 字段：status, feasibility, related-project
+  ;; #person    → 字段：role, email, notes
+#+end_src
+
+这些定义在 Schema View（=M-x supertag-view-schema=）中完成，不是在代码里。下面是数据结构的示意：
+
+#+begin_src emacs-lisp
+  ;; #paper 标签上定义的字段：
+  ;;   authors  : 文本
+  ;;   year     : 数字
+  ;;   venue    : 文本
+  ;;   status   : 选择 → 未读 | 阅读中 | 已读
+  ;;   rating   : 数字 1–5
+  ;;   topic    : 文本
+#+end_src
+
+继承的好处：如果以后创建了一个 =#paper/ai= 标签，让它 /继承/ =#paper=，它就自动拥有
+=authors=、=year=、=status= 等所有字段。我只需要添加 AI 特有的字段，比如 =model= 或 =dataset=。
+
+* 早上：回顾与计划（08:00–08:15）
+
+** 打开 Table View 看今天的任务
+
+我每天早上只用一个命令开头：=M-x supertag-view-table=，选择标签 =task=。
+
+我看到的是：一张类似电子表格的视图，展示 /所有/ =#task= 节点，不管它们分散在哪个 Org 文件里。
+列包括：=status=、=priority=、=due=、=project=，以及我自定义的其他字段。
+
+#+begin_src emacs-lisp
+  ;; 我在 Table View 里常用的按键：
+  ;;   o           → 跳转到该标题所在的 Org 文件
+  ;;   C-o         → 跳转到引用的节点
+  ;;   e           → 编辑当前单元格
+  ;;   s           → 按当前列排序
+  ;;   /           → 过滤行
+  ;;   TAB         → 展开/折叠行详情
+  ;;   ?           → 帮助（显示所有按键绑定）
+#+end_src
+
+** 过滤到真正需要关注的内容
+
+第一步：过滤到 =status != 已完成=，按 =priority= 排序。
+
+#+begin_src emacs-lisp
+  ;; 在 Table View 中：
+  ;;   / → filter → status → != done
+  ;;   s → sort → priority（升序）
+
+  ;; 等效的 Elisp 查询：
+  (supertag-search
+   '(and (tag "task")
+         (not (field "status" "done"))))
+#+end_src
+
+扫一眼前 10 项。如果有过期的（=due= 在今天之前），我要么重新安排，要么把它移到列表顶部。
+编辑一个单元格只需要按一下键。
+
+** 捕获脑子里冒出来的事
+
+复盘的时候经常会想起一些事。我不切换上下文，而是直接捕获：
+
+#+begin_src emacs-lisp
+  ;; M-x supertag-capture
+  ;; 选标签：task
+  ;; 填字段：title → "更新 API 文档", status=todo, priority=high
+  ;; → 立刻出现在表格里
+#+end_src
+
+十五分钟，我清楚地知道今天要做什么。
+
+* 白天：捕获但不中断心流
+
+这是 Org-SuperTag 相对纯 Org-mode 最大的优势。捕获 /快/ 且 /结构化/——不需要记忆字段名或语法。
+
+** 工作中捕获一个任务
+
+我正在写代码，脑子里冒出一个念头："需要更新 API 文档"。我不切换 buffer，不找文件。我只：
+
+1. =M-x supertag-capture=
+2. 选标签 =task=
+3. 输入标题："更新 API 文档 v2.1"
+4. 设 =priority=high=，=project=backend=
+5. =C-c C-c= → 完成。回到代码。整个过程 8 秒。
+
+任务已经落在我的 =inbox.org= 里（我配置的捕获文件），所有字段都已填充。
+下一个同步周期后，它就自动出现在 Table View 里。
+
+** 会议中记录
+
+开会时，我打开 =meetings.org=：
+
+#+begin_example org
+,* 周例会 2025-06-12 #meeting
+,** 进展更新
+   - 后端：API v2 已部署，监控正常
+   - 前端：PR #234 评审中
+   - DevOps：CI 流水线速度提升 30%
+,** 决议
+   - 发布时间推迟到 6 月 20 日
+   - 新服务使用 PostgreSQL 16
+,** 待办事项
+   - @小明：起草发布说明
+   - @小红：在 staging 上跑负载测试
+#+end_example
+
+Org-SuperTag 读取后：
+1. 提取 =#meeting= 标签
+2. 通过 /extractor 流水线/ 拉取 =todo= 关键字、=scheduled= 等结构信息
+3. 使其可以与所有其他 =#meeting= 节点一起查询
+
+之后，我会通过 Node View 补充结构化字段（=date=、=participants=、=decisions=）。
+但开会期间，我自然书写。
+
+** 自动化：让规则帮你填
+
+我设置了一些自动化规则，这样不需要手动填充每个字段。以下是我依赖的规则：
+
+#+begin_src emacs-lisp
+  ;; 规则 1：#meeting 节点创建时，自动设置日期为今天
+  (supertag-automation-create
+   '(:name "auto-date-for-meetings"
+     :trigger :on-node-create
+     :condition (tag "meeting")
+     :actions ((update-field "date" (format-time-string "%Y-%m-%d")))))
+
+  ;; 规则 2：#task 的 status 变为 "done" 时，记录完成时间
+  (supertag-automation-create
+   '(:name "record-done-time"
+     :trigger :on-field-changed
+     :condition (and (tag "task")
+                     (property-changed "status"))
+     :actions ((when (equal (field-value "status") "done")
+                 (update-field "completed-at"
+                               (format-time-string "%Y-%m-%d %H:%M"))))))
+
+  ;; 规则 3：新 #paper 自动设为 "unread"
+  (supertag-automation-create
+   '(:name "new-paper-unread"
+     :trigger :on-node-create
+     :condition (tag "paper")
+     :actions ((update-field "status" "unread"))))
+#+end_src
+
+规则管理：
+- =M-x supertag-view-table= → 选标签 → =?= → =A= → 查看该标签的所有规则
+- 无需删除即可启用/禁用：=supertag-automation-enable= / =disable=
+- 测试规则效果：详见 =doc/AUTOMATION-SYSTEM-GUIDE_cn.md=
+
+自动化的意义：我定义逻辑 /一次/，Org-SuperTag 每次自动应用。"哎呀，忘了给会议记录填日期"这种事不会再发生。
+
+* 工作中：像 App 一样的视图
+
+** Table View——我的主操作界面
+
+我 60% 的 Org-SuperTag 时间都在 Table View 里。它用起来像一个轻量级数据库客户端，但完全在 Emacs 里。
+
+我常做的操作：
+
+| 操作                             | 按键                                   |
+|----------------------------------+----------------------------------------|
+| 按任意列排序                     | =s= → 选择列                           |
+| 过滤（如 status=active）         | =/= → status → = active                |
+| 批量编辑（标记行，设置字段）     | =m= 标记，=B= 批量编辑                  |
+| 添加新列                         | =M-x supertag-view-table-add-column=   |
+| 保存当前视图为命名视图           | =M-x supertag-view-table-save-current-view-as-named= |
+| 切换命名视图                     | =M-x supertag-view-table-switch-view=  |
+| 导出到 Org 文件                  | =M-x supertag-search-export-results-to-file= |
+
+命名视图是改变游戏规则的功能。我有这些：
+
+- =today-tasks=：=#task=，过滤 =status != done=，按 =priority= 排序
+- =reading-queue=：=#paper=，过滤 =status = unread=，按 =year= 降序
+- =active-projects=：=#project=，过滤 =status = active=
+- =recent-meetings=：=#meeting=，过滤 =date >= -7d=
+
+#+begin_src emacs-lisp
+  ;; 命名视图存储在 supertag--view-configs 中。
+  ;; 可以保存到文件并在多台机器间共享：
+  (supertag-view-config-save-to-file "~/org/supertag-views.el")
+  ;; 在另一台机器上：
+  (supertag-view-config-load-from-file "~/org/supertag-views.el")
+#+end_src
+
+** Kanban View——当我需要看到流转
+
+对于 =#task= 和 =#project=，Table View 适合 /查询/，但 Kanban 更适合 /执行/。
+
+=M-x supertag-view-kanban= → 选标签 =task= → 按 =status= 分列
+
+#+begin_example
+  ┌──────────┬──────────┬──────────┐
+  │  待办    │  进行中  │  已完成  │
+  ├──────────┼──────────┼──────────┤
+  │ 修复认证 │ 重写同步 │ 部署     │
+  │ bug      │ 层       │ v2.1     │
+  │ 更新文档 │          │          │
+  └──────────┴──────────┴──────────┘
+#+end_example
+
+我拖拽任务在各列之间推进。Org-SuperTag 自动更新 =status= 字段。如果我设置了 =status= 变更的自动化规则（比如记录完成时间），它们会立刻触发。
+
+** Node View——带自动补全的详细编辑
+
+当我需要详细填写单个节点的字段时，我用 Node View：
+
+=M-x supertag-view-node=
+
+这会打开一个侧边面板，展示当前节点的所有字段：
+- 文本字段：自由输入
+- 选择字段：下拉选择
+- 数字字段：带校验的输入
+- 日期字段：Org 日期选择器
+- 引用字段：=C-o= 跳转到被引用节点
+
+我主要用于论文（填 =authors=、=year=、=venue=、=abstract=）和会议记录（会后补充 =participants=、=decisions=）。
+
+** 虚拟列——不存储的计算数据
+
+有些信息我想看但不想存。虚拟列在显示时实时计算。
+
+#+begin_src emacs-lisp
+  ;; 虚拟列："overdue"——如果截止日期已过且任务未完成，则为 true
+  (supertag-virtual-column-register
+   :name "overdue"
+   :tag "task"
+   :compute (lambda (node)
+              (let ((due (plist-get node :due))
+                    (status (plist-get (supertag-field-value node "task" "status"))))
+                (and due
+                     (not (equal status "done"))
+                     (time-less-p (date-to-time due) (current-time))))))
+
+  ;; 虚拟列："progress"——子任务完成百分比
+  (supertag-virtual-column-register
+   :name "progress"
+   :tag "project"
+   :compute (lambda (node)
+              (let* ((subtasks (supertag-get-children node))
+                     (total (length subtasks))
+                     (done (cl-count-if (lambda (s) (equal "done" (plist-get s :status)))
+                                        subtasks)))
+                (if (> total 0) (round (* 100.0 (/ done total))) 0))))
+#+end_src
+
+虚拟列在 Table View 中和普通字段一样显示。区别：它们每次打开视图时重新计算——零存储，永远最新。
+
+详见 =doc/VIRTUAL_COLUMNS.md=。
+
+* 连接知识：引用与关系
+
+** 快速引用：把两个想法连起来
+
+我在读一篇论文，发现它和一个项目直接相关。我不复制粘贴链接，而是用：
+
+=M-x supertag-add-reference=
+
+这在当前节点和目标节点之间创建双向链接。引用会出现在两个节点的 Table View 的 =Refs= 列中。
+
+#+begin_src emacs-lisp
+  ;; 引用在数据库中存储为 :reference 关系。
+  ;; 它独立于 Org 的 [[链接]]——这意味着：
+  ;;   1. 文件重组后仍然存在
+  ;;   2. 可查询（找到所有引用节点 X 的节点）
+  ;;   3. 出现在 Table View 的 Refs 列
+  ;;   4. 在 Table View 中按 C-o 跳转到被引用节点
+#+end_src
+
+** Schema 关系——父子标签
+
+当我定义标签层级（=#paper/ai= 继承 =#paper=），我在创建 /schema 关系/。
+所有 =#paper/ai= 节点同时也是 =#paper= 节点——它们继承字段，并出现在 =#paper= 查询中。
+
+#+begin_src emacs-lisp
+  ;; 在 Schema View（M-x supertag-view-schema）中：
+  ;;   - 导航到 #paper/ai
+  ;;   - M-x supertag-view-schema-set-extends → 选择 #paper
+  ;;   - #paper/ai 现在继承：authors, year, venue, status, rating, topic
+  ;;   - 添加 AI 特有字段：model, dataset, metrics
+#+end_src
+
+为什么重要：我查询 =#paper= 看 /所有/ 论文。查询 =#paper/ai= 只看 AI 论文。
+两种查询都因为继承而正常工作。
+
+** 知识板——可视化探索
+
+当我想直观地看笔记之间的连接关系，我打开 Board UI：
+
+=M-x supertag-board-open=
+
+这会在浏览器中打开一个基于 React Flow 的可视化画布。它显示：
+- 节点卡片：标题、标签、字段
+- 连线：关系类型用不同颜色标记
+- 分组：视觉容器组织节点
+
+我常用的功能：
+- 点击卡片上的标签 → 展开查看字段值
+- 展开卡片 → 查看完整笔记内容，带滚动
+- 拖拽节点到分组中做视觉组织
+- 顶部搜索栏（Ctrl+F）→ 高亮匹配节点，暗化其他节点
+- Layout 按钮 → Sugiyama 算法自动排列节点
+- 双击连线 → 编辑关系标签
+- 点击连线上的 × → 删除关系
+
+Board UI 最适合 /探索/ 和 /理解/——当我想搞清楚想法之间怎么连接，而不是填数据的时候。
+
+* 晚上：复盘与查询（17:00–17:15）
+
+** 搜索今天的决议
+
+一天结束时，我想知道我做了哪些决定。结构化搜索让这变得简单：
+
+=M-x supertag-search=
+
+#+begin_src emacs-lisp
+  ;; 今天的会议
+  (supertag-search
+   '(and (tag "meeting")
+         (after "-1d")))
+
+  ;; 仍在进行的高优先级任务
+  (supertag-search
+   '(and (tag "task")
+         (field "priority" "high")
+         (not (field "status" "done"))))
+
+  ;; 今天读过的论文
+  (supertag-search
+   '(and (tag "paper")
+         (field "status" "done")
+         (after "-1d")))
+#+end_src
+
+可以把搜索结果保存到文件：
+
+=M-x supertag-search-export-results-to-file= → 生成一个 Org 文件，包含所有匹配的标题及其字段。
+
+** RAG：向我的笔记提问
+
+有时候我不知道正确的查询方式，我只是有一个问题。这就是 RAG（检索增强生成）功能发光的地方：
+
+=M-x supertag-rag-ask=
+
+#+begin_example
+  > 这个月关于 API 架构我们做了什么决定？
+
+  Org-SuperTag:
+  - 搜索过去一个月所有 #meeting 节点
+  - 找到与 API 架构相关的段落
+  - 生成带引用的结构化答案
+  - 显示在 *Supertag RAG Answer* buffer 中
+#+end_example
+
+需要先配置 LLM provider：
+
+#+begin_src emacs-lisp
+  ;; 方案 A：OpenAI
+  (setq supertag-rag-provider
+        (llm-make-openai "gpt-4o" :key "sk-..."))
+
+  ;; 方案 B：Gemini（有免费额度）
+  (setq supertag-rag-provider
+        (llm-make-gemini "gemini-2.5-flash" :key "..."))
+
+  ;; 方案 C：Ollama（完全本地，不需要 API key）
+  (setq supertag-rag-provider
+        (llm-make-ollama "llama3.2" :host "localhost:11434"))
+
+  ;; 方案 D：设置全局默认（所有 llm.el 应用共用）
+  (setq llm-chat-default-provider
+        (llm-make-openai "gpt-4o" :key "sk-..."))
+#+end_src
+
+RAG 有三种模式：
+- =:smart=（默认）：先搜笔记，没找到相关内容才求助通用 AI
+- =:rag-only=：严格只用本地笔记
+- =:general-only=：跳过搜索，直接问 AI
+
+** 自定义仪表盘——我的晚间复盘视图
+
+用 View Framework，我建了一个自定义仪表盘，在一个 buffer 里展示我关心的所有内容：
+
+#+begin_src emacs-lisp
+  ;; 定义自定义仪表盘视图
+  (define-supertag-view evening-review "晚间复盘仪表盘"
+    (tag "task")
+    ;; 区域 1：今天完成的任务
+    (insert (supertag-view-header "✅ 今日已完成"))
+    (dolist (node (supertag-query
+                   '(and (tag "task")
+                         (field "status" "done")
+                         (after "-1d"))))
+      (supertag-view-card node))
+    ;; 区域 2：明天的任务
+    (insert (supertag-view-header "📅 明日待办"))
+    (dolist (node (supertag-query
+                   '(and (tag "task")
+                         (field "due" ,(format-time-string "%Y-%m-%d"
+                                          (time-add (current-time) (days-to-time 1)))))))
+      (supertag-view-card node))
+    ;; 区域 3：待读论文
+    (insert (supertag-view-header "📚 阅读队列"))
+    (dolist (node (supertag-query
+                   '(and (tag "paper")
+                         (field "status" "unread"))))
+      (supertag-view-card node)))
+
+  ;; 打开它
+  ;; M-x supertag-view-evening-review
+#+end_src
+
+详见 =doc/VIEW_FRAMEWORK_DEV_GUIDE.md=。
+
+* 每周：维护与优化（周日，30 分钟）
+
+** 同步健康检查
+
+=M-x supertag-sync-status= 告诉我：
+- 上次同步是什么时候
+- 跟踪了多少文件
+- 数据库里有多少节点
+- 有没有同步错误
+
+如果有什么不对劲：
+
+#+begin_src emacs-lisp
+  ;; 从 Org 文件全量重建
+  M-x supertag-sync-cleanup-database
+  M-x supertag-sync-full-rescan
+
+  ;; 这是安全的——只读你的 Org 文件。数据库中的字段值
+  ;; 会被保留，除非 DB 文件本身损坏了。
+#+end_src
+
+** Schema 优化
+
+我在 Schema View（=M-x supertag-view-schema=）中复盘标签：
+- 有哪些字段我从来没用过？→ 删掉
+- 有哪些字段我希望有？→ 加上
+- 有没有标签该合并或拆分？
+- 继承层级还合理吗？
+
+** 数据库备份
+
+Org-SuperTag 每天自动保存快照（可配置）：
+
+#+begin_src emacs-lisp
+  (setq supertag-db-auto-save-interval 300)   ; 每 5 分钟自动保存
+  (setq supertag-db-backup-interval 86400)    ; 每日备份
+  (setq supertag-db-backup-keep-days 3)       ; 保留最近 3 天的备份
+#+end_src
+
+备份存储在 =~/.emacs.d/org-supertag/backups/=。
+
+** 自动化规则审查
+
+我检查规则是否仍然在按预期工作：
+- =M-x supertag-view-table= → ? → A → 查看该标签的所有自动化
+- 禁用那些产生噪音的规则
+- 为发现的新模式添加规则
+
+* 我的完整 Elisp 配置
+
+这一节把上面提到的所有 Elisp 设置集中在一起。用 =C-c C-v C-t= 提取为 =supertag-workflow.el=，然后：
+
+#+begin_src emacs-lisp
+  (load "~/path/to/supertag-workflow.el")
+#+end_src
+
+#+begin_src emacs-lisp :tangle supertag-workflow.el
+  ;;; supertag-workflow.el — 我的 Org-SuperTag 日常配置
+
+  ;; ── 安装 ──
+  ;; (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
+
+  ;; ── 同步 ──
+  (setq org-supertag-sync-directories '("~/org/"))
+  (setq supertag-auto-sync-interval 60)
+  (setq supertag-sync-maintenance-every-n-ticks 10)
+  (setq supertag-sync-snapshot-guard t)
+
+  ;; ── 持久化与备份 ──
+  (setq supertag-db-auto-save-interval 300)
+  (setq supertag-db-backup-interval 86400)
+  (setq supertag-db-backup-keep-days 3)
+
+  ;; ── RAG（AI 查询）──
+  ;; 取消注释并配置 /其中一个/：
+  ;; (setq supertag-rag-provider (llm-make-openai "gpt-4o" :key "sk-..."))
+  ;; (setq supertag-rag-provider (llm-make-gemini "gemini-2.5-flash" :key "..."))
+  ;; (setq supertag-rag-provider (llm-make-ollama "llama3.2" :host "localhost:11434"))
+
+  ;; ── 自动化规则 ──
+
+  ;; 规则 1：自动设置会议日期
+  (supertag-automation-create
+   '(:name "auto-date-for-meetings"
+     :trigger :on-node-create
+     :condition (tag "meeting")
+     :actions ((update-field "date" (format-time-string "%Y-%m-%d")))))
+
+  ;; 规则 2：任务完成时记录时间
+  (supertag-automation-create
+   '(:name "record-done-time"
+     :trigger :on-field-changed
+     :condition (and (tag "task") (property-changed "status"))
+     :actions ((when (equal (field-value "status") "done")
+                 (update-field "completed-at" (format-time-string "%Y-%m-%d %H:%M"))))))
+
+  ;; 规则 3：新论文默认未读
+  (supertag-automation-create
+   '(:name "new-paper-unread"
+     :trigger :on-node-create
+     :condition (tag "paper")
+     :actions ((update-field "status" "unread"))))
+
+  ;; ── 虚拟列 ──
+  (supertag-virtual-column-register
+   :name "overdue"
+   :tag "task"
+   :compute (lambda (node)
+              (let ((due (plist-get node :due))
+                    (status (plist-get (supertag-field-value node "task" "status"))))
+                (and due
+                     (not (equal status "done"))
+                     (time-less-p (date-to-time due) (current-time))))))
+
+  (provide 'supertag-workflow)
+  ;;; supertag-workflow.el ends here
+#+end_src
+
+* 命令速查表
+
+这是 /我/ 最常用的命令，不是完整列表。完整参考见 README。
+
+| 命令                                     | 我用来做什么                     | 频率   |
+|------------------------------------------+----------------------------------+--------|
+| =M-x supertag-view-table=               | 早上复盘、论文队列、项目总览     | 每天   |
+| =M-x supertag-capture=                  | 不打断心流的快速捕获             | 每天   |
+| =M-x supertag-search=                   | 跨所有文件找东西                 | 每天   |
+| =M-x supertag-view-node=                | 详细编辑单个节点的字段           | 每周   |
+| =M-x supertag-view-kanban=              | 拖拽任务流转                     | 每天   |
+| =M-x supertag-view-schema=              | 增删字段、调整标签层级           | 每周   |
+| =M-x supertag-add-reference=            | 关联两个相关的想法               | 每天   |
+| =M-x supertag-add-tag=                  | 给标题打第一个标签               | 每天   |
+| =M-x supertag-rag-ask=                  | "关于 X 我做了哪些决定？"        | 每周   |
+| =M-x supertag-board-open=               | 可视化知识探索                   | 每周   |
+| =M-x supertag-sync-status=              | 健康检查                         | 每周   |
+| =M-x supertag-sync-full-rescan=         | 从文件重建数据库                 | 每月   |
+| =M-x supertag-sync-cleanup-database=    | 修复不一致                       | 按需   |
+
+* 我实际用的快捷键
+
+#+begin_src emacs-lisp
+  (global-set-key (kbd "C-c t") 'supertag-view-table)
+  (global-set-key (kbd "C-c k") 'supertag-view-kanban)
+  (global-set-key (kbd "C-c c") 'supertag-capture)
+  (global-set-key (kbd "C-c s") 'supertag-search)
+  (global-set-key (kbd "C-c r") 'supertag-add-reference)
+  (global-set-key (kbd "C-c g") 'supertag-add-tag)
+#+end_src
+
+* 我尝试过但不再用的东西
+
+我把 /不用的/ 也记录下来，帮别人少走弯路：
+
+- =org-supertag-sync-directories-mode 'unified= 配 10+ 目录 → 切换到了 vault 模式。
+  每次 tick 扫描所有目录太慢了。
+- 用 =:on-store-changed= 做触发器的自动化规则 → 太吵了。改为特定触发器（=:on-field-changed=、
+  =:on-node-create=）。
+- 纯手动同步 → 漏掉了太多更新。60 秒自动同步是最佳平衡点。
+- 试图一开始在 Schema View 里定义 /所有/ 字段 → 更好的方式是用到什么加什么。
+
+* 延伸阅读
+
+- [[file:../README_CN.md][README]] — 安装和 5 分钟上手
+- [[file:A-DAY-WITH-ORG-SUPERTAG.org][英文版教程]]
+- [[file:AUTOMATION-SYSTEM-GUIDE_cn.md][自动化指南]] — 完整的 trigger/condition/action 参考
+- [[file:CAPTURE-GUIDE_cn.md][捕获指南]] — 捕获系统深入解析
+- [[file:SYNC-CONFIGURATION.md][同步配置]] — 性能调优、vault 模式、故障排查
+- [[file:VIEW_FRAMEWORK_DEV_GUIDE.md][视图框架]] — 构建自定义仪表盘
+- [[file:VIRTUAL_COLUMNS.md][虚拟列]] — 计算字段 API
+- [[file:ONTOLOGY-ARCHITECTURE_cn.md][架构深度解析]]
+- [[file:ORG-SUPERTAG-PLUGIN-GUIDE_cn.md][插件开发指南]] — 构建自己的 extractor 和服务

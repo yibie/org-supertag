@@ -19,6 +19,8 @@ Elisp examples into =supertag-workflow.el=, then include it in your =init.el=.
 
 This document assumes you have Org-SuperTag installed.  See the [[file:../README.md][README]] for installation.
 
+中文版：[[file:A-DAY-WITH-ORG-SUPERTAG_CN.org][Org-SuperTag 的一天（中文）]]
+
 * My Setup
 
 ** My Org Files
