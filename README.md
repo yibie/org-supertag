@@ -1,5 +1,7 @@
 # Org-SuperTag 5.0 – Structured knowledge, inside Emacs, on your own files
 
+[中文](./README_CN.md) | [English](./README.md)
+
 Org-SuperTag turns your plain Org headings into a **structured, queryable knowledge base**.  
 No external services. No Python. No lock-in. Your `.org` files stay yours — we just make them smarter.
 
@@ -8,6 +10,8 @@ No external services. No Python. No lock-in. Your `.org` files stay yours — we
 > See [`doc/GLOBAL-FIELD-MIGRATION-GUIDE.md`](doc/GLOBAL-FIELD-MIGRATION-GUIDE.md) for step-by-step instructions.
 
 > **Why this matters**: Ever tried to find "all papers I haven't read yet" across your notes? Or "all tasks due this week assigned to @alice"? Plain Org-mode can't do this without painful manual tagging and grep. Org-SuperTag makes it as easy as clicking a column header.
+
+> **📖 Ready to dive in?** Start with **[A Day with Org-SuperTag](doc/A-DAY-WITH-ORG-SUPERTAG.org)** — a complete walkthrough of one person's daily workflow, with copy-paste Elisp you can tangle into your config. (中文版：[Org-SuperTag 的一天](doc/A-DAY-WITH-ORG-SUPERTAG_CN.org))
 
 ---
 

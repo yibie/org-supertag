@@ -1,5 +1,7 @@
 # Org-SuperTag 5.0 – 在 Emacs 里，把你的 Org 文件变成结构化知识库
 
+[中文](./README_CN.md) | [English](./README.md)
+
 Org-SuperTag 把普通的 Org 标题变成一个**可结构化查询的知识库**。不依赖外部服务，不需要 Python，你的 `.org` 文件始终是纯文本——我们只是让它变聪明了。
 
 > **⚠️ 从 5.2.0 或更早版本升级？**  
@@ -7,6 +9,8 @@ Org-SuperTag 把普通的 Org 标题变成一个**可结构化查询的知识库
 > 具体步骤见 [`doc/GLOBAL-FIELD-MIGRATION-GUIDE_CN.md`](doc/GLOBAL-FIELD-MIGRATION-GUIDE_CN.md)。
 
 > **为什么这很重要**：你有没有试过"找出所有还没读的论文"？或者"@小王负责的、本周到期的任务"？纯 Org-mode 做不到，除非你手动维护 PROPERTIES 抽屉再 grep。Org-SuperTag 让这件事变成点几下鼠标。
+
+> **📖 准备开始？** 先读 **[Org-SuperTag 的一天](doc/A-DAY-WITH-ORG-SUPERTAG_CN.org)**——一个人的完整日常工作流，所有 Elisp 配置都可以 copy-paste，用 `C-c C-v C-t` 提取到你的配置里。(English: [A Day with Org-SuperTag](doc/A-DAY-WITH-ORG-SUPERTAG.org))
 
 ---
 
