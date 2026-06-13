@@ -21,6 +21,12 @@
 ;;
 ;; ── Company Setup ──
 ;; Company should work out of the box if company-capf is in company-backends.
+;; To ensure #tag completion takes priority over other backends:
+;;
+;;   (setq company-backends '((company-capf :with company-dabbrev-code)))
+;;
+;; Or add company-capf to your existing backends:
+;;   (add-to-list 'company-backends 'company-capf)
 
 (require 'org)
 (require 'org-id)
@@ -191,17 +197,18 @@ completion candidate and correcting the buffer if necessary."
               (cond
                ;; Handle boundaries (corfu/company compatibility)
                ((eq (car-safe action) 'boundaries) nil)
-               ;; Return metadata (corfu uses this for display)
+               ;; Return metadata (both corfu and company use this for display)
                ((eq action 'metadata)
                 '(metadata
                   (category . supertag-tag)
                   (display-sort-function . identity)
                   (cycle-sort-function . identity)
+                  (company-kind . (lambda (_cand) 'keyword))
                   (annotation-function
                    . (lambda (cand)
                        (if (get-text-property 0 'is-new-tag cand)
-                           " [新建]"
-                         " [标签]")))))
+                           " [new]"
+                         " [tag]")))))
                ;; Return all candidates (for display)
                ((eq action t)
                 (supertag-completion--get-completion-table prefix))
@@ -211,13 +218,18 @@ completion candidate and correcting the buffer if necessary."
                ;; Try completion (return common prefix or t if unique)
                ((null action)
                 (try-completion str (supertag-completion--get-completion-table prefix) pred))
-               ;; Boundaries and other actions
+               ;; Boundaries and other actions (handles (boundaries . "") etc.)
                (t
                 (complete-with-action action
                                      (supertag-completion--get-completion-table prefix)
                                      str pred))))
 
-            ;; 2. A SINGLE, UNIFIED :exit-function. This is also
+            ;; 2. Company-specific: explicit prefix length hint.
+            ;;    Company uses this to know how much of the prefix to keep
+            ;;    when the user types more characters. Corfu ignores this safely.
+            :company-prefix-length (- end start)
+
+            ;; 3. A SINGLE, UNIFIED :exit-function. This is also
             ;;    universally understood by all completion frameworks.
             :exit-function
             (lambda (selected-string status)
