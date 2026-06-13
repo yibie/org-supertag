@@ -8,6 +8,19 @@
 ;; and use a SINGLE :exit-function that inspects the properties of the
 ;; selected string to decide on the action. This is the "lowest common
 ;; denominator" approach that all completion frameworks understand.
+;;
+;; ── Corfu Setup ──
+;; For corfu, you need corfu-auto enabled. To trigger completion after #, use:
+;;
+;;   (setq corfu-auto t
+;;         corfu-auto-delay 0.3
+;;         corfu-auto-prefix 1)      ; trigger after 1 char
+;;
+;; Or manually trigger with M-TAB / C-M-i after typing #:
+;;   (define-key org-mode-map (kbd "TAB") #'completion-at-point)
+;;
+;; ── Company Setup ──
+;; Company should work out of the box if company-capf is in company-backends.
 
 (require 'org)
 (require 'org-id)
@@ -80,29 +93,27 @@ This keeps completion flexible enough for emoji and other symbols."
 
 (defun supertag-completion--get-prefix-bounds ()
   "Find the bounds of a tag prefix at point, if any.
-Returns (START . END) where START is right after the # character."
+Returns (START . END) where START is right after the # character.
+Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
   (save-excursion
     (let* ((end (point))
-           (start nil)
-           (result nil))
+           (start nil))
 
-      ;; Walk backwards over everything that counts as part of the tag.
-      ;; We explicitly allow emoji/unicode, hyphen, slash, etc. Anything
-      ;; except whitespace/control characters and another # triggers stop.
+      ;; Walk backwards over valid tag characters
       (while (and (> (point) (point-min))
                   (supertag-completion--valid-tag-char-p
                    (char-before (point))))
         (backward-char))
 
       ;; Check if we're right after a # character
-      ;; Note: after skip-chars-backward, point is at the start of the tag prefix
       (when (and (> (point) (point-min))
                  (eq (char-before (point)) ?#))
-        ;; Found a #, so the tag starts right after it
-        (setq start (point))
-        (setq result (cons start end)))
+        ;; start = right after # (where tag name begins or would begin)
+        (setq start (point)))
 
-      result)))
+      ;; Only return bounds if we found a # before the prefix
+      (when start
+        (cons start end)))))
 
 (defun supertag-completion--get-completion-table (prefix)
   "Return a completion table function that handles both existing tags and new tag creation."
@@ -174,22 +185,29 @@ completion candidate and correcting the buffer if necessary."
 
       (list start end
             ;; 1. The completion table. Returns a custom completion function
-            ;;    that always includes [Create New Tag] in results
+            ;;    that always includes [Create New Tag] in results.
+            ;;    Built to handle all completion actions for corfu/company compatibility.
             (lambda (str pred action)
               (cond
-               ;; Return metadata
+               ;; Handle boundaries (corfu/company compatibility)
+               ((eq (car-safe action) 'boundaries) nil)
+               ;; Return metadata (corfu uses this for display)
                ((eq action 'metadata)
-                '(metadata (category . supertag-tag)
-                          (annotation-function . (lambda (cand)
-                                                   (if (get-text-property 0 'is-new-tag cand)
-                                                       " [new]"
-                                                     " [tag]")))))
+                '(metadata
+                  (category . supertag-tag)
+                  (display-sort-function . identity)
+                  (cycle-sort-function . identity)
+                  (annotation-function
+                   . (lambda (cand)
+                       (if (get-text-property 0 'is-new-tag cand)
+                           " [新建]"
+                         " [标签]")))))
                ;; Return all candidates (for display)
                ((eq action t)
                 (supertag-completion--get-completion-table prefix))
                ;; Test for exact match
                ((eq action 'lambda)
-                (member str (supertag-completion--get-completion-table prefix)))
+                (test-completion str (supertag-completion--get-completion-table prefix) pred))
                ;; Try completion (return common prefix or t if unique)
                ((null action)
                 (try-completion str (supertag-completion--get-completion-table prefix) pred))
@@ -239,5 +257,22 @@ completion candidate and correcting the buffer if necessary."
   supertag-ui-completion-enable)
 
 (provide 'supertag-ui-completion)
+
+;;;###autoload
+(defun supertag-complete-tag ()
+  "Manually trigger #tag completion at point.
+Bind this to TAB in org-mode if you want explicit trigger instead of auto-popup.
+
+  (define-key org-mode-map (kbd \"TAB\") #'supertag-complete-tag)
+
+Works with corfu, company, and default completion."
+  (interactive)
+  (if-let ((bounds (supertag-completion--get-prefix-bounds)))
+      (completion-at-point)
+    ;; No #tag prefix found, fall through to default completion or indent
+    (if (and (eq last-command-event ?\t)
+             (fboundp 'org-cycle))
+        (call-interactively #'org-cycle)
+      (call-interactively #'completion-at-point))))
 
 ;;; supertag-ui-completion.el ends here
