@@ -1,4 +1,28 @@
 * Changelog
+* [5.8.2] - 2026-03-05
+** Fixes
+*** Sync
+- =supertag-sync-save-state= now creates its parent directory before
+  writing =sync-state.el=, fixing a =file-missing= error on first-time
+  setup when =~/.emacs.d/org-supertag/= did not yet exist. Users no
+  longer need to create the directory manually before running
+  =supertag-sync-full-initialize=.
+- Demoted the per-file "Skip sync" / "Enqueued external modification"
+  messages to fire only under =supertag-sync-smart-detection-verbose=,
+  reducing echo-area noise during normal editing.
+
+*** =#tag= Completion
+- Reworked inline =#tag= completion: the "create new tag" candidate is
+  now the typed text itself (propertized) instead of a =[Create New
+  Tag]= placeholder. This keeps it visible under corfu/orderless
+  filtering and lets the UI insert the real tag name directly.
+- Completion candidates now track the live input string rather than the
+  prefix captured when completion started, so the new-tag candidate
+  updates as you type under corfu's incremental filtering.
+- =supertag-completion--post-completion-action= no longer rewrites the
+  buffer after insertion (the inserted text is already the real tag
+  name), removing the fragile delete-region/re-insert step.
+
 * [5.8.1] - 2026-03-04
 ** Fixes
 *** Board UI

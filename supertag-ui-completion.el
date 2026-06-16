@@ -122,7 +122,12 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
         (cons start end)))))
 
 (defun supertag-completion--get-completion-table (prefix)
-  "Return a completion table function that handles both existing tags and new tag creation."
+  "Return the candidate list for PREFIX.
+The list contains existing tags not yet on the current node. When PREFIX
+is non-empty and matches no existing tag, PREFIX itself is prepended as a
+propertized \"new tag\" candidate. Using the typed text as the candidate
+(instead of a [Create New Tag] placeholder) keeps it visible under
+corfu/orderless filtering and means the UI inserts the real tag name."
   (let* ((safe-prefix (or prefix ""))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
@@ -130,37 +135,23 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
          (available-tags (if current-tags
                              (seq-remove (lambda (tag) (member tag current-tags)) all-tags)
                            all-tags))
-         (matching-tags (all-completions safe-prefix available-tags))
-         (new-tag-candidate (propertize "[Create New Tag]" 'is-new-tag t))
          (should-add-new (and (not (string-empty-p safe-prefix))
-                             (not (member safe-prefix matching-tags))
+                             (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
-
-    ;; Return all matching tags, plus [Create New Tag] if applicable
     (if should-add-new
-        (cons new-tag-candidate matching-tags)
-      matching-tags)))
+        (cons (propertize safe-prefix 'is-new-tag t) available-tags)
+      available-tags)))
 
-(defun supertag-completion--post-completion-action (selected-string original-prefix)
+(defun supertag-completion--post-completion-action (selected-string)
   "The single, unified post-completion action.
-It handles both existing and new tags correctly by inspecting the
-completion candidate and correcting the buffer if necessary."
+The completion UI has already inserted SELECTED-STRING into the buffer.
+For both existing and new tags this is the real tag name (new candidates
+are the typed text itself), so no buffer correction is needed."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         ;; For new tags, the REAL tag name is the prefix the user typed.
-         ;; For existing tags, it's the candidate they selected.
-         (clean-tag-string (if is-new original-prefix (substring-no-properties selected-string)))
-         (tag-name clean-tag-string)
+         (tag-name (substring-no-properties selected-string))
          (node-id (org-id-get-create)))
 
     (when (and tag-name (not (string-empty-p tag-name)) node-id)
-
-      ;; --- CRITICAL FIX ---
-      ;; If this is a new tag, the completion UI has inserted the placeholder
-      ;; text "[Create New Tag]". We MUST delete that and insert the actual
-      ;; tag name that the user typed (`original-prefix`).
-      (when is-new
-        (delete-region (- (point) (length selected-string)) (point))
-        (insert original-prefix))
 
       ;; Ensure the node exists in the database
       (unless (supertag-node-get node-id)
@@ -209,19 +200,22 @@ completion candidate and correcting the buffer if necessary."
                        (if (get-text-property 0 'is-new-tag cand)
                            " [new]"
                          " [tag]")))))
-               ;; Return all candidates (for display)
+               ;; Return all candidates (for display).
+               ;; Use the LIVE input STR (not the captured PREFIX) so the
+               ;; "new tag" candidate tracks what the user is typing under
+               ;; corfu's incremental filtering.
                ((eq action t)
-                (supertag-completion--get-completion-table prefix))
+                (supertag-completion--get-completion-table str))
                ;; Test for exact match
                ((eq action 'lambda)
-                (test-completion str (supertag-completion--get-completion-table prefix) pred))
+                (test-completion str (supertag-completion--get-completion-table str) pred))
                ;; Try completion (return common prefix or t if unique)
                ((null action)
-                (try-completion str (supertag-completion--get-completion-table prefix) pred))
+                (try-completion str (supertag-completion--get-completion-table str) pred))
                ;; Boundaries and other actions (handles (boundaries . "") etc.)
                (t
                 (complete-with-action action
-                                     (supertag-completion--get-completion-table prefix)
+                                     (supertag-completion--get-completion-table str)
                                      str pred))))
 
             ;; 2. Company-specific: explicit prefix length hint.
@@ -236,7 +230,7 @@ completion candidate and correcting the buffer if necessary."
               ;; The condition now accepts 'finished, 'exact', and 'sole' to be
               ;; compatible with various completion UIs like Corfu.
               (when (memq status '(finished exact sole))
-                (supertag-completion--post-completion-action selected-string prefix)))))))
+                (supertag-completion--post-completion-action selected-string)))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Setup

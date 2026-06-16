@@ -572,6 +572,7 @@ Respects `supertag-tag-style` configuration for tag formatting."
   "Save sync state to file."
   (supertag-sync--ensure-state-format)
   (let ((state-file (supertag-sync--state-file)))
+    (make-directory (file-name-directory state-file) t)
     (with-temp-file state-file
       (let ((print-length nil)
             (print-level nil))
@@ -1984,11 +1985,13 @@ external modifications (by user/other tools) to avoid unnecessary re-parsing."
         (if (supertag--is-internal-modification-p file-norm)
             ;; Internal modification: skip sync, memory is already up-to-date
             (progn
-              (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file-norm))
+              (when supertag-sync-smart-detection-verbose
+                (message "Supertag: Skip sync for internal modification: %s" (file-name-nondirectory file-norm)))
               ;; Update sync state to prevent periodic sync from re-syncing
               (supertag-sync-update-state file-norm))
           ;; External modification: enqueue for async sync
-          (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file-norm))
+          (when supertag-sync-smart-detection-verbose
+            (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file-norm)))
           (supertag-async-enqueue file-norm))))))
 
 

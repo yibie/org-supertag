@@ -33,8 +33,7 @@
 | =meetings.org=        | 会议记录，包含决议和待办                    |
 | =journal.org=         | 日记、想法、反思                            |
 
-为什么分开多个文件？因为 Org-SuperTag 可以 /跨所有文件/ 查询。文件分隔是为了 /我/ 的脑袋——Org-SuperTag 不在乎标题在哪个文件里。=meetings.org= 里的 =#task= 和 =projects.org= 里的 =#task= 在表格视图中并列显示。
-
+为什么分开多个文件？因为 Org-SuperTag 可以 /跨所有文件/ 查询。文件分隔是为了 /我/ 的脑袋——Org-SuperTag 不在乎标题在哪个文件里。=meetings.org= 里的 =#task= 和 =projects.org= 里的 =#task= 在表格视图中并列显示。 
 ** Vault 配置
 
 我目前用一个 vault 管理所有东西。如果以后想区分工作和个人，我会这样配：
