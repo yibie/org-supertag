@@ -427,7 +427,6 @@ active vault when `supertag-sync-auto-start` is non-nil."
 
 ;; --- User Interface (ui) ---
 (require 'supertag-ui-commands)
-(require 'supertag-ui-chat)
 (require 'supertag-ui-embed)
 (require 'supertag-ui-query-block)
 (require 'supertag-ui-search)
@@ -446,7 +445,7 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-view-kanban)
 
 ;; --- RAG ---
-(require 'supertag-rag)
+;; (archived: supertag-rag, supertag-ui-chat — moved to archive/)
 
 ;; --- Migration ---
 (require 'supertag-migration)
