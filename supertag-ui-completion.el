@@ -341,6 +341,64 @@ tags, creates the tag entity if new)."
 (provide 'supertag-ui-completion)
 
 ;;;###autoload
+(defun supertag-completion-debug ()
+  "Dump the full completion pipeline for the `#prefix' at point.
+Run this with the cursor sitting just after a `#typedprefix' (do not
+delete or move anything) and paste the contents of *Messages* back to
+the maintainer. The output shows: the detected bounds, the live prefix,
+the full candidate list our CAPF returns, and what
+`completion-all-completions' under your active `completion-styles' keeps
+after filtering — i.e. exactly what the popup should display."
+  (interactive)
+  (let ((bounds (supertag-completion--get-prefix-bounds)))
+    (if (not bounds)
+        (message "[supertag-debug] No #prefix bounds at point (no leading #?).")
+      (let* ((start (car bounds))
+             (end (cdr bounds))
+             (prefix (buffer-substring-no-properties start end))
+             (table (supertag-completion--get-completion-table prefix))
+             (first (car table))
+             (styles completion-styles)
+             (md (let ((capf (supertag-completion-at-point)))
+                   (when capf
+                     (funcall (nth 2 capf) prefix nil 'metadata))))
+             (filtered (completion-all-completions
+                        prefix table nil (length prefix) md)))
+        ;; completion-all-completions returns a partial list with the
+        ;; final cdr possibly set to a base-size integer; normalize.
+        (let ((flat (let (acc (c filtered))
+                      (while (consp c)
+                        (push (car c) acc)
+                        (setq c (cdr c)))
+                      (nreverse acc))))
+          (message "[supertag-debug] ─────────────────────────────")
+          (message "[supertag-debug] prefix bounds : %S..%S" start end)
+          (message "[supertag-debug] live prefix   : %S" prefix)
+          (message "[supertag-debug] completion-styles: %S" styles)
+          (message "[supertag-debug] raw candidates  : %d total" (length table))
+          (message "[supertag-debug]   [0] %S  is-new-tag=%S name=%S"
+                   (substring-no-properties (or first ""))
+                   (and first (get-text-property 0 'is-new-tag first))
+                   (and first (get-text-property 0 'new-tag-name first)))
+          (message "[supertag-debug]   first 5 raw  : %S"
+                   (mapcar #'substring-no-properties (cl-subseq table 0 (min 5 (length table)))))
+          (message "[supertag-debug] after-filter   : %d candidates"
+                   (length flat))
+          (message "[supertag-debug]   first 5 kept : %S"
+                   (mapcar #'substring-no-properties (cl-subseq flat 0 (min 5 (length flat)))))
+          (message "[supertag-debug] new-tag in raw? : %s"
+                   (if (cl-some (lambda (c)
+                                  (get-text-property 0 'is-new-tag c))
+                                table)
+                       "YES" "no"))
+          (message "[supertag-debug] new-tag in kept?: %s"
+                   (if (cl-some (lambda (c)
+                                  (get-text-property 0 'is-new-tag c))
+                                flat)
+                       "YES" "NO  ← filter dropped it"))
+          (message "[supertag-debug] ─────────────────────────────"))))))
+
+;;;###autoload
 (defun supertag-complete-tag ()
   "Manually trigger #tag completion at point.
 Bind this to TAB in org-mode if you want explicit trigger instead of auto-popup.
