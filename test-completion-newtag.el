@@ -37,9 +37,7 @@ the bare tag name and no leaked label."
     (insert "Some text #")
     (let ((candidate (propertize "newtag"
                                  'is-new-tag t
-                                 'new-tag-name "newtag"
-                                 'display (concat "newtag"
-                                                  supertag-completion--new-tag-suffix))))
+                                 'new-tag-name "newtag")))
       (insert candidate)
       (when (memq status '(finished exact sole nil))
         (supertag-completion--post-completion-action candidate))
@@ -123,10 +121,11 @@ the bare tag name and no leaked label."
 
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 
-;;; --- 8. The new-tag candidate string is the BARE prefix, with the
-;;;        "[Create New Tag]" label living on the `display' property.
-;;;        This is what stops corfu-preview-current 'insert from
-;;;        leaking the label into the buffer mid-typing.
+;;; --- 8. The new-tag candidate string is the BARE prefix. The
+;;;        "[Create New Tag]" label is supplied by the metadata
+;;;        annotation-function, never living in the candidate string
+;;;        itself. This is what keeps corfu-preview-current 'insert
+;;;        from leaking the label into the buffer.
 (advice-remove 'supertag-node-get #'ignore)
 (advice-add 'supertag-node-get :override
             (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
@@ -138,11 +137,22 @@ the bare tag name and no leaked label."
   (cl-assert (get-text-property 0 'is-new-tag first)
              nil "candidate missing 'is-new-tag property")
   (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
-             nil "candidate missing 'new-tag-name property")
-  (let ((display (get-text-property 0 'display first)))
-    (cl-assert (and (stringp display)
-                    (string-match-p "Create New Tag" display))
-               nil "candidate missing display label, got %S" display)))
+             nil "candidate missing 'new-tag-name property"))
+
+;; And: the metadata annotation-function must label new-tag candidates.
+(with-temp-buffer
+  (org-mode)
+  (insert "Foo #branding")
+  (let* ((capf (supertag-completion-at-point))
+         (table (nth 2 capf))
+         (md (funcall table "branding" nil 'metadata))
+         (ann (cdr (assq 'annotation-function (cdr md)))))
+    (let ((new-label (funcall ann (propertize "branding" 'is-new-tag t)))
+          (old-label (funcall ann "existing")))
+      (cl-assert (string-match-p "Create New Tag" new-label)
+                 nil "annotation did not label new-tag: %S" new-label)
+      (cl-assert (string-match-p "\\[tag\\]" old-label)
+                 nil "annotation did not label existing tag: %S" old-label))))
 
 ;;; --- 9. orderless-style filtering on user input "branding"
 ;;;        must KEEP the new-tag candidate in the list. ---

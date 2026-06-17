@@ -155,15 +155,10 @@ match like \"or\" against \"org-supertag\" continues to work."
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (let ((display-string
-               (concat safe-prefix
-                       (propertize supertag-completion--new-tag-suffix
-                                   'face 'shadow))))
-          (cons (propertize safe-prefix
-                            'is-new-tag t
-                            'new-tag-name safe-prefix
-                            'display display-string)
-                available-tags))
+        (cons (propertize safe-prefix
+                          'is-new-tag t
+                          'new-tag-name safe-prefix)
+              available-tags)
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
@@ -223,25 +218,40 @@ ever contains the real tag name)."
                                     (if (get-text-property 0 'is-new-tag cand)
                                         'snippet
                                       'keyword)))
-                  ;; The new-tag candidate already carries its own
-                  ;; "[Create New Tag]" suffix in its string. We only
-                  ;; annotate existing tags here.
                   (annotation-function
                    . (lambda (cand)
-                       (unless (get-text-property 0 'is-new-tag cand)
+                       (if (get-text-property 0 'is-new-tag cand)
+                           (propertize "  [Create New Tag]" 'face 'shadow)
                          "  [tag]")))))
                ;; Return all candidates (for display).
-               ;; CRITICAL: orderless enumerates by calling TABLE with
-               ;; STR="" and filters with its own regexp. If we let
-               ;; should-add-new gate on STR, the new-tag candidate
-               ;; disappears whenever STR is empty, and orderless never
-               ;; sees it at all. Pin the candidate-set generation to
-               ;; the captured PREFIX (the actual user input that
-               ;; triggered this CAPF), which is stable across the
-               ;; whole completion session. orderless will then filter
-               ;; this stable list to whatever the user has typed.
+               ;; Two gotchas to handle here:
+               ;;
+               ;; 1. orderless enumerates by calling TABLE with STR=""
+               ;;    and filters with its own regexp. Gating the
+               ;;    new-tag candidate on STR being non-empty makes it
+               ;;    invisible to orderless.
+               ;; 2. corfu caches CAPF data for the duration of the
+               ;;    popup session and re-calls only the TABLE function
+               ;;    on subsequent keystrokes — not the outer
+               ;;    `supertag-completion-at-point'. A closure over
+               ;;    `prefix' therefore freezes at popup-open time, so
+               ;;    "#zz" expanded to "#zzzfr" still shows the
+               ;;    "zz  [Create New Tag]" candidate instead of
+               ;;    "zzzfr  [Create New Tag]".
+               ;;
+               ;; Solution: re-read the prefix from the live buffer on
+               ;; every TABLE call. `get-prefix-bounds' walks backward
+               ;; from point to the leading `#', so the value is always
+               ;; current. Fall back to the captured PREFIX (mainly for
+               ;; non-interactive callers and tests).
                ((eq action t)
-                (supertag-completion--get-completion-table prefix))
+                (let* ((live-bounds (and (not (minibufferp))
+                                         (supertag-completion--get-prefix-bounds)))
+                       (live-prefix (if live-bounds
+                                        (buffer-substring-no-properties
+                                         (car live-bounds) (cdr live-bounds))
+                                      prefix)))
+                  (supertag-completion--get-completion-table live-prefix)))
                ;; Test for exact match. NEVER report the user input as an
                ;; exact match against the "[Create New Tag]" candidate
                ;; — that would convince the UI that completion is done
