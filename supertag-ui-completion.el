@@ -281,7 +281,16 @@ candidate's `new-tag-name' property."
             ;;    when the user types more characters. Corfu ignores this safely.
             :company-prefix-length (- end start)
 
-            ;; 3. A SINGLE, UNIFIED :exit-function. This is also
+            ;; 3. EXCLUSIVE: tell completion-at-point that once we are
+            ;;    inside a #tag context, no other CAPF should run.
+            ;;    Without this, cape-dabbrev / cape-keyword / pcomplete
+            ;;    get appended to our candidate list, their candidates
+            ;;    can override our annotation/metadata, and the
+            ;;    "[Create New Tag]" entry gets hidden or stripped of
+            ;;    its label by the cape merging layer.
+            :exclusive 'yes
+
+            ;; 4. A SINGLE, UNIFIED :exit-function. This is also
             ;;    universally understood by all completion frameworks.
             :exit-function
             (lambda (selected-string status)
