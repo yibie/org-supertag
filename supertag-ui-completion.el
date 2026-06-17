@@ -340,6 +340,39 @@ tags, creates the tag entity if new)."
 
 (provide 'supertag-ui-completion)
 
+;;;----------------------------------------------------------------------
+;;; Fallback: bypass corfu entirely
+;;;----------------------------------------------------------------------
+
+;;;###autoload
+(defun supertag-tag-insert ()
+  "Pick or create a #tag via minibuffer, bypassing corfu/company.
+Use when the popup completion does not show the \"[Create New Tag]\"
+option in your UI stack. Prompts for a tag name with completion
+against existing tags. Typing a brand-new name and confirming with
+RET creates and records the tag immediately."
+  (interactive)
+  (let* ((all (supertag-completion--get-all-tags))
+         (node-id (org-id-get-create))
+         (current (when node-id (supertag-completion--get-node-tags node-id)))
+         (available (if current
+                        (seq-remove (lambda (t) (member t current)) all)
+                      all))
+         (input (completing-read "Tag (RET on a typed name creates it): "
+                                 available nil nil)))
+    (when (and input (not (string-empty-p input)))
+      (let ((is-new (not (member input all))))
+        (unless (supertag-node-get node-id)
+          (when (fboundp 'supertag-node-sync-at-point)
+            (supertag-node-sync-at-point)))
+        (when (looking-back "[^#]" 1)
+          (insert "#"))
+        (insert input " ")
+        (when (fboundp 'supertag-ops-add-tag-to-node)
+          (supertag-ops-add-tag-to-node node-id input :create-if-needed t))
+        (message "%s tag '%s' added to node %s"
+                 (if is-new "New" "Existing") input node-id)))))
+
 ;;;###autoload
 (defun supertag-completion-debug ()
   "Dump the full completion pipeline for the `#prefix' at point.
