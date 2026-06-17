@@ -29,6 +29,18 @@
   =test-automation-scheduled.el= as a runnable batch self-check.
 
 *** =#tag= Completion
+- Made the new-tag candidate survive =orderless= enumeration. orderless
+  enumerates the candidate set by calling the CAPF table with
+  =action=t= and =STR=""=, then filters with its own regexp. Our CAPF
+  gated the new-tag candidate on the passed-in =STR= being non-empty,
+  so when orderless asked with =STR=""= the candidate was absent from
+  the enumerated set — orderless could not "reveal" what it never saw,
+  and no user-visible [Create New Tag] entry ever appeared in the
+  popup. This was the root cause behind every "I still don't see it"
+  report. Switched the =action=t= branch to enumerate based on the
+  captured =prefix= (the live user input that triggered the CAPF), so
+  the candidate is always present in the enumerated set and orderless
+  filters from there.
 - Stopped the "[Create New Tag]" popup entry from being silently
   auto-inserted into the buffer when it is the only surviving
   candidate. The CAPF table's `try-completion' branch used to return

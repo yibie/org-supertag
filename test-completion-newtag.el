@@ -180,4 +180,27 @@ The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
                lambda-result)))
 
 (message "OK sole new-tag does not trigger silent auto-commit.")
+
+;;; --- 11. THE BUG ORDERLESS WAS HIDING ---
+;;; orderless enumerates the table with action=t and STR="" (uses its
+;;; own regexp for filtering, not a prefix). If the CAPF table gates
+;;; the new-tag candidate on STR being non-empty, the candidate is
+;;; absent from the enumerated set and orderless can never reveal it
+;;; — no matter what the user types. The CAPF must enumerate based on
+;;; the captured PREFIX (live user input that triggered the CAPF),
+;;; not on the STR orderless passes for filtering.
+(setq test-automation-added-tag nil)
+(with-temp-buffer
+  (org-mode)
+  (insert "Foo #thinkinging")
+  (let* ((capf (supertag-completion-at-point))
+         (table (nth 2 capf))
+         ;; This is exactly how orderless enumerates: action=t, STR="".
+         (enumerated (funcall table "" nil t)))
+    (cl-assert (cl-some (lambda (c) (get-text-property 0 'is-new-tag c))
+                        enumerated)
+               nil "new-tag candidate missing when orderless enumerates with STR=\"\":\n  %S"
+               (mapcar #'substring-no-properties enumerated))))
+
+(message "OK CAPF includes new-tag candidate when orderless enumerates with STR=\"\".")
 (kill-emacs 0)

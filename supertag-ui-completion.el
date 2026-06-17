@@ -229,11 +229,17 @@ candidate's `new-tag-name' property."
                        (unless (get-text-property 0 'is-new-tag cand)
                          "  [tag]")))))
                ;; Return all candidates (for display).
-               ;; Use the LIVE input STR (not the captured PREFIX) so the
-               ;; "new tag" candidate tracks what the user is typing under
-               ;; corfu's incremental filtering.
+               ;; CRITICAL: orderless enumerates by calling TABLE with
+               ;; STR="" and filters with its own regexp. If we let
+               ;; should-add-new gate on STR, the new-tag candidate
+               ;; disappears whenever STR is empty, and orderless never
+               ;; sees it at all. Pin the candidate-set generation to
+               ;; the captured PREFIX (the actual user input that
+               ;; triggered this CAPF), which is stable across the
+               ;; whole completion session. orderless will then filter
+               ;; this stable list to whatever the user has typed.
                ((eq action t)
-                (supertag-completion--get-completion-table str))
+                (supertag-completion--get-completion-table prefix))
                ;; Test for exact match. NEVER report the user input as an
                ;; exact match against the "[Create New Tag]" candidate
                ;; — that would convince the UI that completion is done
