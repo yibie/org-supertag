@@ -127,13 +127,23 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
 The list contains existing tags not yet on the current node. When
-PREFIX is non-empty and matches no existing tag, a candidate of the
-form \"PREFIX  [Create New Tag]\" is prepended with the text
-properties `is-new-tag' and `new-tag-name'. Putting PREFIX literally
-at the front of the candidate means orderless and basic styles match
-it on the typed input, so the option stays visible during incremental
-filtering. `supertag-completion--post-completion-action' strips the
-suffix back off after the UI commits the candidate."
+PREFIX is non-empty and matches no existing tag, the bare PREFIX
+itself is prepended as the new-tag candidate, carrying two text
+properties:
+- `is-new-tag' (and `new-tag-name') so the exit function knows it;
+- `display' holding \"PREFIX  [Create New Tag]\" so the popup and
+  any corfu preview render the full label while the underlying
+  candidate (what gets inserted into the buffer) stays just PREFIX.
+
+This split is crucial: with `corfu-preview-current' set to `'insert'
+corfu inserts the literal candidate string into the buffer as the
+user keeps typing. If the candidate literally contained
+\"  [Create New Tag]\", buffer contents like #org-supertag would
+break the moment the user typed `-' (which is not in
+`corfu-continue-commands' and so commits the preview).
+
+orderless still sees the bare PREFIX in the candidate, so a leading
+match like \"or\" against \"org-supertag\" continues to work."
   (let* ((safe-prefix (or prefix ""))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
@@ -145,34 +155,26 @@ suffix back off after the UI commits the candidate."
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (let* ((suffix (propertize supertag-completion--new-tag-suffix
-                                   'face 'shadow))
-               (candidate (concat safe-prefix suffix)))
-          (cons (propertize candidate
+        (let ((display-string
+               (concat safe-prefix
+                       (propertize supertag-completion--new-tag-suffix
+                                   'face 'shadow))))
+          (cons (propertize safe-prefix
                             'is-new-tag t
-                            'new-tag-name safe-prefix)
+                            'new-tag-name safe-prefix
+                            'display display-string)
                 available-tags))
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
   "Post-completion action invoked after the UI inserts SELECTED-STRING.
-For new tags SELECTED-STRING is \"NAME  [Create New Tag]\" — strip
-the suffix off the buffer and recover the bare NAME from the
-candidate's `new-tag-name' property."
+SELECTED-STRING is the bare tag name in all cases (the visible
+\"[Create New Tag]\" label lives on the candidate's `display'
+property, not in the candidate string itself, so the buffer only
+ever contains the real tag name)."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (if is-new
-                       (get-text-property 0 'new-tag-name selected-string)
-                     (substring-no-properties selected-string)))
+         (tag-name (substring-no-properties selected-string))
          (node-id (org-id-get-create)))
-
-    (when (and is-new tag-name)
-      (let* ((end (point))
-             (literal (substring-no-properties selected-string))
-             (start (- end (length literal))))
-        (when (and (>= start (point-min))
-                   (string= (buffer-substring-no-properties start end) literal))
-          (delete-region start end)
-          (insert tag-name))))
 
     (when (and tag-name (not (string-empty-p tag-name)) node-id)
 
@@ -252,30 +254,23 @@ candidate's `new-tag-name' property."
                                  (get-text-property
                                   0 'is-new-tag (car cands)))))))
                ;; Try completion (return common prefix or t if unique).
-               ;; CRITICAL: try-completion returns the longest common
-               ;; prefix across matching candidates. When the only
-               ;; candidate that starts with STR is our labeled
-               ;; "STR  [Create New Tag]" entry, try-completion returns
-               ;; that whole literal — and the UI happily auto-inserts
-               ;; "  [Create New Tag]" into the buffer without ever
-               ;; showing the popup. Detect that case and return STR
-               ;; (or t) so the UI shows the popup instead.
+               ;; CRITICAL: if the only matching candidate is our
+               ;; new-tag entry, returning t (or the bare prefix as a
+               ;; "complete" match) lets corfu commit it silently
+               ;; without showing the popup. Force the popup by
+               ;; pretending the completion has not finished.
                ((null action)
                 (let* ((cands (supertag-completion--get-completion-table str))
-                       (raw (try-completion str cands pred)))
-                  (cond
-                   ;; t means "unique exact match" — let the UI handle it.
-                   ((eq raw t) t)
-                   ;; If the literal raw result contains our marker, the
-                   ;; only matching candidate is the new-tag entry. Tell
-                   ;; the UI "no progress past STR" so it pops the menu
-                   ;; instead of auto-inserting the label.
-                   ((and (stringp raw)
-                         (string-match-p (regexp-quote
-                                          supertag-completion--new-tag-suffix)
-                                         raw))
-                    str)
-                   (t raw))))
+                       (sole-new-tag
+                        (and (= (length cands) 1)
+                             (get-text-property
+                              0 'is-new-tag (car cands)))))
+                  (if sole-new-tag
+                      ;; Tell the UI "STR is what we have so far",
+                      ;; equivalent to no further progress — popup
+                      ;; appears.
+                      str
+                    (try-completion str cands pred))))
                ;; Boundaries and other actions (handles (boundaries . "") etc.)
                (t
                 (complete-with-action action

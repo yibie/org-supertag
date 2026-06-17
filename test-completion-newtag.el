@@ -27,17 +27,19 @@
 
 (defun test-completion--drive-exit (status)
   "Simulate the UI committing the new-tag candidate at point.
-The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
-`new-tag-name'. After commit, the buffer must contain only \"NAME\"."
+The candidate is the bare prefix \"newtag\" carrying `is-new-tag' +
+`display' properties. After commit, the buffer must contain exactly
+the bare tag name and no leaked label."
   (setq test-completion-added-tag nil)
   (with-temp-buffer
     (org-mode)
     (insert "* node\n")
     (insert "Some text #")
-    (let ((candidate (propertize (concat "newtag"
-                                         supertag-completion--new-tag-suffix)
+    (let ((candidate (propertize "newtag"
                                  'is-new-tag t
-                                 'new-tag-name "newtag")))
+                                 'new-tag-name "newtag"
+                                 'display (concat "newtag"
+                                                  supertag-completion--new-tag-suffix))))
       (insert candidate)
       (when (memq status '(finished exact sole nil))
         (supertag-completion--post-completion-action candidate))
@@ -45,7 +47,7 @@ The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
         (cl-assert (string-match-p "#newtag" (buffer-string))
                    nil "buffer missing #newtag: %s" (buffer-string))
         (cl-assert (not (string-match-p "Create New Tag" (buffer-string)))
-                   nil "suffix not stripped from buffer: %s"
+                   nil "label leaked into buffer: %s"
                    (buffer-string))))))
 
 ;;; --- 1. Corfu-style finish ---
@@ -121,29 +123,30 @@ The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
 
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 
-;;; --- 8. The new-tag candidate string starts with the user's prefix
-;;;        followed by "  [Create New Tag]" — this shape lets orderless
-;;;        and basic styles match the user's input on the leading
-;;;        prefix while keeping the visible label in the candidate.
+;;; --- 8. The new-tag candidate string is the BARE prefix, with the
+;;;        "[Create New Tag]" label living on the `display' property.
+;;;        This is what stops corfu-preview-current 'insert from
+;;;        leaking the label into the buffer mid-typing.
 (advice-remove 'supertag-node-get #'ignore)
 (advice-add 'supertag-node-get :override
             (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
 (let* ((cands (supertag-completion--get-completion-table "branding"))
        (first (car cands))
        (literal (substring-no-properties first)))
-  (cl-assert (string-prefix-p "branding" literal)
-             nil "candidate does not start with prefix: %S" literal)
-  (cl-assert (string-match-p "\\[Create New Tag\\]" literal)
-             nil "candidate missing visible label: %S" literal)
+  (cl-assert (string= literal "branding")
+             nil "candidate string must be bare prefix, got %S" literal)
   (cl-assert (get-text-property 0 'is-new-tag first)
-             nil "new-tag candidate missing 'is-new-tag property")
+             nil "candidate missing 'is-new-tag property")
   (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
-             nil "new-tag candidate missing 'new-tag-name property"))
+             nil "candidate missing 'new-tag-name property")
+  (let ((display (get-text-property 0 'display first)))
+    (cl-assert (and (stringp display)
+                    (string-match-p "Create New Tag" display))
+               nil "candidate missing display label, got %S" display)))
 
-;;; --- 9. Crucially: orderless-style filtering on user input "branding"
+;;; --- 9. orderless-style filtering on user input "branding"
 ;;;        must KEEP the new-tag candidate in the list. ---
 (let* ((cands (supertag-completion--get-completion-table "branding"))
-       ;; basic/substring matchers
        (filtered (let ((completion-styles '(basic substring)))
                    (all-completions "branding" cands))))
   (cl-assert (cl-some (lambda (c) (string-prefix-p "branding" c)) filtered)
@@ -159,7 +162,7 @@ The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
 ;;;        showing the popup. This is the bug the user kept reporting.
 (advice-remove 'supertag-completion--get-all-tags #'ignore)
 (advice-add 'supertag-completion--get-all-tags :override
-            (lambda () (list "idea" "tips")))
+            (lambda () nil))   ; no existing tags → sole new-tag scenario
 (with-temp-buffer
   (org-mode)
   (insert "Some text #goodgoodgood")
