@@ -396,6 +396,18 @@ after filtering — i.e. exactly what the popup should display."
                                   (get-text-property 0 'is-new-tag c))
                                 flat)
                        "YES" "NO  ← filter dropped it"))
+          (message "[supertag-debug] candidate width : %d chars (corfu-max-width may truncate)"
+                   (length (substring-no-properties (or first ""))))
+          (message "[supertag-debug] corfu installed?: %s%s"
+                   (if (featurep 'corfu) "yes" "no")
+                   (if (boundp 'corfu-max-width)
+                       (format ", corfu-max-width=%S" corfu-max-width)
+                     ""))
+          (message "[supertag-debug] cape installed? : %s" (if (featurep 'cape) "yes" "no"))
+          (message "[supertag-debug] marginalia?     : %s" (if (and (boundp 'marginalia-mode) marginalia-mode) "ON" "off"))
+          (message "[supertag-debug] capf-functions  : %S"
+                   (mapcar (lambda (f) (if (symbolp f) f 'lambda))
+                           completion-at-point-functions))
           (message "[supertag-debug] ─────────────────────────────"))))))
 
 ;;;###autoload
