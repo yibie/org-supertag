@@ -227,9 +227,14 @@ are the typed text itself), so no buffer correction is needed."
             ;;    universally understood by all completion frameworks.
             :exit-function
             (lambda (selected-string status)
-              ;; The condition now accepts 'finished, 'exact', and 'sole' to be
-              ;; compatible with various completion UIs like Corfu.
-              (when (memq status '(finished exact sole))
+              ;; Accept any "successful" exit. Corfu uses 'finished;
+              ;; default completion-at-point uses 'sole / 'exact; pressing
+              ;; SPC after typing a brand-new #tag exits with no status
+              ;; (status = nil) — that path must also count, otherwise
+              ;; new tags never reach the database until the user types
+              ;; C-M-i again. The only state we explicitly skip is
+              ;; 'unknown (incremental keystroke filter, not a real exit).
+              (unless (eq status 'unknown)
                 (supertag-completion--post-completion-action selected-string)))))))
 
 ;;;----------------------------------------------------------------------

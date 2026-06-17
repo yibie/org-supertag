@@ -28,6 +28,14 @@
   had never actually fired in this release line. Added
   =test-automation-scheduled.el= as a runnable batch self-check.
 
+*** =#tag= Completion
+- Typing a brand-new =#newtag= and pressing SPC now records the tag
+  immediately. Previously the CAPF =:exit-function= only acted on
+  status =finished= / =exact= / =sole=, so the common "type and space"
+  path (status =nil= in most UIs) silently dropped the tag and the
+  user had to re-trigger completion with =C-M-i= to get it stored.
+  Added =test-completion-newtag.el= as a self-check.
+
 *** Sync
 - =supertag-sync-save-state= now creates its parent directory before
   writing =sync-state.el=, fixing a =file-missing= error on first-time
