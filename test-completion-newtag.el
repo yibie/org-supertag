@@ -26,27 +26,22 @@
 (advice-add 'supertag-node-get :override (lambda (&rest _) '(:id "fake-node-id")))
 
 (defun test-completion--drive-exit (status)
-  "Simulate the UI committing the placeholder candidate at point.
-The candidate text is already in the buffer (as the UI inserted it);
-we then invoke `post-completion-action' directly with that candidate."
+  "Simulate the UI committing the new-tag candidate at point.
+The candidate is the bare prefix string carrying `is-new-tag'."
   (setq test-completion-added-tag nil)
   (with-temp-buffer
     (org-mode)
     (insert "* node\n")
     (insert "Some text #")
-    (let ((candidate (propertize "[Create New Tag: newtag]"
-                                 'is-new-tag t
-                                 'new-tag-name "newtag")))
+    (let ((candidate (propertize "newtag" 'is-new-tag t)))
       (insert candidate)
-      ;; status is informational here — post-completion-action is what
-      ;; the :exit-function would invoke for finished/exact/sole/nil.
       (when (memq status '(finished exact sole nil))
         (supertag-completion--post-completion-action candidate))
-      ;; After commit the placeholder must have been rewritten to "newtag"
+      ;; Buffer must still contain "#newtag" — no rewrite needed because
+      ;; the candidate IS the real tag name.
       (when (memq status '(finished exact sole nil))
         (cl-assert (string-match-p "#newtag" (buffer-string))
-                   nil "placeholder not rewritten in buffer:\n%s"
-                   (buffer-string))))))
+                   nil "buffer lost the tag name:\n%s" (buffer-string))))))
 
 ;;; --- 1. Corfu-style finish ---
 (test-completion--drive-exit 'finished)
@@ -121,20 +116,34 @@ we then invoke `post-completion-action' directly with that candidate."
 
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 
-;;; --- 8. The candidate the UI displays for a new tag is the literal
-;;;        placeholder string "[Create New Tag: <name>]" so the user
-;;;        actually sees a "create new tag" option in the popup. ---
+;;; --- 8. The new-tag candidate is the bare prefix carrying is-new-tag
+;;;        so orderless/corfu cannot filter it out, and the metadata
+;;;        affixation-function adds the visible "[Create New Tag]" suffix.
 (advice-remove 'supertag-node-get #'ignore)
 (advice-add 'supertag-node-get :override
             (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
 (let* ((cands (supertag-completion--get-completion-table "branding"))
        (first (car cands)))
-  (cl-assert (string= first "[Create New Tag: branding]")
-             nil "new-tag candidate is not the placeholder string (got %S)" first)
+  (cl-assert (string= first "branding")
+             nil "new-tag candidate is not the bare prefix (got %S)" first)
   (cl-assert (get-text-property 0 'is-new-tag first)
-             nil "placeholder missing 'is-new-tag property")
-  (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
-             nil "placeholder missing 'new-tag-name property"))
+             nil "new-tag candidate missing 'is-new-tag property"))
 
-(message "OK new-tag placeholder candidate is visible as [Create New Tag: NAME].")
+;; Affixation function must label the new-tag candidate visibly.
+(with-temp-buffer
+  (org-mode)
+  (insert "Some text #branding")
+  (let* ((capf (supertag-completion-at-point))
+         (table (nth 2 capf))
+         (md (funcall table "branding" nil 'metadata))
+         (affix (cdr (assq 'affixation-function (cdr md))))
+         (rendered (funcall affix
+                            (list (propertize "branding" 'is-new-tag t)
+                                  "existing"))))
+    (cl-assert (string-match-p "Create New Tag" (caddr (car rendered)))
+               nil "affixation did not label new-tag candidate: %S" rendered)
+    (cl-assert (string-match-p "\\[tag\\]" (caddr (cadr rendered)))
+               nil "affixation did not label existing tag: %S" rendered)))
+
+(message "OK new-tag candidate is bare prefix with visible [Create New Tag] affix.")
 (kill-emacs 0)

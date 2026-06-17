@@ -29,32 +29,32 @@
   =test-automation-scheduled.el= as a runnable batch self-check.
 
 *** =#tag= Completion
-- Restored the explicit =[Create New Tag: <name>]= candidate in the
-  popup. The previous "use the typed text itself as the candidate"
-  trick made the popup look as if it offered no way to create a new
-  tag — users could not see whether typing more would commit a new
-  tag or just keep filtering existing ones.
-- The placeholder is rewritten to the bare =<name>= during commit
-  (`post-completion-action'), so the buffer ends up with the real
-  tag, not the bracketed label.
-- Pinned the CAPF =completion-styles= metadata to =(basic substring
-  partial-completion)= so orderless/corfu strict matchers do not
-  filter the placeholder out when the user has only typed part of
-  the new name.
+- Made the "create new tag" option actually visible in the popup. The
+  previous attempt used =[Create New Tag: <name>]= as the candidate
+  string, but orderless (corfu's default matcher) treated the bracket
+  text as required-to-match and filtered the candidate out — the
+  popup looked as if it offered no "new tag" path even though one
+  existed. Switched to a two-part design:
+  - candidate string = the bare prefix the user is typing (orderless
+    cannot filter it because it matches itself exactly);
+  - a metadata =affixation-function= renders =[Create New Tag]= as a
+    suffix column next to the candidate, so the popup shows
+    =thinking  [Create New Tag]= alongside the existing =[tag]=
+    entries.
 - Typing =#newtag= and continuing to write (without explicitly
   selecting the popup candidate) still records the tag immediately
-  via a new =post-self-insert-hook=. corfu/company quit their popup
-  silently in that case and never call the CAPF =:exit-function=, so
-  the tag used to be lost until the user re-triggered completion
-  with =C-M-i=. The new hook fires only when the just-inserted
-  character ends a =#tag= context, and skips tags already on the
-  node.
+  via a buffer-local =post-self-insert-hook=. corfu/company quit
+  their popup silently in that case and never call the CAPF
+  =:exit-function=, so the tag used to be lost until the user
+  re-triggered completion with =C-M-i=. The new hook fires only when
+  the just-inserted character ends a =#tag= context, and skips tags
+  already on the node.
 - Loosened the CAPF =:exit-function= status guard to accept any
   successful exit code (everything except =unknown=), so default
   =completion-at-point= paths that report =nil= also commit.
-- Added =test-completion-newtag.el= covering placeholder visibility,
-  the four exit-status paths, the ignored-candidate hook path, the
-  prose-no-tag path, and the duplicate-tag path.
+- Added =test-completion-newtag.el= covering candidate shape,
+  affixation label, the four exit-status paths, the ignored-candidate
+  hook path, the prose-no-tag path, and the duplicate-tag path.
 
 *** Sync
 - =supertag-sync-save-state= now creates its parent directory before
