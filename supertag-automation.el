@@ -434,6 +434,7 @@ Returns the created automation data with assigned ID."
                                               (plist-get automation-data :trigger))
                                     :condition (plist-get automation-data :condition)
                                     :actions (plist-get automation-data :actions)
+                                    :schedule (plist-get automation-data :schedule)
                                     :enabled (if (plist-member automation-data :enabled)
                                                (plist-get automation-data :enabled)
                                              t)

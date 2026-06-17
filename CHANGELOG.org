@@ -20,6 +20,14 @@
 - A failing scheduled task no longer aborts the master scheduler tick;
   the error is logged and the remaining tasks keep running.
 
+*** Automation
+- =supertag-automation-create= now preserves the =:schedule= plist on
+  the stored rule. Previously it was silently dropped, which meant any
+  =:on-schedule= rule was registered with =:time nil= and the scheduler
+  rejected it with "Invalid time format" — so scheduled automations
+  had never actually fired in this release line. Added
+  =test-automation-scheduled.el= as a runnable batch self-check.
+
 *** Sync
 - =supertag-sync-save-state= now creates its parent directory before
   writing =sync-state.el=, fixing a =file-missing= error on first-time
