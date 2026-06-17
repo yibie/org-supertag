@@ -154,9 +154,13 @@ Prevents thundering herd by running only one daily task per cycle."
             (let* ((today (format-time-string "%Y-%m-%d" now))
                    (current-time (format-time-string "%H:%M" now))
                    (scheduled-time (plist-get task :time))
-                   (last-run (plist-get task :last-run)))
+                   (last-run (plist-get task :last-run))
+                   (days (plist-get task :days-of-week)))
               (when (and (string-greaterp current-time scheduled-time)
-                         (not (equal last-run today)))
+                         (not (equal last-run today))
+                         (or (null days)
+                             (memq (string-to-number (format-time-string "%u" now))
+                                   days)))
                 (supertag-scheduler--run-task id task now)
                 (setq daily-task-ran t)))))))
      supertag-scheduler--tasks)))
@@ -165,7 +169,9 @@ Prevents thundering herd by running only one daily task per cycle."
   "Execute a task and update its state."
   (let ((func (plist-get task :function)))
     (message "[Supertag Scheduler] Running task '%s'..." id)
-    (funcall func)
+    (condition-case err
+        (funcall func)
+      (error (message "[Supertag Scheduler] Task '%s' failed: %S" id err)))
     ;; Update last-run time
     (pcase (plist-get task :type)
       (:interval (plist-put task :last-run now))

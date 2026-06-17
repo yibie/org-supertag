@@ -403,10 +403,19 @@ This function ensures all levels are proper hash tables."
   "Save the current `supertag--store` to a file.
 FILE is the optional file path. Defaults to `supertag-db-file`."
   (interactive)
-  (let ((file-to-save (or file supertag-db-file)))
-    (let ((reasons (supertag--persistence-guard-violations file-to-save)))
-      (when reasons
-        (supertag--persistence-refuse-save reasons)))
+  (let* ((file-to-save (or file supertag-db-file))
+         (reasons (supertag--persistence-guard-violations file-to-save))
+         (interactive-call (called-interactively-p 'any)))
+    (cond
+     ;; ponytail: timer-driven calls must not raise; only interactive
+     ;; invocations get the loud error. Otherwise a stalled init (e.g.
+     ;; failed `require`) leaves the auto-save timer barking forever.
+     ((and reasons interactive-call)
+      (supertag--persistence-refuse-save reasons))
+     (reasons
+      (message "Supertag auto-save skipped: %s"
+               (mapconcat #'identity reasons "; ")))
+     (t
     (supertag-persistence-ensure-data-directory) ; Ensure directory exists before saving
     (when (supertag-dirty-p) ; Only save if dirty
       ;; Safety guard: avoid overwriting a non-trivial on-disk DB with an empty in-memory store
@@ -432,7 +441,7 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
           (supertag-clear-dirty)
           (supertag--record-store-origin :ok)
           ;; Check if daily backup is needed after successful save
-          (supertag-check-daily-backup))))))
+          (supertag-check-daily-backup))))))))
 
 (defun supertag-db-migrate-and-normalize ()
   "Run all data migrations and normalizations on the loaded store.

@@ -1050,6 +1050,15 @@ setup or when rebuilding the entire database."
 
          ;; Step 4: Save state and report results
          (supertag-sync-save-state)
+         ;; ponytail: stamp store origin so the auto-save timer can save the
+         ;; freshly built store. Without this, full-initialize leaves origin
+         ;; nil and supertag-save-store keeps refusing.
+         (when (fboundp 'supertag--record-store-origin)
+           (supertag--record-store-origin :ok
+                                          (list :loaded-from supertag-db-file
+                                                :seeded-by 'supertag-sync-full-initialize)))
+         (supertag-mark-dirty)
+         (supertag-save-store)
 
          (let ((nodes-created (plist-get counters :nodes-created))
                (nodes-updated (plist-get counters :nodes-updated))

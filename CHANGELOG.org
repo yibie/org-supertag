@@ -1,6 +1,25 @@
 * Changelog
 * [5.8.2] - 2026-03-05
 ** Fixes
+*** Persistence
+- =supertag-save-store= no longer raises =user-error= when invoked by
+  the auto-save timer with an uninitialized store. Timer-driven calls
+  now log a single =Supertag auto-save skipped: ...= message instead
+  of spamming the echo area whenever the store origin is missing
+  (e.g. after a half-finished initialization). Interactive calls still
+  surface the full guard error.
+- =supertag-sync-full-initialize= now stamps =supertag--store-origin=
+  and triggers an immediate save once the rescan completes, so users
+  who run the full initializer without going through =supertag-init=
+  end up with a persisted database and no recurring timer error.
+
+*** Scheduler
+- The daily scheduler now respects the =:days-of-week= filter that was
+  already accepted by =supertag-scheduler-register-task= but silently
+  ignored at dispatch time.
+- A failing scheduled task no longer aborts the master scheduler tick;
+  the error is logged and the remaining tasks keep running.
+
 *** Sync
 - =supertag-sync-save-state= now creates its parent directory before
   writing =sync-state.el=, fixing a =file-missing= error on first-time
