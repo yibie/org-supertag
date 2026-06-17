@@ -121,16 +121,19 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
       (when start
         (cons start end)))))
 
+(defconst supertag-completion--new-tag-suffix "  [Create New Tag]"
+  "Visible suffix used to flag the \"create new tag\" candidate.")
+
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
 The list contains existing tags not yet on the current node. When
-PREFIX is non-empty and matches no existing tag, PREFIX itself is
-prepended as the new-tag candidate, carrying the `is-new-tag' text
-property. Using PREFIX as the candidate string (rather than a literal
-\"[Create New Tag]\" placeholder) is what lets orderless/corfu keep
-the candidate visible during incremental filtering — they only see
-it as a perfect match for what the user is typing. The visible label
-\"[Create New Tag]\" is supplied by the metadata `affixation-function'."
+PREFIX is non-empty and matches no existing tag, a candidate of the
+form \"PREFIX  [Create New Tag]\" is prepended with the text
+properties `is-new-tag' and `new-tag-name'. Putting PREFIX literally
+at the front of the candidate means orderless and basic styles match
+it on the typed input, so the option stays visible during incremental
+filtering. `supertag-completion--post-completion-action' strips the
+suffix back off after the UI commits the candidate."
   (let* ((safe-prefix (or prefix ""))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
@@ -142,17 +145,34 @@ it as a perfect match for what the user is typing. The visible label
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (cons (propertize safe-prefix 'is-new-tag t) available-tags)
+        (let* ((suffix (propertize supertag-completion--new-tag-suffix
+                                   'face 'shadow))
+               (candidate (concat safe-prefix suffix)))
+          (cons (propertize candidate
+                            'is-new-tag t
+                            'new-tag-name safe-prefix)
+                available-tags))
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
   "Post-completion action invoked after the UI inserts SELECTED-STRING.
-SELECTED-STRING is the real tag name in all cases (the visible
-\"[Create New Tag]\" annotation is supplied by the affixation
-function and never enters the buffer)."
+For new tags SELECTED-STRING is \"NAME  [Create New Tag]\" — strip
+the suffix off the buffer and recover the bare NAME from the
+candidate's `new-tag-name' property."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (substring-no-properties selected-string))
+         (tag-name (if is-new
+                       (get-text-property 0 'new-tag-name selected-string)
+                     (substring-no-properties selected-string)))
          (node-id (org-id-get-create)))
+
+    (when (and is-new tag-name)
+      (let* ((end (point))
+             (literal (substring-no-properties selected-string))
+             (start (- end (length literal))))
+        (when (and (>= start (point-min))
+                   (string= (buffer-substring-no-properties start end) literal))
+          (delete-region start end)
+          (insert tag-name))))
 
     (when (and tag-name (not (string-empty-p tag-name)) node-id)
 
@@ -201,23 +221,12 @@ function and never enters the buffer)."
                                     (if (get-text-property 0 'is-new-tag cand)
                                         'snippet
                                       'keyword)))
-                  ;; affixation gives us a third column (suffix) the UI
-                  ;; renders alongside the candidate. orderless cannot
-                  ;; filter the candidate out by its bracketed label
-                  ;; because the candidate itself is just the bare name.
-                  (affixation-function
-                   . (lambda (cands)
-                       (mapcar (lambda (c)
-                                 (if (get-text-property 0 'is-new-tag c)
-                                     (list c "" (propertize "  [Create New Tag]"
-                                                            'face 'shadow))
-                                   (list c "" (propertize "  [tag]"
-                                                          'face 'shadow))))
-                               cands)))
+                  ;; The new-tag candidate already carries its own
+                  ;; "[Create New Tag]" suffix in its string. We only
+                  ;; annotate existing tags here.
                   (annotation-function
                    . (lambda (cand)
-                       (if (get-text-property 0 'is-new-tag cand)
-                           "  [Create New Tag]"
+                       (unless (get-text-property 0 'is-new-tag cand)
                          "  [tag]")))))
                ;; Return all candidates (for display).
                ;; Use the LIVE input STR (not the captured PREFIX) so the

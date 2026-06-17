@@ -27,21 +27,26 @@
 
 (defun test-completion--drive-exit (status)
   "Simulate the UI committing the new-tag candidate at point.
-The candidate is the bare prefix string carrying `is-new-tag'."
+The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
+`new-tag-name'. After commit, the buffer must contain only \"NAME\"."
   (setq test-completion-added-tag nil)
   (with-temp-buffer
     (org-mode)
     (insert "* node\n")
     (insert "Some text #")
-    (let ((candidate (propertize "newtag" 'is-new-tag t)))
+    (let ((candidate (propertize (concat "newtag"
+                                         supertag-completion--new-tag-suffix)
+                                 'is-new-tag t
+                                 'new-tag-name "newtag")))
       (insert candidate)
       (when (memq status '(finished exact sole nil))
         (supertag-completion--post-completion-action candidate))
-      ;; Buffer must still contain "#newtag" — no rewrite needed because
-      ;; the candidate IS the real tag name.
       (when (memq status '(finished exact sole nil))
         (cl-assert (string-match-p "#newtag" (buffer-string))
-                   nil "buffer lost the tag name:\n%s" (buffer-string))))))
+                   nil "buffer missing #newtag: %s" (buffer-string))
+        (cl-assert (not (string-match-p "Create New Tag" (buffer-string)))
+                   nil "suffix not stripped from buffer: %s"
+                   (buffer-string))))))
 
 ;;; --- 1. Corfu-style finish ---
 (test-completion--drive-exit 'finished)
@@ -116,34 +121,34 @@ The candidate is the bare prefix string carrying `is-new-tag'."
 
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 
-;;; --- 8. The new-tag candidate is the bare prefix carrying is-new-tag
-;;;        so orderless/corfu cannot filter it out, and the metadata
-;;;        affixation-function adds the visible "[Create New Tag]" suffix.
+;;; --- 8. The new-tag candidate string starts with the user's prefix
+;;;        followed by "  [Create New Tag]" — this shape lets orderless
+;;;        and basic styles match the user's input on the leading
+;;;        prefix while keeping the visible label in the candidate.
 (advice-remove 'supertag-node-get #'ignore)
 (advice-add 'supertag-node-get :override
             (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
 (let* ((cands (supertag-completion--get-completion-table "branding"))
-       (first (car cands)))
-  (cl-assert (string= first "branding")
-             nil "new-tag candidate is not the bare prefix (got %S)" first)
+       (first (car cands))
+       (literal (substring-no-properties first)))
+  (cl-assert (string-prefix-p "branding" literal)
+             nil "candidate does not start with prefix: %S" literal)
+  (cl-assert (string-match-p "\\[Create New Tag\\]" literal)
+             nil "candidate missing visible label: %S" literal)
   (cl-assert (get-text-property 0 'is-new-tag first)
-             nil "new-tag candidate missing 'is-new-tag property"))
+             nil "new-tag candidate missing 'is-new-tag property")
+  (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
+             nil "new-tag candidate missing 'new-tag-name property"))
 
-;; Affixation function must label the new-tag candidate visibly.
-(with-temp-buffer
-  (org-mode)
-  (insert "Some text #branding")
-  (let* ((capf (supertag-completion-at-point))
-         (table (nth 2 capf))
-         (md (funcall table "branding" nil 'metadata))
-         (affix (cdr (assq 'affixation-function (cdr md))))
-         (rendered (funcall affix
-                            (list (propertize "branding" 'is-new-tag t)
-                                  "existing"))))
-    (cl-assert (string-match-p "Create New Tag" (caddr (car rendered)))
-               nil "affixation did not label new-tag candidate: %S" rendered)
-    (cl-assert (string-match-p "\\[tag\\]" (caddr (cadr rendered)))
-               nil "affixation did not label existing tag: %S" rendered)))
+;;; --- 9. Crucially: orderless-style filtering on user input "branding"
+;;;        must KEEP the new-tag candidate in the list. ---
+(let* ((cands (supertag-completion--get-completion-table "branding"))
+       ;; basic/substring matchers
+       (filtered (let ((completion-styles '(basic substring)))
+                   (all-completions "branding" cands))))
+  (cl-assert (cl-some (lambda (c) (string-prefix-p "branding" c)) filtered)
+             nil "new-tag candidate filtered out by basic/substring: %S"
+             filtered))
 
-(message "OK new-tag candidate is bare prefix with visible [Create New Tag] affix.")
+(message "OK new-tag candidate \"PREFIX  [Create New Tag]\" survives filtering.")
 (kill-emacs 0)

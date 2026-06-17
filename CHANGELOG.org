@@ -29,18 +29,19 @@
   =test-automation-scheduled.el= as a runnable batch self-check.
 
 *** =#tag= Completion
-- Made the "create new tag" option actually visible in the popup. The
-  previous attempt used =[Create New Tag: <name>]= as the candidate
-  string, but orderless (corfu's default matcher) treated the bracket
-  text as required-to-match and filtered the candidate out — the
-  popup looked as if it offered no "new tag" path even though one
-  existed. Switched to a two-part design:
-  - candidate string = the bare prefix the user is typing (orderless
-    cannot filter it because it matches itself exactly);
-  - a metadata =affixation-function= renders =[Create New Tag]= as a
-    suffix column next to the candidate, so the popup shows
-    =thinking  [Create New Tag]= alongside the existing =[tag]=
-    entries.
+- Made the "create new tag" option actually visible in the popup
+  across UI/filter combinations. Two earlier shapes failed:
+  - =[Create New Tag: <name>]= candidate: orderless filtered it out
+    because the leading =[= and trailing =]= did not match user input;
+  - bare =<name>= candidate with metadata =affixation-function=:
+    affixation is not honored by every corfu version / marginalia
+    setup, so users saw no label at all.
+  Switched to a self-labeled candidate: the candidate string itself is
+  =<name>  [Create New Tag]=, carrying =is-new-tag= and =new-tag-name=
+  text properties. Because the candidate starts with the user's
+  prefix, orderless/basic/substring matchers all keep it visible.
+  =post-completion-action= strips the suffix back off the buffer after
+  commit, leaving only the bare tag name.
 - Typing =#newtag= and continuing to write (without explicitly
   selecting the popup candidate) still records the tag immediately
   via a buffer-local =post-self-insert-hook=. corfu/company quit
