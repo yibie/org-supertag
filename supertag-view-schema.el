@@ -601,13 +601,28 @@ Dispatches to the correct deletion logic based on context."
       (message "Not on a valid field line."))))
 
 (defun supertag-schema-refresh ()
-  "Refresh the schema view while attempting to preserve point."
+  "Refresh the schema view while preserving point as best we can.
+Tries three strategies in order:
+  1. restore the exact context (tag + field) that was at point;
+  2. fall back to just the tag line if the field is gone;
+  3. fall back to the same line number if both are gone."
   (interactive)
-  (let ((context-before (supertag-schema--get-context-at-point)))
+  (let* ((context-before (supertag-schema--get-context-at-point))
+         (line-before (line-number-at-pos)))
     (let ((inhibit-read-only t))
       (supertag-schema--render))
-    (when context-before
-      (supertag-schema--goto-context context-before))))
+    (or (and context-before
+             (supertag-schema--goto-context context-before))
+        ;; field gone but its tag may still exist — jump to the tag line
+        (and context-before
+             (eq (plist-get context-before :type) :field)
+             (supertag-schema--goto-context
+              (list :type :tag :tag-id (plist-get context-before :tag-id))))
+        ;; nothing left of the context — keep the same line number
+        (progn
+          (goto-char (point-min))
+          (forward-line (1- line-before))
+          (goto-char (line-beginning-position))))))
 
 (defun supertag-schema--goto-context (context)
   "Search for CONTEXT from top of buffer and move point there."
