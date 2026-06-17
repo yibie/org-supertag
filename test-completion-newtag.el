@@ -151,4 +151,33 @@ The candidate is \"NAME  [Create New Tag]\" carrying `is-new-tag' and
              filtered))
 
 (message "OK new-tag candidate \"PREFIX  [Create New Tag]\" survives filtering.")
+
+;;; --- 10. CRITICAL: when the only surviving candidate is the new-tag
+;;;        entry, the CAPF table must NOT report the user input as
+;;;        completed — otherwise corfu / completion-at-point silently
+;;;        commits the labeled candidate into the buffer without ever
+;;;        showing the popup. This is the bug the user kept reporting.
+(advice-remove 'supertag-completion--get-all-tags #'ignore)
+(advice-add 'supertag-completion--get-all-tags :override
+            (lambda () (list "idea" "tips")))
+(with-temp-buffer
+  (org-mode)
+  (insert "Some text #goodgoodgood")
+  (let* ((capf (supertag-completion-at-point))
+         (table (nth 2 capf))
+         (try-result (funcall table "goodgoodgood" nil nil))
+         (lambda-result (funcall table "goodgoodgood" nil 'lambda)))
+    ;; try-completion must NOT return the labeled candidate; otherwise
+    ;; the UI would auto-insert "  [Create New Tag]" into the buffer.
+    (cl-assert (or (eq try-result t)
+                   (and (stringp try-result)
+                        (not (string-match-p "Create New Tag" try-result))))
+               nil "try-completion leaked labeled candidate: %S" try-result)
+    ;; test-completion must NOT report 'finished' on a sole new-tag,
+    ;; otherwise completion-at-point treats it as already complete.
+    (cl-assert (not lambda-result)
+               nil "test-completion incorrectly marked sole new-tag as exact: %S"
+               lambda-result)))
+
+(message "OK sole new-tag does not trigger silent auto-commit.")
 (kill-emacs 0)

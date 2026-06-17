@@ -29,6 +29,19 @@
   =test-automation-scheduled.el= as a runnable batch self-check.
 
 *** =#tag= Completion
+- Stopped the "[Create New Tag]" popup entry from being silently
+  auto-inserted into the buffer when it is the only surviving
+  candidate. The CAPF table's `try-completion' branch used to return
+  the full labeled candidate string ("PREFIX  [Create New Tag]"), and
+  corfu — especially with `corfu-preview-current' set to `'insert' —
+  treated that as "already complete" and committed the suffix to the
+  buffer (often as the lowercase residue "[Create new tag]") without
+  ever showing the popup. The CAPF now detects when the longest
+  common prefix contains the new-tag marker and returns the user's
+  raw input instead, forcing the popup to appear.
+- `test-completion' branch hardened the same way: a sole new-tag
+  candidate no longer reports the input as "exactly complete", so
+  `completion-at-point' will not skip the popup either.
 - Made the "create new tag" option actually visible in the popup
   across UI/filter combinations. Two earlier shapes failed:
   - =[Create New Tag: <name>]= candidate: orderless filtered it out
@@ -42,6 +55,15 @@
   prefix, orderless/basic/substring matchers all keep it visible.
   =post-completion-action= strips the suffix back off the buffer after
   commit, leaving only the bare tag name.
+- Added =supertag-tag-insert= as a UI-stack-agnostic fallback:
+  =M-x supertag-tag-insert= reads the tag via the minibuffer with
+  completion against existing tags, and a freshly typed name creates
+  the tag immediately. Use when the popup completion misbehaves with
+  exotic corfu/cape/marginalia configurations.
+- Added =supertag-completion-debug= for popup diagnosis. Run it with
+  the cursor right after a =#prefix= to dump bounds, live prefix,
+  raw candidate list, post-filter candidate list, candidate width,
+  and the active capf chain to =*Messages*=.
 - Typing =#newtag= and continuing to write (without explicitly
   selecting the popup candidate) still records the tag immediately
   via a buffer-local =post-self-insert-hook=. corfu/company quit

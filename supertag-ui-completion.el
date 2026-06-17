@@ -234,12 +234,42 @@ candidate's `new-tag-name' property."
                ;; corfu's incremental filtering.
                ((eq action t)
                 (supertag-completion--get-completion-table str))
-               ;; Test for exact match
+               ;; Test for exact match. NEVER report the user input as an
+               ;; exact match against the "[Create New Tag]" candidate
+               ;; — that would convince the UI that completion is done
+               ;; and it would auto-commit the labeled candidate.
                ((eq action 'lambda)
-                (test-completion str (supertag-completion--get-completion-table str) pred))
-               ;; Try completion (return common prefix or t if unique)
+                (let ((cands (supertag-completion--get-completion-table str)))
+                  (and (test-completion str cands pred)
+                       ;; not satisfied if the only match is the new-tag entry
+                       (not (and (= (length cands) 1)
+                                 (get-text-property
+                                  0 'is-new-tag (car cands)))))))
+               ;; Try completion (return common prefix or t if unique).
+               ;; CRITICAL: try-completion returns the longest common
+               ;; prefix across matching candidates. When the only
+               ;; candidate that starts with STR is our labeled
+               ;; "STR  [Create New Tag]" entry, try-completion returns
+               ;; that whole literal — and the UI happily auto-inserts
+               ;; "  [Create New Tag]" into the buffer without ever
+               ;; showing the popup. Detect that case and return STR
+               ;; (or t) so the UI shows the popup instead.
                ((null action)
-                (try-completion str (supertag-completion--get-completion-table str) pred))
+                (let* ((cands (supertag-completion--get-completion-table str))
+                       (raw (try-completion str cands pred)))
+                  (cond
+                   ;; t means "unique exact match" — let the UI handle it.
+                   ((eq raw t) t)
+                   ;; If the literal raw result contains our marker, the
+                   ;; only matching candidate is the new-tag entry. Tell
+                   ;; the UI "no progress past STR" so it pops the menu
+                   ;; instead of auto-inserting the label.
+                   ((and (stringp raw)
+                         (string-match-p (regexp-quote
+                                          supertag-completion--new-tag-suffix)
+                                         raw))
+                    str)
+                   (t raw))))
                ;; Boundaries and other actions (handles (boundaries . "") etc.)
                (t
                 (complete-with-action action
