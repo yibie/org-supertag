@@ -149,7 +149,7 @@ the bare tag name and no leaked label."
          (ann (cdr (assq 'annotation-function (cdr md)))))
     (let ((new-label (funcall ann (propertize "branding" 'is-new-tag t)))
           (old-label (funcall ann "existing")))
-      (cl-assert (string-match-p "Create New Tag" new-label)
+      (cl-assert (string-match-p "\\[New\\]" new-label)
                  nil "annotation did not label new-tag: %S" new-label)
       (cl-assert (string-match-p "\\[tag\\]" old-label)
                  nil "annotation did not label existing tag: %S" old-label))))

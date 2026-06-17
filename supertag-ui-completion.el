@@ -221,7 +221,7 @@ ever contains the real tag name)."
                   (annotation-function
                    . (lambda (cand)
                        (if (get-text-property 0 'is-new-tag cand)
-                           (propertize "  [Create New Tag]" 'face 'shadow)
+                           (propertize "  [New]" 'face 'shadow)
                          "  [tag]")))))
                ;; Return all candidates (for display).
                ;; Two gotchas to handle here:
