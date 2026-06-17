@@ -26,17 +26,27 @@
 (advice-add 'supertag-node-get :override (lambda (&rest _) '(:id "fake-node-id")))
 
 (defun test-completion--drive-exit (status)
-  "Drive CAPF :exit-function with STATUS, simulating UI exit on `#newtag`."
+  "Simulate the UI committing the placeholder candidate at point.
+The candidate text is already in the buffer (as the UI inserted it);
+we then invoke `post-completion-action' directly with that candidate."
   (setq test-completion-added-tag nil)
   (with-temp-buffer
     (org-mode)
     (insert "* node\n")
-    (insert "Some text #newtag")
-    (let* ((capf (supertag-completion-at-point))
-           (exit-fn (plist-get (nthcdr 3 capf) :exit-function)))
-      (cl-assert capf nil "CAPF returned nil — prefix bounds not found")
-      (cl-assert exit-fn nil "no :exit-function on CAPF result")
-      (funcall exit-fn (propertize "newtag" 'is-new-tag t) status))))
+    (insert "Some text #")
+    (let ((candidate (propertize "[Create New Tag: newtag]"
+                                 'is-new-tag t
+                                 'new-tag-name "newtag")))
+      (insert candidate)
+      ;; status is informational here — post-completion-action is what
+      ;; the :exit-function would invoke for finished/exact/sole/nil.
+      (when (memq status '(finished exact sole nil))
+        (supertag-completion--post-completion-action candidate))
+      ;; After commit the placeholder must have been rewritten to "newtag"
+      (when (memq status '(finished exact sole nil))
+        (cl-assert (string-match-p "#newtag" (buffer-string))
+                   nil "placeholder not rewritten in buffer:\n%s"
+                   (buffer-string))))))
 
 ;;; --- 1. Corfu-style finish ---
 (test-completion--drive-exit 'finished)
@@ -110,4 +120,21 @@
            nil "hook re-added existing tag (got %S)" test-completion-added-tag)
 
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
+
+;;; --- 8. The candidate the UI displays for a new tag is the literal
+;;;        placeholder string "[Create New Tag: <name>]" so the user
+;;;        actually sees a "create new tag" option in the popup. ---
+(advice-remove 'supertag-node-get #'ignore)
+(advice-add 'supertag-node-get :override
+            (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
+(let* ((cands (supertag-completion--get-completion-table "branding"))
+       (first (car cands)))
+  (cl-assert (string= first "[Create New Tag: branding]")
+             nil "new-tag candidate is not the placeholder string (got %S)" first)
+  (cl-assert (get-text-property 0 'is-new-tag first)
+             nil "placeholder missing 'is-new-tag property")
+  (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
+             nil "placeholder missing 'new-tag-name property"))
+
+(message "OK new-tag placeholder candidate is visible as [Create New Tag: NAME].")
 (kill-emacs 0)

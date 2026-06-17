@@ -123,11 +123,16 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
 
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
-The list contains existing tags not yet on the current node. When PREFIX
-is non-empty and matches no existing tag, PREFIX itself is prepended as a
-propertized \"new tag\" candidate. Using the typed text as the candidate
-(instead of a [Create New Tag] placeholder) keeps it visible under
-corfu/orderless filtering and means the UI inserts the real tag name."
+The list contains existing tags not yet on the current node. When
+PREFIX is non-empty and matches no existing tag, a literal
+\"[Create New Tag: PREFIX]\" placeholder is prepended, carrying the
+text properties `is-new-tag' and `new-tag-name'. The placeholder is
+unambiguous and is rewritten to the real tag name by
+`supertag-completion--post-completion-action'.
+
+To stop orderless/corfu from filtering the placeholder out when the
+user is typing a substring like \"newt\", the metadata returned by
+the CAPF restricts completion-styles to basic+substring."
   (let* ((safe-prefix (or prefix ""))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
@@ -139,17 +144,33 @@ corfu/orderless filtering and means the UI inserts the real tag name."
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (cons (propertize safe-prefix 'is-new-tag t) available-tags)
+        (cons (propertize (format "[Create New Tag: %s]" safe-prefix)
+                          'is-new-tag t
+                          'new-tag-name safe-prefix)
+              available-tags)
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
-  "The single, unified post-completion action.
-The completion UI has already inserted SELECTED-STRING into the buffer.
-For both existing and new tags this is the real tag name (new candidates
-are the typed text itself), so no buffer correction is needed."
+  "Post-completion action invoked after the UI inserts SELECTED-STRING.
+For existing tags SELECTED-STRING is the real tag name, already in the
+buffer. For new tags it is the literal \"[Create New Tag: NAME]\"
+placeholder — rewrite the buffer region back to the bare NAME before
+adding it to the database."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (substring-no-properties selected-string))
+         (tag-name (if is-new
+                       (get-text-property 0 'new-tag-name selected-string)
+                     (substring-no-properties selected-string)))
          (node-id (org-id-get-create)))
+
+    ;; Rewrite the placeholder text back to the real tag name.
+    (when (and is-new tag-name)
+      (let ((end (point))
+            (start (- (point) (length selected-string))))
+        (when (and (>= start (point-min))
+                   (string= (buffer-substring-no-properties start end)
+                            (substring-no-properties selected-string)))
+          (delete-region start end)
+          (insert tag-name))))
 
     (when (and tag-name (not (string-empty-p tag-name)) node-id)
 
@@ -194,11 +215,18 @@ are the typed text itself), so no buffer correction is needed."
                   (category . supertag-tag)
                   (display-sort-function . identity)
                   (cycle-sort-function . identity)
-                  (company-kind . (lambda (_cand) 'keyword))
+                  ;; Pin to forgiving styles so orderless does not filter
+                  ;; out the [Create New Tag: ...] placeholder when the
+                  ;; user has only typed a substring of the new name.
+                  (completion-styles . (basic substring partial-completion))
+                  (company-kind . (lambda (cand)
+                                    (if (get-text-property 0 'is-new-tag cand)
+                                        'snippet
+                                      'keyword)))
                   (annotation-function
                    . (lambda (cand)
                        (if (get-text-property 0 'is-new-tag cand)
-                           " [new]"
+                           ""
                          " [tag]")))))
                ;; Return all candidates (for display).
                ;; Use the LIVE input STR (not the captured PREFIX) so the
