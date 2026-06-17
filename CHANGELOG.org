@@ -29,12 +29,18 @@
   =test-automation-scheduled.el= as a runnable batch self-check.
 
 *** =#tag= Completion
-- Typing a brand-new =#newtag= and pressing SPC now records the tag
-  immediately. Previously the CAPF =:exit-function= only acted on
-  status =finished= / =exact= / =sole=, so the common "type and space"
-  path (status =nil= in most UIs) silently dropped the tag and the
-  user had to re-trigger completion with =C-M-i= to get it stored.
-  Added =test-completion-newtag.el= as a self-check.
+- Typing =#newtag= and continuing to write (without explicitly
+  selecting the popup =[new]= candidate) now records the tag
+  immediately via a new =post-self-insert-hook=. corfu/company quit
+  their popup silently in that case and never call the CAPF
+  =:exit-function=, so the tag used to be lost until the user
+  re-triggered completion with =C-M-i=. The new hook fires only when
+  the just-inserted character ends a =#tag= context, and skips tags
+  already on the node.
+- Loosened the CAPF =:exit-function= status guard to accept any
+  successful exit code (everything except =unknown=), so default
+  =completion-at-point= paths that report =nil= also commit.
+- Added =test-completion-newtag.el= as a runnable batch self-check.
 
 *** Sync
 - =supertag-sync-save-state= now creates its parent directory before

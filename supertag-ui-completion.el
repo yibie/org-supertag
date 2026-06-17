@@ -238,6 +238,45 @@ are the typed text itself), so no buffer correction is needed."
                 (supertag-completion--post-completion-action selected-string)))))))
 
 ;;;----------------------------------------------------------------------
+;;; Auto-record on tag boundary
+;;;----------------------------------------------------------------------
+
+(defun supertag-completion--auto-record-on-boundary ()
+  "Record the `#prefix' right behind point if the user just ended it.
+Triggered from `post-self-insert-hook'. The corfu popup may have shown
+a `[new]' candidate, but if the user ignored it and typed SPC/RET/etc.
+to continue writing, the CAPF `:exit-function' is never called and the
+tag would be lost until the user re-triggered completion with C-M-i.
+This hook closes that gap: when the just-inserted character ends a
+`#tag' context, sync the node and add the tag (idempotent for existing
+tags, creates the tag entity if new)."
+  (when (and (derived-mode-p 'org-mode)
+             (not (supertag-completion--valid-tag-char-p (char-before)))
+             (> (point) 2)
+             ;; The char just before the separator must be a valid tag
+             ;; char — otherwise we are not on a tag boundary.
+             (supertag-completion--valid-tag-char-p (char-before (1- (point)))))
+    (save-excursion
+      (backward-char) ; step over the separator we just typed
+      (when-let* ((bounds (supertag-completion--get-prefix-bounds))
+                  (prefix (buffer-substring-no-properties
+                           (car bounds) (cdr bounds)))
+                  (_ (not (string-empty-p prefix))))
+        (condition-case err
+            (let ((node-id (org-id-get-create)))
+              (when node-id
+                (unless (supertag-node-get node-id)
+                  (when (fboundp 'supertag-node-sync-at-point)
+                    (supertag-node-sync-at-point)))
+                (let ((node-tags (supertag-completion--get-node-tags node-id)))
+                  (unless (member prefix node-tags)
+                    (when (fboundp 'supertag-ops-add-tag-to-node)
+                      (supertag-ops-add-tag-to-node
+                       node-id prefix :create-if-needed t))))))
+          (error
+           (message "supertag-completion: auto-record failed: %S" err)))))))
+
+;;;----------------------------------------------------------------------
 ;;; Setup
 ;;;----------------------------------------------------------------------
 
@@ -245,7 +284,9 @@ are the typed text itself), so no buffer correction is needed."
 (defun supertag-completion-setup ()
   "Setup completion for org-supertag."
   (add-hook 'completion-at-point-functions
-            #'supertag-completion-at-point nil t))
+            #'supertag-completion-at-point nil t)
+  (add-hook 'post-self-insert-hook
+            #'supertag-completion--auto-record-on-boundary nil t))
 
 ;;;###autoload
 (define-minor-mode supertag-ui-completion-mode
@@ -254,7 +295,9 @@ are the typed text itself), so no buffer correction is needed."
   (if supertag-ui-completion-mode
       (supertag-completion-setup)
     (remove-hook 'completion-at-point-functions
-                 #'supertag-completion-at-point t)))
+                 #'supertag-completion-at-point t)
+    (remove-hook 'post-self-insert-hook
+                 #'supertag-completion--auto-record-on-boundary t)))
 
 ;;;###autoload
 (defun supertag-ui-completion-enable ()

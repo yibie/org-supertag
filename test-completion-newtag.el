@@ -63,5 +63,51 @@
            nil "unknown status incorrectly committed tag (got %S)"
            test-completion-added-tag)
 
-(message "OK: #newtag commits on finished / exact / nil status; skips on unknown.")
+(message "OK exit-function path: commits on finished/exact/nil; skips on unknown.")
+
+;;; --- 5. THE REAL USER SCENARIO ---
+;;; corfu shows a [new] candidate, user IGNORES it and types SPC to
+;;; keep writing. :exit-function is never called. Our post-self-insert
+;;; hook must catch this and record the tag anyway.
+(setq test-completion-added-tag nil)
+(with-temp-buffer
+  (org-mode)
+  (supertag-ui-completion-mode 1)
+  (insert "Some text #ignoredtag")
+  ;; Simulate SPC self-insert (last-command-event = ?\s, point advances)
+  (let ((last-command-event ?\s))
+    (insert " ")
+    (run-hooks 'post-self-insert-hook)))
+(cl-assert (equal test-completion-added-tag "ignoredtag")
+           nil "post-self-insert hook did not record ignored #newtag (got %S)"
+           test-completion-added-tag)
+
+;;; --- 6. Hook must NOT fire on plain prose (no preceding #tag) ---
+(setq test-completion-added-tag nil)
+(with-temp-buffer
+  (org-mode)
+  (supertag-ui-completion-mode 1)
+  (insert "ordinary sentence")
+  (let ((last-command-event ?\s))
+    (insert " ")
+    (run-hooks 'post-self-insert-hook)))
+(cl-assert (null test-completion-added-tag)
+           nil "hook fired on non-tag text (got %S)" test-completion-added-tag)
+
+;;; --- 7. Hook must NOT re-add an existing tag on the same node ---
+(setq test-completion-added-tag nil)
+(advice-remove 'supertag-node-get #'ignore)
+(advice-add 'supertag-node-get :override
+            (lambda (&rest _) '(:id "fake-node-id" :tags ("already"))))
+(with-temp-buffer
+  (org-mode)
+  (supertag-ui-completion-mode 1)
+  (insert "Recap #already")
+  (let ((last-command-event ?\s))
+    (insert " ")
+    (run-hooks 'post-self-insert-hook)))
+(cl-assert (null test-completion-added-tag)
+           nil "hook re-added existing tag (got %S)" test-completion-added-tag)
+
+(message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 (kill-emacs 0)
