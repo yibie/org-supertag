@@ -203,7 +203,8 @@ You can customize this list to match your org-mode TODO keywords."
     ;; Debug
     (define-key map (kbd "?") 'supertag-view-node-debug-field-at-point)
     map)
-  "Keymap for `supertag-view-node-mode'.")
+  "Keymap for `supertag-view-node-mode'.
+Users can rebind keys in this map to avoid conflicts with modal editing.")
 
 (define-derived-mode supertag-view-node-mode special-mode "Supertag Node"
   "A modern major mode for viewing and editing an Org-Supertag node.

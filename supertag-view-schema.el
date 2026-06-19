@@ -295,9 +295,7 @@ This function handles both legacy and global field modes."
 
 ;;; --- Major Mode and User Command ---
 
-(define-derived-mode supertag-schema-view-mode special-mode "Schema"
-  "A major mode for viewing the Org-Supertag schema."
-  (setq-local buffer-read-only t)
+(defvar supertag-schema-view-mode-map
   (let ((map (make-sparse-keymap)))
     ;; ========== Add Commands (a prefix) ==========
     (let ((add-map (make-sparse-keymap "Add...")))
@@ -356,7 +354,16 @@ This function handles both legacy and global field modes."
     (define-key map "r" #'supertag-schema--rename-at-point)               ; r: Rename (legacy)
     (define-key map "D" #'supertag-schema--batch-delete-marked-items)     ; D: Delete Marked (legacy)
 
-    (use-local-map map))
+    map)
+  "Keymap for `supertag-schema-view-mode'.
+Users can rebind keys in this map to avoid conflicts with modal editing.")
+
+(define-derived-mode supertag-schema-view-mode special-mode "Schema"
+  "A major mode for viewing the Org-Supertag schema.
+
+\\{supertag-schema-view-mode-map}"
+  :keymap supertag-schema-view-mode-map
+  (setq-local buffer-read-only t)
   (setq-local revert-buffer-function #'(lambda (&rest _) (supertag-schema-refresh))))
 
 (defface supertag-schema-marked-face

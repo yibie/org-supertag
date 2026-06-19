@@ -1862,10 +1862,12 @@ With prefix argument INDEX, switch to specific table number."
     ;; Help
     (define-key map (kbd "?") #'supertag-view-table-help)
     map)
-  "Keymap for supertag-view-table-mode.")
+  "Keymap for `supertag-view-table-mode'.
+Users can rebind keys in this map to avoid conflicts with modal editing.")
 
 (define-derived-mode supertag-view-table-mode special-mode "Supertag-Grid"
   "Major mode for Supertag grid views."
+  :keymap supertag-view-table-mode-map
   (setq buffer-read-only t)
   ;; Critical: Set line-spacing to 0 to ensure image slices align perfectly,
   ;; recreating the "perfect display environment" from the old version.

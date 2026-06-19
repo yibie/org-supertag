@@ -329,10 +329,12 @@ Returns plist with :node-id, :current-value, and other card info."
     (define-key map (kbd "p") #'supertag-view-kanban-previous-card)
     (define-key map (kbd "n") #'supertag-view-kanban-next-card)
     map)
-  "Keymap for supertag-view-kanban-mode.")
+  "Keymap for `supertag-view-kanban-mode'.
+Users can rebind keys in this map to avoid conflicts with modal editing.")
 
 (define-derived-mode supertag-view-kanban-mode special-mode "Supertag-Kanban"
   "Major mode for Supertag Kanban board views."
+  :keymap supertag-view-kanban-mode-map
   (setq buffer-read-only t))
 
 (defun supertag-view-kanban-cleanup ()
