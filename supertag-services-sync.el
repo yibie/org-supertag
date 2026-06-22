@@ -110,7 +110,7 @@ Takes precedence over `org-supertag-sync-directories`."
 
 
 (defcustom supertag-sync-hash-props
-  '(:raw-value :olp :tags :todo :priority :content :properties)
+  '(:raw-value :olp :tags :todo :priority :content :properties :parent-id)
   "Properties to include when calculating node hash values.
 `:id' is always included. `:todo-type' is treated as `:todo'."
   :type '(repeat symbol)
@@ -886,17 +886,105 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
 NEW-PROPS is the source of truth for file-based properties.
 OLD-PROPS is the source of truth for database-only fields."
   (let ((merged-props (copy-sequence new-props))
-        (standard-keys '(:id :title :raw-value :olp :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type)))
+        (standard-keys '(:id :title :raw-value :olp :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type :parent-id)))
     (cl-loop for (key value) on old-props by #'cddr
              do (unless (member key standard-keys)
                   (plist-put merged-props key value)))
     merged-props))
+
+(defun supertag-sync--parse-file-header ()
+  "Parse file header in current buffer for file node properties.
+Returns a plist with :id, :title, :file-tags.
+ID source depends on `org-supertag-file-id-source'."
+  (save-excursion
+    (goto-char (point-min))
+    (let (id title file-tags)
+      ;; Read org-roam style :PROPERTIES: :ID:
+      (when (eq org-supertag-file-id-source 'org-roam)
+        (when (re-search-forward "^:PROPERTIES:" (min 2000 (point-max)) t)
+          (let ((prop-start (point)))
+            (when (re-search-forward "^:ID:\\s-*\\(.+\\)"
+                                     (min (+ prop-start 500) (point-max)) t)
+              (setq id (string-trim (match-string 1)))))))
+      ;; Read denote style #+IDENTIFIER:
+      (when (and (not id) (eq org-supertag-file-id-source 'denote))
+        (goto-char (point-min))
+        (when (re-search-forward
+               "^#\\+IDENTIFIER:\\s-*\\(.+\\)"
+               (min 2000 (point-max)) t)
+          (setq id (string-trim (match-string 1)))))
+      ;; Read #+TITLE:
+      (goto-char (point-min))
+      (when (re-search-forward
+             "^#\\+TITLE:\\s-*\\(.+\\)"
+             (min 2000 (point-max)) t)
+        (setq title (string-trim (match-string 1))))
+      ;; Read #+FILETAGS:
+      (goto-char (point-min))
+      (when (re-search-forward
+             "^#\\+FILETAGS:\\s-*\\(.+\\)"
+             (min 2000 (point-max)) t)
+        (let ((raw (string-trim (match-string 1))))
+          (setq file-tags (supertag-sync--parse-filetags raw))))
+      (list :id id :title title :file-tags file-tags))))
+
+(defun supertag-sync--parse-filetags (raw)
+  "Parse RAW #+FILETAGS: value into a list of tag strings.
+Handles both colon-separated (:tag1:tag2:) and space-separated formats."
+  (let ((clean (string-trim raw)))
+    (if (string-empty-p clean)
+        nil
+      (cl-remove-if #'string-empty-p
+                    (mapcar #'string-trim
+                            (if (string-prefix-p ":" clean)
+                                (split-string clean ":" t)
+                              (split-string clean nil t)))))))
+
+(defun supertag-sync--upsert-file-node (file file-header counters)
+  "Upsert a file node for FILE using FILE-HEADER properties.
+FILE-HEADER is a plist from `supertag-sync--parse-file-header'.
+Returns the file node ID."
+  (let* ((header-id (plist-get file-header :id))
+         (file-id (or header-id
+                      (if (eq org-supertag-file-id-source 'denote)
+                          (progn
+                            (lwarn '(supertag-sync) :warning
+                                   "denote mode but no #+IDENTIFIER: in %s, using org-id" file)
+                            (org-id-new))
+                        (org-id-new))))
+         (title (plist-get file-header :title))
+         (file-tags (plist-get file-header :file-tags))
+         ;; Build file node props
+         (props (list :id file-id
+                      :file file
+                      :level 0
+                      :title title
+                      :tags file-tags
+                      :position 1
+                      :content nil
+                      :properties nil)))
+    ;; Upsert: create or update
+    (let ((existing (supertag-node-get file-id)))
+      (if existing
+          ;; Update if changed
+          (when (supertag-node-changed-p existing props)
+            (supertag-db-add-with-hash file-id props counters)
+            (when counters
+              (setf (plist-get counters :nodes-updated)
+                    (1+ (or (plist-get counters :nodes-updated) 0)))))
+        ;; Create new
+        (supertag-db-add-with-hash file-id props counters)
+        (when counters
+          (setf (plist-get counters :nodes-created)
+                (1+ (or (plist-get counters :nodes-created) 0))))))
+    file-id))
 
 (defun supertag-sync--process-single-file (file counters)
   "Process a single FILE for synchronization.
 COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-deleted."
   (let* ((should-parse t)
          (content-hash nil)
+         (file-header nil)
          (nodes-from-file nil)
          (allow-destructive (supertag-sync--allow-destructive-p))
          (deferred-entry (gethash file supertag-sync--deferred-files))
@@ -915,6 +1003,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
           (setq should-parse nil)))
 
       (when should-parse
+        (setq file-header (supertag-sync--parse-file-header))
         (setq nodes-from-file (supertag--parse-org-nodes-from-current-buffer file))))
 
     ;; 2. Processing (if not skipped)
@@ -922,20 +1011,29 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
         ;; Just update state (mtime + hash)
         (supertag-sync-update-state file content-hash)
 
-      ;; Parse & Update
-      (let* ((current-nodes-in-file (make-hash-table :test 'equal))
-             ;; nodes-from-file is already set
-             (existing-nodes-in-store (supertag-find-nodes-by-file file)))
+      ;; Upsert file node
+      (let ((file-node-id (supertag-sync--upsert-file-node file file-header counters)))
+        ;; Assign :parent-id to all heading nodes
+        (when file-node-id
+          (dolist (node-props nodes-from-file)
+            (plist-put node-props :parent-id file-node-id)))
 
-        ;; Populate current-nodes-in-file hash table
-        (dolist (node-props nodes-from-file)
-          (puthash (plist-get node-props :id) node-props current-nodes-in-file))
+        ;; Parse & Update heading nodes
+        (let* ((current-nodes-in-file (make-hash-table :test 'equal))
+               ;; nodes-from-file is already set
+               (existing-nodes-in-store (supertag-find-nodes-by-file file)))
 
-        ;; Process existing nodes
+          ;; Populate current-nodes-in-file hash table
+          (dolist (node-props nodes-from-file)
+            (puthash (plist-get node-props :id) node-props current-nodes-in-file))
+
+        ;; Process existing nodes (skip file nodes, level 0)
         (dolist (existing-node-pair existing-nodes-in-store)
           (let* ((id (car existing-node-pair))
                  (old-node-props (cdr existing-node-pair))
                  (new-node-props (gethash id current-nodes-in-file)))
+            ;; ponytail: file nodes (level 0) are not managed by heading sync
+            (unless (eq (plist-get old-node-props :level) 0)
             (cond
              ((null new-node-props)
               (when allow-destructive
@@ -948,7 +1046,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
               (setf (plist-get counters :nodes-updated)
                     (1+ (or (plist-get counters :nodes-updated) 0))))
              (t nil))
-            (remhash id current-nodes-in-file)))
+            (remhash id current-nodes-in-file))))
 
         ;; Process new nodes
         (maphash (lambda (id new-node-props)
@@ -958,7 +1056,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                  current-nodes-in-file)
 
         ;; Update sync state
-        (supertag-sync-update-state file content-hash)))
+        (supertag-sync-update-state file content-hash))))
 
     (when (and allow-destructive deferred-entry)
       (remhash file supertag-sync--deferred-files))
@@ -991,6 +1089,9 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
             (let* ((id (car existing-node-pair))
                    (old-node-props (cdr existing-node-pair))
                    (new-node-props (gethash id current-nodes-in-file)))
+              ;; Skip file nodes (level 0) - they are NOT orphaned while file exists
+              ;; ponytail: file node lifecycle mirrors the file itself
+              (unless (eq (plist-get old-node-props :level) 0)
               ;; If node exists in store but not in file, mark it as orphaned
               (when (null new-node-props)
                 (let ((db-node (supertag-node-get id)))
@@ -1807,6 +1908,17 @@ MIGRATION-MODE when t, only processes nodes with existing IDs."
     (error "File does not exist: %s" file))
   (with-temp-buffer
     (insert-file-contents file)
+    ;; Enter org-mode so that org-element correctly recognizes TODO keywords,
+    ;; priority cookies, and other heading metadata in :raw-value extraction.
+    ;; Without this, :raw-value includes "TODO My Title" instead of "My Title".
+    (let ((org-mode-hook nil)
+          (org-inhibit-startup t)
+          (org-agenda-inhibit-startup t)
+          (inhibit-modification-hooks t))
+      (delay-mode-hooks (org-mode))
+      ;; Disable org-element cache in temp buffer: cache is known to
+      ;; trigger freezes and spurious errors in transient buffers.
+      (setq-local org-element-use-cache nil))
     (supertag--parse-org-nodes-from-current-buffer file migration-mode)))
 
 ;;;------------------------------------------------------------------
@@ -2026,6 +2138,8 @@ Uses minimal side effects to avoid interfering with other packages."
                 (inhibit-modification-hooks t))
             (insert subtree-text)
             (org-mode)
+            ;; Disable org-element cache in temp buffer to avoid freezes.
+            (setq-local org-element-use-cache nil)
             ;; Restore TODO keywords and regexps to the temp buffer
             (setq-local org-todo-keywords-1 source-todo-keywords-1)
             (setq-local org-todo-regexp source-todo-regexp)

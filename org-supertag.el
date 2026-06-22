@@ -80,6 +80,14 @@ file belongs to (based on its path)."
   :type 'boolean
   :group 'org-supertag)
 
+(defcustom org-supertag-file-id-source 'org-roam
+  "Source for file node IDs.
+- `org-roam' => read :ID: from :PROPERTIES: drawer at top of file
+- `denote'  => read #+IDENTIFIER: keyword"
+  :type '(choice (const :tag "org-roam (:PROPERTIES: :ID:)" org-roam)
+                 (const :tag "denote (#+IDENTIFIER:)" denote))
+  :group 'org-supertag)
+
 (defvar supertag-vault--current nil
   "Currently active vault plist (normalized).")
 

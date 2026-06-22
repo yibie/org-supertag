@@ -126,6 +126,63 @@ This is an O(1) operation on the node data."
   (when-let ((node-data (supertag-node-get node-id)))
     (member tag-name (plist-get node-data :tags))))
 
+
+(defun supertag-find-nodes-by-parent (parent-id)
+  "Find all nodes whose :parent-id is PARENT-ID.
+Returns a list of (node-id . node-data) pairs."
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
+        (found-nodes '()))
+    (when (hash-table-p nodes-collection)
+      (maphash
+       (lambda (id node-data)
+         (when (and node-data
+                    (equal (plist-get node-data :parent-id) parent-id))
+           (push (cons id node-data) found-nodes)))
+       nodes-collection))
+    (nreverse found-nodes)))
+
+(defun supertag-find-file-node (file-path)
+  "Find the file node (level 0) for FILE-PATH.
+Returns (node-id . node-data) or nil."
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
+        (found nil))
+    (when (hash-table-p nodes-collection)
+      (maphash
+       (lambda (id node-data)
+         (when (and node-data
+                    (eq (plist-get node-data :level) 0)
+                    (equal (plist-get node-data :file) file-path)
+                    (not found))
+           (setq found (cons id node-data))))
+       nodes-collection))
+    found))
+
+(defun supertag-get-file-node-for-node (node-id)
+  "Get the file node (parent) for NODE-ID.
+Walks :parent-id chain. Returns (file-node-id . file-node-data) or nil."
+  (when-let ((node (supertag-node-get node-id)))
+    (if-let ((parent-id (plist-get node :parent-id)))
+        (let ((parent (supertag-node-get parent-id)))
+          (when parent
+            (cons parent-id parent)))
+      ;; Fallback: try to find file node by :file path
+      (when-let ((file-path (plist-get node :file)))
+        (supertag-find-file-node file-path)))))
+
+(defun supertag-find-all-file-nodes ()
+  "Find all file nodes (level 0) in the database.
+Returns a list of (node-id . node-data) pairs."
+  (let ((nodes-collection (supertag-store-get-collection :nodes))
+        (found-nodes '()))
+    (when (hash-table-p nodes-collection)
+      (maphash
+       (lambda (id node-data)
+         (when (and node-data
+                    (eq (plist-get node-data :level) 0))
+           (push (cons id node-data) found-nodes)))
+       nodes-collection))
+    (nreverse found-nodes)))
+
 (provide 'supertag-core-scan)
 
 
