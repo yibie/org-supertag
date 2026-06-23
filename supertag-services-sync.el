@@ -1101,7 +1101,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                                     (string= db-node-file file))))
                     (supertag-node-mark-deleted-from-file id)
                     (setf (plist-get counters :nodes-deleted)
-                          (1+ (plist-get counters :nodes-deleted)))))))))
+                          (1+ (plist-get counters :nodes-deleted))))))))))
       ;; File doesn't exist: mark all its nodes as orphaned
       (dolist (existing-node-pair existing-nodes-in-store)
         (let* ((id (car existing-node-pair))
