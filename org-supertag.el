@@ -360,8 +360,6 @@ active vault when `supertag-sync-auto-start` is non-nil."
                supertag-sync-auto-start
                (fboundp 'supertag-sync-start-auto-sync))
       (ignore-errors (supertag-sync-start-auto-sync)))
-    (when (fboundp 'supertag-view-node-refresh)
-      (ignore-errors (supertag-view-node-refresh)))
     (message "Supertag: active vault => %s (%s)"
              (plist-get vault :name)
              (abbreviate-file-name (plist-get vault :root)))))
@@ -448,8 +446,6 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-view-priority-matrix)
 (require 'supertag-view-schema)
 (require 'supertag-view-helper)
-(unless (require 'supertag-view-node nil t)
-  (message "org-supertag: supertag-view-node not loaded (posframe missing?)"))
 (require 'supertag-view-table)
 (require 'supertag-view-kanban)
 
@@ -546,12 +542,6 @@ This function loads all necessary components and sets up the environment."
     ;; Step 13: Enable runtime config guard after successful init
     (setq supertag--initialized t)
     (supertag-config-guard-enable))
-
-  ;; Optionally auto-show Node View side window and follow context
-  (when (and (boundp 'supertag-view-node-auto-show)
-             supertag-view-node-auto-show
-             (fboundp 'supertag-view-node-ensure-shown))
-    (supertag-view-node-ensure-shown))
 
 (defun supertag--check-critical-config ()
   "Check critical configuration before initialization.
