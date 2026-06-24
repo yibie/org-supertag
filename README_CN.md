@@ -30,12 +30,6 @@ Org-SuperTag 把普通的 Org 标题变成一个**可结构化查询的知识库
 
 ## 30 秒安装
 
-**前置依赖**：SuperTag 核心零依赖（纯 Emacs Lisp）。
-
-视图组件可选依赖：
-- `posframe`：节点快览窗（`supertag-view-node`），通过 `straight.el` 安装：`(straight-use-package 'posframe)`
-- 未安装 `posframe` 时，除视图外的所有功能正常使用
-
 ```emacs-lisp
 ;; 用 straight.el 安装
 (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
@@ -80,7 +74,6 @@ rating   →  数字（1–5）
 ### 3. 视图让你浏览、填写、查询数据
 
 - **表格视图** (`M-x supertag-view-table`)：像一个针对你标签节点的电子表格。点列头排序，过滤，批量编辑。
-- **节点视图** (`M-x supertag-view-node`)：编辑单个节点的字段，带自动补全和校验。
 - **看板视图** (`M-x supertag-view-kanban`)：拖拽式的看板，适合 `#task`、`#project`。
 
 ---
@@ -179,7 +172,6 @@ rating   →  数字（1–5）
 |---|---|---|
 | 打标签 | `M-x supertag-add-tag` | 添加 `#tag` 到标题，节点自动出现在该标签的表格里 |
 | 看一个标签的所有节点 | `M-x supertag-view-table` | 电子表格视图。可排序、过滤、直接编辑单元格 |
-| 编辑单个节点的字段 | `M-x supertag-view-node` | 表单视图，带自动补全、选择器和校验 |
 | 看板视图 | `M-x supertag-view-kanban` | 拖拽式看板，列之间移动 |
 | 定义标签字段 | `M-x supertag-view-schema` | 增删字段、设置类型、配置继承关系 |
 | 快速捕获新节点 | `M-x supertag-capture` | 模板化快速录入，自动写入 Org 文件 |
