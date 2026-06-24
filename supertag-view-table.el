@@ -689,7 +689,10 @@ STATE is expected to contain a :node-state plist built by
     (let ((inhibit-read-only t))
       (erase-buffer)
       (cond
-       ;; Simple fallback: show title and ID.
+       ;; 优先复用现有的 Node View 渲染函数（如果已加载）。
+       ((and node-state (fboundp 'supertag-view-node--render-from-state))
+        (supertag-view-node--render-from-state node-state))
+       ;; 简单回退：只显示标题和 ID。
        (node
         (let* ((title (or (plist-get node :title) "Untitled Node")))
           (insert (format "📄 %s\n\n" title))
