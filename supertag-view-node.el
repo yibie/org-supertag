@@ -9,7 +9,6 @@
 
 (require 'cl-lib)
 (require 'org)
-(require 'posframe)
 (require 'subr-x)
 (require 'supertag-core-store)
 (require 'supertag-ops-node)
@@ -27,14 +26,6 @@
 
 (defvar-local supertag-view-node--current-node-id nil
   "The ID of the node currently displayed in the view buffer.")
-
-(defconst supertag-view-node--posframe-buffer-name " *supertag-node-view*")
-
-(defvar supertag-view-node--posframe-frame nil
-  "Child frame used to display the node view posframe.")
-
-(defvar supertag-view-node--posframe-origin-window nil
-  "Origin window that invoked the node view posframe.")
 
 ;; Side-window presenter + follow support
 (defconst supertag-view-node--buffer-name "*Supertag Node*")
@@ -198,7 +189,7 @@ You can customize this list to match your org-mode TODO keywords."
 
     ;; Utility
     (define-key map (kbd "g") 'supertag-view-node-refresh)
-    (define-key map (kbd "q") #'supertag-view-node--posframe-hide)
+    (define-key map (kbd "q") #'supertag-view-node--hide-side)
     (define-key map (kbd "h") 'describe-mode)
     ;; Debug
     (define-key map (kbd "?") 'supertag-view-node-debug-field-at-point)
@@ -687,7 +678,7 @@ Handles special logic for :node-reference fields."
                          (when vstart
                            (max 0 (- (point) vstart))))))
     (when field-def
-      (supertag-view-node--focus-origin-window)
+      (other-window 1)
       (condition-case err
           (let* ((field-type (plist-get field-def :type))
                  (current-value (supertag-field-get-with-default node-id tag-id field-name))
@@ -710,8 +701,8 @@ Handles special logic for :node-reference fields."
 
             ;; Set the field value (for all types)
             (supertag-field-set node-id tag-id field-name new-value)
-            (supertag-view-node--posframe-refresh)
-            (supertag-view-node--focus-posframe)
+            (supertag-view-node--refresh-view)
+            (supertag-view-node--focus-view)
             (when (supertag-view-node--goto-field tag-id field-name)
               ;; Restore caret position relative to the start of the value column
               (let* ((bol (line-beginning-position))
@@ -726,7 +717,7 @@ Handles special logic for :node-reference fields."
             (message "✓ Field '%s' updated successfully!" field-name))
         (quit
          ;; User cancelled (C-g): restore focus and caret to original field value
-         (supertag-view-node--focus-posframe)
+         (supertag-view-node--focus-view)
          (when (supertag-view-node--goto-field tag-id field-name)
            (let* ((bol (line-beginning-position))
                   (eol (line-end-position))
@@ -740,7 +731,7 @@ Handles special logic for :node-reference fields."
          (message "Edit cancelled"))
         (error
          ;; On any error, return focus and attempt to restore caret
-         (supertag-view-node--focus-posframe)
+         (supertag-view-node--focus-view)
          (ignore-errors (supertag-view-node--goto-field tag-id field-name))
          (message "Edit failed: %s" (error-message-string err)))))))
 
@@ -787,38 +778,19 @@ Return non-nil when the target field is located."
           (point))))))
 
 (defun supertag-view-node--goto-field (&optional tag-id field-name)
-  "Move point in the active posframe to TAG-ID and FIELD-NAME.
+  "Move point in the active node view to TAG-ID and FIELD-NAME.
 When both arguments are nil, jump to the first field."
-  (when-let ((buffer (supertag-view-node--posframe-buffer)))
+  (when-let ((buffer (supertag-view-node--buffer)))
     (supertag-view-node--goto-field-in-buffer buffer tag-id field-name)))
 
 (defun supertag-view-node--goto-first-field ()
-  "Move point in the active posframe to the first field line.
+  "Move point in the active node view to the first field line.
 Falls back to beginning of buffer when no field is found."
   (or (supertag-view-node--goto-field nil nil)
       (progn (goto-char (point-min)) (point))))
 
-;;; --- Posframe Management ---
-
-(defun supertag-view-node--posframe-buffer ()
-  "Compatibility: return the side-window buffer."
-  (supertag-view-node--buffer))
-
-(defun supertag-view-node--focus-origin-window ()
-  "Focus the window that opened the posframe when possible."
-  (cond
-   ((window-live-p supertag-view-node--posframe-origin-window)
-    (let ((origin-frame (window-frame supertag-view-node--posframe-origin-window)))
-      (when (frame-live-p origin-frame)
-        (select-frame-set-input-focus origin-frame)))
-    (select-window supertag-view-node--posframe-origin-window))
-   ((frame-live-p supertag-view-node--posframe-frame)
-    (when-let ((parent (frame-parent supertag-view-node--posframe-frame)))
-      (when (frame-live-p parent)
-        (select-frame-set-input-focus parent))))))
-
-(defun supertag-view-node--focus-posframe ()
-  "Compatibility: focus the side-window buffer if visible."
+(defun supertag-view-node--focus-view ()
+  "Focus the side-window buffer if visible."
   (when-let* ((buf (supertag-view-node--buffer))
               (win (get-buffer-window buf)))
     (select-window win)
@@ -826,16 +798,9 @@ Falls back to beginning of buffer when no field is found."
       (when (fboundp 'evil-local-mode) (ignore-errors (evil-local-mode -1)))
       (when (fboundp 'evil-emacs-state) (ignore-errors (evil-emacs-state))))))
 
-(defun supertag-view-node--posframe-hide ()
-  "Compatibility: hide the side-window presenter."
-  (interactive)
-  (supertag-view-node--hide-side)
-  (supertag-view-node--focus-origin-window)
-  (setq supertag-view-node--posframe-origin-window nil))
-
-(defun supertag-view-node--posframe-refresh ()
-  "Compatibility: refresh side-window presenter."
-  (when-let ((buf (supertag-view-node--posframe-buffer)))
+(defun supertag-view-node--refresh-view ()
+  "Refresh side-window content, preserving scroll position."
+  (when-let ((buf (supertag-view-node--buffer)))
     (let ((eid (or supertag-view-node--current-node-id
                    (supertag-view-node--current-entity-id))))
       (when eid
@@ -848,17 +813,6 @@ Falls back to beginning of buffer when no field is found."
                          (supertag-view-node--goto-field-in-buffer buf saved-tag saved-field))
               (supertag-view-node--goto-first-field))))))))
 
-(defun supertag-view-node--posframe-show (node-id)
-  "Compatibility: show side-window presenter for NODE-ID."
-  (unless node-id (user-error "No node ID found at point"))
-  (setq supertag-view-node--posframe-origin-window (selected-window))
-  (supertag-view-node--show-side node-id)
-  (supertag-view-node--focus-posframe)
-  (when-let ((buf (supertag-view-node--buffer)))
-    (with-current-buffer buf
-      (supertag-view-node--goto-first-field)
-      (recenter))))
-
 
 ;;; --- Commands ---
 
@@ -867,8 +821,8 @@ Falls back to beginning of buffer when no field is found."
   (interactive)
   (if (supertag-view-node--buffer)
       (progn
-        (supertag-view-node--posframe-refresh)
-        (supertag-view-node--focus-posframe))
+        (supertag-view-node--refresh-view)
+        (supertag-view-node--focus-view))
     (message "No active supertag node view.")))
 
 (defun supertag-view-node ()
@@ -878,9 +832,15 @@ Falls back to beginning of buffer when no field is found."
                           (supertag-ui--get-node-at-point))
                      (supertag-view-node--current-entity-id))))
     (if supertag-view-node--enabled
-        (supertag-view-node--posframe-hide)
+        (supertag-view-node--hide-side)
       (if node-id
-          (supertag-view-node--posframe-show node-id)
+          (progn
+            (supertag-view-node--show-side node-id)
+            (supertag-view-node--focus-view)
+            (when-let ((buf (supertag-view-node--buffer)))
+              (with-current-buffer buf
+                (supertag-view-node--goto-first-field)
+                (recenter))))
         (user-error "No node detected at point")))))
 
 ;; If Evil is installed, set an initial state that won't override this mode's keys.
