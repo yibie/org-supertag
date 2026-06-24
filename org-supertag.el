@@ -448,7 +448,8 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-view-priority-matrix)
 (require 'supertag-view-schema)
 (require 'supertag-view-helper)
-(require 'supertag-view-node)
+(unless (require 'supertag-view-node nil t)
+  (message "org-supertag: supertag-view-node not loaded (posframe missing?)"))
 (require 'supertag-view-table)
 (require 'supertag-view-kanban)
 

@@ -30,6 +30,12 @@ Org-SuperTag 把普通的 Org 标题变成一个**可结构化查询的知识库
 
 ## 30 秒安装
 
+**前置依赖**：SuperTag 核心零依赖（纯 Emacs Lisp）。
+
+视图组件可选依赖：
+- `posframe`：节点快览窗（`supertag-view-node`），通过 `straight.el` 安装：`(straight-use-package 'posframe)`
+- 未安装 `posframe` 时，除视图外的所有功能正常使用
+
 ```emacs-lisp
 ;; 用 straight.el 安装
 (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
