@@ -67,7 +67,7 @@ When nil, only the tag name is shown."
   :type 'string
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-color-alpha 0.18
+(defcustom supertag-svg-tag-color-alpha 1.0
   "Opacity of the colored style background (0 = invisible, 1 = opaque)."
   :type 'number
   :group 'supertag-view-svg-tag)
@@ -112,11 +112,11 @@ When nil, only the tag name is shown."
   (let* ((idx (supertag-svg-tag--hash-to-index tag-name 20))
          (hue (* idx 18))
          (light-p (supertag-svg-tag--is-light-theme-p))
-         (base-bg (supertag-svg-tag--hsl-color hue 0.55 (if light-p 0.90 0.30)))
-         (bg (supertag-svg-tag--hsl-rgba hue 0.55 (if light-p 0.90 0.30)
-                                         supertag-svg-tag-color-alpha))
-         (border (supertag-svg-tag--hsl-color hue 0.60 (if light-p 0.72 0.45)))
-         (fg (supertag-svg-tag--text-color base-bg)))
+         (sat (if light-p 0.78 0.65))
+         (lit (if light-p 0.82 0.40))
+         (bg (supertag-svg-tag--hsl-rgba hue sat lit supertag-svg-tag-color-alpha))
+         (border (supertag-svg-tag--hsl-color hue 0.65 (if light-p 0.68 0.48)))
+         (fg (if light-p "#1e293b" "#f8fafc")))
     (list bg border fg)))
 
 (defun supertag-svg-tag--get-colors (tag-name)
@@ -124,16 +124,6 @@ When nil, only the tag name is shown."
   (if (eq supertag-svg-tag-style 'neutral)
       (supertag-svg-tag--neutral-colors)
     (supertag-svg-tag--colored-colors tag-name)))
-
-(defun supertag-svg-tag--text-color (bg-color)
-  "Derive a readable text color from BG-COLOR."
-  (let* ((rgb (color-name-to-rgb bg-color))
-         (r (nth 0 rgb))
-         (g (nth 1 rgb))
-         (b (nth 2 rgb))
-         ;; Perceived brightness: 0.299R + 0.587G + 0.114B
-         (brightness (+ (* 0.299 r) (* 0.587 g) (* 0.114 b))))
-    (if (> brightness 0.65) "#1e293b" "#f8fafc")))
 
 ;;;----------------------------------------------------------------------
 ;;; SVG tag builder
