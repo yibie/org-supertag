@@ -25,7 +25,15 @@ When nil, falls back to face-based rendering via `supertag-inline-face'."
   :type 'boolean
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-padding-x 6
+(defcustom supertag-svg-tag-style 'neutral
+  "Visual style of SVG tags.
+`neutral' uses a subtle gray pill like typical note apps.
+`colored' uses a deterministic pastel color per tag name."
+  :type '(choice (const :tag "Neutral gray pill" neutral)
+                 (const :tag "Colored per-tag" colored))
+  :group 'supertag-view-svg-tag)
+
+(defcustom supertag-svg-tag-padding-x 8
   "Horizontal padding (px) inside the SVG tag."
   :type 'integer
   :group 'supertag-view-svg-tag)
@@ -37,23 +45,24 @@ creates a fully rounded pill."
   :type 'integer
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-stroke-width 1.0
-  "Stroke width for SVG tag borders."
+(defcustom supertag-svg-tag-stroke-width 0
+  "Stroke width for SVG tag borders.
+Set to 0 to draw no border."
   :type 'number
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-font-scale 0.82
+(defcustom supertag-svg-tag-font-scale 0.78
   "Font size scale factor relative to the frame character height."
   :type 'number
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-show-hash nil
+(defcustom supertag-svg-tag-show-hash t
   "When non-nil, include the leading '#' in the SVG badge.
 When nil, only the tag name is shown."
   :type 'boolean
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-font-weight "500"
+(defcustom supertag-svg-tag-font-weight "normal"
   "Font weight used inside SVG tags (e.g. \"normal\", \"500\", \"bold\")."
   :type 'string
   :group 'supertag-view-svg-tag)
@@ -61,7 +70,7 @@ When nil, only the tag name is shown."
 (require 'color)
 
 ;;;----------------------------------------------------------------------
-;;; Color generation – deterministic per-tag HSL colors
+;;; Color generation
 ;;;----------------------------------------------------------------------
 
 (defun supertag-svg-tag--is-light-theme-p ()
@@ -78,8 +87,14 @@ When nil, only the tag name is shown."
          (append (color-hsl-to-rgb (/ hue 360.0) saturation lightness)
                  '(2))))
 
-(defun supertag-svg-tag--get-colors (tag-name)
-  "Return (bg . border) color pair for TAG-NAME."
+(defun supertag-svg-tag--neutral-colors ()
+  "Return (bg . border) for the neutral gray style."
+  (if (supertag-svg-tag--is-light-theme-p)
+      (cons "#f3f4f6" "#f3f4f6")
+    (cons "#374151" "#374151")))
+
+(defun supertag-svg-tag--colored-colors (tag-name)
+  "Return (bg . border) for the colored style based on TAG-NAME."
   (let* ((idx (supertag-svg-tag--hash-to-index tag-name 20))
          (hue (* idx 18))
          (light-p (supertag-svg-tag--is-light-theme-p))
@@ -87,22 +102,30 @@ When nil, only the tag name is shown."
          (border (supertag-svg-tag--hsl-color hue 0.60 (if light-p 0.72 0.45))))
     (cons bg border)))
 
+(defun supertag-svg-tag--get-colors (tag-name)
+  "Return (bg . border) color pair for TAG-NAME."
+  (if (eq supertag-svg-tag-style 'neutral)
+      (supertag-svg-tag--neutral-colors)
+    (supertag-svg-tag--colored-colors tag-name)))
+
 (defun supertag-svg-tag--text-color (bg-color)
   "Derive a readable text color from BG-COLOR."
-  (let* ((rgb (color-name-to-rgb bg-color))
-         (r (nth 0 rgb))
-         (g (nth 1 rgb))
-         (b (nth 2 rgb))
-         ;; Perceived brightness: 0.299R + 0.587G + 0.114B
-         (brightness (+ (* 0.299 r) (* 0.587 g) (* 0.114 b))))
-    (if (> brightness 0.65) "#1e293b" "#f8fafc")))
+  (if (eq supertag-svg-tag-style 'neutral)
+      (if (supertag-svg-tag--is-light-theme-p) "#374151" "#f3f4f6")
+    (let* ((rgb (color-name-to-rgb bg-color))
+           (r (nth 0 rgb))
+           (g (nth 1 rgb))
+           (b (nth 2 rgb))
+           ;; Perceived brightness: 0.299R + 0.587G + 0.114B
+           (brightness (+ (* 0.299 r) (* 0.587 g) (* 0.114 b))))
+      (if (> brightness 0.65) "#1e293b" "#f8fafc"))))
 
 ;;;----------------------------------------------------------------------
 ;;; SVG tag builder
 ;;;----------------------------------------------------------------------
 
 (defvar supertag-svg-tag--cache (make-hash-table :test 'equal)
-  "Cache of SVG images keyed by (display-text char-height background-mode).")
+  "Cache of SVG images keyed by (display-text char-height style background-mode).")
 
 (defun supertag-svg-tag--char-width ()
   "Return a usable character width in pixels."
@@ -137,7 +160,7 @@ Returns an Emacs image object suitable for the `display' text property."
          (font-size-px (round (* char-h supertag-svg-tag-font-scale)))
          (text-w (supertag-svg-tag--text-pixel-width display-text))
          (pad-x supertag-svg-tag-padding-x)
-         (img-h char-h)
+         (img-h (max char-h (round (* char-h 1.15))))
          (img-w (+ text-w (* 2 pad-x)))
          (radius (min supertag-svg-tag-radius (/ img-h 2)))
          (colors (supertag-svg-tag--get-colors text))
@@ -172,6 +195,7 @@ Returns an Emacs image object suitable for the `display' text property."
                            tag-name)))
          (key (list display-text
                     (supertag-svg-tag--char-height)
+                    supertag-svg-tag-style
                     (frame-parameter nil 'background-mode))))
     (or (gethash key supertag-svg-tag--cache)
         (let ((img (supertag-svg-tag--make-svg tag-name display-text)))
