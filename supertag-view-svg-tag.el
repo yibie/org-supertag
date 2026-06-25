@@ -25,12 +25,12 @@ When nil, falls back to face-based rendering via `supertag-inline-face'."
   :type 'boolean
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-style 'neutral
+(defcustom supertag-svg-tag-style 'colored
   "Visual style of SVG tags.
-`neutral' uses a subtle gray pill like typical note apps.
-`colored' uses a deterministic pastel color per tag name."
-  :type '(choice (const :tag "Neutral gray pill" neutral)
-                 (const :tag "Colored per-tag" colored))
+`colored' uses a deterministic pastel color per tag name.
+`neutral' uses a subtle gray pill like typical note apps."
+  :type '(choice (const :tag "Colored per-tag" colored)
+                 (const :tag "Neutral gray pill" neutral))
   :group 'supertag-view-svg-tag)
 
 (defcustom supertag-svg-tag-padding-x 8
@@ -45,7 +45,7 @@ creates a fully rounded pill."
   :type 'integer
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-stroke-width 0
+(defcustom supertag-svg-tag-stroke-width 1.0
   "Stroke width for SVG tag borders.
 Set to 0 to draw no border."
   :type 'number
@@ -56,13 +56,13 @@ Set to 0 to draw no border."
   :type 'number
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-show-hash t
+(defcustom supertag-svg-tag-show-hash nil
   "When non-nil, include the leading '#' in the SVG badge.
 When nil, only the tag name is shown."
   :type 'boolean
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-font-weight "normal"
+(defcustom supertag-svg-tag-font-weight "500"
   "Font weight used inside SVG tags (e.g. \"normal\", \"500\", \"bold\")."
   :type 'string
   :group 'supertag-view-svg-tag)
