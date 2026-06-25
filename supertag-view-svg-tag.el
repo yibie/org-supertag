@@ -45,7 +45,7 @@ creates a fully rounded pill."
   :type 'integer
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-stroke-width 1.0
+(defcustom supertag-svg-tag-stroke-width 0
   "Stroke width for SVG tag borders.
 Set to 0 to draw no border."
   :type 'number
@@ -65,6 +65,11 @@ When nil, only the tag name is shown."
 (defcustom supertag-svg-tag-font-weight "500"
   "Font weight used inside SVG tags (e.g. \"normal\", \"500\", \"bold\")."
   :type 'string
+  :group 'supertag-view-svg-tag)
+
+(defcustom supertag-svg-tag-color-alpha 0.18
+  "Opacity of the colored style background (0 = invisible, 1 = opaque)."
+  :type 'number
   :group 'supertag-view-svg-tag)
 
 (require 'color)
@@ -87,45 +92,55 @@ When nil, only the tag name is shown."
          (append (color-hsl-to-rgb (/ hue 360.0) saturation lightness)
                  '(2))))
 
+(defun supertag-svg-tag--hsl-rgba (hue saturation lightness alpha)
+  "Return an rgba(...) string from HUE, SATURATION, LIGHTNESS and ALPHA."
+  (let ((rgb (color-hsl-to-rgb (/ hue 360.0) saturation lightness)))
+    (format "rgba(%d,%d,%d,%s)"
+            (round (* (nth 0 rgb) 255))
+            (round (* (nth 1 rgb) 255))
+            (round (* (nth 2 rgb) 255))
+            alpha)))
+
 (defun supertag-svg-tag--neutral-colors ()
-  "Return (bg . border) for the neutral gray style."
+  "Return (bg border fg) for the neutral gray style."
   (if (supertag-svg-tag--is-light-theme-p)
-      (cons "#f3f4f6" "#f3f4f6")
-    (cons "#374151" "#374151")))
+      (list "#f3f4f6" "#f3f4f6" "#374151")
+    (list "#374151" "#374151" "#f3f4f6")))
 
 (defun supertag-svg-tag--colored-colors (tag-name)
-  "Return (bg . border) for the colored style based on TAG-NAME."
+  "Return (bg border fg) for the colored style based on TAG-NAME."
   (let* ((idx (supertag-svg-tag--hash-to-index tag-name 20))
          (hue (* idx 18))
          (light-p (supertag-svg-tag--is-light-theme-p))
-         (bg (supertag-svg-tag--hsl-color hue 0.55 (if light-p 0.90 0.30)))
-         (border (supertag-svg-tag--hsl-color hue 0.60 (if light-p 0.72 0.45))))
-    (cons bg border)))
+         (base-bg (supertag-svg-tag--hsl-color hue 0.55 (if light-p 0.90 0.30)))
+         (bg (supertag-svg-tag--hsl-rgba hue 0.55 (if light-p 0.90 0.30)
+                                         supertag-svg-tag-color-alpha))
+         (border (supertag-svg-tag--hsl-color hue 0.60 (if light-p 0.72 0.45)))
+         (fg (supertag-svg-tag--text-color base-bg)))
+    (list bg border fg)))
 
 (defun supertag-svg-tag--get-colors (tag-name)
-  "Return (bg . border) color pair for TAG-NAME."
+  "Return (bg border fg) color triple for TAG-NAME."
   (if (eq supertag-svg-tag-style 'neutral)
       (supertag-svg-tag--neutral-colors)
     (supertag-svg-tag--colored-colors tag-name)))
 
 (defun supertag-svg-tag--text-color (bg-color)
   "Derive a readable text color from BG-COLOR."
-  (if (eq supertag-svg-tag-style 'neutral)
-      (if (supertag-svg-tag--is-light-theme-p) "#374151" "#f3f4f6")
-    (let* ((rgb (color-name-to-rgb bg-color))
-           (r (nth 0 rgb))
-           (g (nth 1 rgb))
-           (b (nth 2 rgb))
-           ;; Perceived brightness: 0.299R + 0.587G + 0.114B
-           (brightness (+ (* 0.299 r) (* 0.587 g) (* 0.114 b))))
-      (if (> brightness 0.65) "#1e293b" "#f8fafc"))))
+  (let* ((rgb (color-name-to-rgb bg-color))
+         (r (nth 0 rgb))
+         (g (nth 1 rgb))
+         (b (nth 2 rgb))
+         ;; Perceived brightness: 0.299R + 0.587G + 0.114B
+         (brightness (+ (* 0.299 r) (* 0.587 g) (* 0.114 b))))
+    (if (> brightness 0.65) "#1e293b" "#f8fafc")))
 
 ;;;----------------------------------------------------------------------
 ;;; SVG tag builder
 ;;;----------------------------------------------------------------------
 
 (defvar supertag-svg-tag--cache (make-hash-table :test 'equal)
-  "Cache of SVG images keyed by (display-text char-height style background-mode).")
+  "Cache of SVG images keyed by (display-text char-height style background-mode alpha).")
 
 (defun supertag-svg-tag--char-width ()
   "Return a usable character width in pixels."
@@ -164,9 +179,9 @@ Returns an Emacs image object suitable for the `display' text property."
          (img-w (+ text-w (* 2 pad-x)))
          (radius (min supertag-svg-tag-radius (/ img-h 2)))
          (colors (supertag-svg-tag--get-colors text))
-         (bg (car colors))
-         (border-clr (cdr colors))
-         (fg (supertag-svg-tag--text-color bg))
+         (bg (nth 0 colors))
+         (border-clr (nth 1 colors))
+         (fg (nth 2 colors))
          (svg (svg-create img-w img-h)))
     ;; Pill/capsule background
     (svg-rectangle svg 0 0 img-w img-h
@@ -196,7 +211,8 @@ Returns an Emacs image object suitable for the `display' text property."
          (key (list display-text
                     (supertag-svg-tag--char-height)
                     supertag-svg-tag-style
-                    (frame-parameter nil 'background-mode))))
+                    (frame-parameter nil 'background-mode)
+                    supertag-svg-tag-color-alpha)))
     (or (gethash key supertag-svg-tag--cache)
         (let ((img (supertag-svg-tag--make-svg tag-name display-text)))
           (puthash key img supertag-svg-tag--cache)
