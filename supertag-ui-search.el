@@ -423,10 +423,8 @@ Handles both time stamps (list) and date strings."
           (if (and file-path (file-exists-p file-path))
               (progn
                 (find-file file-path)
-                (goto-char (point-min))
-                (if (re-search-forward (format ":ID: *%s" (regexp-quote node-id)) nil t)
+                (if (supertag-node--goto-location node-id)
                     (progn
-                      (org-back-to-heading t)
                       (org-show-context)
                       t)
                   (message "Node %s found in file but ID not located" node-id)

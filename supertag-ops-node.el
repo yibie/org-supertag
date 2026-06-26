@@ -78,6 +78,26 @@ ID is the unique identifier of the node.
 Returns node data, or nil if it does not exist."
   (supertag-store-get-entity :nodes id))
 
+(defun supertag-node--goto-location (node-id)
+  "Position point at the location of NODE-ID in the current buffer.
+Assumes the file for NODE-ID has already been made current.  For a
+file-level node (:level 0) point stays at the top of the file; for
+heading nodes point is moved to the containing heading.
+Returns t on success, nil if the ID could not be found."
+  (when-let* ((node (supertag-node-get node-id))
+              (level (plist-get node :level)))
+    (goto-char (point-min))
+    (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote node-id)) nil t)
+        (progn
+          (unless (eq level 0)
+            (when (fboundp 'org-back-to-heading)
+              (org-back-to-heading t))
+            (when (fboundp 'org-show-context)
+              (org-show-context)))
+          t)
+      (message "Error: Could not find ID %s in current buffer" node-id)
+      nil)))
+
 (defun supertag-node-update (id updater)
   "Update node data using the unified commit system.
 ID is the unique identifier of the node.

@@ -1550,11 +1550,8 @@ COORDS is a plist with :entity-id and :col-index."
           ;; Open the file in the selected window
           (find-file file)
           ;; Find and jump to the node
-          (goto-char (point-min))
-          (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote entity-id)) nil t)
+          (if (supertag-node--goto-location entity-id)
               (progn
-                (org-back-to-heading t)
-                (org-show-context)
                 (recenter)
                 (message "Jumped to node: %s" (or (plist-get node :title) entity-id)))
             (message "Error: Could not find ID %s in file %s" entity-id file)))))))

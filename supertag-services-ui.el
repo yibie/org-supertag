@@ -88,11 +88,9 @@ If OTHER-WINDOW is non-nil, open in another window."
             (pop-to-buffer buffer)
           (switch-to-buffer buffer))
         (with-current-buffer buffer
-          (goto-char (point-min))
-          (if (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote node-id)) nil t)
-              (progn
-                (org-back-to-heading t)
-                (message "Jumped to node: %s" (or (plist-get node :raw-value) (plist-get node :title))))
+          (if (supertag-node--goto-location node-id)
+              (message "Jumped to node: %s" (or (plist-get node :raw-value)
+                                                 (plist-get node :title)))
             (message "Error: Could not find ID %s in file %s" node-id file)))))))
 
 ;;; --- Shared Node View State Builder ---
