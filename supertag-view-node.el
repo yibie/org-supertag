@@ -94,6 +94,7 @@ Point must be at an Org heading. when invoked from other modes."
 
 (defun supertag-view-node--hide-side ()
   "Hide the side window and disable follow."
+  (interactive)
   (setq supertag-view-node--enabled nil)
   (remove-hook 'post-command-hook #'supertag-view-node--post-command t)
   (when-let ((buf (supertag-view-node--buffer)))
