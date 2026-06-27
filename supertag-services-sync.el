@@ -2103,7 +2103,7 @@ external modifications (by user/other tools) to avoid unnecessary re-parsing."
               (supertag-sync-update-state file-norm))
           ;; External modification: enqueue for async sync
           (when supertag-sync-smart-detection-verbose
-            (message "Supertag: Enqueued external modification for async sync: %s" (file-name-nondirectory file-norm)))
+            (message "↻ %s" (file-name-nondirectory file-norm)))
           (supertag-async-enqueue file-norm))))))
 
 
