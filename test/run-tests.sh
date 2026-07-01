@@ -7,6 +7,7 @@
 #   ./test/run-tests.sh node         # Run only node-ops tests
 #   ./test/run-tests.sh view         # Run only view-framework tests
 #   ./test/run-tests.sh persist      # Run only persistence tests
+#   ./test/run-tests.sh field-ref    # Run only node-reference field tests
 
 set -euo pipefail
 
@@ -30,6 +31,7 @@ TEST_FILES=(
     "test/formula-test.el"
     "test/reference-test.el"
     "test/virtual-column-test.el"
+    "test-field-node-reference.el"
 )
 
 # Allow filtering by keyword
@@ -44,8 +46,9 @@ if [ $# -gt 0 ]; then
             aggregate) FILTER="$FILTER test/aggregate-test.el" ;;
             reference) FILTER="$FILTER test/reference-test.el" ;;
             vc|virtual) FILTER="$FILTER test/virtual-column-test.el" ;;
+            field-ref) FILTER="$FILTER test-field-node-reference.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

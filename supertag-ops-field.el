@@ -14,11 +14,14 @@
 (require 'supertag-core-transform)
 (require 'supertag-core-scan)
 (require 'supertag-ops-tag)
+(require 'supertag-ops-relation)
 
 (declare-function supertag-ui-select-node "supertag-services-ui"
                   (&optional prompt use-cache with-preview))
 (declare-function supertag-ui-select-multiple-nodes "supertag-services-ui"
                   (&optional prompt use-cache initial with-preview))
+(declare-function supertag-ui--remove-link-under-node "supertag-ui-commands"
+                  (target-node-id link-node-id))
 
 (defcustom supertag-debug-log-field-events nil
   "When non-nil, log detailed field mutation events and automation processing.
@@ -117,6 +120,26 @@ When CREATE is non-nil, allocate and store a new table if absent."
 
 ;; 4.1 Field Value Operations
 
+(defun supertag-field--sync-node-references (node-id old-value new-value)
+  "Sync :reference relations/backlinks for a :node-reference field change.
+NODE-ID is the source node. OLD-VALUE and NEW-VALUE are the previous and
+new field values (any shape accepted by
+`supertag-field-normalize-node-reference-list').
+Removed targets have their relation and backlink deleted; added targets
+get a new relation with reciprocal backlink."
+  (let* ((old-targets (supertag-field-normalize-node-reference-list old-value))
+         (new-targets (supertag-field-normalize-node-reference-list new-value))
+         (removed (cl-set-difference old-targets new-targets :test #'string=))
+         (added (cl-set-difference new-targets old-targets :test #'string=)))
+    ;; Remove stale references and associated backlinks.
+    (dolist (target removed)
+      (dolist (rel (supertag-relation-find-between node-id target :reference))
+        (supertag-relation-delete (plist-get rel :id)))
+      (supertag-ui--remove-link-under-node target node-id))
+    ;; Add new references via the relation service (creates DB edge + backlink).
+    (dolist (target added)
+      (supertag-relation-add-reference node-id target))))
+
 (defun supertag-field-set (node-id tag-id field-name value)
   "Set the value of a tag field for a node using the unified commit system.
 NODE-ID is the unique identifier of the node.
@@ -136,6 +159,9 @@ Returns the updated field value."
           (if (and (not (eq old supertag-field--missing))
                    (equal old value))
               old
+            ;; Sync :reference relations/backlinks when this is a node-reference field.
+            (when (eq (plist-get field-def :type) :node-reference)
+              (supertag-field--sync-node-references node-id old value))
             (supertag-node-set-global-field node-id fid value)
             ;; Directly notify automation sync about global field changes
             ;; to ensure rules are triggered even when the commit system
@@ -162,24 +188,26 @@ Returns the updated field value."
               (message "supertag-field-set SKIP %s/%s/%s unchanged=%S"
                        node-id tag-id field-name value))
             value)
-        (progn
-          (supertag-ops-commit
-           :operation :field-set
-           :collection :fields
-           :id node-id
-           :path (list :fields node-id tag-id field-name)
-           :previous event-old
-           :new event-new
-           :context (list :node-id node-id :tag-id tag-id :field-name field-name)
-           :perform (lambda ()
-                      (let* ((node-table (supertag-field--ensure-node-table node-id t))
-                             (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
-                        (puthash field-name value tag-table)
-                        (when supertag-debug-log-field-events
-                          (message "supertag-field-set WRITE %s/%s/%s old=%S new=%S"
-                                   node-id tag-id field-name old-value value))
-                        event-new))))
-          value))))
+        ;; Sync :reference relations/backlinks when this is a node-reference field.
+        (when (eq (plist-get (supertag-tag-get-field tag-id field-name) :type) :node-reference)
+          (supertag-field--sync-node-references node-id old-value value))
+        (supertag-ops-commit
+         :operation :field-set
+         :collection :fields
+         :id node-id
+         :path (list :fields node-id tag-id field-name)
+         :previous event-old
+         :new event-new
+         :context (list :node-id node-id :tag-id tag-id :field-name field-name)
+         :perform (lambda ()
+                    (let* ((node-table (supertag-field--ensure-node-table node-id t))
+                           (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
+                      (puthash field-name value tag-table)
+                      (when supertag-debug-log-field-events
+                        (message "supertag-field-set WRITE %s/%s/%s old=%S new=%S"
+                                 node-id tag-id field-name old-value value))
+                      event-new)))
+        value))))
 
 (defun supertag-field-set-many (node-id specs)
   "Set multiple tag fields for NODE-ID in a single commit.

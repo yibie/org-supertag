@@ -2155,7 +2155,12 @@ Uses minimal side effects to avoid interfering with other packages."
                          (org-element-contents ast))
                 (let ((headline-element (car (org-element-contents ast))))
                   (when (eq (org-element-type headline-element) 'headline)
-                    (supertag--convert-element-to-node-plist headline-element current-file)))))))))))
+                    (let ((node-props (supertag--convert-element-to-node-plist headline-element current-file)))
+                      ;; The subtree is parsed in a temp buffer, so :begin is 1.
+                      ;; Preserve the original buffer position for navigation.
+                      (setq node-props (plist-put node-props :position begin))
+                      (setq node-props (plist-put node-props :pos begin))
+                      node-props)))))))))))
 
 ;;;###autoload
 (defun supertag-node-sync-at-point ()
