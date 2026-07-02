@@ -285,10 +285,10 @@
          ((= ch ?/)
           (push '/ tokens)
           (setq i (1+ i)))
-         ((= ch ?()
+         ((= ch ?\()
           (push '*lparen* tokens)
           (setq i (1+ i)))
-         ((= ch ?))
+         ((= ch ?\))
           (push '*rparen* tokens)
           (setq i (1+ i)))
          ((and (>= ch ?0) (<= ch ?9))
@@ -388,7 +388,7 @@
     (`(/ ,a ,b)
      (let ((denom (supertag-formula-eval b node-id)))
        (if (zerop denom) 0
-         (/ (supertag-formula-eval a node-id) denom))))
+         (/ (float (supertag-formula-eval a node-id)) denom))))
     (`(*neg* ,a) (- (supertag-formula-eval a node-id)))
     (_ (error "Unknown AST node: %s" ast))))
 

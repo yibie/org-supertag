@@ -89,3 +89,24 @@ docs/
 hooks/
 logs/
 qoder/
+
+# pi coding agent
+.pi/
+.agent-relay/
+
+# reasonix
+.codegraph/
+.reasonix/
+.serena/
+reasonix.toml
+
+# test files (exclude standalone test files, keep test/ dir structure)
+test-add-reference.el
+test-file-node-display.el
+test-index-perf.el
+test-automation-scheduled.el
+supertag-persistence-test.el
+supertag-test.el
+
+# pictures
+picture/

@@ -155,10 +155,14 @@ match like \"or\" against \"org-supertag\" continues to work."
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (cons (propertize safe-prefix
-                          'is-new-tag t
-                          'new-tag-name safe-prefix)
-              available-tags)
+        (let ((new-cand (propertize safe-prefix
+                                    'is-new-tag t
+                                    'new-tag-name safe-prefix)))
+          ;; Insert new-tag at position 2 (index 1) so it never becomes
+          ;; the default pick; if no existing tags, it stays alone.
+          (if available-tags
+              (cons (car available-tags) (cons new-cand (cdr available-tags)))
+            (list new-cand)))
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
@@ -221,7 +225,7 @@ ever contains the real tag name)."
                   (annotation-function
                    . (lambda (cand)
                        (if (get-text-property 0 'is-new-tag cand)
-                           (propertize "  [New]" 'face 'shadow)
+                           (propertize "  [+NEW]" 'face 'warning)
                          "  [tag]")))))
                ;; Return all candidates (for display).
                ;; Two gotchas to handle here:
