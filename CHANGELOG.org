@@ -1,4 +1,33 @@
 * Changelog
+* [Unreleased]
+** Features
+*** File node reference / backlink support
+- =supertag-add-reference= now accepts file nodes (level-0 nodes
+  representing entire files) as both source and target.
+- When a file node is the source, the forward link duplicate check
+  scans the whole file instead of a subtree.
+- When a file node is the target, the reciprocal backlink is inserted
+  at the marker position (after file metadata, as positioned by
+  =supertag-ui--find-node-marker=).
+- New helper =supertag-ui--find-node-marker= provides unified
+  node locating for both heading and file nodes, replacing scattered
+  =org-id-find= calls.
+
+*** Backlink timestamps
+- New option =supertag-reference-backlink-include-timestamp=.  When set
+  to =t=, creating a reference appends the current time as an inactive
+  Org timestamp to the reciprocal backlink, e.g.
+  =[[id:abc][Title]] [2025-06-22 Sun 16:07]=.  Default is =nil= to
+  preserve existing behavior.
+
+** Fixes
+*** Reference insertion cursor position
+- =supertag-add-reference= now saves the cursor as an Emacs marker
+  instead of a raw integer position. This ensures the forward link is
+  inserted at the original cursor location even when the reciprocal
+  backlink is inserted earlier in the same file, which would otherwise
+  shift subsequent text and leave the saved position stale.
+
 * [5.8.2] - 2026-03-05
 ** Fixes
 *** Persistence
