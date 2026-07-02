@@ -106,15 +106,32 @@ This is a safe wrapper around org-at-commented-p."
 
 ;;;###autoload
 (define-minor-mode supertag-view-style-mode
-  "Minor mode for styling supertag inline tags."
+  "Minor mode for styling supertag inline tags.
+
+When `supertag-svg-tag-enable' is non-nil, uses SVG pill badges.
+Otherwise uses face-based rendering via `supertag-inline-face'."
   :lighter " Tag-Style"
   :group 'supertag-view-style
   (if supertag-view-style-mode
       (progn
-        (font-lock-add-keywords nil supertag-view-helper--font-lock-keywords t)
+        ;; Allow font-lock to manage the `display' property for SVG rendering
+        (make-local-variable 'font-lock-extra-managed-props)
+        (cl-pushnew 'display font-lock-extra-managed-props)
+        (font-lock-add-keywords nil (supertag-view-helper--get-font-lock-keywords) t)
         (supertag-view-helper--refresh-fontification))
     (font-lock-remove-keywords nil supertag-view-helper--font-lock-keywords)
+    (when (bound-and-true-p supertag-view-svg-tag--font-lock-keywords)
+      (font-lock-remove-keywords nil supertag-view-svg-tag--font-lock-keywords))
     (supertag-view-helper--refresh-fontification)))
+
+(defun supertag-view-helper--get-font-lock-keywords ()
+  "Return the appropriate font-lock keywords based on current config.
+Prefers SVG keywords when `supertag-svg-tag-enable' is non-nil."
+  (if (and (bound-and-true-p supertag-svg-tag-enable)
+           (bound-and-true-p supertag-view-svg-tag--font-lock-keywords)
+           (fboundp 'svg-create))
+      supertag-view-svg-tag--font-lock-keywords
+    supertag-view-helper--font-lock-keywords))
 
 (defun supertag-view-helper--refresh-fontification ()
   "Refresh font-lock fontification in the current buffer."

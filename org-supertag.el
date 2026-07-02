@@ -448,6 +448,7 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-view-priority-matrix)
 (require 'supertag-view-schema)
 (require 'supertag-view-helper)
+(require 'supertag-view-svg-tag)
 (require 'supertag-view-node)
 (require 'supertag-view-table)
 (require 'supertag-view-kanban)
@@ -627,7 +628,13 @@ Consider running: M-x supertag-sync-full-rescan" db-file)
 (add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
-(add-hook 'emacs-startup-hook #'supertag-init)
+;; If Emacs has already finished startup by the time this file loads
+;; (lazy-load via autoload / use-package :defer / late require), the
+;; `emacs-startup-hook' has already fired, so hooking into it silently
+;; drops `supertag-init'. Run it immediately in that case.
+(if after-init-time
+    (supertag-init)
+  (add-hook 'emacs-startup-hook #'supertag-init))
 (add-hook 'org-mode-hook #'supertag-vault-auto-activate)
 (add-hook 'org-mode-hook #'supertag-sync-setup-realtime-hooks)
 
