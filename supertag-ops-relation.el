@@ -8,6 +8,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'org)
+(require 'org-id)
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
@@ -37,6 +39,12 @@ Value is a plist:
   :reason  symbol keyword for programmatic branching
   :message human-readable error message
   :detail  optional low-level detail.")
+
+(defcustom supertag-reference-backlink-include-timestamp nil
+  "When non-nil, append an inactive Org timestamp to reciprocal backlinks.
+Example: [[id:abc][Title]] [2025-06-22 Sun 16:07]"
+  :type 'boolean
+  :group 'org-supertag)
 
 (defun supertag-relation-last-error ()
   "Return the last error payload from `supertag-relation-add-reference`."
@@ -344,8 +352,6 @@ This involves:
 2. Inserting a reciprocal link in the TO-ID node's file.
 
 Returns t on success, nil on failure."
-  (require 'org)
-  (require 'org-id)
   (setq supertag-relation--last-error nil)
   (cond
    ((or (not (stringp from-id)) (string-empty-p from-id))
@@ -379,7 +385,8 @@ Returns t on success, nil on failure."
                    (from-title (or (plist-get from-node :title)
                                    (plist-get from-node :raw-value)
                                    from-id))
-                   (marker (org-id-find to-id 'marker)))
+                   (marker (supertag-ui--find-node-marker to-id))
+                   (backlink-pos nil))
               (unless (and marker (marker-buffer marker))
                 (when (and created-new relation-id)
                   (ignore-errors (supertag-relation-delete relation-id)))
@@ -392,29 +399,49 @@ Returns t on success, nil on failure."
                     (org-with-wide-buffer
                       (save-excursion
                         (goto-char marker)
-                        ;; Ensure we are on the heading for TO-ID
-                        (org-back-to-heading t)
-                        (unless (org-at-heading-p)
-                          (error "Target marker is not on an Org heading"))
-                        ;; Skip metadata and go to end of own content (before children)
-                        (org-end-of-meta-data t)
-                        (let* ((content-start (point))
-                               (content-end (save-excursion
-                                              (if (re-search-forward org-outline-regexp nil t)
-                                                  (match-beginning 0)
-                                                (org-end-of-subtree t t)
-                                                (point))))
-                               (pattern (format "\\[\\[id:%s\\]" (regexp-quote from-id))))
-                          ;; Avoid duplicate backlinks if one already exists
-                          (goto-char content-start)
-                          (unless (re-search-forward pattern content-end t)
-                            (goto-char content-end)
-                            (unless (bolp) (insert "\n"))
-                            (insert (format "[[id:%s][%s]]\n" from-id from-title))))
+                        (let* ((to-file-node-p (supertag-ui--file-node-p to-id))
+                               (pattern (format "\\[\\[id:%s\\]" (regexp-quote from-id)))
+                               (ts (when supertag-reference-backlink-include-timestamp
+                                     (format-time-string " [%Y-%m-%d %a %H:%M]" (current-time)))))
+                          (if to-file-node-p
+                              (let ((content-start (point))
+                                    (content-end (point-max)))
+                                (goto-char content-start)
+                                (unless (re-search-forward pattern content-end t)
+                                  (goto-char content-start)
+                                  (unless (looking-at "\\s-*$")
+                                    (insert "\n"))
+                                  (setq backlink-pos (point))
+                                  (insert (format "[[id:%s][%s]]%s\n"
+                                                  from-id from-title (or ts "")))))
+                            (org-back-to-heading t)
+                            (unless (org-at-heading-p)
+                              (error "Target marker is not on an Org heading"))
+                            (org-end-of-meta-data t)
+                            (let ((content-start (point))
+                                  (content-end (save-excursion
+                                                 (if (re-search-forward org-outline-regexp nil t)
+                                                     (match-beginning 0)
+                                                   (org-end-of-subtree t t)
+                                                   (point)))))
+                              (goto-char content-start)
+                              (unless (re-search-forward pattern content-end t)
+                                (goto-char content-end)
+                                (unless (bolp) (insert "\n"))
+                                (setq backlink-pos (line-beginning-position -1))
+                                (insert (format "[[id:%s][%s]]%s\n"
+                                                from-id from-title (or ts "")))))))
                         ;; Mark as internal modification to prevent sync loop
                         (when (fboundp 'supertag--mark-internal-modification)
                           (supertag--mark-internal-modification (buffer-file-name)))
-                        (save-buffer))))
+                        (save-buffer)
+                        (when relation-id
+                          (supertag-relation-update relation-id
+                           (lambda (rel)
+                             (when (and rel backlink-pos)
+                               (let ((copy (copy-sequence rel)))
+                                 (plist-put copy :to-pos backlink-pos)
+                                 copy))))))))
                 (error
                  (when (and created-new relation-id)
                    (ignore-errors (supertag-relation-delete relation-id)))
