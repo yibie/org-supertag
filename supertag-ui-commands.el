@@ -19,7 +19,18 @@
 (require 'supertag-view-kanban)    ; For Kanban board view
 (require 'supertag-services-sync) ; For sync services
 (require 'supertag-services-capture) ; For capture services
-(require 'supertag-core-store) ; For supertag--rebuild-all-indexes
+(require 'supertag-core-store)
+
+;; Forward declarations for view-node
+(declare-function supertag-view-node--buffer "supertag-view-node" ())
+(declare-function supertag-view-node--show-side "supertag-view-node" (&optional node-id))
+(declare-function supertag-view-node--render "supertag-view-node" (node-id))
+(declare-function supertag-view-node--render-from-state "supertag-view-node" (state))
+(declare-function supertag-view-node--focus-view "supertag-view-node" ())
+(declare-function supertag-view-node--goto-field "supertag-view-node" (&optional tag-id field-name))
+(declare-function supertag-view-node-edit-at-point "supertag-view-node" ())
+(declare-function supertag-view-build-node-state "supertag-services-ui" (node-id))
+(defvar supertag-view-node--current-node-id) ; For supertag--rebuild-all-indexes
 
 ;;; --- Customization ---
 
@@ -127,21 +138,24 @@ Creates an ID if one does not exist. Errors out if not on a heading."
 
 (defun supertag-ui--get-containing-node-at-point ()
   "Get the node ID of the containing node, whether at heading or in content.
-Works both when point is at a heading or within the content of a node.
-Returns the node ID, creating one if it doesn't exist."
+Works when point is at a heading, within the content of a node, or at the
+file-level before any heading."
   (save-excursion
-    ;; If we're already at a heading, use that
-    (if (org-at-heading-p)
-        (org-id-get-create)
-      ;; Otherwise, find the containing heading
-      (when (org-back-to-heading t)
-        (org-id-get-create)))))
+    (cond
+     ((org-at-heading-p)
+      (org-id-get-create))
+     ((org-before-first-heading-p)
+      (supertag-ui--get-file-node-at-point))
+     ((org-back-to-heading t)
+      (org-id-get-create))
+     (t
+      (supertag-ui--get-file-node-at-point)))))
 
 (defun supertag-ui--ensure-node-synced (node-id)
   "Ensure NODE-ID exists in the store by syncing the heading if necessary."
   (when node-id
     (unless (supertag-node-get node-id)
-      (when-let ((marker (org-id-find node-id 'marker)))
+      (when-let ((marker (supertag-ui--find-node-marker node-id)))
         (org-with-point-at marker
           (when (org-at-heading-p)
             (supertag-node-sync-at-point)))))))
@@ -325,7 +339,7 @@ current file and inserted into the target file at a chosen position."
             ;; 2. First pass: collect all node data before any modifications
             ;;    Read directly from current buffer to avoid database dependency
             (dolist (node-id node-ids)
-              (let ((marker (org-id-find node-id 'marker)))
+              (let ((marker (supertag-ui--find-node-marker node-id)))
                 (when marker
                   (with-current-buffer (marker-buffer marker)
                     (save-restriction
@@ -511,46 +525,47 @@ content region, this function does nothing."
               (save-buffer))))))))
 
 (defun supertag-add-reference ()
-  "Add a reference from the current node to another selected node."
+  "Add a reference from the current node to another selected node.
+Works for both heading nodes and file nodes (level 0)."
   (interactive)
   (let* ((from-id (supertag-ui--get-containing-node-at-point))
          (to-id nil)
-         (insertion-point (point)))
-    (unless from-id
-      (user-error "Point must be inside an Org heading or its content."))
-
-    (supertag-ui--ensure-node-synced from-id)
-
-    (setq to-id (supertag-ui-select-node "Add reference to: " t))
-
-    (when (and from-id to-id)
-      ;; 1. Call relation-level service to handle DB and reciprocal link.
-      (if (supertag-relation-add-reference from-id to-id)
-          (progn
-            ;; 2. Service succeeded. Only insert a forward link if the
-            ;; current node does not already contain one anywhere in its
-            ;; subtree (including the headline).
+         ;; Use a marker so insertion point survives buffer changes
+         ;; when the reciprocal backlink is inserted earlier in the same file.
+         (insertion-point (point-marker)))
+    (unwind-protect
+        (progn
+          (unless from-id
+            (user-error "Point must be inside an Org heading or its content."))
+          (supertag-ui--ensure-node-synced from-id)
+          (setq to-id (supertag-ui-select-node "Add reference to: " t))
+          (when (and from-id to-id)
+            (unless (supertag-relation-add-reference from-id to-id)
+              (let* ((err (and (fboundp 'supertag-relation-last-error)
+                               (supertag-relation-last-error)))
+                     (msg (or (plist-get err :message)
+                              "Failed to add reference to database.")))
+                (user-error "%s" msg)))
             (let* ((to-node (supertag-node-get to-id))
                    (to-title (or (plist-get to-node :title) to-id))
                    (link-pattern (format "\\[\\[id:%s\\]" (regexp-quote to-id)))
                    (link-exists nil))
               (save-excursion
                 (org-with-wide-buffer
-                  (org-back-to-heading t)
-                  (let* ((subtree-start (point))
-                         (subtree-end (save-excursion
-                                        (org-end-of-subtree t t))))
-                    (goto-char subtree-start)
-                    (setq link-exists (re-search-forward link-pattern subtree-end t)))))
+                  (if (supertag-ui--file-node-p from-id)
+                      ;; File node: search the whole file
+                      (setq link-exists (re-search-forward link-pattern nil t))
+                    ;; Heading node: search the current subtree
+                    (org-back-to-heading t)
+                    (let* ((subtree-start (point))
+                           (subtree-end (save-excursion (org-end-of-subtree t t))))
+                      (goto-char subtree-start)
+                      (setq link-exists (re-search-forward link-pattern subtree-end t))))))
               (unless link-exists
                 (goto-char insertion-point)
                 (insert (format "[[id:%s][%s]]" to-id to-title)))
-              (message "Reference added."))
-        (let* ((err (and (fboundp 'supertag-relation-last-error)
-                         (supertag-relation-last-error)))
-               (msg (or (plist-get err :message)
-                        "Failed to add reference to database.")))
-          (user-error "%s" msg)))))))
+              (message "Reference added."))))
+      (set-marker insertion-point nil))))
 
 (defun supertag-add-reference-and-create (beg end)
   "Create a new node from the selected region and replace it with a link.
@@ -703,37 +718,15 @@ new tag name, bypassing fuzzy completion matching."
                 (dolist (node-id node-ids)
                   ;; Ensure node exists
                   (unless (supertag-node-get node-id)
-                    (let* ((marker (org-id-find node-id 'marker)))
+                    (let* ((marker (supertag-ui--find-node-marker node-id)))
                       (when marker
                         (with-current-buffer (marker-buffer marker)
                           (goto-char (marker-position marker))
                           (supertag-node-sync-at-point)))))
 
                   (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
-                    ;; Insert #tag text
-                    (let* ((marker (org-id-find node-id 'marker)))
-                      (when marker
-                        (with-current-buffer (marker-buffer marker)
-                          (if batch-mode
-                              ;; Batch mode: insert based on user preference
-                              (progn
-                                (goto-char (marker-position marker))
-                                (when (org-at-heading-p)
-                                  (if (eq supertag-batch-tag-insert-position 'beginning)
-                                      ;; Insert at beginning (after stars and TODO keyword)
-                                      (progn
-                                        (org-back-to-heading t)
-                                        (forward-word)  ; Skip stars
-                                        (when (org-get-todo-state)
-                                          (forward-word))  ; Skip TODO keyword if present
-                                        (supertag-view-helper-insert-tag-text tag-id))
-                                    ;; Insert at end (default)
-                                    (end-of-line)
-                                    (supertag-view-helper-insert-tag-text tag-id))))
-                            ;; Single mode: insert at current cursor position
-                            (goto-char current-point)
-                            (supertag-view-helper-insert-tag-text tag-id))
-                          (save-buffer)))))))
+                    (let* ((marker (supertag-ui--find-node-marker node-id)))
+                      (supertag-ui--insert-tag-text-at-node node-id marker tag-id batch-mode current-point)))))
               (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))
           ;; Original behavior for fuzzy matching
           (let ((tag-exists (supertag-tag-get tag-id)))
@@ -746,37 +739,15 @@ new tag name, bypassing fuzzy completion matching."
                 (dolist (node-id node-ids)
                   ;; Ensure node exists
                   (unless (supertag-node-get node-id)
-                    (let* ((marker (org-id-find node-id 'marker)))
+                    (let* ((marker (supertag-ui--find-node-marker node-id)))
                       (when marker
                         (with-current-buffer (marker-buffer marker)
                           (goto-char (marker-position marker))
                           (supertag-node-sync-at-point)))))
 
                   (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed nil)
-                    ;; Insert #tag text
-                    (let* ((marker (org-id-find node-id 'marker)))
-                      (when marker
-                        (with-current-buffer (marker-buffer marker)
-                          (if batch-mode
-                              ;; Batch mode: insert based on user preference
-                              (progn
-                                (goto-char (marker-position marker))
-                                (when (org-at-heading-p)
-                                  (if (eq supertag-batch-tag-insert-position 'beginning)
-                                      ;; Insert at beginning (after stars and TODO keyword)
-                                      (progn
-                                        (org-back-to-heading t)
-                                        (forward-word)  ; Skip stars
-                                        (when (org-get-todo-state)
-                                          (forward-word))  ; Skip TODO keyword if present
-                                        (supertag-view-helper-insert-tag-text tag-id))
-                                    ;; Insert at end (default)
-                                    (end-of-line)
-                                    (supertag-view-helper-insert-tag-text tag-id))))
-                            ;; Single mode: insert at current cursor position
-                            (goto-char current-point)
-                            (supertag-view-helper-insert-tag-text tag-id))
-                          (save-buffer)))))))
+                    (let* ((marker (supertag-ui--find-node-marker node-id)))
+                      (supertag-ui--insert-tag-text-at-node node-id marker tag-id batch-mode current-point)))))
               (message "Tag '%s' added to %d node(s)." tag-id (length node-ids)))
              ;; If tag doesn't exist, create it
              (t
@@ -788,37 +759,15 @@ new tag name, bypassing fuzzy completion matching."
                   (dolist (node-id node-ids)
                     ;; Ensure node exists
                     (unless (supertag-node-get node-id)
-                      (let* ((marker (org-id-find node-id 'marker)))
+                      (let* ((marker (supertag-ui--find-node-marker node-id)))
                         (when marker
                           (with-current-buffer (marker-buffer marker)
                             (goto-char (marker-position marker))
                             (supertag-node-sync-at-point)))))
 
                     (when (supertag-ops-add-tag-to-node node-id tag-id :create-if-needed t)
-                      ;; Insert #tag text
-                      (let* ((marker (org-id-find node-id 'marker)))
-                        (when marker
-                          (with-current-buffer (marker-buffer marker)
-                            (if batch-mode
-                                ;; Batch mode: insert based on user preference
-                                (progn
-                                  (goto-char (marker-position marker))
-                                  (when (org-at-heading-p)
-                                    (if (eq supertag-batch-tag-insert-position 'beginning)
-                                        ;; Insert at beginning (after stars and TODO keyword)
-                                        (progn
-                                          (org-back-to-heading t)
-                                          (forward-word)  ; Skip stars
-                                          (when (org-get-todo-state)
-                                            (forward-word))  ; Skip TODO keyword if present
-                                          (supertag-view-helper-insert-tag-text tag-id))
-                                      ;; Insert at end (default)
-                                      (end-of-line)
-                                      (supertag-view-helper-insert-tag-text tag-id))))
-                              ;; Single mode: insert at current cursor position
-                              (goto-char current-point)
-                              (supertag-view-helper-insert-tag-text tag-id))
-                            (save-buffer)))))))
+                      (let* ((marker (supertag-ui--find-node-marker node-id)))
+                        (supertag-ui--insert-tag-text-at-node node-id marker tag-id batch-mode current-point)))))
                   (message "Tag '%s' created and added to %d node(s)." tag-id (length node-ids)))))))))))
 
 (defun supertag-remove-tag-from-node ()
@@ -1305,5 +1254,174 @@ target node, and optional context note."
         (when rel-id
           (supertag-relation-delete rel-id)
           (message "Relation removed."))))))
+
+
+;;;----------------------------------------------------------------------
+;;; File-node support helpers
+;;;----------------------------------------------------------------------
+
+(defun supertag-ui--file-node-p (node-id)
+  "Return non-nil if NODE-ID is a file node (level 0)."
+  (when-let ((node (supertag-node-get node-id)))
+    (eq (plist-get node :level) 0)))
+
+(defun supertag-ui--get-file-node-at-point ()
+  "Return the file node ID for the current buffer, ensuring it is synced."
+  (let ((file (buffer-file-name)))
+    (unless file
+      (user-error "Point must be inside an Org heading or a file-level context."))
+    (or (car (supertag-find-file-node file))
+        (progn
+          (supertag-ui--ensure-file-node-synced file)
+          (car (supertag-find-file-node file)))
+        (user-error "Failed to create file node for %s" file))))
+
+(defun supertag-ui--ensure-file-node-synced (file)
+  "Ensure FILE has a corresponding file node in the store."
+  (if (and (fboundp 'supertag-sync--process-single-file)
+           (fboundp 'supertag-sync--in-scope-path-p)
+           (supertag-sync--in-scope-path-p file))
+      (let ((counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
+                        :references-created 0 :references-deleted 0)))
+        (supertag-with-transaction
+          (supertag-sync--process-single-file file counters))
+        (when (> (+ (plist-get counters :nodes-created)
+                    (plist-get counters :nodes-updated)
+                    (plist-get counters :nodes-deleted))
+                 0)
+          (when (fboundp 'supertag-sync-update-state)
+            (supertag-sync-update-state file))))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (org-mode)
+      (let* ((file-header (supertag-sync--parse-file-header))
+             (counters '(:nodes-created 0 :nodes-updated 0 :nodes-deleted 0
+                         :references-created 0 :references-deleted 0)))
+        (supertag-sync--upsert-file-node file file-header counters)))))
+
+(defun supertag-ui--find-node-marker (node-id)
+  "Return a marker at NODE-ID's position in its file.
+For heading nodes, delegates to `org-id-find'.
+For file nodes, positions after file-level metadata (keywords + :PROPERTIES:)."
+  (if (supertag-ui--file-node-p node-id)
+      (when-let* ((node (supertag-node-get node-id))
+                  (file (plist-get node :file))
+                  ((file-exists-p file)))
+        (with-current-buffer (find-file-noselect file)
+          (save-excursion
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             ;; Skip #+KEYWORD: lines
+             (while (looking-at "#\\+\\w+:")
+               (forward-line 1))
+             ;; Skip optional top-level :PROPERTIES: drawer
+             (when (looking-at "\\s-*:PROPERTIES:")
+               (re-search-forward "^\\s-*:END:" nil t)
+               (forward-line 1))
+             ;; Skip trailing blank lines
+             (while (and (not (eobp)) (looking-at "\\s-*$"))
+               (forward-line 1))
+             (point-marker)))))
+    (org-id-find node-id 'marker)))
+
+(defun supertag-ui--insert-tag-text-at-node (node-id marker tag-id &optional batch-mode current-point)
+  "Insert #TAG-ID text at MARKER for NODE-ID.
+For heading nodes, inserts per existing batch/single mode logic.
+For file nodes, appends to #+FILETAGS: line."
+  (when marker
+    (with-current-buffer (marker-buffer marker)
+      (if (supertag-ui--file-node-p node-id)
+          (save-excursion
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (if (re-search-forward "^#\\+FILETAGS:\\s-*" nil t)
+                 (progn
+                   (end-of-line)
+                   (let ((colon-style (string-suffix-p ":" (string-trim (buffer-substring (line-beginning-position) (point))))))
+                     (if colon-style
+                         ;; Org colon-style: preceding : acts as separator, append "tag:"
+                         (insert (format "%s:" (supertag-sanitize-tag-name tag-id)))
+                       ;; Space-separated: just append
+                       (unless (looking-back "\\s-" (line-beginning-position))
+                         (insert " "))
+                       (insert (supertag-sanitize-tag-name tag-id)))))
+               (goto-char (point-min))
+               (while (looking-at "#\\+\\w+:")
+                 (forward-line 1))
+               (insert (format "#+FILETAGS: :%s:\n" (supertag-sanitize-tag-name tag-id)))))
+            (save-buffer))
+        (if batch-mode
+            (progn
+              (goto-char (marker-position marker))
+              (when (org-at-heading-p)
+                (if (eq supertag-batch-tag-insert-position 'beginning)
+                    (progn
+                      (org-back-to-heading t)
+                      (forward-word)
+                      (when (org-get-todo-state) (forward-word))
+                      (supertag-view-helper-insert-tag-text tag-id))
+                  (end-of-line)
+                  (supertag-view-helper-insert-tag-text tag-id))))
+          (goto-char current-point)
+          (supertag-view-helper-insert-tag-text tag-id))
+        (save-buffer)))))
+
+(defun supertag-ui--heading-title-at-point ()
+  "Return the plain title of the heading at point, or nil."
+  (when (org-at-heading-p)
+    (org-get-heading t t t t)))
+
+;;;----------------------------------------------------------------------
+;;; Quick Edit Field
+;;;----------------------------------------------------------------------
+
+(defun supertag-ui-quick-edit-field ()
+  "Quickly select and edit a field value on the current node."
+  (interactive)
+  (let* ((node-id (supertag-ui--get-containing-node-at-point))
+         (tag-ids (supertag-view--resolve-node-tags node-id)))
+    (unless tag-ids
+      (user-error "No tags on this node"))
+    (let* ((seen-fields (make-hash-table :test 'equal))
+           (candidates nil))
+      (dolist (tag-id tag-ids)
+        (let* ((tag-data (supertag-tag-get tag-id))
+               (fields (when tag-data (supertag-tag-get-all-fields tag-id))))
+          (dolist (f (or fields '()))
+            (let* ((fname (plist-get f :name))
+                   (ftype (plist-get f :type))
+                   (key (cons tag-id fname)))
+              (unless (gethash key seen-fields)
+                (puthash key t seen-fields)
+                (let* ((type-label (or (and ftype (format "[%s]" ftype)) ""))
+                       (display (format "%s \267 %-20s  %s" tag-id fname type-label)))
+                  (push (cons display (cons tag-id fname)) candidates)))))))
+      (unless candidates
+        (user-error "No editable fields on this node\'s tags"))
+      (setq candidates (nreverse candidates))
+      (let* ((title (supertag-ui--heading-title-at-point))
+             (selected (completing-read
+                        (format "Edit field on %s: " (or title node-id))
+                        candidates nil t))
+             (choice (cdr (assoc selected candidates)))
+             (tag-id (car choice))
+             (field-name (cdr choice)))
+        (supertag-ui--ensure-node-synced node-id)
+        (unless (supertag-view-node--buffer)
+          (supertag-view-node--show-side node-id))
+        (let ((buf (or (supertag-view-node--buffer)
+                       (progn (supertag-view-node--show-side node-id)
+                              (supertag-view-node--buffer)))))
+          (with-current-buffer buf
+            (if (fboundp 'supertag-view-build-node-state)
+                (let ((state (supertag-view-build-node-state node-id)))
+                  (if state
+                      (supertag-view-node--render-from-state state)
+                    (supertag-view-node--render node-id)))
+              (supertag-view-node--render node-id))
+            (setq supertag-view-node--current-node-id node-id))
+          (supertag-view-node--focus-view)
+          (when (supertag-view-node--goto-field tag-id field-name)
+            (supertag-view-node-edit-at-point)))))))
 
 (provide 'supertag-ui-commands)

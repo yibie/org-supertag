@@ -212,20 +212,24 @@ For completion framework integration, e.g., live previews.")
     (sort candidates (lambda (a b) (string< (car a) (car b))))))
 
 (defun supertag-ui--format-node-display (node-data)
-  "Return a human-readable display string for NODE-DATA."
-  (let* ((raw-title (or (plist-get node-data :raw-value)
-                        (plist-get node-data :title)
-                        "Untitled"))
-         (olp (plist-get node-data :olp))
+  "Return a human-readable display string for NODE-DATA.
+File nodes (level 0) get a \"📄 \" prefix and fall back to filename when untitled."
+  (let* ((is-file-node (eq (plist-get node-data :level) 0))
+         (raw-title (or (plist-get node-data :raw-value)
+                        (plist-get node-data :title)))
          (file (plist-get node-data :file))
+         (title (or raw-title
+                    (and is-file-node file (file-name-nondirectory file))
+                    "Untitled"))
+         (olp (plist-get node-data :olp))
          (display-path (if (and (listp olp) (> (length olp) 1))
-                           ;; Node has parents, show "Parent / Child"
-                           (concat (string-join (butlast olp) " / ") " / " raw-title)
-                         ;; Node is top-level, just show its title
-                         raw-title)))
-    (if file
-        (format "%s  (in %s)" display-path (file-name-nondirectory file))
-      (format "%s  [orphaned]" display-path))))
+                           (concat (string-join (butlast olp) " / ") " / " title)
+                         title))
+         (prefix (if is-file-node "📄 " "")))
+    (format "%s%s%s" prefix display-path
+            (if file
+                (format "  (in %s)" (file-name-nondirectory file))
+              "  [orphaned]"))))
 
 (defun supertag-ui-select-node (&optional prompt use-cache with-preview)
   "Interactively prompt user to select a node.
