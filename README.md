@@ -180,7 +180,17 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 | Capture new node | `M-x supertag-capture` | Quick entry with template, adds to your Org file |
 | Search | `M-x supertag-search` | Structured query. Save results to file |
 | Link related nodes | `M-x supertag-add-reference` | Bidirectional link between any two nodes |
+| Promote selected text to a concept | `M-x supertag-promote-concept` | Creates/reuses a concept node, references it from the current node, and keeps the text plain |
+| Highlight concept mentions | `M-x supertag-concept-link-mode` | Shows concept title/alias mentions as amber semantic highlights, not stored links |
 | Full database rebuild | `M-x supertag-sync-full-rescan` | Safe — just re-reads your Org files |
+
+Optional keybindings:
+
+```emacs-lisp
+(with-eval-after-load 'org
+  (define-key org-mode-map (kbd "C-c s p") #'supertag-promote-concept)
+  (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
+```
 
 ---
 

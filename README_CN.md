@@ -179,7 +179,17 @@ rating   →  数字（1–5）
 | 快速捕获新节点 | `M-x supertag-capture` | 模板化快速录入，自动写入 Org 文件 |
 | 搜索 | `M-x supertag-search` | 结构化查询，结果可导出到文件 |
 | 关联节点 | `M-x supertag-add-reference` | 任意两节点间建立双向链接 |
+| 将选中文本提升为概念 | `M-x supertag-promote-concept` | 创建/复用概念节点，从当前节点建立 reference，原文保持普通文本 |
+| 高亮概念提及 | `M-x supertag-concept-link-mode` | 将概念 title/alias 的提及显示为琥珀色语义高亮，不落库为链接 |
 | 全量重建数据库 | `M-x supertag-sync-full-rescan` | 安全——仅重新读取 Org 文件 |
+
+可选快捷键示例：
+
+```emacs-lisp
+(with-eval-after-load 'org
+  (define-key org-mode-map (kbd "C-c s p") #'supertag-promote-concept)
+  (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
+```
 
 ---
 
