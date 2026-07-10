@@ -651,7 +651,7 @@ capture DSL."
                                (replace-regexp-in-string
                                 "\\(?:^\\|\\s-\\)#[^[:space:]#]+" "" title)))
                              (tag-string
-                              (mapconcat (lambda (t) (concat "#" t))
+                              (mapconcat (lambda (tag) (concat "#" tag))
                                          unique-tags " "))
                              (new-title
                               (string-trim
