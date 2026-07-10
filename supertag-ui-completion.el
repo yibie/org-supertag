@@ -410,7 +410,7 @@ RET creates and records the tag immediately."
          (node-id (org-id-get-create))
          (current (when node-id (supertag-completion--get-node-tags node-id)))
          (available (if current
-                        (seq-remove (lambda (t) (member t current)) all)
+                        (seq-remove (lambda (tag) (member tag current)) all)
                       all))
          (input (completing-read "Tag (RET on a typed name creates it): "
                                  available nil nil)))
