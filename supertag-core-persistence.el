@@ -20,8 +20,7 @@
   "Directory for storing Org-Supertag data.
 This is a fallback definition. The primary definition is in org-supertag.el.")
 
-(defvar supertag--config-guard-allow nil
-  "Non-nil while guarded persistence configuration changes are allowed.")
+(defvar supertag--config-guard-allow)
 
 (defun supertag-data-file (filename)
   "Get full path for data file.
