@@ -20,6 +20,9 @@
   "Directory for storing Org-Supertag data.
 This is a fallback definition. The primary definition is in org-supertag.el.")
 
+(defvar supertag--config-guard-allow nil
+  "Non-nil while guarded persistence configuration changes are allowed.")
+
 (defun supertag-data-file (filename)
   "Get full path for data file.
 FILENAME is relative to `supertag-data-directory`."
@@ -230,9 +233,7 @@ or files with a `.db` extension that still contain an Emacs-lisp printed store."
 (defun supertag--persistence--set-db-file (path)
   "Set `supertag-db-file` to PATH, respecting config guard when available."
   (when (and (stringp path) (> (length path) 0))
-    (if (fboundp 'supertag-config-guard--with-allow)
-        (supertag-config-guard--with-allow
-          (setq supertag-db-file path))
+    (let ((supertag--config-guard-allow t))
       (setq supertag-db-file path))))
 
 (defun supertag--persistence--try-read-store (path)

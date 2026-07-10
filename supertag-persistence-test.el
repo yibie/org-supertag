@@ -99,6 +99,40 @@
              (node (gethash id loaded-nodes)))
         (should (equal (plist-get node :id) id))))))
 
+(ert-deftest supertag-persistence-set-db-file-compiles-without-config-guard ()
+  "The persistence module must compile independently of the config guard macro."
+  (let* ((source-directory
+          (file-name-directory
+           (symbol-file 'supertag-persistence-test--make-store-with-nodes 'defun)))
+         (source-file (expand-file-name "supertag-core-persistence.el"
+                                        source-directory))
+         (definition
+          (with-temp-buffer
+            (insert-file-contents source-file)
+            (re-search-forward
+             "^(defun supertag--persistence--set-db-file\\_>")
+            (goto-char (match-beginning 0))
+            (read (current-buffer))))
+         (had-macro (fboundp 'supertag-config-guard--with-allow))
+         (saved-macro (and had-macro
+                           (symbol-function 'supertag-config-guard--with-allow)))
+         compiled-setter)
+    (unwind-protect
+        (progn
+          (when had-macro
+            (fmakunbound 'supertag-config-guard--with-allow))
+          (let ((byte-compile-warnings nil))
+            (setq compiled-setter
+                  (byte-compile (cons 'lambda (cddr definition)))))
+          (fset 'supertag-config-guard--with-allow
+                (cons 'macro (lambda (&rest body) (cons 'progn body))))
+          (let ((supertag-db-file nil))
+            (funcall compiled-setter "/tmp/supertag-regression.db")
+            (should (equal supertag-db-file "/tmp/supertag-regression.db"))))
+      (if had-macro
+          (fset 'supertag-config-guard--with-allow saved-macro)
+        (fmakunbound 'supertag-config-guard--with-allow)))))
+
 (provide 'supertag-persistence-test)
 
 ;;; supertag-persistence-test.el ends here

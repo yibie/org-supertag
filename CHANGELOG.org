@@ -21,6 +21,9 @@
   preserve existing behavior.
 
 ** Fixes
+*** Package loading
+- Independently byte-compiled persistence code no longer raises =invalid-function supertag-config-guard--with-allow= while loading Org-SuperTag.
+
 *** Reference insertion cursor position
 - =supertag-add-reference= now saves the cursor as an Emacs marker
   instead of a raw integer position. This ensures the forward link is
