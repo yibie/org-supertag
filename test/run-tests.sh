@@ -32,6 +32,7 @@ TEST_FILES=(
     "test/reference-test.el"
     "test/virtual-column-test.el"
     "test-field-node-reference.el"
+    "test/persistence-hardening-test.el"
 )
 
 # Allow filtering by keyword
@@ -47,8 +48,9 @@ if [ $# -gt 0 ]; then
             reference) FILTER="$FILTER test/reference-test.el" ;;
             vc|virtual) FILTER="$FILTER test/virtual-column-test.el" ;;
             field-ref) FILTER="$FILTER test-field-node-reference.el" ;;
+            persist)   FILTER="$FILTER supertag-persistence-test.el test/persistence-hardening-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

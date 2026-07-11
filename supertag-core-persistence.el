@@ -724,17 +724,36 @@ reported loudly rather than re-signaled: the loaded store is left in place
           (let ((snapshot-file nil))
             (when (file-exists-p supertag-db-file)
               (condition-case err
-                  (progn
+                  (let* ((sanitized-version
+                          (replace-regexp-in-string "[^A-Za-z0-9]+" "-" old-version))
+                         (existing
+                          (and (file-directory-p supertag-db-backup-directory)
+                               (directory-files
+                                supertag-db-backup-directory t
+                                (format "\\`supertag-db-premigrate-%s-.*\\.el\\'"
+                                        (regexp-quote sanitized-version))))))
                     (supertag-persistence-ensure-data-directory)
-                    (setq snapshot-file
-                          (expand-file-name
-                           (format "supertag-db-premigrate-%s-%s.el"
-                                   (replace-regexp-in-string "[^A-Za-z0-9]+" "-" old-version)
-                                   (format-time-string "%Y%m%d-%H%M%S"))
-                           supertag-db-backup-directory))
-                    (copy-file supertag-db-file snapshot-file t)
-                    (message "Supertag: pre-migration snapshot saved to %s"
-                             (abbreviate-file-name snapshot-file)))
+                    ;; A snapshot for this same source version may already
+                    ;; exist when an earlier auto-migration ran but its save
+                    ;; was skipped by a persistence guard (so the on-disk DB
+                    ;; is still at OLD-VERSION). Reuse it instead of writing
+                    ;; another copy of the same pre-migration state — with a
+                    ;; per-second timestamp a same-second rerun would even
+                    ;; silently overwrite the first snapshot.
+                    (if existing
+                        (progn
+                          (setq snapshot-file (car existing))
+                          (message "Supertag: reusing existing pre-migration snapshot %s"
+                                   (abbreviate-file-name snapshot-file)))
+                      (setq snapshot-file
+                            (expand-file-name
+                             (format "supertag-db-premigrate-%s-%s.el"
+                                     sanitized-version
+                                     (format-time-string "%Y%m%d-%H%M%S"))
+                             supertag-db-backup-directory))
+                      (copy-file supertag-db-file snapshot-file t)
+                      (message "Supertag: pre-migration snapshot saved to %s"
+                               (abbreviate-file-name snapshot-file))))
                 (error
                  (setq snapshot-file nil)
                  (message "Supertag: failed to create pre-migration snapshot (%s); proceeding with auto-migration anyway."
@@ -746,7 +765,16 @@ reported loudly rather than re-signaled: the loaded store is left in place
                            old-version supertag-data-version
                            (if snapshot-file
                                (format " Pre-migration snapshot: %s" (abbreviate-file-name snapshot-file))
-                             "")))
+                             ""))
+                  ;; The save inside `supertag-db-migrate-and-normalize' goes
+                  ;; through `supertag-save-store' and is therefore subject to
+                  ;; ALL persistence guards. Early in startup the sync-state
+                  ;; guard can legitimately skip it, leaving the migrated
+                  ;; store in memory only. That is safe (the auto-save timer
+                  ;; persists it once the guards clear), but the user should
+                  ;; know the on-disk file is still the old version for now.
+                  (when (supertag-dirty-p)
+                    (message "Supertag: migrated store not yet written to disk (a save guard deferred it); it will be persisted by the next successful save.")))
               (error
                (message "Supertag: AUTO-MIGRATION FAILED (%s -> %s): %s. Database left loaded but NOT migrated.%s Run M-x supertag-db-migrate-and-normalize manually to retry."
                         old-version supertag-data-version

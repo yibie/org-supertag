@@ -52,7 +52,7 @@ simtag/nano-graphrag/
 .GEMINI.md
 .cursorules
 .pytest_cache/
-test/
+test/test-results.txt
 commands/
 .continue/
 .kiro/
