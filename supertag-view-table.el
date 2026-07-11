@@ -533,7 +533,7 @@ Automatically detects virtual databases and uses their database fields."
                                   (and slug (equal slug supertag-view-table--refs-field-id))
                                   (gethash dedupe-key seen))
                        do (puthash dedupe-key t seen)
-                       collect (let ((col `(:name ,raw-name
+                       and collect (let ((col `(:name ,raw-name
                                           :key ,(intern (or slug raw-name))
                                           :field-id ,slug
                                           :width 20)))

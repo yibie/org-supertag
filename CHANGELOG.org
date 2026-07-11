@@ -21,6 +21,9 @@
   preserve existing behavior.
 
 ** Fixes
+*** Table view
+- Suppress schema fields whose slug is =refs= so the reserved Refs column is not displayed twice.
+
 *** Reference insertion cursor position
 - =supertag-add-reference= now saves the cursor as an Emacs marker
   instead of a raw integer position. This ensures the forward link is
