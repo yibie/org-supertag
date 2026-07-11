@@ -22,6 +22,10 @@ This is a fallback definition. The primary definition is in org-supertag.el.")
 
 (defvar supertag--config-guard-allow)
 
+(defconst supertag-data-version "5.0.0"
+  "Current data format version.
+Used for data format compatibility checks and automatic migration.")
+
 (defun supertag-data-file (filename)
   "Get full path for data file.
 FILENAME is relative to `supertag-data-directory`."
@@ -76,6 +80,20 @@ holds the lock, this session records the conflict in
 `supertag--db-lock-conflict' and refuses to save the database until the
 other instance releases the lock (or `supertag-db-retry-lock' is used once
 it has exited)."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom supertag-db-auto-migrate t
+  "When non-nil, automatically migrate an out-of-date database after load.
+After `supertag-load-store' successfully loads `supertag-db-file', if the
+loaded store's :version does not match `supertag-data-version', this session
+runs `supertag-db-migrate-and-normalize' automatically instead of requiring
+the user to invoke it by hand (see `supertag--maybe-auto-migrate').
+
+A timestamped pre-migration snapshot of the database file is written to
+`supertag-db-backup-directory' before migrating. When nil, out-of-date
+databases are left as-is after loading; migrate manually with
+\\[supertag-db-migrate-and-normalize]."
   :type 'boolean
   :group 'org-supertag)
 
@@ -603,7 +621,13 @@ data corruption is suspected."
         (message "Starting database migration and normalization...")
 
         ;; --- Data version check and automatic migration ---
-        (supertag--run-migrations supertag--store)
+        ;; `supertag--run-migrations' returns non-nil (and stamps :version)
+        ;; whenever it performs a migration, even when no :nodes/:fields
+        ;; content actually changed. That must still mark the store dirty,
+        ;; otherwise a pure version bump is never persisted and migration
+        ;; would silently re-run on every subsequent load.
+        (when (supertag--run-migrations supertag--store)
+          (supertag-mark-dirty))
 
         ;; --- Normalize :fields collection structure ---
         (supertag--normalize-fields-collection)
@@ -659,6 +683,79 @@ data corruption is suspected."
   ;;     (message "Purged %d invalid/ghost entries from database." purged-count)
   ;;     (supertag-mark-dirty)))
 
+(defun supertag--maybe-auto-migrate ()
+  "Automatically migrate the just-loaded store when its version is stale.
+Called from `supertag-load-store' right after a successful load and lock
+acquisition. Does nothing unless all of the following hold:
+- `supertag-db-auto-migrate' is non-nil;
+- `supertag--store' is a loaded hash table;
+- `(supertag--get-data-version supertag--store)' differs from
+  `supertag-data-version' (a missing/nil stored version already reads back
+  as the old default version, so it counts as a mismatch too).
+
+If this session recorded a multi-instance lock conflict
+(`supertag--db-lock-conflict'), migration is skipped with a message instead:
+a read-only session (another Emacs instance holds the write lock) must never
+rewrite the database.
+
+Before migrating, when `supertag-db-file' exists on disk, a pre-migration
+snapshot is copied into `supertag-db-backup-directory' as
+\"supertag-db-premigrate-<OLDVER>-<TIMESTAMP>.el\" (old version sanitized for
+filename use). Note that this filename pattern intentionally does not match
+the daily-backup cleanup regex used by `supertag-cleanup-old-backups'
+\(\"^supertag-db-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\.el$\"), so these
+pre-migration snapshots are never automatically deleted. If the database
+file does not exist on disk yet, the snapshot step is skipped but migration
+still proceeds.
+
+Errors signaled by `supertag-db-migrate-and-normalize' are caught here and
+reported loudly rather than re-signaled: the loaded store is left in place
+(so it stays usable) and the message tells the user to run
+\\[supertag-db-migrate-and-normalize] by hand."
+  (when (and supertag-db-auto-migrate
+             (hash-table-p supertag--store))
+    (let ((old-version (supertag--get-data-version supertag--store)))
+      (unless (string= old-version supertag-data-version)
+        (if supertag--db-lock-conflict
+            (message "Supertag: skipping auto-migration of %s (locked by another Emacs instance: %s). Stored data version %s is out of date; run M-x supertag-db-migrate-and-normalize once the lock is released."
+                     (abbreviate-file-name supertag-db-file)
+                     supertag--db-lock-conflict
+                     old-version)
+          (let ((snapshot-file nil))
+            (when (file-exists-p supertag-db-file)
+              (condition-case err
+                  (progn
+                    (supertag-persistence-ensure-data-directory)
+                    (setq snapshot-file
+                          (expand-file-name
+                           (format "supertag-db-premigrate-%s-%s.el"
+                                   (replace-regexp-in-string "[^A-Za-z0-9]+" "-" old-version)
+                                   (format-time-string "%Y%m%d-%H%M%S"))
+                           supertag-db-backup-directory))
+                    (copy-file supertag-db-file snapshot-file t)
+                    (message "Supertag: pre-migration snapshot saved to %s"
+                             (abbreviate-file-name snapshot-file)))
+                (error
+                 (setq snapshot-file nil)
+                 (message "Supertag: failed to create pre-migration snapshot (%s); proceeding with auto-migration anyway."
+                          (error-message-string err)))))
+            (condition-case err
+                (progn
+                  (supertag-db-migrate-and-normalize)
+                  (message "Supertag: auto-migrated database from version %s to %s.%s"
+                           old-version supertag-data-version
+                           (if snapshot-file
+                               (format " Pre-migration snapshot: %s" (abbreviate-file-name snapshot-file))
+                             "")))
+              (error
+               (message "Supertag: AUTO-MIGRATION FAILED (%s -> %s): %s. Database left loaded but NOT migrated.%s Run M-x supertag-db-migrate-and-normalize manually to retry."
+                        old-version supertag-data-version
+                        (error-message-string err)
+                        (if snapshot-file
+                            (format " A pre-migration snapshot is available at %s."
+                                    (abbreviate-file-name snapshot-file))
+                          " No pre-migration snapshot was created."))))))))))
+
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
 This function loads and coerces the persisted store data, but does not
@@ -705,9 +802,27 @@ FILE is the optional file path. Defaults to supertag-db-file."
                                          (list :loaded-from file-to-load
                                                :load-candidates candidates
                                                :load-failures (nreverse failures)))
-          (message "Database loaded from %s. For migrations, run M-x supertag-db-migrate-and-normalize."
-                   (abbreviate-file-name file-to-load))
-          (supertag--db-acquire-lock))
+          ;; The "run migration manually" hint is stale once auto-migration is
+          ;; enabled and able to run. Only surface it when auto-migrate is off,
+          ;; or when it is on but a version mismatch will be skipped anyway
+          ;; (this session holds no write lock on `supertag-db-file', so
+          ;; `supertag--maybe-auto-migrate' will refuse to touch the store).
+          (let* ((version-mismatch
+                  (not (string= (supertag--get-data-version supertag--store)
+                                supertag-data-version)))
+                 (migration-will-be-skipped
+                  (and version-mismatch
+                       supertag-db-auto-migrate
+                       (stringp (file-locked-p file-to-load))))
+                 (show-manual-hint
+                  (or (not supertag-db-auto-migrate) migration-will-be-skipped)))
+            (message "Database loaded from %s.%s"
+                     (abbreviate-file-name file-to-load)
+                     (if show-manual-hint
+                         " For migrations, run M-x supertag-db-migrate-and-normalize."
+                       "")))
+          (supertag--db-acquire-lock)
+          (supertag--maybe-auto-migrate))
       (setq supertag--store (ht-create))
       (setq load-status :new)
       (supertag-clear-dirty)
@@ -974,10 +1089,6 @@ TIME-VALUE should be a four-element list (high low micro pico)."
        (cl-every #'integerp time-value)))
 
 ;;; --- Data Version Management ---
-
-(defconst supertag-data-version "5.0.0"
-  "Current data format version.
-Used for data format compatibility checks and automatic migration.")
 
 (defun supertag--get-data-version (data)
   "Extract version information from the data store.
