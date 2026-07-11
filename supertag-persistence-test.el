@@ -80,6 +80,23 @@
         (should bad-entry)
         (should (stringp (cdr bad-entry)))))))
 
+(ert-deftest supertag-persistence-load-store-prefers-explicit-file ()
+  "An explicit DB file must take priority over configured and snapshot paths."
+  (supertag-persistence-test--with-temp-env
+    (let ((explicit (expand-file-name "supertag-db-9999-99-99.el"
+                                      supertag-data-directory)))
+      (supertag-persistence-test--write-db
+       supertag-db-file
+       (supertag-persistence-test--make-store-with-nodes '("CONFIGURED")))
+      (supertag-persistence-test--write-db
+       explicit
+       (supertag-persistence-test--make-store-with-nodes '("EXPLICIT")))
+      (supertag-load-store explicit)
+      (should (equal (plist-get supertag--store-origin :loaded-from) explicit))
+      (let ((nodes (gethash :nodes supertag--store)))
+        (should (gethash "EXPLICIT" nodes))
+        (should-not (gethash "CONFIGURED" nodes))))))
+
 (ert-deftest supertag-persistence-load-store-supports-print-circle ()
   (supertag-persistence-test--with-temp-env
     ;; Ensure the DB contains #n=/#n# so that `read-circle` is required.

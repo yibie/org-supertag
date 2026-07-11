@@ -215,7 +215,8 @@ or files with a `.db` extension that still contain an Emacs-lisp printed store."
                      (expand-file-name "supertag-db.db" dir))))
          (snapshot (supertag--persistence--newest-db-snapshot)))
     (cl-delete-duplicates (delq nil (list explicit configured default legacy snapshot))
-                          :test #'string=)))
+                          :test #'string=
+                          :from-end t)))
 
 (defun supertag--persistence--pick-readable-file (paths)
   "Return the first readable regular file in PATHS, or nil."
