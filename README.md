@@ -216,6 +216,14 @@ Optional keybindings:
   (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
 ```
 
+### How concept mentions behave
+
+- Promotion accepts non-empty text inside an Org node. It reuses a unique heading node or creates one, adds one explicit reference, and leaves the selected text unchanged. A same-title file node is not silently converted into a concept.
+- Mentions are display-only. Org links, code/verbatim, comments and `COMMENT` subtrees, keywords/drawers, source blocks, and tables are not highlighted.
+- A title or alias shared by multiple concepts is ambiguous. SuperTag does not choose a target from hash-table order; the mention stays plain and promotion reports the conflict.
+
+After changing concept titles or aliases outside SuperTag, run `M-x supertag-concept-refresh` in enabled buffers.
+
 ---
 
 ## Why this doesn't add friction

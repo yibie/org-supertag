@@ -215,6 +215,14 @@ rating   →  数字（1–5）
   (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
 ```
 
+### Concept mention 的行为边界
+
+- Promote 只接受 Org node 内的非空文本。它会复用唯一的同名标题节点或创建新节点，建立一条显式 reference，并保持选区原文不变；同名 file-node 不会被静默转换为 concept。
+- Mention 只存在于显示层。Org link、code/verbatim、普通注释与 `COMMENT` 子树、keyword/drawer、source block 和表格都不会高亮。
+- 多个 concept 共用 title 或 alias 时，该词存在歧义。SuperTag 不会根据 hash table 顺序任意选择目标；文本保持普通显示，promote 会明确报告冲突。
+
+如果在 SuperTag 之外修改了 concept title 或 alias，请在已启用的 buffer 中执行 `M-x supertag-concept-refresh`。
+
 ---
 
 ## 为什么不会增加负担
