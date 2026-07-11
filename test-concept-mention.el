@@ -114,6 +114,57 @@
       (should (equal (get-text-property (point) 'supertag-concept-node-id)
                      "long-id")))))
 
+(ert-deftest concept-mention-mode-skips-non-prose-contexts ()
+  "Mentions do not override Org code, verbatim, comments or COMMENT headings."
+  (concept-test--with-env
+    (concept-test--create-node "concept-id" "注意力机制")
+    (with-temp-buffer
+      (org-mode)
+      (insert "~注意力机制~ =注意力机制=\n# 注意力机制\n* COMMENT 注意力机制\n* Normal\nPlain 注意力机制\n")
+      (supertag-concept-link-mode 1)
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (dotimes (_ 4)
+        (search-forward "注意力机制")
+        (should-not (get-text-property (match-beginning 0)
+                                       'supertag-concept-node-id)))
+      (search-forward "注意力机制")
+      (should (equal (get-text-property (match-beginning 0)
+                                        'supertag-concept-node-id)
+                     "concept-id")))))
+
+(ert-deftest concept-entries-skip-ambiguous-terms ()
+  "A shared title or alias must not silently choose a concept node."
+  (concept-test--with-env
+    (concept-test--create-node "first-id" "First" "Shared")
+    (concept-test--create-node "second-id" "Second" "Shared")
+    (should-not (assoc "Shared" (supertag-concept-entries)))
+    (should-error (supertag-concept--find-concept-id-by-term "Shared")
+                  :type 'user-error)))
+
+(ert-deftest concept-mark-node-persists-before-updating-store ()
+  "Marking a heading works without a pre-populated org-id location cache."
+  (concept-test--with-env
+    (let ((file (expand-file-name "existing.org" supertag-data-directory)))
+      (with-temp-file file
+        (insert "* Existing\n:PROPERTIES:\n:ID:       existing-id\n:END:\n"))
+      (supertag-node-create
+       (list :id "existing-id" :title "Existing" :file file
+             :position 1 :level 1 :properties nil))
+      (should (equal (supertag-concept--mark-node "existing-id") "existing-id"))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (re-search-forward "^:SUPERTAG_CONCEPT: t$" nil t)))
+      (should (supertag-concept-node-p (supertag-node-get "existing-id"))))))
+
+(ert-deftest concept-file-node-is-not-reused-as-heading-concept ()
+  "A same-title file node is not silently marked as a heading concept."
+  (concept-test--with-env
+    (supertag-node-create
+     '(:id "file-id" :title "Topic" :file "/tmp/topic.org"
+       :position 1 :level 0 :properties nil))
+    (should-not (supertag-concept--find-node-id-by-title "Topic"))))
+
 (ert-deftest promote-concept-keeps-text-and-creates-one-reference ()
   "Promoting selected text leaves it plain and adds one current-node reference."
   (concept-test--with-env
@@ -146,6 +197,24 @@
           (should-not (re-search-forward "\\[\\[id:concept-id\\]" source-end t)))
         (should (= 1 (length (supertag-relation-find-between
                               "source-id" "concept-id" :reference))))))))
+
+(ert-deftest promote-empty-concept-does-not-create-source-id ()
+  "Reject an empty concept before mutating the source heading."
+  (concept-test--with-env
+    (let ((file (expand-file-name "empty.org" supertag-data-directory)))
+      (with-temp-file file
+        (insert "* Source\n\n   \n"))
+      (with-current-buffer (find-file-noselect file)
+        (org-mode)
+        (goto-char (point-min))
+        (search-forward "   ")
+        (let ((before (buffer-string))
+              (beg (match-beginning 0))
+              (end (match-end 0)))
+          (should-error (supertag-promote-concept beg end) :type 'user-error)
+          (should (equal (buffer-string) before))
+          (goto-char (point-min))
+          (should-not (org-entry-get nil "ID")))))))
 
 (when noninteractive
   (ert-run-tests-batch-and-exit))

@@ -119,11 +119,10 @@ Each entry is (TERM . NODE-ID).")
        (not (string-empty-p (string-trim term)))
        (>= (length (string-trim term)) supertag-concept-min-term-length)))
 
-(defun supertag-concept-entries ()
-  "Return all known concept mention entries as (TERM . NODE-ID), longest first."
+(defun supertag-concept--term-index ()
+  "Return a hash table mapping each concept term to all matching node IDs."
   (let ((nodes (supertag-store-get-collection :nodes))
-        (seen (make-hash-table :test 'equal))
-        entries)
+        (index (make-hash-table :test 'equal)))
     (when (hash-table-p nodes)
       (maphash
        (lambda (id node)
@@ -132,11 +131,20 @@ Each entry is (TERM . NODE-ID).")
                                    (supertag-concept--node-prop node :raw-value))
                                (supertag-concept-node-aliases node)))
              (let ((clean (and term (string-trim (format "%s" term)))))
-               (when (and (supertag-concept--valid-term-p clean)
-                          (not (gethash clean seen)))
-                 (puthash clean t seen)
-                 (push (cons clean id) entries))))))
+               (when (supertag-concept--valid-term-p clean)
+                 (cl-pushnew id (gethash clean index) :test #'equal))))))
        nodes))
+    index))
+
+(defun supertag-concept-entries ()
+  "Return unambiguous concept entries as (TERM . NODE-ID), longest first."
+  (let ((index (supertag-concept--term-index))
+        entries)
+    (maphash
+     (lambda (term ids)
+       (when (null (cdr ids))
+         (push (cons term (car ids)) entries)))
+     index)
     (sort entries
           (lambda (a b)
             (> (length (car a)) (length (car b)))))))
@@ -144,30 +152,23 @@ Each entry is (TERM . NODE-ID).")
 (defun supertag-concept--regexp (entries)
   "Build a longest-first exact phrase regexp from ENTRIES."
   (when entries
-    (concat "\\(?:" (mapconcat (lambda (entry) (regexp-quote (car entry)))
-                               entries "\\|")
-            "\\)")))
+    (regexp-opt (mapcar #'car entries))))
 
-(defun supertag-concept--inside-org-link-p ()
-  "Return non-nil when the current match is inside an Org link."
-  (when (and (derived-mode-p 'org-mode) (fboundp 'org-element-context))
-    (let ((pos (match-beginning 0)))
-      (save-excursion
-        (goto-char pos)
-        (let ((element (org-element-context)))
-          (and (eq (org-element-type element) 'link)
-               (<= (org-element-property :begin element) pos)
-               (< pos (org-element-property :end element))))))))
+(defun supertag-concept--ignored-org-context-p (pos)
+  "Return non-nil when POS is not prose suitable for a concept mention."
+  (save-excursion
+    (goto-char pos)
+    (let ((type (org-element-type (org-element-context))))
+      (or (memq type '(link code verbatim comment comment-block keyword
+                       node-property property-drawer drawer src-block
+                       example-block table table-row table-cell fixed-width))
+          (org-in-commented-heading-p)))))
 
 (defun supertag-concept--valid-match-p ()
   "Return non-nil when the current concept match should be rendered."
   (let ((pos (max (point-min) (or (match-beginning 0) (point-min)))))
     (and (derived-mode-p 'org-mode)
-         (not (supertag-concept--inside-org-link-p))
-         (not (supertag-view-helper--in-src-block-p pos))
-         (not (supertag-view-helper--at-table-p pos))
-         (not (supertag-view-helper--at-commented-p pos))
-         (not (eq (get-text-property pos 'face) 'org-verbatim)))))
+         (not (supertag-concept--ignored-org-context-p pos)))))
 
 (defun supertag-concept--match-handler ()
   "Font-lock handler for concept mention matches."
@@ -257,47 +258,51 @@ Each entry is (TERM . NODE-ID).")
   (supertag-concept-open-at-point))
 
 (defun supertag-concept--find-concept-id-by-term (term)
-  "Return concept node id whose title or alias is TERM."
-  (cdr (assoc term (supertag-concept-entries))))
+  "Return the unique concept node ID whose title or alias is TERM."
+  (let ((ids (gethash term (supertag-concept--term-index))))
+    (cond
+     ((null ids) nil)
+     ((null (cdr ids)) (car ids))
+     (t (user-error "Concept term is ambiguous: %s" term)))))
 
 (defun supertag-concept--find-node-id-by-title (title)
-  "Return the first node id whose title or raw value exactly equals TITLE."
+  "Return the unique heading node ID whose title exactly equals TITLE."
   (let ((nodes (supertag-store-get-collection :nodes))
-        found)
+        matches)
     (when (hash-table-p nodes)
       (maphash
        (lambda (id node)
-         (when (and (not found)
+         (when (and (let ((level (supertag-concept--node-prop node :level)))
+                      (and (integerp level) (> level 0)))
                     (member title
                             (delq nil (list (supertag-concept--node-prop node :title)
                                             (supertag-concept--node-prop node :raw-value)))))
-           (setq found id)))
+           (push id matches)))
        nodes))
-    found))
-
-(defun supertag-concept--put-node-property (node key value)
-  "Return NODE with user property KEY set to VALUE."
-  (let* ((copy (copy-sequence node))
-         (props (copy-sequence (or (plist-get copy :properties) '()))))
-    (plist-put copy :properties (plist-put props key value))))
+    (cond
+     ((null matches) nil)
+     ((null (cdr matches)) (car matches))
+     (t (user-error "Multiple heading nodes share title: %s" title)))))
 
 (defun supertag-concept--mark-node (node-id)
-  "Mark NODE-ID as a concept node in the store and, when possible, its Org file."
-  (supertag-node-update
-   node-id
-   (lambda (node)
-     (when node
-       (supertag-concept--put-node-property
-        node supertag-concept--marker-property "t"))))
-  (when-let* ((marker (supertag-ui--find-node-marker node-id)))
+  "Persistently mark heading NODE-ID as a concept and re-sync it."
+  (let ((node (supertag-node-get node-id))
+        (marker (supertag-ui--find-node-marker node-id)))
+    (unless (and node (> (or (plist-get node :level) 0) 0))
+      (user-error "Concept target is not a heading node: %s" node-id))
+    (unless marker
+      (user-error "Cannot locate concept target: %s" node-id))
     (with-current-buffer (marker-buffer marker)
       (unless (derived-mode-p 'org-mode)
         (org-mode))
       (save-excursion
         (goto-char marker)
-        (when (org-at-heading-p)
-          (org-entry-put nil supertag-concept--org-marker-property "t")
-          (save-buffer)))))
+        (unless (org-at-heading-p)
+          (user-error "Concept target is not an Org heading: %s" node-id))
+        (org-entry-put nil supertag-concept--org-marker-property "t")
+        (save-buffer)
+        (unless (supertag-node-sync-at-point)
+          (user-error "Failed to sync concept target: %s" node-id)))))
   node-id)
 
 (defun supertag-concept--create-node (title)
@@ -313,21 +318,19 @@ Each entry is (TERM . NODE-ID).")
     (with-current-buffer (find-file-noselect target-file)
       (unless (derived-mode-p 'org-mode)
         (org-mode))
-      (goto-char insert-pos)
-      (unless (or (bobp) (looking-back "\n" 1))
-        (insert "\n"))
-      (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:%s: t\n:END:\n"
-                      (make-string insert-level ?*) title node-id
-                      supertag-concept--org-marker-property))
-      (org-id-add-location node-id target-file)
-      (save-buffer))
-    (supertag-node-create
-     (list :id node-id
-           :title title
-           :file target-file
-           :position insert-pos
-           :level insert-level
-           :properties (list supertag-concept--marker-property "t")))
+      (org-with-wide-buffer
+       (goto-char insert-pos)
+       (unless (or (bobp) (looking-back "\n" 1))
+         (insert "\n"))
+       (let ((heading-pos (point)))
+         (insert (format "%s %s\n:PROPERTIES:\n:ID:       %s\n:%s: t\n:END:\n"
+                         (make-string insert-level ?*) title node-id
+                         supertag-concept--org-marker-property))
+         (goto-char heading-pos)
+         (save-buffer)
+         (org-id-add-location node-id target-file)
+         (unless (supertag-node-sync-at-point)
+           (user-error "Failed to sync new concept: %s" title)))))
     node-id))
 
 (defun supertag-concept--ensure-node (title)
@@ -353,24 +356,24 @@ to that concept, and leaves the selected text unchanged."
   (let* ((title (string-trim
                  (replace-regexp-in-string
                   "[ \t\n\r]+" " "
-                  (buffer-substring-no-properties beg end))))
-         (from-id (save-excursion
-                    (goto-char beg)
-                    (supertag-ui--get-containing-node-at-point))))
+                  (buffer-substring-no-properties beg end)))))
     (when (string-empty-p title)
       (user-error "Selected text is empty"))
-    (supertag-ui--ensure-node-synced from-id)
-    (let ((concept-id (supertag-concept--ensure-node title)))
-      (unless (equal from-id concept-id)
-        (unless (supertag-relation-add-reference from-id concept-id)
-          (let* ((err (and (fboundp 'supertag-relation-last-error)
-                           (supertag-relation-last-error)))
-                 (msg (or (plist-get err :message)
-                          "Failed to add concept reference")))
-            (user-error "%s" msg))))
-      (supertag-concept--refresh-all-buffers)
-      (message "Promoted concept mention: %s" title)
-      concept-id)))
+    (let ((from-id (save-excursion
+                     (goto-char beg)
+                     (supertag-ui--get-containing-node-at-point))))
+      (supertag-ui--ensure-node-synced from-id)
+      (let ((concept-id (supertag-concept--ensure-node title)))
+        (unless (equal from-id concept-id)
+          (unless (supertag-relation-add-reference from-id concept-id)
+            (let* ((err (and (fboundp 'supertag-relation-last-error)
+                             (supertag-relation-last-error)))
+                   (msg (or (plist-get err :message)
+                            "Failed to add concept reference")))
+              (user-error "%s" msg))))
+        (supertag-concept--refresh-all-buffers)
+        (message "Promoted concept mention: %s" title)
+        concept-id))))
 
 (provide 'supertag-concept)
 ;;; supertag-concept.el ends here

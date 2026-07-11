@@ -1301,7 +1301,7 @@ target node, and optional context note."
 
 (defun supertag-ui--find-node-marker (node-id)
   "Return a marker at NODE-ID's position in its file.
-For heading nodes, delegates to `org-id-find'.
+For heading nodes, use `org-id-find' with a direct-file fallback.
 For file nodes, positions after file-level metadata (keywords + :PROPERTIES:)."
   (if (supertag-ui--file-node-p node-id)
       (when-let* ((node (supertag-node-get node-id))
@@ -1322,7 +1322,11 @@ For file nodes, positions after file-level metadata (keywords + :PROPERTIES:)."
              (while (and (not (eobp)) (looking-at "\\s-*$"))
                (forward-line 1))
              (point-marker)))))
-    (org-id-find node-id 'marker)))
+    (or (org-id-find node-id 'marker)
+        (when-let* ((node (supertag-node-get node-id))
+                    (file (plist-get node :file))
+                    ((file-exists-p file)))
+          (org-id-find-id-in-file node-id file t)))))
 
 (defun supertag-ui--insert-tag-text-at-node (node-id marker tag-id &optional batch-mode current-point)
   "Insert #TAG-ID text at MARKER for NODE-ID.
