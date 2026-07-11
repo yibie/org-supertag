@@ -81,11 +81,17 @@ file belongs to (based on its path)."
   :group 'org-supertag)
 
 (defcustom org-supertag-file-id-source 'org-roam
-  "Source for file node IDs.
-- `org-roam' => read :ID: from :PROPERTIES: drawer at top of file
-- `denote'  => read #+IDENTIFIER: keyword"
+  "Policy for recognizing stable file node IDs.
+- `org-roam' => require :ID: in the top-level :PROPERTIES: drawer
+- `denote'   => require a #+IDENTIFIER: keyword
+- `auto'     => prefer a top-level :ID:, then #+IDENTIFIER:
+- `disabled' => do not create file nodes
+
+Files without the selected persistent identity remain ordinary Org files."
   :type '(choice (const :tag "org-roam (:PROPERTIES: :ID:)" org-roam)
-                 (const :tag "denote (#+IDENTIFIER:)" denote))
+                 (const :tag "denote (#+IDENTIFIER:)" denote)
+                 (const :tag "auto-detect either identity" auto)
+                 (const :tag "disable file nodes" disabled))
   :group 'org-supertag)
 
 (defvar supertag-vault--current nil

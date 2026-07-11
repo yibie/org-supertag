@@ -483,9 +483,7 @@ Handles both time stamps (list) and date strings."
                                   (if (stringp title)
                                       title
                                     (prin1-to-string title)))))
-                       (insert (format "- [[id:%s][%s]]\n"
-                                     node-id
-                                     clean-title))))
+                       (insert "- " (supertag-node-format-link node-id clean-title) "\n")))
                    (buffer-string))))
             (insert content)
             (message "Inserted %d node links at original position"
@@ -526,7 +524,7 @@ Handles both time stamps (list) and date strings."
                        (clean-title (if (stringp title)
                                        (substring-no-properties title)
                                      (prin1-to-string title))))
-              (insert (format "- [[id:%s][%s]]\n" node-id clean-title))))
+              (insert "- " (supertag-node-format-link node-id clean-title) "\n")))
           (save-buffer)
           (find-file file)
           (message "Export of %d links completed successfully to %s"

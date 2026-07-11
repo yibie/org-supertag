@@ -469,7 +469,6 @@ current file and inserted into the target file at a chosen position."
 
 ;; --- Node Commands: Add, Remove Reference
 
-
 (defun supertag-ui--remove-link-under-node (target-node-id link-node-id)
   "Remove the Org link referencing LINK-NODE-ID from TARGET-NODE-ID's entry."
   (when-let* ((target-node (supertag-node-get target-node-id))
@@ -484,7 +483,7 @@ current file and inserted into the target file at a chosen position."
                                   (org-end-of-meta-data t)
                                   (point)))
                  (entry-end (save-excursion (org-end-of-subtree t t)))
-                 (pattern (format "\\[\\[id:%s\\]" (regexp-quote link-node-id))))
+                 (pattern (supertag-node-link-pattern link-node-id)))
             (goto-char content-start)
             (when (re-search-forward pattern entry-end t)
               (let ((line-start (line-beginning-position))
@@ -513,15 +512,14 @@ content region, this function does nothing."
                                       (match-beginning 0)
                                     (org-end-of-subtree t t)
                                     (point))))
-                   (pattern (format "\\[\\[id:%s\\]" (regexp-quote link-node-id))))
+                   (pattern (supertag-node-link-pattern link-node-id)))
               ;; Avoid inserting duplicate backlinks
               (goto-char content-start)
               (unless (re-search-forward pattern content-end t)
                 (goto-char content-end)
                 (unless (bolp) (insert "\n"))
-                (insert (format "[[id:%s][%s]]\n"
-                                link-node-id
-                                (or link-title link-node-id))))
+                (insert (supertag-node-format-link link-node-id link-title))
+                (insert "\n"))
               (save-buffer))))))))
 
 (defun supertag-add-reference ()
@@ -548,7 +546,7 @@ Works for both heading nodes and file nodes (level 0)."
                 (user-error "%s" msg)))
             (let* ((to-node (supertag-node-get to-id))
                    (to-title (or (plist-get to-node :title) to-id))
-                   (link-pattern (format "\\[\\[id:%s\\]" (regexp-quote to-id)))
+                   (link-pattern (supertag-node-link-pattern to-id))
                    (link-exists nil))
               (save-excursion
                 (org-with-wide-buffer
@@ -563,7 +561,7 @@ Works for both heading nodes and file nodes (level 0)."
                       (setq link-exists (re-search-forward link-pattern subtree-end t))))))
               (unless link-exists
                 (goto-char insertion-point)
-                (insert (format "[[id:%s][%s]]" to-id to-title)))
+                (insert (supertag-node-format-link to-id to-title)))
               (message "Reference added."))))
       (set-marker insertion-point nil))))
 
@@ -635,7 +633,7 @@ Interactively asks for a target location to save the new node."
         ;; 2. Optional: Find and delete the org-link from the buffer
         (save-excursion
           (goto-char (point-min))
-          (when (re-search-forward (format "\\[\\[id:%s\\]" (regexp-quote to-id)) nil t)
+          (when (re-search-forward (supertag-node-link-pattern to-id) nil t)
             (goto-char (match-beginning 0))
             (when-let* ((link (org-element-context)))
               (when (and (eq (org-element-type link) 'link)
@@ -1266,7 +1264,7 @@ target node, and optional context note."
     (eq (plist-get node :level) 0)))
 
 (defun supertag-ui--get-file-node-at-point ()
-  "Return the file node ID for the current buffer, ensuring it is synced."
+  "Return the persistent file node ID for the current buffer."
   (let ((file (buffer-file-name)))
     (unless file
       (user-error "Point must be inside an Org heading or a file-level context."))
@@ -1274,10 +1272,12 @@ target node, and optional context note."
         (progn
           (supertag-ui--ensure-file-node-synced file)
           (car (supertag-find-file-node file)))
-        (user-error "Failed to create file node for %s" file))))
+        (user-error
+         "No file node for %s; add the identity required by `org-supertag-file-id-source'"
+         file))))
 
 (defun supertag-ui--ensure-file-node-synced (file)
-  "Ensure FILE has a corresponding file node in the store."
+  "Sync FILE's file node when it has a configured persistent identity."
   (if (and (fboundp 'supertag-sync--process-single-file)
            (fboundp 'supertag-sync--in-scope-path-p)
            (supertag-sync--in-scope-path-p file))

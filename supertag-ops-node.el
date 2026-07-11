@@ -78,6 +78,25 @@ ID is the unique identifier of the node.
 Returns node data, or nil if it does not exist."
   (supertag-store-get-entity :nodes id))
 
+(defun supertag-node-link-type (id)
+  "Return the physical Org link type for node ID."
+  (pcase (plist-get (supertag-node-get id) :link-type)
+    ((or 'denote "denote") "denote")
+    (_ "id")))
+
+(defun supertag-node-format-link (id &optional title)
+  "Return an Org link to node ID with optional TITLE."
+  (format "[[%s:%s][%s]]"
+          (supertag-node-link-type id)
+          id
+          (or title id)))
+
+(defun supertag-node-link-pattern (id)
+  "Return a regexp matching this package's physical link to node ID."
+  (format "\\[\\[%s:%s\\]"
+          (regexp-quote (supertag-node-link-type id))
+          (regexp-quote id)))
+
 (defun supertag-node--goto-location (node-id)
   "Position point at the location of NODE-ID in the current buffer.
 Assumes the file for NODE-ID has already been made current.  For a

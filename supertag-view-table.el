@@ -953,7 +953,7 @@ Uses improved styling from old version."
          (lambda (ref-id)
            (let* ((node (supertag-view-api-get-entity :nodes ref-id))
                   (title (plist-get node :title)))
-             (format "[[id:%s][%s]]" ref-id (or title "No Title"))))
+             (supertag-node-format-link ref-id (or title "No Title"))))
          refs
          "\n"))))
    ((stringp value) value)

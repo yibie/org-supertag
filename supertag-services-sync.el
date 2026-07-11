@@ -25,6 +25,9 @@
 (require 'supertag-ops-relation) ; For supertag-relation-create, supertag-relation-find-between
 (require 'supertag-core-async) ; For async job queue
 
+(defvar org-supertag-file-id-source 'org-roam
+  "Policy for recognizing stable file node IDs.")
+
 ;;; Customization (from org-supertag-old/org-supertag-sync.el)
 
 (defgroup supertag-sync nil
@@ -886,7 +889,7 @@ If OLD-NODE doesn't have a hash value, calculate it on the fly."
 NEW-PROPS is the source of truth for file-based properties.
 OLD-PROPS is the source of truth for database-only fields."
   (let ((merged-props (copy-sequence new-props))
-        (standard-keys '(:id :title :raw-value :olp :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type :parent-id)))
+        (standard-keys '(:id :title :raw-value :olp :tags :properties :ref-to :file :content :level :todo :priority :scheduled :deadline :position :pos :hash :type :parent-id :link-type)))
     (cl-loop for (key value) on old-props by #'cddr
              do (unless (member key standard-keys)
                   (plist-put merged-props key value)))
@@ -894,25 +897,36 @@ OLD-PROPS is the source of truth for database-only fields."
 
 (defun supertag-sync--parse-file-header ()
   "Parse file header in current buffer for file node properties.
-Returns a plist with :id, :title, :file-tags.
-ID source depends on `org-supertag-file-id-source'."
+Returns a plist with :id, :link-type, :title and :file-tags.
+Identity selection follows `org-supertag-file-id-source'."
   (save-excursion
     (goto-char (point-min))
-    (let (id title file-tags)
-      ;; Read org-roam style :PROPERTIES: :ID:
-      (when (eq org-supertag-file-id-source 'org-roam)
-        (when (re-search-forward "^:PROPERTIES:" (min 2000 (point-max)) t)
-          (let ((prop-start (point)))
-            (when (re-search-forward "^:ID:\\s-*\\(.+\\)"
-                                     (min (+ prop-start 500) (point-max)) t)
-              (setq id (string-trim (match-string 1)))))))
-      ;; Read denote style #+IDENTIFIER:
-      (when (and (not id) (eq org-supertag-file-id-source 'denote))
-        (goto-char (point-min))
-        (when (re-search-forward
-               "^#\\+IDENTIFIER:\\s-*\\(.+\\)"
-               (min 2000 (point-max)) t)
-          (setq id (string-trim (match-string 1)))))
+    (let (org-id denote-id id link-type title file-tags)
+      ;; A file-level Org ID must be in the drawer at the start of the file.
+      (skip-chars-forward " \t\r\n")
+      (when (looking-at "^:PROPERTIES:")
+        (let ((drawer-end (save-excursion
+                            (when (re-search-forward "^:END:" nil t)
+                              (point)))))
+          (when (and drawer-end
+                     (re-search-forward "^:ID:\\s-*\\(.+\\)" drawer-end t))
+            (setq org-id (string-trim (match-string 1))))))
+      ;; Denote mirrors its persistent file identifier in Org front matter.
+      (goto-char (point-min))
+      (when (re-search-forward
+             "^#\\+IDENTIFIER:\\s-*\\(.+\\)"
+             (min 2000 (point-max)) t)
+        (setq denote-id (string-trim (match-string 1))))
+      (pcase org-supertag-file-id-source
+        ((or 'org-roam 'org-id)
+         (setq id org-id link-type (and org-id 'id)))
+        ('denote
+         (setq id denote-id link-type (and denote-id 'denote)))
+        ('auto
+         (setq id (or org-id denote-id)
+               link-type (cond (org-id 'id) (denote-id 'denote))))
+        ('disabled nil)
+        (_ (user-error "Unknown file node policy: %S" org-supertag-file-id-source)))
       ;; Read #+TITLE:
       (goto-char (point-min))
       (when (re-search-forward
@@ -926,7 +940,7 @@ ID source depends on `org-supertag-file-id-source'."
              (min 2000 (point-max)) t)
         (let ((raw (string-trim (match-string 1))))
           (setq file-tags (supertag-sync--parse-filetags raw))))
-      (list :id id :title title :file-tags file-tags))))
+      (list :id id :link-type link-type :title title :file-tags file-tags))))
 
 (defun supertag-sync--parse-filetags (raw)
   "Parse RAW #+FILETAGS: value into a list of tag strings.
@@ -943,41 +957,31 @@ Handles both colon-separated (:tag1:tag2:) and space-separated formats."
 (defun supertag-sync--upsert-file-node (file file-header counters)
   "Upsert a file node for FILE using FILE-HEADER properties.
 FILE-HEADER is a plist from `supertag-sync--parse-file-header'.
-Returns the file node ID."
-  (let* ((header-id (plist-get file-header :id))
-         (file-id (or header-id
-                      (if (eq org-supertag-file-id-source 'denote)
-                          (progn
-                            (lwarn '(supertag-sync) :warning
-                                   "denote mode but no #+IDENTIFIER: in %s, using org-id" file)
-                            (org-id-new))
-                        (org-id-new))))
-         (title (plist-get file-header :title))
-         (file-tags (plist-get file-header :file-tags))
-         ;; Build file node props
-         (props (list :id file-id
-                      :file file
-                      :level 0
-                      :title title
-                      :tags file-tags
-                      :position 1
-                      :content nil
-                      :properties nil)))
-    ;; Upsert: create or update
-    (let ((existing (supertag-node-get file-id)))
+Return its persistent ID, or nil when the selected policy finds none."
+  (when-let* ((file-id (plist-get file-header :id)))
+    (let* ((title (plist-get file-header :title))
+           (file-tags (plist-get file-header :file-tags))
+           (props (list :id file-id
+                        :file file
+                        :level 0
+                        :link-type (or (plist-get file-header :link-type) 'id)
+                        :title title
+                        :tags file-tags
+                        :position 1
+                        :content nil
+                        :properties nil))
+           (existing (supertag-node-get file-id)))
       (if existing
-          ;; Update if changed
           (when (supertag-node-changed-p existing props)
             (supertag-db-add-with-hash file-id props counters)
             (when counters
               (setf (plist-get counters :nodes-updated)
                     (1+ (or (plist-get counters :nodes-updated) 0)))))
-        ;; Create new
         (supertag-db-add-with-hash file-id props counters)
         (when counters
           (setf (plist-get counters :nodes-created)
-                (1+ (or (plist-get counters :nodes-created) 0))))))
-    file-id))
+                (1+ (or (plist-get counters :nodes-created) 0)))))
+      file-id)))
 
 (defun supertag-sync--process-single-file (file counters)
   "Process a single FILE for synchronization.
@@ -1422,14 +1426,22 @@ Returns a plist of keyword-value pairs, excluding org-internal properties."
     user-props))
 
 (defun supertag--extract-refs (elements)
-  "Extract id: links from a list of org elements."
+  "Extract supported node reference links from a list of org elements."
   (let ((refs '()))
     (when elements
       (org-element-map elements 'link
         (lambda (link)
-          (when (and (equal (org-element-property :type link) "id")
-                     (org-uuidgen-p (org-element-property :path link)))
-            (push (org-element-property :path link) refs)))))
+          (let* ((type (org-element-property :type link))
+                 (path (org-element-property :path link))
+                 (raw (org-element-property :raw-link link))
+                 (denote-id (cond
+                             ((equal type "denote") path)
+                             ((and raw (string-prefix-p "denote:" raw))
+                              (substring raw (length "denote:"))))))
+            (when (and (stringp path)
+                       (not (string-empty-p path))
+                       (or (equal type "id") denote-id))
+              (push (or denote-id path) refs))))))
     (nreverse refs)))
 
 (defun supertag--extract-inline-tags-from-string (content-string)

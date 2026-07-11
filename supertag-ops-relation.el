@@ -17,6 +17,9 @@
 (require 'sha1)
 
 (declare-function supertag-node-update "supertag-ops-node" (id updater))
+(declare-function supertag-node-get "supertag-ops-node" (id))
+(declare-function supertag-node-format-link "supertag-ops-node" (id &optional title))
+(declare-function supertag-node-link-pattern "supertag-ops-node" (id))
 (declare-function supertag-tag-update "supertag-ops-tag" (id updater))
 
 ;;; --- Reference Field Ownership ---
@@ -400,7 +403,7 @@ Returns t on success, nil on failure."
                       (save-excursion
                         (goto-char marker)
                         (let* ((to-file-node-p (supertag-ui--file-node-p to-id))
-                               (pattern (format "\\[\\[id:%s\\]" (regexp-quote from-id)))
+                               (pattern (supertag-node-link-pattern from-id))
                                (ts (when supertag-reference-backlink-include-timestamp
                                      (format-time-string " [%Y-%m-%d %a %H:%M]" (current-time)))))
                           (if to-file-node-p
@@ -412,8 +415,8 @@ Returns t on success, nil on failure."
                                   (unless (looking-at "\\s-*$")
                                     (insert "\n"))
                                   (setq backlink-pos (point))
-                                  (insert (format "[[id:%s][%s]]%s\n"
-                                                  from-id from-title (or ts "")))))
+                                  (insert (supertag-node-format-link from-id from-title)
+                                          (or ts "") "\n")))
                             (org-back-to-heading t)
                             (unless (org-at-heading-p)
                               (error "Target marker is not on an Org heading"))
@@ -429,8 +432,8 @@ Returns t on success, nil on failure."
                                 (goto-char content-end)
                                 (unless (bolp) (insert "\n"))
                                 (setq backlink-pos (line-beginning-position -1))
-                                (insert (format "[[id:%s][%s]]%s\n"
-                                                from-id from-title (or ts "")))))))
+                                (insert (supertag-node-format-link from-id from-title)
+                                        (or ts "") "\n")))))
                         ;; Mark as internal modification to prevent sync loop
                         (when (fboundp 'supertag--mark-internal-modification)
                           (supertag--mark-internal-modification (buffer-file-name)))

@@ -60,7 +60,7 @@ This is the primary function for S-expression query blocks."
                                (let* ((id (plist-get node :id))
                                       (title (or (plist-get node :title) "Untitled"))
                                       (tags (plist-get node :tags)))
-                                 (append (list (format "[[id:%s][%s]]" id title)
+                                 (append (list (supertag-node-format-link id title)
                                                (if (and tags (listp tags))
                                                    (mapconcat #'identity tags ", ")
                                                  ""))
