@@ -635,6 +635,11 @@ Consider running: M-x supertag-sync-full-rescan" db-file)
 (add-hook 'kill-emacs-hook #'supertag-cleanup-all-timers) ; Clean up all timers on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-save-state) ; Save sync state on exit
 (add-hook 'kill-emacs-hook #'supertag-sync-stop-auto-sync) ; Stop auto-sync on exit
+;; Release the multi-instance DB lock last, after the final `supertag-save-store'
+;; above has run (APPEND t places this at the end of `kill-emacs-hook', which
+;; — given the other entries above are added without APPEND, i.e. prepended —
+;; runs after all of them).
+(add-hook 'kill-emacs-hook #'supertag--db-release-lock t)
 ;; If Emacs has already finished startup by the time this file loads
 ;; (lazy-load via autoload / use-package :defer / late require), the
 ;; `emacs-startup-hook' has already fired, so hooking into it silently

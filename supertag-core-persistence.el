@@ -68,6 +68,17 @@ previous database file is left untouched."
   :type 'boolean
   :group 'org-supertag)
 
+(defcustom supertag-db-lock t
+  "When non-nil, protect the database from concurrent multi-instance access.
+Uses Emacs' built-in advisory file locking (`lock-file', `unlock-file',
+`file-locked-p') on `supertag-db-file'. When another Emacs instance already
+holds the lock, this session records the conflict in
+`supertag--db-lock-conflict' and refuses to save the database until the
+other instance releases the lock (or `supertag-db-retry-lock' is used once
+it has exited)."
+  :type 'boolean
+  :group 'org-supertag)
+
 (defvar supertag-db--auto-save-timer nil
   "Timer for auto-save.")
 
@@ -82,6 +93,76 @@ previous database file is left untouched."
 
 (defvar supertag--store-origin nil
   "Metadata about the loaded store and its originating persistence state.")
+
+(defvar supertag--db-lock-conflict nil
+  "Non-nil when another Emacs instance holds the DB lock.
+Holds the owner description string returned by `file-locked-p' (for example
+\"user@host.12345:1698765432\") for whichever file `supertag--db-acquire-lock'
+last checked. While non-nil, this session refuses to save the database (see
+`supertag--persistence-guard-violations'). Cleared automatically once the
+lock is acquired or the other instance's lock is found to be gone.")
+
+(defvar supertag--db-locked-file nil
+  "File path this Emacs instance currently holds the advisory lock for, or nil.
+Tracked separately from `supertag-db-file' so that switching vaults (which
+reassigns `supertag-db-file' before the old lock is released) still releases
+the correct file's lock.")
+
+;;; --- Multi-instance DB Locking ---
+
+(defun supertag--db-acquire-lock ()
+  "Acquire the advisory lock on `supertag-db-file' for this Emacs instance.
+When `supertag-db-lock' is enabled and `supertag-db-file' is set, checks
+`file-locked-p' on it: if another Emacs instance already holds the lock
+\(i.e. `file-locked-p' returns a string, not t), records the owner in
+`supertag--db-lock-conflict' and warns that this session will not save the
+database until the conflict clears. Otherwise, clears any previous conflict
+and calls `lock-file' — locally binding `create-lockfiles' to t, since
+`lock-file' is a no-op when that variable is nil. Any error signaled while
+locking is caught and reported via `message' but never propagated, so a
+locking problem can never break DB loading."
+  (when (and supertag-db-lock
+             (stringp supertag-db-file)
+             (> (length supertag-db-file) 0))
+    (let ((owner (file-locked-p supertag-db-file)))
+      (if (stringp owner)
+          (progn
+            (setq supertag--db-lock-conflict owner)
+            (message "Supertag: database %s is locked by another Emacs instance (%s); this session will NOT save until the lock is released. Run M-x supertag-db-retry-lock once the other instance has exited."
+                     (abbreviate-file-name supertag-db-file) owner))
+        (setq supertag--db-lock-conflict nil)
+        (condition-case err
+            (let ((create-lockfiles t))
+              (lock-file supertag-db-file)
+              (setq supertag--db-locked-file supertag-db-file))
+          (error
+           (message "Supertag: failed to acquire lock on %s: %s (continuing without a lock)"
+                    (abbreviate-file-name supertag-db-file)
+                    (error-message-string err))))))))
+
+(defun supertag--db-release-lock ()
+  "Release the advisory DB lock held by this Emacs instance, if any.
+Safe no-op when no lock is currently held (`supertag--db-locked-file' is
+nil). Any error from `unlock-file' is ignored, since a failed unlock must
+never interrupt shutdown or vault switching."
+  (when supertag--db-locked-file
+    (ignore-errors (unlock-file supertag--db-locked-file))
+    (setq supertag--db-locked-file nil))
+  (setq supertag--db-lock-conflict nil))
+
+(defun supertag-db-retry-lock ()
+  "Retry acquiring the DB lock after a previously detected conflict.
+Useful once the other Emacs instance holding the lock on `supertag-db-file'
+has exited: re-checks `file-locked-p' and, if the lock is now free (or
+already held by this instance), calls `supertag--db-acquire-lock' to take
+it over so saves can resume."
+  (interactive)
+  (supertag--db-acquire-lock)
+  (if supertag--db-lock-conflict
+      (message "Supertag: database %s is still locked by another Emacs instance (%s)."
+               (abbreviate-file-name supertag-db-file) supertag--db-lock-conflict)
+    (message "Supertag: database lock acquired for %s."
+             (abbreviate-file-name supertag-db-file))))
 
 ;;; --- Backup Functions ---
 
@@ -336,6 +417,19 @@ Signals an error if the file cannot be read or parsed."
                (= current-field-count 0)
                (> current-nodes 0))
       (push "field-values dropped to 0 (possible data loss)" reasons))
+    (when supertag-db-lock
+      (let ((live-owner (file-locked-p db-file)))
+        (cond
+         ((stringp live-owner)
+          (setq supertag--db-lock-conflict live-owner)
+          (push (format "database locked by another Emacs instance (%s)" live-owner) reasons))
+         (supertag--db-lock-conflict
+          ;; We previously recorded a conflict, but `file-locked-p' no longer
+          ;; reports another owner for this file — the other instance likely
+          ;; exited. Retry taking over the lock for this session.
+          (supertag--db-acquire-lock)
+          (when supertag--db-lock-conflict
+            (push (format "database locked by another Emacs instance (%s)" supertag--db-lock-conflict) reasons))))))
     (nreverse reasons)))
 
 (defun supertag--persistence-refuse-save (reasons)
@@ -576,6 +670,9 @@ FILE is the optional file path. Defaults to supertag-db-file."
          (file-to-load nil)
          (load-status nil)
          (failures '()))
+    ;; Release any lock held for a previously loaded DB file (e.g. when
+    ;; switching vaults) before possibly loading a different one below.
+    (supertag--db-release-lock)
     ;; Ensure directory exists before loading (best-effort; does not depend on DB presence).
     (ignore-errors (supertag-persistence-ensure-data-directory))
 
@@ -609,7 +706,8 @@ FILE is the optional file path. Defaults to supertag-db-file."
                                                :load-candidates candidates
                                                :load-failures (nreverse failures)))
           (message "Database loaded from %s. For migrations, run M-x supertag-db-migrate-and-normalize."
-                   (abbreviate-file-name file-to-load)))
+                   (abbreviate-file-name file-to-load))
+          (supertag--db-acquire-lock))
       (setq supertag--store (ht-create))
       (setq load-status :new)
       (supertag-clear-dirty)
