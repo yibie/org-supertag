@@ -230,10 +230,7 @@ Returns the appropriate display spec for the matched tag."
 
 (defvar supertag-view-svg-tag--font-lock-keywords
   `((,(concat "#[" supertag-view-helper--valid-tag-chars "]+")
-     (0 (if (and (not (supertag-view-helper--in-src-block-p))
-                 (not (supertag-view-helper--at-table-p))
-                 (not (supertag-view-helper--at-commented-p))
-                 (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
+     (0 (if (supertag-view-helper--valid-inline-tag-match-p)
             (supertag-svg-tag--match-handler))
         t)))
   "Font-lock keywords for SVG tag rendering.")

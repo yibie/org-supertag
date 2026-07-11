@@ -49,3 +49,29 @@
     - `M-x supertag-db-inspect-file` 显示 file 内 nodes > 0
     - 重启 Emacs 后 `Database status ... Nodes` 为非零
   - 影响范围：持久化加载路径、启动诊断日志
+
+- task010 [x] 修复 persistence 显式 DB 候选被 snapshot 重复项降级（issue010）
+  - 产出：保持 `explicit → configured → default → legacy → snapshot` 的首次出现顺序；增加有效显式 DB 优先级回归测试
+  - 验证方式：`supertag-persistence-test.el` 4/4 以上全部通过；显式有效 DB 覆盖 configured DB
+  - 影响范围：`supertag-core-persistence.el`、`supertag-persistence-test.el`
+
+- task011 [x] 禁止为无持久化身份的文件生成临时 file-node ID（issue011）
+  - 产出：file-node policy 支持 org-roam/denote/auto/disabled；无匹配身份时不创建 file-node
+  - 验证方式：同一无 ID 文件重复同步不会增加 file-node；Org-ID 与 Denote 身份保持稳定
+  - 影响范围：`org-supertag.el`、`supertag-services-sync.el`
+
+- task012 [x] 集中 file-node link codec（issue011）
+  - 产出：节点保存 `:link-type`；UI/relation 根据目标节点生成和匹配 `id:`/`denote:`
+  - 验证方式：同一 store 内 Org-ID file-node、Denote file-node 与 heading 分别生成正确链接；Denote reciprocal link 不再硬编码 `id:`
+  - 影响范围：`supertag-ops-node.el`、`supertag-ui-commands.el`、`supertag-ops-relation.el`
+
+- task013 [ ] 将 reciprocal backlink 从物理写入迁移为 relation 派生视图（issue011）
+  - 产出：审计旧物理 backlink 与用户正向链接不可区分问题，确定兼容迁移路径后停止新增物化 backlink
+  - 验证方式：reference 只保留一个方向的物理链接，反向视图由 relation index 查询；旧数据不丢失
+  - 影响范围：relation 创建/删除、sync reference extraction、Node View backlink
+  - 当前结论：不能直接停止写入；旧的自动 backlink 与用户手写正向链接语法相同，需先引入可识别的 ownership/migration 边界
+
+- task014 [x] 在中英文 README 说明 file-node 兼容策略（issue011）
+  - 产出：提供 org-roam/denote/auto/disabled 可复制配置、身份边界和重扫步骤
+  - 验证方式：中英文配置值一致；Markdown diff 检查通过
+  - 影响范围：`README.md`、`README_CN.md`

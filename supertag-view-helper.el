@@ -100,6 +100,28 @@ This is a safe wrapper around org-at-commented-p."
         (beginning-of-line)
         (looking-at-p "^[ \t]*#\\+"))))))
 
+(defun supertag-view-helper--org-priority-match-p ()
+  "Return non-nil if the current # match is an Org priority marker."
+  (and (eq (char-before (match-beginning 0)) ?\[)
+       (string-match-p "\\`#[A-Z]\\]" (match-string 0))))
+
+(defun supertag-view-helper--url-fragment-match-p ()
+  "Return non-nil if the current # match sits inside a URL fragment."
+  (save-excursion
+    (goto-char (match-beginning 0))
+    (let ((end (match-end 0)))
+      (skip-chars-backward "^ \t\n<>\"'()[]{}")
+      (and (search-forward "://" end t) t))))
+
+(defun supertag-view-helper--valid-inline-tag-match-p ()
+  "Return non-nil if the current font-lock match is a renderable inline tag."
+  (not (or (supertag-view-helper--in-src-block-p)
+           (supertag-view-helper--at-table-p)
+           (supertag-view-helper--at-commented-p)
+           (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)
+           (supertag-view-helper--org-priority-match-p)
+           (supertag-view-helper--url-fragment-match-p))))
+
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API
 ;;;----------------------------------------------------------------------
@@ -184,10 +206,7 @@ Prefers SVG keywords when `supertag-svg-tag-enable' is non-nil."
 
 (defvar supertag-view-helper--font-lock-keywords
   `((,(concat "#[" supertag-view-helper--valid-tag-chars "]+")
-     (0 (if (and (not (supertag-view-helper--in-src-block-p))
-                 (not (supertag-view-helper--at-table-p))
-                 (not (supertag-view-helper--at-commented-p))
-                 (not (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)))
+     (0 (if (supertag-view-helper--valid-inline-tag-match-p)
             'supertag-inline-face) t)))
   "Font-lock keywords for highlighting inline tags.")
 

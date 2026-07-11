@@ -112,7 +112,7 @@ This is an internal function and should not be called directly by users."
     (let* ((node-id (plist-get link-info :id))
            (begin (plist-get link-info :begin))
            (end (plist-get link-info :end))
-           (node-data (supertag-node-get node-id))))
+           (node-data (supertag-node-get node-id)))
 
       (unless node-data
         (user-error "Node %s not found in database" node-id))
@@ -133,7 +133,7 @@ This is an internal function and should not be called directly by users."
           (insert "\n"))
         (insert "#+end_embed\n")
 
-        (message "Converted link to embed block for node %s" node-id))))
+        (message "Converted link to embed block for node %s" node-id)))))
 
 (defun supertag-ui-embed--insert-block ()
   "Internal function to select a node and insert an embed block at point.
@@ -144,35 +144,32 @@ not be called directly by users."
   (require 'supertag-services-ui)
 
   ;; Use the existing node selection UI with cache for better performance
-  (let ((node-id (supertag-ui-select-node "Insert embed block for node: " t)))
+  (let* ((node-id (supertag-ui-select-node "Insert embed block for node: " t))
+         (node-data (and node-id (supertag-node-get node-id))))
     (unless node-id
       (user-error "No node selected"))
 
-    ;; Verify node exists in database
-    (let ((node-data (supertag-node-get node-id))))
-      (unless node-data
-        (user-error "Node %s not found in database" node-id))
+    (unless node-data
+      (user-error "Node %s not found in database" node-id))
 
-      ;; Generate embed block content
-      (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
-            (title (plist-get node-data :title)))
-        (unless embed-content
-          (user-error "Failed to generate embed content for node %s" node-id))
+    ;; Generate embed block content
+    (let ((embed-content (supertag-ui-embed-generate-node-content node-id))
+          (title (plist-get node-data :title)))
+      (unless embed-content
+        (user-error "Failed to generate embed content for node %s" node-id))
 
-        ;; Insert embed block at current position
-        (let ((start-pos (point)))
-          ;; Ensure we're at the beginning of a line
-          (unless (bolp)
-            (insert "\n"))
+      ;; Ensure we're at the beginning of a line
+      (unless (bolp)
+        (insert "\n"))
 
-          ;; Include title in the begin_embed line for reference
-          (insert (format "#+begin_embed: %s [%s]\n" node-id (or title "Untitled")))
-          (insert embed-content)
-          (unless (string-suffix-p "\n" embed-content)
-            (insert "\n"))
-          (insert "#+end_embed\n")
+      ;; Include title in the begin_embed line for reference
+      (insert (format "#+begin_embed: %s [%s]\n" node-id (or title "Untitled")))
+      (insert embed-content)
+      (unless (string-suffix-p "\n" embed-content)
+        (insert "\n"))
+      (insert "#+end_embed\n")
 
-          (message "Inserted embed block for node %s" node-id)))))
+      (message "Inserted embed block for node %s" node-id))))
 
 (provide 'supertag-ui-embed)
 ;;; supertag-ui-embed.el ends here
