@@ -45,6 +45,30 @@ M-x supertag-sync-full-initialize
 
 ---
 
+## File-node：兼容 Org-roam、Denote 或混合目录
+
+这个设置只影响文件级节点；标题节点仍然照常使用 Org ID。
+
+```emacs-lisp
+;; 默认：识别文件开头的 :ID:（Org-roam 风格）
+(setq org-supertag-file-id-source 'org-roam)
+
+;; 识别 #+IDENTIFIER:（Denote 风格）
+(setq org-supertag-file-id-source 'denote)
+
+;; 混合目录：逐个文件自动识别两种格式
+(setq org-supertag-file-id-source 'auto)
+
+;; 完全不创建文件级节点
+(setq org-supertag-file-id-source 'disabled)
+```
+
+Org-roam 与 Denote 文件放在同一同步目录时，使用 `auto`。链接由每个节点自己的身份决定：Org-ID 节点使用 `id:`，Denote 文件节点使用 `denote:`。文件没有所选的持久化身份时，它仍是普通 Org 文件；SuperTag 不会为它生成临时 ID。
+
+修改设置后，执行 `M-x supertag-sync-full-rescan`。
+
+---
+
 ## 三个核心概念（2 分钟搞懂）
 
 Org-SuperTag 只建立在三个简单想法上：

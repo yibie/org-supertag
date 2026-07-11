@@ -46,6 +46,30 @@ That's it. No API keys, no database server, no configuration wizard. Your existi
 
 ---
 
+## File nodes: Org-roam, Denote, or both
+
+This setting only affects file-level nodes. Heading nodes continue to use Org IDs normally.
+
+```emacs-lisp
+;; Default: files with a top-level :ID: (Org-roam style)
+(setq org-supertag-file-id-source 'org-roam)
+
+;; Files with #+IDENTIFIER: (Denote style)
+(setq org-supertag-file-id-source 'denote)
+
+;; Mixed directory: recognize either format per file
+(setq org-supertag-file-id-source 'auto)
+
+;; Do not create file-level nodes
+(setq org-supertag-file-id-source 'disabled)
+```
+
+Use `auto` when Org-roam and Denote files share a sync directory. Links are generated from each node's own identity: Org-ID nodes use `id:`, while Denote file nodes use `denote:`. A file without the selected persistent identity remains an ordinary Org file; SuperTag does not invent a temporary ID for it.
+
+After changing the setting, run `M-x supertag-sync-full-rescan`.
+
+---
+
 ## The three things you need to know
 
 Org-SuperTag is built on three simple ideas:
