@@ -59,6 +59,15 @@ Older backups will be automatically cleaned up."
   :type 'integer
   :group 'org-supertag)
 
+(defcustom supertag-db-verify-after-save t
+  "When non-nil, verify the database file after saving.
+The freshly written file is re-read and its :nodes collection count is
+compared against the in-memory store before the previous database file
+is replaced. On mismatch or read error, the write is aborted and the
+previous database file is left untouched."
+  :type 'boolean
+  :group 'org-supertag)
+
 (defvar supertag-db--auto-save-timer nil
   "Timer for auto-save.")
 
@@ -400,6 +409,56 @@ This function ensures all levels are proper hash tables."
         (supertag-mark-dirty)))))
 
 
+(defun supertag--persistence-write-store-atomically (file)
+  "Write `supertag--store' to FILE atomically.
+
+A temporary file is created in the same directory as FILE (so the
+final `rename-file' is atomic on the same filesystem), the in-memory
+store is serialized into it using the same print settings as
+`supertag-save-store', and — when `supertag-db-verify-after-save' is
+non-nil — the temp file is re-read the same way the loader does and
+its :nodes count is compared against the in-memory store's :nodes
+count before it replaces FILE.
+
+On any failure, including a verification mismatch or read error, the
+temp file is removed, an error is signaled, and FILE is left
+untouched."
+  (let ((temp-file (make-temp-file (concat file ".tmp")))
+        (success nil))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
+            (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
+                  (print-length nil)         ; Unlimited print length
+                  (print-level nil)          ; No limit print level
+                  (print-circle t))          ; Handle circular structures
+              (prin1 supertag--store (current-buffer)))
+            (let ((write-region-inhibit-fsync nil))
+              (write-region (point-min) (point-max) temp-file nil 'silent)))
+          (when supertag-db-verify-after-save
+            (let (verify-count)
+              (condition-case err
+                  (let* ((verify-data (supertag--persistence--try-read-store temp-file))
+                         (verify-nodes (and (hash-table-p verify-data)
+                                            (gethash :nodes verify-data))))
+                    (setq verify-count (if (hash-table-p verify-nodes)
+                                           (hash-table-count verify-nodes)
+                                         0)))
+                (error
+                 (error "Supertag save verification failed to read %s: %s"
+                        temp-file (error-message-string err))))
+              (let ((live-count (supertag--count-nodes)))
+                (unless (= verify-count live-count)
+                  (error "Supertag save verification mismatch for %s: wrote %d nodes, expected %d"
+                         file verify-count live-count)))))
+          (when (file-exists-p file)
+            (set-file-modes temp-file (file-modes file)))
+          (rename-file temp-file file t)
+          (setq success t))
+      (unless success
+        (ignore-errors (delete-file temp-file))))))
+
 (defun supertag-save-store (&optional file)
   "Save the current `supertag--store` to a file.
 FILE is the optional file path. Defaults to `supertag-db-file`."
@@ -432,13 +491,7 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
                  (= live-node-count 0))
             (message "Protective skip: Live DB has 0 nodes while on-disk DB looks non-trivial (%s bytes). Skipping save to avoid data loss."
                      existing-size)
-          (with-temp-file file-to-save
-            (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
-            (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
-                  (print-length nil)         ; Unlimited print length
-                  (print-level nil)          ; No limit print level
-                  (print-circle t))          ; Handle circular structures
-              (prin1 supertag--store (current-buffer))))
+          (supertag--persistence-write-store-atomically file-to-save)
           (supertag-clear-dirty)
           (supertag--record-store-origin :ok)
           ;; Check if daily backup is needed after successful save
@@ -459,7 +512,40 @@ data corruption is suspected."
         (supertag--run-migrations supertag--store)
 
         ;; --- Normalize :fields collection structure ---
-        (supertag--normalize-fields-collection))
+        (supertag--normalize-fields-collection)
+
+        ;; --- Automatic Field Migration ---
+        (let* ((nodes-table (supertag-store-get-collection :nodes))
+               (migrated-count 0))
+          (maphash
+           (lambda (key value)
+             (when (and value (eq (plist-get value :type) :node))
+               (let ((needs-migration nil)
+                     (migrated-value (copy-sequence value)))
+                 ;; Migrate :file-path to :file
+                 (when (and (plist-get value :file-path)
+                            (not (plist-get value :file)))
+                   (setq migrated-value (plist-put migrated-value :file (plist-get value :file-path)))
+                   (setq needs-migration t))
+                 ;; Migrate :pos to :position
+                 (when (and (plist-get value :pos)
+                            (not (plist-get value :position)))
+                   (setq migrated-value (plist-put migrated-value :position (plist-get value :pos)))
+                   (setq needs-migration t))
+                 ;; Update if migration was needed
+                 (when needs-migration
+                   (supertag-store-put-entity :nodes key migrated-value t)
+                   (cl-incf migrated-count)))))
+           nodes-table)
+          (when (> migrated-count 0)
+            (message "Migrated %d nodes with legacy field names (:file-path -> :file, :pos -> :position)."
+                     migrated-count)
+            (supertag-mark-dirty)))
+
+        (message "Database migration and normalization complete.")
+        (when (supertag-dirty-p)
+          (message "Changes were made. Saving database...")
+          (supertag-save-store)))
     (message "Database not loaded. Please load the database first.")))
 
   ;; --- Automatic Purge of Invalid Nodes (example, kept commented) ---
@@ -478,39 +564,6 @@ data corruption is suspected."
   ;;       (cl-incf purged-count))
   ;;     (message "Purged %d invalid/ghost entries from database." purged-count)
   ;;     (supertag-mark-dirty)))
-
-  ;; --- Automatic Field Migration ---
-  (let* ((nodes-table (supertag-store-get-collection :nodes))
-         (migrated-count 0))
-    (maphash
-     (lambda (key value)
-       (when (and value (eq (plist-get value :type) :node))
-         (let ((needs-migration nil)
-               (migrated-value (copy-sequence value)))
-           ;; Migrate :file-path to :file
-           (when (and (plist-get value :file-path)
-                      (not (plist-get value :file)))
-             (setq migrated-value (plist-put migrated-value :file (plist-get value :file-path)))
-             (setq needs-migration t))
-           ;; Migrate :pos to :position
-           (when (and (plist-get value :pos)
-                      (not (plist-get value :position)))
-             (setq migrated-value (plist-put migrated-value :position (plist-get value :pos)))
-             (setq needs-migration t))
-           ;; Update if migration was needed
-           (when needs-migration
-             (supertag-store-put-entity :nodes key migrated-value t)
-             (cl-incf migrated-count)))))
-     nodes-table)
-    (when (> migrated-count 0)
-      (message "Migrated %d nodes with legacy field names (:file-path -> :file, :pos -> :position)."
-               migrated-count)
-      (supertag-mark-dirty)))
-
-  (message "Database migration and normalization complete.")
-  (when (supertag-dirty-p)
-    (message "Changes were made. Saving database...")
-    (supertag-save-store))
 
 (defun supertag-load-store (&optional file)
   "Load data into supertag--store from a file.
