@@ -1,7 +1,7 @@
 ;;; test-automation-scheduled.el --- One-shot scheduled-rule self-check  -*- lexical-binding: t; -*-
 ;; ponytail: standalone batch sanity check, no ert framework.
 ;; Run with:
-;;   emacs --batch -Q -L . -l test-automation-scheduled.el
+;;   emacs --batch -Q -L . -l test/test-automation-scheduled.el
 
 (require 'cl-lib)
 (setq supertag-data-directory (make-temp-file "supertag-test-" t))

@@ -1,5 +1,5 @@
 ;;; test-inline-tag-filter.el --- self-check for inline tag filtering -*- lexical-binding: t; -*-
-;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test-inline-tag-filter.el
+;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test/test-inline-tag-filter.el
 
 (require 'cl-lib)
 (require 'org)

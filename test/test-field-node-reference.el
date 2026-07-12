@@ -12,7 +12,10 @@
 (require 'cl-lib)
 
 (when load-file-name
-  (add-to-list 'load-path (file-name-directory load-file-name)))
+  ;; This file lives in test/; add the project root (its parent) to
+  ;; load-path so the `require' calls below can find sibling modules
+  ;; even when invoked without an explicit `-L .' flag.
+  (add-to-list 'load-path (expand-file-name ".." (file-name-directory load-file-name))))
 
 (require 'supertag-core-store)
 (require 'supertag-ops-node)

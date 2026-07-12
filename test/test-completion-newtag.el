@@ -1,5 +1,5 @@
 ;;; test-completion-newtag.el --- self-check for #newtag exit path -*- lexical-binding: t; -*-
-;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test-completion-newtag.el
+;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test/test-completion-newtag.el
 
 (require 'cl-lib)
 (setq supertag-data-directory (make-temp-file "supertag-test-" t))

@@ -1,5 +1,5 @@
 ;;; test-denote-reference.el --- file-node identity and link tests -*- lexical-binding: t; -*-
-;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test-denote-reference.el
+;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test/test-denote-reference.el
 
 (require 'ert)
 (require 'cl-lib)

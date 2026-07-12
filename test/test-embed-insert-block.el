@@ -1,5 +1,5 @@
 ;;; test-embed-insert-block.el --- self-check for embed block insertion -*- lexical-binding: t; -*-
-;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test-embed-insert-block.el
+;; Run: emacs --batch -Q --eval '(package-initialize)' -L . -l test/test-embed-insert-block.el
 
 (require 'cl-lib)
 (require 'supertag-ui-embed)
