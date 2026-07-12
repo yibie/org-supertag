@@ -22,6 +22,7 @@
 
 ** Fixes
 *** Table view
+- Parent headings now inherit theme-appropriate subdued styling instead of using a hard-coded dark background.
 - Suppress schema fields whose slug is =refs= so the reserved Refs column is not displayed twice.
 
 *** Reference insertion cursor position
