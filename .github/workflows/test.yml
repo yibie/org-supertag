@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The package's declared minimum is Emacs 28.1 (see Package-Requires
+        # in org-supertag.el), but jcs090218/setup-emacs on Linux is more
+        # reliable installing 28.2 than 28.1, so we test against 28.2 as the
+        # floor plus the current stable release.
+        emacs_version: ['28.2', '29.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jcs090218/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Install elisp dependencies
+        run: |
+          emacs -batch --eval "(progn (require 'package) (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\")) (package-initialize) (package-refresh-contents) (package-install 'ht))"
+
+      # test/run-tests.sh is already tracked with mode 100755 in git
+      # (verified via `git ls-files -s test/run-tests.sh`), so no chmod
+      # step is needed here.
+      - name: Run tests
+        run: ./test/run-tests.sh all
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-emacs-${{ matrix.emacs_version }}
+          path: test/test-results.txt
