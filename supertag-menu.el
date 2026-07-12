@@ -81,6 +81,10 @@
 (declare-function supertag-search "supertag-ui-search" ())
 ;; supertag-ui-query-block.el (no autoload cookie; wrapped)
 (declare-function supertag-insert-query-block "supertag-ui-query-block" ())
+(declare-function supertag-insert-query-dblock "supertag-ui-query-block" ())
+(declare-function supertag-query-build "supertag-query-library" ())
+(declare-function supertag-query-run-saved "supertag-query-library" ())
+(declare-function supertag-query-describe-syntax "supertag-query-library" ())
 
 ;; supertag-services-capture.el (;;;###autoload; also unconditionally
 ;; required by org-supertag.el, so it is safe to reference directly)
@@ -167,6 +171,22 @@ DOC is used as the docstring of the generated wrapper."
   supertag-ui-query-block supertag-insert-query-block
   "Run `supertag-insert-query-block', loading its feature first if needed.")
 
+(supertag-menu--defwrapper supertag-menu--insert-query-dblock
+  supertag-ui-query-block supertag-insert-query-dblock
+  "Run `supertag-insert-query-dblock', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--query-build
+  supertag-query-library supertag-query-build
+  "Run `supertag-query-build', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--query-run-saved
+  supertag-query-library supertag-query-run-saved
+  "Run `supertag-query-run-saved', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--query-describe-syntax
+  supertag-query-library supertag-query-describe-syntax
+  "Run `supertag-query-describe-syntax', loading its feature first if needed.")
+
 (supertag-menu--defwrapper supertag-menu--insert-embed
   supertag-ui-commands supertag-insert-embed
   "Run `supertag-insert-embed', loading its feature first if needed.")
@@ -220,6 +240,10 @@ DOC is used as the docstring of the generated wrapper."
   [["Search & Query"
     ("ss" "Search"                supertag-menu--search)
     ("sq" "Insert query block"    supertag-menu--insert-query-block)
+    ("sd" "Insert dynamic query"  supertag-menu--insert-query-dblock)
+    ("sb" "Build query (wizard)"  supertag-menu--query-build)
+    ("sr" "Run saved query"       supertag-menu--query-run-saved)
+    ("sy" "Query syntax help"     supertag-menu--query-describe-syntax)
     ("se" "Insert embed"          supertag-menu--insert-embed)
     ("sc" "Convert link to embed" supertag-menu--convert-link-to-embed)
     ("sl" "Add reference"         supertag-menu--add-reference)
