@@ -1,6 +1,74 @@
 * Changelog
 * [Unreleased]
-** Features
+
+* [5.9.0] - 2026-07-12
+** Data safety (highlights)
+*** Atomic database saves
+- =supertag-save-store= now writes to a same-directory temp file,
+  optionally verifies it re-reads with the expected node count (new
+  option =supertag-db-verify-after-save=, default =t=), then renames
+  over the target. A crash mid-save can no longer truncate the
+  database.
+- Fixed a defun-boundary bug that made the legacy field migration run
+  at load (=require=) time.
+
+*** Multi-instance protection
+- New option =supertag-db-lock= (default =t=): the database is
+  advisory-locked after load. A second Emacs instance loads read-only
+  with a clear warning and =M-x supertag-db-retry-lock= to take over
+  once the first instance exits.
+
+*** Automatic migration on load
+- New option =supertag-db-auto-migrate= (default =t=): out-of-date
+  databases are migrated automatically after load, preceded by a
+  timestamped =supertag-db-premigrate-*= snapshot that daily-backup
+  retention never deletes. Read-only (locked) sessions skip migration.
+- Fixed version-only migrations never being persisted (they re-ran on
+  every load).
+
+*** Health check
+- New command =M-x supertag-doctor=: one-stop report over database
+  files, guards, lock, version, integrity, and backups, with optional
+  guided repairs.
+
+** Discoverability
+- New command =M-x supertag-menu= (transient): all major commands
+  grouped and keyed in one place.
+- New command =M-x supertag-setup=: first-run wizard for sync
+  directories, file-ID source, persistence, and the initial scan.
+- New command =M-x supertag-automation-insert-template=: nine
+  ready-made automation rule templates with guided parameters.
+
+** Query language
+- Dynamic query blocks: =#+BEGIN: supertag-query :query "..."= re-render
+  on =C-c C-c= / =org-dblock-update=. New command
+  =supertag-insert-query-dblock=.
+- Both block forms honor =:sort=, =:order=, =:limit=, =:columns=.
+- New =supertag-query-library=: save/run/insert named queries, a
+  guided query builder (=supertag-query-build=), and
+  =supertag-query-describe-syntax=. Full reference in =doc/QUERY.md=.
+- Implemented =recent-days= / =in-month= / =in-year= operators that
+  older docs advertised but the parser never supported.
+- Fixed absolute dates (=YYYY-MM-DD=) signaling "Invalid time
+  specification" in =after= / =before= / =between=.
+
+** Fixes
+- =cl-return-from= inside plain =defun= in three supertag-ops-tag.el
+  functions signaled void-variable on their early-exit paths.
+- Auto-migration whose save is deferred by a guard no longer re-runs
+  and overwrites its premigrate snapshot on the next load.
+
+** Engineering
+- GitHub Actions CI (Emacs 28.2 / 29.4) running the full ERT suite;
+  tests grew from 81 to 110.
+- All root-level test scratch files moved under =test/=; fixed a bare
+  =test/= .gitignore rule that had kept four suite files untracked.
+- Removed the unused =gptel= dependency and the abandoned =archive/=
+  code; renamed =supertag-test.el= to =supertag-diagnostics.el=.
+- New reproducible performance baseline (=test/perf-benchmark.el=):
+  at 10k nodes the O(N) paths stay well inside interactive budgets.
+
+** Features (from community PRs and pre-release work)
 *** File node reference / backlink support
 - =supertag-add-reference= now accepts file nodes (level-0 nodes
   representing entire files) as both source and target.
