@@ -241,7 +241,12 @@ Compatible with the old query engine date format."
 
      ;; Case 3: Absolute date "YYYY-MM-DD"
      ((string-match "^[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}$" date-str)
-      (parse-time-string date-str))
+      ;; `parse-time-string' on a bare date returns a decoded-time list
+      ;; with nil SEC/MIN/HOUR -- not a value `time-less-p' accepts.
+      ;; Fill midnight and encode to a real time value.
+      (let ((decoded (parse-time-string date-str)))
+        (encode-time 0 0 0
+                     (nth 3 decoded) (nth 4 decoded) (nth 5 decoded))))
 
      ;; Default: Invalid format
      (t nil))))

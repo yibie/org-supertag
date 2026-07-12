@@ -464,7 +464,9 @@ Returns the field definition, or nil if not found."
       (when all-fields
         (cl-find field-name all-fields :key (lambda (f) (plist-get f :name)) :test #'equal)))))
 
-(defun supertag-tag-move-field-up (tag-id field-name)
+;; `cl-defun': the body uses `cl-return-from', which needs the implicit
+;; block a plain `defun' does not create (void-variable at runtime).
+(cl-defun supertag-tag-move-field-up (tag-id field-name)
   "Move a field definition up in the tag's field list.
 TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field to move up.
@@ -497,7 +499,8 @@ Returns the updated tag data."
             ;; If field is not found or already at the top, return unchanged
             tag))))))
 
-(defun supertag-tag-move-field-down (tag-id field-name)
+;; `cl-defun': the body uses `cl-return-from' (see move-field-up above).
+(cl-defun supertag-tag-move-field-down (tag-id field-name)
   "Move a field definition down in the tag's field list.
 TAG-ID is the unique identifier of the tag.
 FIELD-NAME is the name of the field to move down.
@@ -558,11 +561,14 @@ In global field mode, this uses the resolved schema to include inherited fields.
         (plist-get resolved :fields))
        (t
         (let ((tag (supertag-tag-get tag-id)))
-          (unless tag
-            (message "Warning: Tag '%s' not found, returning empty field list." tag-id)
-            (cl-return-from supertag-tag-get-all-fields '()))
-          (let ((plist-tag (supertag--ensure-plist tag)))
-            (or (plist-get plist-tag :fields) '()))))))))
+          ;; `cl-return-from' needs a `cl-defun'/`cl-block'; inside a plain
+          ;; `defun' it signals void-variable at runtime, so branch instead.
+          (if (not tag)
+              (progn
+                (message "Warning: Tag '%s' not found, returning empty field list." tag-id)
+                '())
+            (let ((plist-tag (supertag--ensure-plist tag)))
+              (or (plist-get plist-tag :fields) '())))))))))
 
 (defun supertag-sanitize-tag-name (name)
   "Sanitize a string into a valid tag name.
