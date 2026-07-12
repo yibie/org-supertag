@@ -31,7 +31,7 @@
 ;;; Faces
 
 (defface supertag-view-table-parent-title-face
-  '((t :inherit shadow :background "#303030"))
+  '((t :inherit shadow))
   "Face used for the parent-title line in the Title column."
   :group 'supertag-view)
 
@@ -533,7 +533,7 @@ Automatically detects virtual databases and uses their database fields."
                                   (and slug (equal slug supertag-view-table--refs-field-id))
                                   (gethash dedupe-key seen))
                        do (puthash dedupe-key t seen)
-                       collect (let ((col `(:name ,raw-name
+                       and collect (let ((col `(:name ,raw-name
                                           :key ,(intern (or slug raw-name))
                                           :field-id ,slug
                                           :width 20)))
@@ -877,7 +877,7 @@ Uses improved styling from old version."
                                            (nth (- (length olp) 2) olp))))
                     (if (and parent-title (not (string-empty-p parent-title)))
                         ;; First line: current title (with org links rendered);
-                        ;; second line: parent title (grey background).
+                        ;; second line: parent title (subdued).
                         (concat rendered-title "\n"
                                 (propertize parent-title 'face 'supertag-view-table-parent-title-face))
                       rendered-title)))
