@@ -208,6 +208,13 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 | Highlight concept mentions | `M-x supertag-concept-link-mode` | Shows concept title/alias mentions as amber semantic highlights, not stored links |
 | Full database rebuild | `M-x supertag-sync-full-rescan` | Safe — just re-reads your Org files |
 
+Beyond single-command lookups, Org-Supertag has a small S-expression query
+language for combining tags, fields, dates, and full-text search, e.g.
+`(and (tag "task") (not (field "status" "done")))`. Write one in a
+`org-supertag-query-block` babel block, save it with `M-x supertag-query-save`
+for reuse, or build one interactively with `M-x supertag-query-build`. See
+`doc/QUERY.md` for the full grammar.
+
 Optional keybindings:
 
 ```emacs-lisp

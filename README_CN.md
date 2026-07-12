@@ -207,6 +207,11 @@ rating   →  数字（1–5）
 | 高亮概念提及 | `M-x supertag-concept-link-mode` | 将概念 title/alias 的提及显示为琥珀色语义高亮，不落库为链接 |
 | 全量重建数据库 | `M-x supertag-sync-full-rescan` | 安全——仅重新读取 Org 文件 |
 
+除了单条命令，Org-Supertag 还提供一套小巧的 S-expression 查询语言，可以组合标签、字段、日期和全文搜索，例如
+`(and (tag "task") (not (field "status" "done")))`。可以把它写进 `org-supertag-query-block`
+babel 代码块，用 `M-x supertag-query-save` 保存以便复用，或者用 `M-x supertag-query-build`
+交互式构建。完整语法见 `doc/QUERY.md`（英文）。
+
 可选快捷键示例：
 
 ```emacs-lisp
