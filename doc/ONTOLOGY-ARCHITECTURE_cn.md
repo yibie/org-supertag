@@ -176,10 +176,10 @@ Org 文本/用户动作
 
 3. **程序化/Agent 使用（Elisp / AI）**：把 query 当作可调用的“逻辑函数”。  
    - 入口：`supertag-query-sexp`（实现见 `supertag-services-query.el`）  
-   - 实验：`supertag-test-view-query-sexp`（在 `supertag-test.el`，用最小 UI 展示 query 结果）  
+   - 实验：`supertag-diagnostics-view-query-sexp`（在 `supertag-diagnostics.el`，用最小 UI 展示 query 结果）  
 
 4. **解释/诊断（实验，面向“为什么没跑”）**：把“逻辑结论”和“自动化执行原因”一次性展示出来。  
-   - 入口：`M-x supertag-test-explain-current-node`（输出 Derived facts + Automation dry-run）  
+   - 入口：`M-x supertag-diagnostics-explain-current-node`（输出 Derived facts + Automation dry-run）  
    - 价值：当你看到 “trigger-miss / condition-fail”，你知道问题在“触发没对上”还是“条件不满足”，不用靠猜。  
 
 落地顺序建议：
@@ -244,6 +244,6 @@ Org 文本/用户动作
 
 ### 7.6 测试
 
-**`supertag-test.el`**：测试文件
-- 职责：实验脚本（逻辑解释、automation dry-run、query 结果预览）
-- 边界：测试代码，不属于生产架构
+**`supertag-diagnostics.el`**：诊断工具
+- 职责：交互式诊断脚本（逻辑解释、automation dry-run、query 结果预览），非自动化测试
+- 边界：开发/调试辅助代码，不属于生产架构

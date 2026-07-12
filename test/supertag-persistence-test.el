@@ -118,11 +118,8 @@
 
 (ert-deftest supertag-persistence-set-db-file-compiles-without-config-guard ()
   "The persistence module must compile independently of the config guard macro."
-  (let* ((source-directory
-          (file-name-directory
-           (symbol-file 'supertag-persistence-test--make-store-with-nodes 'defun)))
-         (source-file (expand-file-name "supertag-core-persistence.el"
-                                        source-directory))
+  (let* ((source-file (or (locate-library "supertag-core-persistence.el")
+                          (locate-library "supertag-core-persistence")))
          (definition
           (with-temp-buffer
             (insert-file-contents source-file)

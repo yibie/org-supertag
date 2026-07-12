@@ -48,7 +48,7 @@ if [ $# -gt 0 ]; then
             reference) FILTER="$FILTER test/reference-test.el" ;;
             vc|virtual) FILTER="$FILTER test/virtual-column-test.el" ;;
             field-ref) FILTER="$FILTER test/test-field-node-reference.el" ;;
-            persist)   FILTER="$FILTER supertag-persistence-test.el test/persistence-hardening-test.el" ;;
+            persist)   FILTER="$FILTER test/supertag-persistence-test.el test/persistence-hardening-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
             *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist all"; exit 1 ;;
         esac

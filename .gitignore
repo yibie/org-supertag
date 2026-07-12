@@ -100,9 +100,5 @@ qoder/
 .serena/
 reasonix.toml
 
-# test files (exclude standalone test files, keep test/ dir structure)
-supertag-persistence-test.el
-supertag-test.el
-
 # pictures
 picture/
