@@ -251,7 +251,10 @@ parameters (:sort/:order/:limit/:columns and friends)."
     ("term"    . "(term WORD) -- full-text search over title/content")
     ("after"   . "(after DATE) -- nodes dated after DATE")
     ("before"  . "(before DATE) -- nodes dated before DATE")
-    ("between" . "(between START END) -- nodes dated between START and END"))
+    ("between" . "(between START END) -- nodes dated between START and END")
+    ("recent-days" . "(recent-days N) -- nodes created in the last N days")
+    ("in-month" . "(in-month \"YYYY-MM\") -- nodes created in that month")
+    ("in-year"  . "(in-year \"YYYY\") -- nodes created in that year"))
   "Leaf query operators offered by `supertag-query-build', with descriptions.")
 
 (defun supertag-query-library--completing-read-operator (prompt)
@@ -345,6 +348,14 @@ COMBINATOR is \"and\"/\"or\" (a string) or the symbol `and'/`or'."
                   op
                   (supertag-query-library--read-date "Start date")
                   (supertag-query-library--read-date "End date")))
+      ("recent-days" (supertag-query-library--make-condition
+                      op (read-number "Created within the last N days: " 7)))
+      ("in-month" (supertag-query-library--make-condition
+                   op (read-string "Month (YYYY-MM): "
+                                   (format-time-string "%Y-%m"))))
+      ("in-year" (supertag-query-library--make-condition
+                  op (read-string "Year (YYYY): "
+                                  (format-time-string "%Y"))))
       (_ (user-error "Unknown operator `%s'" op)))))
 
 (defun supertag-query-library--present-built-query (expr)
@@ -408,6 +419,9 @@ Leaf conditions
   (after DATE)           nodes dated after DATE
   (before DATE)          nodes dated before DATE
   (between START END)    nodes dated between START and END
+  (recent-days N)        nodes created in the last N days
+  (in-month \"YYYY-MM\")   nodes created in that calendar month
+  (in-year \"YYYY\")       nodes created in that calendar year
 
 Date formats (DATE / START / END above)
   \"now\"                 the current moment

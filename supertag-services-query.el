@@ -122,6 +122,38 @@ This function is compatible with the old query syntax."
       (unless (= (length args) 1)
         (error "'term' operator expects exactly one argument, but got %S" args))
       `(:type term :value ,(if (stringp (car args)) (car args) (symbol-name (car args)))))
+     ;; Date sugar below: these desugar to `after'/`between' at parse time,
+     ;; so the executor needs no knowledge of them. All match on :created-at
+     ;; (the same timestamp the other date operators use).
+     ((eq op 'recent-days)
+      (let ((n (car args)))
+        (when (and (stringp n) (string-match-p "\\`[0-9]+\\'" n))
+          (setq n (string-to-number n)))
+        (unless (and (= (length args) 1) (integerp n) (> n 0))
+          (error "'recent-days' operator expects one positive integer, but got %S" args))
+        `(:type after :date ,(format "-%dd" n))))
+     ((eq op 'in-month)
+      (unless (and (= (length args) 1) (stringp (car args))
+                   (string-match "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)\\'" (car args)))
+        (error "'in-month' operator expects one \"YYYY-MM\" string, but got %S" args))
+      (let* ((year (string-to-number (match-string 1 (car args))))
+             (month (string-to-number (match-string 2 (car args)))))
+        (unless (<= 1 month 12)
+          (error "'in-month': month out of range in %S" (car args)))
+        `(:type between
+                :start-date ,(format "%04d-%02d-01" year month)
+                :end-date ,(if (= month 12)
+                               (format "%04d-01-01" (1+ year))
+                             (format "%04d-%02d-01" year (1+ month))))))
+     ((eq op 'in-year)
+      (let ((arg (car args)))
+        (when (and (stringp arg) (string-match-p "\\`[0-9]\\{4\\}\\'" arg))
+          (setq arg (string-to-number arg)))
+        (unless (and (= (length args) 1) (integerp arg) (> arg 0))
+          (error "'in-year' operator expects one \"YYYY\" argument, but got %S" args))
+        `(:type between
+                :start-date ,(format "%04d-01-01" arg)
+                :end-date ,(format "%04d-01-01" (1+ arg)))))
      (t (error "Invalid query operator: %S" op)))))
 
 (defun supertag-query--execute-ast (ast)

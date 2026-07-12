@@ -31,6 +31,9 @@ For hands-on help while writing a query, see:
 | `after` | `DATE` | nodes dated after `DATE` | `(after "2025-01-01")` |
 | `before` | `DATE` | nodes dated before `DATE` | `(before "2025-12-31")` |
 | `between` | `START END` | nodes dated between `START` and `END` | `(between "-7d" "now")` |
+| `recent-days` | `N` | nodes created in the last `N` days (sugar for `(after "-Nd")`) | `(recent-days 7)` |
+| `in-month` | `"YYYY-MM"` | nodes created in that calendar month | `(in-month "2025-06")` |
+| `in-year` | `"YYYY"` | nodes created in that calendar year (integer also accepted) | `(in-year "2025")` |
 
 Notes on argument types, verified against `supertag-query--parse-sexp`:
 
@@ -179,10 +182,8 @@ instead of `(after "2025-06-01")`.
 
 **`Invalid query operator: NAME`**
 You used an operator the parser doesn't recognize. Only `and`, `or`, `not`,
-`tag`, `field`, `after`, `before`, `between`, and `term` are implemented.
-(Older docs and examples elsewhere may mention `recent-days`, `in-month`, or
-`in-year` — these are **not** implemented by the current parser and will
-raise this error if you try them.)
+`tag`, `field`, `after`, `before`, `between`, `term`, `recent-days`,
+`in-month`, and `in-year` are implemented.
 
 **`'OPERATOR' operator expects ... arguments, but got (...)`**
 You passed the wrong number of arguments to `tag`, `field`, `not`, `after`,

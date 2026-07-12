@@ -60,6 +60,38 @@
   (should-error (supertag-query-library--make-condition "field" "only-one-arg"))
   (should-error (supertag-query-library--make-condition "between" "-7d")))
 
+(ert-deftest supertag-query-library-test-date-sugar-operators-desugar ()
+  "recent-days / in-month / in-year desugar to after/between at parse time."
+  ;; recent-days N -> (after "-Nd"); integer and numeric-string accepted.
+  (should (equal (supertag-query--parse-sexp '(recent-days 7))
+                 '(:type after :date "-7d")))
+  (should (equal (supertag-query--parse-sexp '(recent-days "30"))
+                 '(:type after :date "-30d")))
+  ;; in-month -> between [first of month, first of next month).
+  (should (equal (supertag-query--parse-sexp '(in-month "2025-06"))
+                 '(:type between :start-date "2025-06-01" :end-date "2025-07-01")))
+  ;; December rolls over the year.
+  (should (equal (supertag-query--parse-sexp '(in-month "2025-12"))
+                 '(:type between :start-date "2025-12-01" :end-date "2026-01-01")))
+  ;; in-year -> between [Jan 1, next Jan 1); string and integer accepted.
+  (should (equal (supertag-query--parse-sexp '(in-year "2025"))
+                 '(:type between :start-date "2025-01-01" :end-date "2026-01-01")))
+  (should (equal (supertag-query--parse-sexp '(in-year 2025))
+                 '(:type between :start-date "2025-01-01" :end-date "2026-01-01")))
+  ;; The desugared date strings must resolve to real time values.
+  (should (supertag-query--resolve-date-string "2025-06-01")))
+
+(ert-deftest supertag-query-library-test-date-sugar-rejects-bad-arguments ()
+  "Date-sugar operators validate their arguments at parse time."
+  (should-error (supertag-query--parse-sexp '(recent-days 0)))
+  (should-error (supertag-query--parse-sexp '(recent-days -3)))
+  (should-error (supertag-query--parse-sexp '(recent-days "x")))
+  (should-error (supertag-query--parse-sexp '(in-month "2025-13")))
+  (should-error (supertag-query--parse-sexp '(in-month "2025-6")))
+  (should-error (supertag-query--parse-sexp '(in-month 202506)))
+  (should-error (supertag-query--parse-sexp '(in-year "25")))
+  (should-error (supertag-query--parse-sexp '(in-year "20256"))))
+
 (ert-deftest supertag-query-library-test-combine-conditions-wraps-and-validates ()
   "`supertag-query-library--combine-conditions' nests conditions under and/or."
   (let* ((c1 (supertag-query-library--make-condition "tag" "task"))
