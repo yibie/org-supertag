@@ -244,6 +244,120 @@ wiring change, no tombstone rename."
         (should (equal original-bytes after-bytes)))
       (should-not (directory-files outside-dir nil "\\.migrated-")))))
 
+;;; ----------------------------------------------------------------
+;;; Part 1b (P0-2 regression): migration must not lose unsaved
+;;; in-memory changes -- see `supertag-git--do-migrate-layout''s
+;;; Commentary in supertag-git.el for the fixed flush/write/verify
+;;; sequence this pins down.
+;;; ----------------------------------------------------------------
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-migrate-layout-preserves-dirty-changes
+    "An UNSAVED in-memory edit (`supertag-dirty-p' true) made after loading
+the store must survive migration -- the migrated database must reflect
+the CURRENT in-memory value, not whatever is still on disk. This pins
+down BOTH halves of the P0-2 fix: (a) the dirty flush to the OLD file via
+the real `supertag-save-store' path actually runs and clears the flag,
+and (b) the NEW file is written directly from the in-memory store via
+`supertag--persistence-write-store-atomically' (never a stale `copy-file'
+of whatever the old file happened to contain a moment before)."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((vault-root (file-name-as-directory (expand-file-name "vault" dir)))
+           (outside-dir (file-name-as-directory (expand-file-name "outside-db" dir)))
+           (outside-db (expand-file-name "supertag-db.el" outside-dir))
+           (org-supertag-sync-directories (list vault-root))
+           (supertag-data-directory outside-dir)
+           (supertag-db-file outside-db)
+           (supertag-db-backup-directory (expand-file-name "backups" outside-dir))
+           (supertag--store nil)
+           (supertag--store-origin nil))
+      (make-directory vault-root t)
+      (make-directory outside-dir t)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) outside-db)
+      ;; Load the store into memory, then mutate a title WITHOUT saving --
+      ;; this is the "unsaved in-memory change" the migration must not lose.
+      (supertag-load-store)
+      (should-not (supertag-dirty-p))
+      (let* ((nodes (gethash :nodes supertag--store))
+             (data (copy-sequence (gethash "n1" nodes))))
+        (puthash "n1" (plist-put data :title "mutated in memory") nodes))
+      (supertag-mark-dirty)
+      (should (supertag-dirty-p))
+      ;; Neutralize the unrelated sync-state guard (same trick used by
+      ;; `test/persistence-hardening-test.el''s auto-migrate test) so the
+      ;; internal flush this migration performs actually succeeds --
+      ;; without this, `supertag--persistence-guard-violations' always
+      ;; reports "sync-state not loaded for current vault" in this
+      ;; standalone test environment, which is exactly the OTHER test
+      ;; below's scenario, not this one's.
+      (cl-letf (((symbol-function 'supertag--persistence--expected-sync-state-file)
+                 (lambda () nil)))
+        (let ((result (supertag-git--migrate-layout)))
+          (should (eq :migrated (plist-get result :status)))
+          ;; The flush succeeded: dirty is cleared, not carried over
+          ;; silently unsaved.
+          (should-not (supertag-dirty-p))
+          (let* ((on-disk (supertag--persistence--try-read-store
+                           (plist-get result :new-db-file)))
+                 (node (gethash "n1" (gethash :nodes on-disk))))
+            (should (equal "mutated in memory" (plist-get node :title))))
+          (should (equal "mutated in memory"
+                         (plist-get (gethash "n1" (gethash :nodes supertag--store))
+                                    :title))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-migrate-layout-aborts-when-save-guard-blocks
+    "When the in-memory store is dirty AND the safety-net flush cannot
+actually save (a real guard violation -- `supertag-sync--state-source' is
+explicitly nil here, reusing the same sync-state trick
+`test/persistence-hardening-test.el' relies on, just for the OPPOSITE
+purpose: forcing the guard to fire rather than neutralizing it),
+migration must ABORT outright rather than proceed to write a target from
+a state it could not actually confirm was persisted: the old file is left
+byte-for-byte untouched, no `.supertag/' target database is created, this
+session's wiring is unchanged, and the failure names the guard reason."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((vault-root (file-name-as-directory (expand-file-name "vault" dir)))
+           (outside-dir (file-name-as-directory (expand-file-name "outside-db" dir)))
+           (outside-db (expand-file-name "supertag-db.el" outside-dir))
+           (org-supertag-sync-directories (list vault-root))
+           (supertag-data-directory outside-dir)
+           (supertag-db-file outside-db)
+           (supertag-db-backup-directory (expand-file-name "backups" outside-dir))
+           (supertag--store nil)
+           (supertag--store-origin nil)
+           (supertag-sync--state-source nil)
+           original-bytes)
+      (make-directory vault-root t)
+      (make-directory outside-dir t)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) outside-db)
+      (supertag-load-store)
+      (let* ((nodes (gethash :nodes supertag--store))
+             (data (copy-sequence (gethash "n1" nodes))))
+        (puthash "n1" (plist-put data :title "mutated in memory") nodes))
+      (supertag-mark-dirty)
+      (setq original-bytes (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally outside-db)
+                             (buffer-string)))
+      (let ((result (supertag-git--migrate-layout)))
+        (should (eq :failed (plist-get result :status)))
+        (should (stringp (plist-get result :error)))
+        (should (string-match-p "sync-state not loaded" (plist-get result :error))))
+      ;; The dirty flag is never cleared -- the save really was skipped,
+      ;; not silently treated as having succeeded.
+      (should (supertag-dirty-p))
+      ;; Old file byte-for-byte untouched.
+      (let ((after-bytes (with-temp-buffer
+                           (set-buffer-multibyte nil)
+                           (insert-file-contents-literally outside-db)
+                           (buffer-string))))
+        (should (equal original-bytes after-bytes)))
+      ;; No target database created, no tombstone, wiring unchanged.
+      (should-not (file-exists-p (expand-file-name ".supertag/supertag-db.el" vault-root)))
+      (should-not (directory-files outside-dir nil "\\.migrated-"))
+      (should (equal supertag-db-file outside-db)))))
+
 ;;; ================================================================
 ;;; Part 2: supertag-git-clone
 ;;; ================================================================
@@ -326,13 +440,20 @@ first). Firing the debounce function directly produces exactly ONE new
 commit; firing it again with nothing new staged produces NO empty commit."
   (supertag-git-sync-test--with-temp-dir root
     (supertag-git-sync-test--init-worktree root)
-    (let ((db (expand-file-name "supertag-db.el" root))
-          (supertag-git-sync--synchronous t)
-          (supertag-git-sync--vault-root root)
-          (supertag-git-sync--in-flight nil)
-          (supertag-git-sync--pending-push-count 0)
-          (supertag-git-sync--offline-warned nil)
-          (supertag-git-sync--commit-timer nil))
+    (let* ((db (expand-file-name "supertag-db.el" root))
+           (supertag-git-sync--synchronous t)
+           (supertag-git-sync--vault-root root)
+           (supertag-git-sync--in-flight nil)
+           (supertag-git-sync--pending-push-count 0)
+           (supertag-git-sync--offline-warned nil)
+           (supertag-git-sync--conflict-commit-warned nil)
+           (supertag-git-sync--commit-timer nil)
+           ;; `supertag-git-sync--commit-pathspecs' (P0-3) needs
+           ;; `supertag-db-file' pointed at this vault's database to stage
+           ;; it -- exactly what a real `supertag-git-sync-mode' session
+           ;; already has by the time it is enabled.
+           (supertag-db-file db)
+           (supertag-data-directory root))
       (supertag-git-sync-test--write-store
        (supertag-git-sync-test--build-store '("n1")) db)
       (supertag-git--configure-clone root db)
@@ -559,6 +680,144 @@ debounced commit."
               (let ((log (supertag-git-sync-test--git! root "log" "--oneline")))
                 (should (= 2 (length (split-string (string-trim log) "\n" t))))))
           (when supertag-git-sync-mode (supertag-git-sync-mode 0)))))))
+
+;;; ----------------------------------------------------------------
+;;; Part 3b (P0-3 regression): auto-commit must never ship unresolved
+;;; conflict markers, and must never sweep untracked non-vault files
+;;; into a commit -- see `supertag-git-sync--fire-commit''s docstring
+;;; in supertag-git.el for the fixed pre-stage refusal / scoped
+;;; staging / post-stage marker scan this pins down.
+;;; ----------------------------------------------------------------
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-commit-refuses-unresolved-conflict-then-proceeds
+    "`supertag-git-sync--fire-commit' must refuse to stage or commit
+ANYTHING while ROOT still has a real, unresolved merge conflict (A and B
+edit the SAME line of the same org file, so B's fetch+merge leaves
+literal `<<<<<<<' markers in `notes.org' and an unmerged index entry) --
+the old unconditional `git add -A' would otherwise mark that conflict
+resolved and commit the literal markers into history. A one-shot warning
+is issued and `in-flight' is cleared, never left stuck. Once the conflict
+is resolved manually (`git checkout --theirs' + `git add', exactly as a
+user/magit would), the very next `--fire-commit' call proceeds normally
+and completes the merge commit."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((bare (expand-file-name "bare.git" root))
+           (a (file-name-as-directory (expand-file-name "a" root)))
+           (b (file-name-as-directory (expand-file-name "b" root)))
+           (db-a (expand-file-name "supertag-db.el" a))
+           (db-b (expand-file-name "supertag-db.el" b))
+           (org-rel "notes.org"))
+      (supertag-git-sync-test--init-worktree a)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db-a)
+      (with-temp-file (expand-file-name org-rel a) (insert "* Heading\nOriginal line.\n"))
+      (supertag-git--configure-clone a db-a)
+      (supertag-git-sync-test--git! a "add" "-A")
+      (supertag-git-sync-test--git! a "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! a "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! a "push" "-q" "origin" "main")
+      (supertag-git-sync-test--git! root "clone" "-q" bare b)
+      (supertag-git-sync-test--git! b "config" "user.name" "Supertag Test")
+      (supertag-git-sync-test--git! b "config" "user.email" "supertag-test@example.com")
+      (supertag-git-sync-test--git! b "config" "commit.gpgsign" "false")
+      (supertag-git--configure-clone b db-b)
+      (with-temp-file (expand-file-name org-rel a) (insert "* Heading\nA's version.\n"))
+      (supertag-git-sync-test--commit-edit a "A edits notes.org")
+      (supertag-git-sync-test--git! a "push" "-q" "origin" "main")
+      (with-temp-file (expand-file-name org-rel b) (insert "* Heading\nB's version.\n"))
+      (supertag-git-sync-test--commit-edit b "B edits notes.org")
+      (let* ((supertag-git-sync--synchronous t)
+             (supertag-git-sync--vault-root b)
+             (supertag-git-sync--in-flight nil)
+             (supertag-git-sync--offline-warned nil)
+             (supertag-git-sync--conflict-commit-warned nil)
+             (supertag-git-sync--conflicted-org-files nil)
+             (supertag-db-file db-b)
+             (supertag-data-directory b)
+             (supertag--store (supertag-git-sync-test--build-store '("n1")))
+             (supertag--store-origin nil)
+             (head-before-commit nil))
+        ;; Get B into a genuine conflicted-merge state.
+        (supertag-git-sync--pull)
+        (should (member org-rel (supertag-git-sync--unmerged-paths b)))
+        (setq head-before-commit (string-trim (supertag-git-sync-test--git! b "rev-parse" "HEAD")))
+        ;; Firing the debounced commit while unresolved must refuse
+        ;; entirely: nothing staged, no commit, a one-shot warning,
+        ;; `in-flight' cleared rather than left stuck.
+        (supertag-git-sync--fire-commit)
+        (should-not supertag-git-sync--in-flight)
+        (should supertag-git-sync--conflict-commit-warned)
+        ;; Nothing changed about the unmerged state itself -- the refusal
+        ;; happened before any staging was attempted, not merely after an
+        ;; attempted-then-undone one.
+        (should (equal (supertag-git-sync--unmerged-paths b) (list org-rel)))
+        (should (equal head-before-commit
+                       (string-trim (supertag-git-sync-test--git! b "rev-parse" "HEAD"))))
+        (should (> (length (supertag-git-sync-test--git! b "diff" "--name-only" "--diff-filter=U"))
+                   0))
+        ;; Resolve the conflict manually, exactly as a user/magit would.
+        (supertag-git-sync-test--git! b "checkout" "--theirs" "--" org-rel)
+        (supertag-git-sync-test--git! b "add" "--" org-rel)
+        ;; The next fire-commit proceeds normally and completes the merge:
+        ;; exactly ONE new commit, a genuine 2-parent merge commit whose
+        ;; first parent is the pre-resolution HEAD (i.e. it actually
+        ;; completes THIS merge, not some unrelated commit). Checked via
+        ;; `rev-parse'/`%P' rather than counting total reachable commits
+        ;; via `git log --oneline', which -- being a MERGE -- also newly
+        ;; includes the upstream commit(s) it merged in, not just +1.
+        (supertag-git-sync--fire-commit)
+        (should-not supertag-git-sync--in-flight)
+        (should-not supertag-git-sync--conflict-commit-warned)
+        (let ((head-after-commit (string-trim (supertag-git-sync-test--git! b "rev-parse" "HEAD")))
+              (parents (split-string
+                        (string-trim (supertag-git-sync-test--git! b "log" "-1" "--format=%P" "HEAD"))
+                        " " t)))
+          (should-not (equal head-before-commit head-after-commit))
+          (should (= 2 (length parents)))
+          (should (member head-before-commit parents)))
+        (should (= 0 (length (supertag-git-sync-test--git! b "diff" "--name-only" "--diff-filter=U"))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-commit-scopes-staging-away-from-untracked-junk
+    "The auto-commit's staging must be scoped (`supertag-git-sync--commit-pathspecs'),
+never a bare `git add -A': an untracked, non-`.org', non-database file
+living in the vault (simulating a stray credentials/secret file) must
+NEVER be swept into an automatic commit, while a genuine concurrent
+`.org' edit in the same debounce cycle IS committed normally."
+  (supertag-git-sync-test--with-temp-dir root
+    (supertag-git-sync-test--init-worktree root)
+    (let ((db (expand-file-name "supertag-db.el" root))
+          (org-file (expand-file-name "notes.org" root))
+          (junk-file (expand-file-name "fake-credentials.txt" root)))
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Heading\nOriginal.\n"))
+      (supertag-git--configure-clone root db)
+      (supertag-git-sync-test--git! root "add" "-A")
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "initial")
+      ;; A genuine org edit AND a stray junk file both appear before the
+      ;; next debounce cycle fires.
+      (with-temp-file org-file (insert "* Heading\nEdited.\n"))
+      (with-temp-file junk-file (insert "SECRET=hunter2\n"))
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-git-sync--vault-root root)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-git-sync--conflict-commit-warned nil)
+            (supertag-git-sync--commit-timer nil)
+            (supertag-db-file db)
+            (supertag-data-directory root))
+        (supertag-git-sync--fire-commit)
+        (should-not supertag-git-sync--in-flight))
+      (let ((shown (supertag-git-sync-test--git! root "show" "--stat" "--oneline" "HEAD")))
+        (should (string-match-p "notes\\.org" shown))
+        (should-not (string-match-p "fake-credentials" shown)))
+      ;; The junk file is still on disk (never deleted) -- just never
+      ;; committed; it remains untracked.
+      (should (file-exists-p junk-file))
+      (should (string-match-p "\\`\\?\\? fake-credentials\\.txt"
+                              (supertag-git-sync-test--git! root "status" "--porcelain" "--" junk-file))))))
 
 (provide 'git-sync-mode-test)
 

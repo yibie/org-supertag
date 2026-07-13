@@ -306,17 +306,45 @@ THIS call -- empty on a re-run, which is how idempotence is verified."
 ;; is a database living at `~/.emacs.d/org-supertag/' -- entirely outside
 ;; whatever git repository the user's `.org' vault lives in. Migration is:
 ;;
-;;   1. copy the database to `<repo-root>/.supertag/supertag-db.el'
-;;   2. verify the COPY is loadable (never trust a bare `copy-file')
+;;   0. if the LIVE in-memory store has unsaved changes (`supertag-dirty-p'),
+;;      flush them to the OLD file first via the normal `supertag-save-store'
+;;      path, then re-check `supertag-dirty-p' -- a save that is silently
+;;      skipped (guard violation, lock conflict, protective empty-store
+;;      skip, ...) still leaves the flag set, and that must ABORT the
+;;      migration rather than let step 1 below copy a database that does
+;;      not reflect what is actually in memory (see
+;;      `supertag--persistence-guard-violations' for the reasons named in
+;;      the abort message).
+;;   1. write the NEW database from the CURRENT in-memory store directly,
+;;      via `supertag--persistence-write-store-atomically' -- never a
+;;      `copy-file' of whatever the OLD file happens to contain on disk,
+;;      which (even after step 0's flush) is one extra hop removed from
+;;      "what is actually in memory right now". `copy-file' is used ONLY
+;;      as a fallback for the case where no store has been loaded into
+;;      this session at all yet (so there is no in-memory store to
+;;      serialize from).
+;;   2. verify the new file is loadable (never trust a bare `copy-file' or
+;;      a bare atomic write without reading it back)
 ;;   3. only once verified: flip this session's persistence wiring
 ;;      (`supertag-data-directory'/`supertag-db-file'/etc, the same
-;;      config-guard-bypassed pattern `supertag-vault--apply' uses) and
-;;      reload the live store from the new location
-;;   4. only once the reload above has itself succeeded: rename (never
-;;      delete) the OLD database file to a `.migrated-<timestamp>' tombstone
+;;      config-guard-bypassed pattern `supertag-vault--apply' uses),
+;;      reload the live store from the new location, and confirm BOTH that
+;;      the reload's recorded origin status is `:ok' AND (when a store was
+;;      already loaded pre-migration) that its node count matches the
+;;      pre-migration count captured in step 0 -- any disagreement aborts
+;;      exactly like a failed verification would.
+;;   4. only once step 3 has itself fully succeeded: rename (never delete)
+;;      the OLD database file to a `.migrated-<timestamp>' tombstone
 ;;
-;; Any failure before step 4 leaves the OLD file completely untouched (no
-;; wiring changed, nothing renamed) -- see `supertag-git--do-migrate-layout'.
+;; Any failure at or after the wiring flip in step 3 restores this
+;; session's wiring to its pre-migration snapshot (`supertag-git--capture-wiring'
+;; / `supertag-git--restore-wiring') and reloads the store from the
+;; (now-restored) OLD file, via an `unwind-protect' state machine -- so a
+;; failure never leaves the session pointed at a new file while the OLD
+;; file (and whatever real data it holds) sits untouched and unreferenced.
+;; Any failure BEFORE the wiring flip leaves the OLD file completely
+;; untouched (no wiring changed, nothing renamed) -- see
+;; `supertag-git--do-migrate-layout'.
 
 (defun supertag-git--apply-data-directory-wiring (data-dir)
   "Point this session's persistence variables at DATA-DIR (a directory).
@@ -357,8 +385,42 @@ in that case (this matters for this file's own standalone batch tests)."
           (let ((supertag--config-guard-allow t))
             (setq org-supertag-active-sync-directory (car roots))))))))
 
+(defun supertag-git--capture-wiring ()
+  "Return a plist snapshotting this session's persistence wiring variables,
+so `supertag-git--restore-wiring' can put them back if a migration step
+fails AFTER `supertag-git--apply-data-directory-wiring' has already
+flipped them. Mirrors exactly the set of variables that function writes."
+  (list :data-directory (and (boundp 'supertag-data-directory) supertag-data-directory)
+        :db-file (and (boundp 'supertag-db-file) supertag-db-file)
+        :db-backup-directory (and (boundp 'supertag-db-backup-directory)
+                                  supertag-db-backup-directory)
+        :sync-state-file (and (boundp 'supertag-sync-state-file)
+                              supertag-sync-state-file)
+        :active-sync-directory (and (boundp 'org-supertag-active-sync-directory)
+                                    org-supertag-active-sync-directory)))
+
+(defun supertag-git--restore-wiring (snapshot)
+  "Restore persistence wiring variables from SNAPSHOT (as returned by
+`supertag-git--capture-wiring'), bypassing the config guard the same way
+`supertag-git--apply-data-directory-wiring' does -- this is the undo half
+of that function, used when a migration fails after the wiring was
+already flipped (see `supertag-git--do-migrate-layout')."
+  (let ((supertag--config-guard-allow t))
+    (when (boundp 'supertag-data-directory)
+      (setq supertag-data-directory (plist-get snapshot :data-directory)))
+    (when (boundp 'supertag-db-file)
+      (setq supertag-db-file (plist-get snapshot :db-file)))
+    (when (boundp 'supertag-db-backup-directory)
+      (setq supertag-db-backup-directory (plist-get snapshot :db-backup-directory)))
+    (when (boundp 'supertag-sync-state-file)
+      (setq supertag-sync-state-file (plist-get snapshot :sync-state-file)))
+    (when (boundp 'org-supertag-active-sync-directory)
+      (setq org-supertag-active-sync-directory (plist-get snapshot :active-sync-directory))))
+  (when (fboundp 'supertag-config-guard--capture)
+    (funcall #'supertag-config-guard--capture)))
+
 (defun supertag-git--do-migrate-layout (old-db-file root)
-  "Perform the copy/verify/wire/reload/tombstone sequence, migrating
+  "Perform the flush/write/verify/wire/reload/tombstone sequence, migrating
 OLD-DB-FILE into `<ROOT>/.supertag/supertag-db.el'.
 
 Only ever called by `supertag-git--migrate-layout' once ROOT has already
@@ -366,13 +428,18 @@ been confirmed to be the single configured sync root and NOT already an
 ancestor directory of OLD-DB-FILE. Returns a plist; see that function's
 docstring for the full set of possible `:status' values. Never signals --
 every failure mode (including one deliberately injected by a test, e.g. an
-unwritable target directory) is caught and reported as `:status :failed'
-plus a human-readable `:error' string, with the OLD file provably
-untouched (nothing renames it until after a successful reload)."
+unwritable target directory, an unsaveable dirty store, or a post-reload
+node-count mismatch) is caught and reported as `:status :failed' plus a
+human-readable `:error' string, with the OLD file provably untouched and
+this session's wiring provably restored whenever it had already been
+flipped (see this file's Commentary above this section for the full
+sequence)."
   (condition-case err
       (let* ((target-dir (expand-file-name ".supertag/" root))
              (target-db (expand-file-name "supertag-db.el" target-dir))
-             (old-exists (file-exists-p old-db-file)))
+             (old-exists (file-exists-p old-db-file))
+             (store-loaded-p (and (boundp 'supertag--store) (hash-table-p supertag--store)))
+             (pre-migration-node-count (and store-loaded-p (supertag--count-nodes))))
         (when (file-exists-p target-db)
           (error "migration target %s already exists -- resolve manually before retrying (are two migrations racing?)"
                  target-db))
@@ -388,46 +455,110 @@ untouched (nothing renames it until after a successful reload)."
               ;; Fresh vault: nothing on disk to copy/verify/tombstone yet --
               ;; just point the wiring at the new location so the rest of
               ;; `supertag-git-setup' (and the very next save) creates the
-              ;; database there directly.
+              ;; database there directly. Nothing destructive happens here
+              ;; (no old file to lose, no wiring to restore on failure).
               (progn
                 (supertag-git--apply-data-directory-wiring target-dir)
                 (list :status :migrated :old-db-file old-db-file :new-db-file target-db
                       :repo-root toplevel :tombstone nil :fresh-vault t))
-            (copy-file old-db-file target-db nil t)
-            ;; Verify the COPY (never the live in-memory store, which may
-            ;; have unsaved changes not yet reflected in OLD-DB-FILE either)
-            ;; is actually loadable BEFORE touching any wiring or the old
-            ;; file -- a `copy-file' that "succeeded" onto a filesystem that
-            ;; silently truncates, or a target that was already subtly
-            ;; corrupt, must not be trusted just because the syscall
-            ;; returned.
+            ;; Step 0: flush any unsaved in-memory changes to the OLD file
+            ;; first, via the normal save path -- then verify the flush
+            ;; actually cleared the dirty flag. A save can be silently
+            ;; skipped (guard violation, lock conflict, the protective
+            ;; empty-store skip, ...) without signaling anything, which is
+            ;; why this checks `supertag-dirty-p' again afterward instead of
+            ;; trusting `supertag-save-store' to have either raised or
+            ;; succeeded.
+            (when (supertag-dirty-p)
+              (when (fboundp 'supertag-save-store)
+                (funcall #'supertag-save-store old-db-file))
+              (when (supertag-dirty-p)
+                (error "refusing to migrate: the in-memory database has unsaved changes that could not be saved first (%s) -- resolve the issue (see M-x supertag-doctor), save manually, and retry"
+                       (let ((reasons (supertag--persistence-guard-violations old-db-file)))
+                         (if reasons
+                             (mapconcat #'identity reasons "; ")
+                           "save was skipped for an unlogged reason -- see *Messages* for the most recent \"Supertag\" message")))))
+            ;; Step 1: write the NEW file from the CURRENT in-memory store
+            ;; directly when one is loaded (never a `copy-file' of the OLD
+            ;; file, which even post-flush is one hop removed from "what is
+            ;; actually in memory") -- `copy-file' is the fallback ONLY for
+            ;; the no-store-loaded-yet case.
+            (if store-loaded-p
+                (supertag--persistence-write-store-atomically target-db)
+              (copy-file old-db-file target-db nil t))
+            ;; Step 2: verify the new file is actually loadable BEFORE
+            ;; touching any wiring or the old file -- a write/copy that
+            ;; "succeeded" onto a filesystem that silently truncates, or a
+            ;; target that was already subtly corrupt, must not be trusted
+            ;; just because the syscall returned.
             (let ((verify-error nil))
               (condition-case verr
                   (unless (hash-table-p (supertag--persistence--try-read-store target-db))
-                    (setq verify-error "migrated copy did not parse into a store hash table"))
+                    (setq verify-error "migrated database did not parse into a store hash table"))
                 (error (setq verify-error (error-message-string verr))))
               (when verify-error
                 (ignore-errors (delete-file target-db))
-                (error "migrated copy at %s failed verification: %s" target-db verify-error)))
-            ;; Verified loadable: only now flip the wiring and reload the
-            ;; live store from the new location (this also re-acquires the
-            ;; multi-instance lock and refreshes cross-machine presence for
-            ;; the new path, via `supertag-load-store' itself).
-            (supertag-git--apply-data-directory-wiring target-dir)
-            (when (fboundp 'supertag-load-store)
-              (funcall #'supertag-load-store))
-            ;; Only after a successful reload do we touch the OLD file at
-            ;; all -- renamed to a tombstone, NEVER deleted.
-            (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
-                   (tombstone (concat old-db-file ".migrated-" timestamp)))
-              (condition-case terr
-                  (rename-file old-db-file tombstone)
-                (error
-                 (message "supertag-git: migration to %s succeeded, but renaming the old database (%s) to a tombstone failed: %s -- the old file is harmlessly left in place (it is no longer read by anything)."
-                          target-db old-db-file (error-message-string terr))
-                 (setq tombstone nil)))
-              (list :status :migrated :old-db-file old-db-file :new-db-file target-db
-                    :repo-root toplevel :tombstone tombstone)))))
+                (error "migrated database at %s failed verification: %s" target-db verify-error)))
+            ;; Verified loadable: only now flip the wiring. Everything from
+            ;; here on is guarded by an `unwind-protect' that restores the
+            ;; wiring (and reloads the store from the OLD file) unless the
+            ;; whole sequence, including the tombstone rename, reaches
+            ;; `:committed'.
+            (let ((wiring-snapshot (supertag-git--capture-wiring))
+                  (committed nil))
+              (unwind-protect
+                  (progn
+                    (supertag-git--apply-data-directory-wiring target-dir)
+                    ;; Reload the live store from the new location (this
+                    ;; also re-acquires the multi-instance lock and
+                    ;; refreshes cross-machine presence for the new path,
+                    ;; via `supertag-load-store' itself).
+                    (when (fboundp 'supertag-load-store)
+                      (funcall #'supertag-load-store))
+                    ;; Step 3: the reload must report `:ok', and -- when a
+                    ;; store was already loaded pre-migration -- its node
+                    ;; count must match the pre-migration count captured
+                    ;; above. Either failing means the reload landed on
+                    ;; something other than what was actually migrated;
+                    ;; never tombstone the old file in that case.
+                    (let ((origin-status (and (boundp 'supertag--store-origin)
+                                              (plist-get supertag--store-origin :status)))
+                          (post-node-count (supertag--count-nodes)))
+                      (unless (eq origin-status :ok)
+                        (error "reload of the migrated database at %s reported status %s (expected :ok)"
+                               target-db origin-status))
+                      (when (and store-loaded-p
+                                 (numberp pre-migration-node-count)
+                                 (/= post-node-count pre-migration-node-count))
+                        (error "node count mismatch after migration reload: had %d node(s) before, %d after (%s) -- refusing to tombstone the old database"
+                               pre-migration-node-count post-node-count target-db)))
+                    ;; Step 4: only after a successful reload AND a matching
+                    ;; node count do we touch the OLD file at all -- renamed
+                    ;; to a tombstone, NEVER deleted.
+                    (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
+                           (tombstone (concat old-db-file ".migrated-" timestamp)))
+                      (condition-case terr
+                          (rename-file old-db-file tombstone)
+                        (error
+                         (message "supertag-git: migration to %s succeeded, but renaming the old database (%s) to a tombstone failed: %s -- the old file is harmlessly left in place (it is no longer read by anything)."
+                                  target-db old-db-file (error-message-string terr))
+                         (setq tombstone nil)))
+                      (setq committed t)
+                      (list :status :migrated :old-db-file old-db-file :new-db-file target-db
+                            :repo-root toplevel :tombstone tombstone)))
+                (unless committed
+                  ;; Something after the wiring flip failed: restore the
+                  ;; wiring to its pre-migration snapshot and reload the
+                  ;; store from the (now-restored) OLD file, so this
+                  ;; session's in-memory state matches its wiring again --
+                  ;; never left pointed at a new file it just gave up on
+                  ;; while `supertag-db-file' itself already says otherwise.
+                  ;; Also remove the unverified/unused target so a retry
+                  ;; does not trip the "target already exists" guard above.
+                  (supertag-git--restore-wiring wiring-snapshot)
+                  (when (fboundp 'supertag-load-store)
+                    (funcall #'supertag-load-store))
+                  (ignore-errors (delete-file target-db))))))))
     (error
      (list :status :failed :old-db-file old-db-file :repo-root root
            :error (error-message-string err)))))
@@ -978,6 +1109,93 @@ themselves failing, which is unusual and worth a message every time,
 unlike the expected/common fetch-push offline case)."
   (message "supertag-git-sync: %s failed: %s" op (string-trim (cdr result))))
 
+;;; --- Conflict detection (shared: commit-time refusal, doctor, post-merge) ---
+;;
+;; All of this is deliberately computed FRESH from git's own live state
+;; every time it is asked for, never trusted from a cached/session-local
+;; variable alone -- `supertag-git-sync--conflicted-org-files' below is
+;; still maintained as a cache (existing callers/`supertag-doctor' read
+;; it), but it is session-local Lisp state that vanishes on an Emacs
+;; restart while an unresolved conflicted repository on disk does not.
+;; `supertag-git-sync--fire-commit' (refusing to auto-commit) and
+;; `supertag-doctor' (reporting current status, including after a
+;; restart) both call `supertag-git-sync--unmerged-paths'/
+;; `supertag-git-sync--live-conflicted-org-files' directly instead of
+;; relying on whatever this session happens to remember.
+
+(defun supertag-git-sync--unmerged-paths (root)
+  "Return paths still marked unmerged (conflicted) in ROOT's index
+\(`git diff --name-only --diff-filter=U'). This works whether or not the
+overall `git merge' command itself reported success: a merge DRIVER can
+leave the database path cleanly, automatically resolved (and hence absent
+from this list, even with `:sync-conflicts' recorded inside it -- see
+supertag-merge.el) while some OTHER path in the SAME merge -- typically
+plain `.org' prose, which has no merge driver -- is left with literal
+conflict markers, an unmerged index entry, and a non-zero overall `git
+merge' exit code. `ORIG_HEAD..HEAD' is deliberately NOT used here (unlike
+an earlier version of this function): a merge left mid-conflict never
+advances HEAD at all, so that diff would see nothing.
+
+Also exactly the check `supertag-git-sync--fire-commit' uses BEFORE ever
+staging anything: an unresolved conflict from a merge that happened in a
+PREVIOUS Emacs session (or outside Emacs entirely, e.g. `git pull` on the
+command line) leaves the same unmerged index entries, and must block
+auto-commit exactly the same way."
+  (let ((result (supertag-git--run root "diff" "--name-only" "--diff-filter=U")))
+    (when (supertag-git--ok-p result)
+      (split-string (cdr result) "\n" t))))
+
+(defun supertag-git-sync--file-has-conflict-markers-p (file)
+  "Return non-nil if FILE contains literal, unresolved git conflict
+markers. Reuses `supertag--persistence--buffer-has-conflict-markers-p'
+\(already proven correct for the DB loader's own guard -- see
+supertag-core-persistence.el) rather than re-implementing the same
+three-line-prefix scan; that function only looks at buffer text, so it
+works identically for an org file as for the database file."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (supertag--persistence--buffer-has-conflict-markers-p)))
+
+(defun supertag-git-sync--live-conflicted-org-files (root)
+  "Return `.org' files under ROOT that are BOTH still unmerged (per
+`supertag-git-sync--unmerged-paths') AND actually contain literal conflict
+markers, computed FRESH from git's current on-disk state every time this
+is called -- callable at any time (right after a merge, from
+`supertag-git-sync--fire-commit', or from `supertag-doctor' in a session
+that never even turned `supertag-git-sync-mode' on), unlike the
+session-local `supertag-git-sync--conflicted-org-files' cache, which only
+ever gets written by `supertag-git-sync--after-merge' and is simply gone
+after an Emacs restart regardless of what is actually on disk."
+  (let (conflicted)
+    (dolist (rel (supertag-git-sync--unmerged-paths root))
+      (when (string-match-p "\\.org\\'" rel)
+        (let ((abs (expand-file-name rel root)))
+          (when (and (file-exists-p abs)
+                     (supertag-git-sync--file-has-conflict-markers-p abs))
+            (push abs conflicted)))))
+    (nreverse conflicted)))
+
+(defvar supertag-git-sync--conflict-commit-warned nil
+  "Non-nil once `supertag-git-sync--fire-commit' has already reported a
+refusal to auto-commit for the CURRENT unresolved-conflict episode (either
+an unmerged path found before staging, or a literal conflict marker found
+in staged content after it). Reset to nil once no unmerged paths remain,
+so the refusal is reported once per episode, not once per debounce retry
+-- the same one-message-per-state-change pattern as
+`supertag-git-sync--offline-warned'.")
+
+(defun supertag-git-sync--note-commit-refused (reason)
+  "Report REASON (a human-readable string) for refusing to auto-commit,
+exactly once per unresolved-conflict episode."
+  (unless supertag-git-sync--conflict-commit-warned
+    (setq supertag-git-sync--conflict-commit-warned t)
+    (message "supertag-git-sync: refusing to auto-commit -- %s" reason)))
+
+(defun supertag-git-sync--clear-commit-conflict-warning ()
+  "Clear the one-shot refusal warning once the conflict episode is over."
+  (when supertag-git-sync--conflict-commit-warned
+    (setq supertag-git-sync--conflict-commit-warned nil)))
+
 ;;; --- Commit (debounced) ---
 
 (defun supertag-git-sync--schedule-commit ()
@@ -992,40 +1210,148 @@ the first -- per the plan's \"debounce 30s\"."
           (run-with-timer supertag-git-sync-commit-debounce nil
                            #'supertag-git-sync--fire-commit))))
 
+(defun supertag-git-sync--staged-conflict-markers-p (root)
+  "Return non-nil if the content just staged in ROOT's index
+\(`git diff --cached') introduces literal git conflict markers. A
+belt-and-suspenders check run AFTER staging, in case something slipped
+past the pre-stage `supertag-git-sync--unmerged-paths' guard in
+`supertag-git-sync--fire-commit' (e.g. conflict-marker-shaped text
+introduced some other way, not by an actual in-progress git merge). Only
+lines the diff ADDS (a leading `+') count, so a marker that already existed
+in a previous commit's context lines is not a false positive."
+  (let ((result (supertag-git--run root "diff" "--cached")))
+    (and (supertag-git--ok-p result)
+         (string-match-p "^\\+<<<<<<< \\|^\\+=======$\\|^\\+>>>>>>> "
+                         (cdr result)))))
+
+(defun supertag-git-sync--pathspec-matches-p (root pathspec)
+  "Return non-nil if PATHSPEC matches at least one path git already knows
+about in ROOT (tracked, modified, deleted, or untracked-but-not-ignored).
+
+This exists purely to work around a real `git add' behavior (verified
+against a real git binary, not assumed): `git add -A -- PATHSPEC' FATALLY
+errors with a \"did not match any files\" message -- staging NOTHING, not
+even the other pathspecs in the same invocation -- when
+PATHSPEC (literal or `*.org'-style glob) matches nothing at all on disk,
+even under `-A'. A brand-new vault with no `.org' files yet, or one whose
+`.gitignore' has not been written yet, are both real cases this guards
+against, not merely defensive: see `supertag-git-sync--commit-pathspecs',
+which uses this to filter its candidate list down to only what actually
+exists before ever invoking `git add'."
+  (let ((result (supertag-git--run root "ls-files" "--cached" "--others"
+                                    "--deleted" "--exclude-standard" "--"
+                                    pathspec)))
+    (and (supertag-git--ok-p result) (> (length (cdr result)) 0))))
+
+(defun supertag-git-sync--commit-pathspecs (root)
+  "Return the git pathspecs `supertag-git-sync--fire-commit' stages via
+`git add -A --', filtered down to only those that currently match
+something (see `supertag-git-sync--pathspec-matches-p' for why that
+filtering is required, not optional).
+
+Deliberately narrow -- replacing an earlier, unconditional `git add -A'
+-- per this mode's docstring: only `.org' files under ROOT (recursively,
+via git's own unanchored `*.org' pathspec matching -- this is passed
+straight to `call-process'/`make-process', never a shell, so the glob is
+never shell-expanded and DOES match recursively), `supertag-db-file'
+itself, and the two `supertag-git-setup'-managed config files
+\(`.gitattributes' at ROOT, `.gitignore' next to the database -- see
+`supertag-git--configure-clone') are ever staged. Any OTHER untracked file
+inside the vault -- credentials, attachments, IDE/OS junk, ... -- is
+deliberately left alone and NEVER swept into an automatic commit.
+
+Both ROOT and every file path below are resolved through `file-truename'
+before computing a relative pathspec -- ROOT here is typically
+`supertag-git-sync--vault-root', which came from `supertag-git-check' /
+`supertag-git--repo-toplevel', itself ALWAYS a truename (see
+`supertag-git--truename-dir'). Without matching that on the file side
+too, a `supertag-db-file' that is lexically equal but not
+truename-identical to ROOT (e.g. one side under a symlinked `/tmp' or
+`/var' on macOS, the other resolved through it) produces a bogus,
+repository-escaping `../../...' relative pathspec that git rejects
+outright -- silently dropping the database from every auto-commit."
+  (let* ((true-root (supertag-git--truename-dir root))
+         (db-file (file-truename (expand-file-name supertag-db-file)))
+         (db-dir (file-name-directory db-file))
+         (candidates
+          (delete-dups
+           (list "*.org"
+                 (file-relative-name db-file true-root)
+                 (file-relative-name (file-truename (expand-file-name ".gitattributes" root))
+                                     true-root)
+                 (file-relative-name (file-truename (expand-file-name ".gitignore" db-dir))
+                                     true-root)))))
+    (cl-remove-if-not (lambda (p) (supertag-git-sync--pathspec-matches-p root p))
+                       candidates)))
+
 (defun supertag-git-sync--fire-commit ()
-  "The debounce timer function: `git add -A' then commit ONLY if
-something is actually staged (`git diff --cached --quiet' guard -- never
-an empty commit), then push. Batch tests call this directly (never wait
-for the real timer), per this task's instructions. A no-op when no vault
-is active or another git op is already in flight (the next timer tick
-will catch up, per this section's Commentary on serialization)."
+  "The debounce timer function: scoped `git add -A --' (never a bare,
+unconditional `git add -A' -- see `supertag-git-sync--commit-pathspecs')
+then commit ONLY if something is actually staged (`git diff --cached
+--quiet' guard -- never an empty commit), then push. Batch tests call
+this directly (never wait for the real timer), per this task's
+instructions. A no-op when no vault is active or another git op is
+already in flight (the next timer tick will catch up, per this section's
+Commentary on serialization).
+
+Refuses to stage or commit ANYTHING, entirely, when ROOT's index still
+has unresolved conflicted (unmerged) paths from a previous merge --
+whether that merge happened in this session, an earlier Emacs session, or
+outside Emacs entirely (e.g. a manual `git pull'); staging over that with
+`git add' would mark the conflict resolved and commit literal `<<<<<<<'
+markers into history. As a second, belt-and-suspenders check AFTER
+staging (in case something conflict-marker-shaped slipped past the first
+one), the newly staged content itself is scanned for literal conflict
+markers and, if found, unstaged (`git reset') rather than committed. Both
+refusals are reported at most once per episode (see
+`supertag-git-sync--note-commit-refused')."
   (setq supertag-git-sync--commit-timer nil)
   (when (and supertag-git-sync--vault-root (not supertag-git-sync--in-flight))
-    (setq supertag-git-sync--in-flight t)
-    (let ((root supertag-git-sync--vault-root))
-      (supertag-git-sync--run-git
-       root (list "add" "-A")
-       (lambda (add-result)
-         (if (not (supertag-git--ok-p add-result))
-             (progn (setq supertag-git-sync--in-flight nil)
-                    (supertag-git-sync--report-failure "git add -A" add-result))
-           (supertag-git-sync--run-git
-            root (list "diff" "--cached" "--quiet")
-            (lambda (diff-result)
-              (if (supertag-git--ok-p diff-result)
-                  ;; Exit 0 = nothing staged -- nothing to commit.
-                  (setq supertag-git-sync--in-flight nil)
-                (let ((commit-message
-                       (format "supertag-sync: %s %s" (system-name)
-                               (format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
-                  (supertag-git-sync--run-git
-                   root (list "commit" "-q" "-m" commit-message)
-                   (lambda (commit-result)
-                     (if (not (supertag-git--ok-p commit-result))
-                         (progn (setq supertag-git-sync--in-flight nil)
-                                (supertag-git-sync--report-failure "git commit" commit-result))
-                       (cl-incf supertag-git-sync--pending-push-count)
-                       (supertag-git-sync--push root))))))))))))))
+    (let* ((root supertag-git-sync--vault-root)
+           (unmerged (supertag-git-sync--unmerged-paths root)))
+      (if unmerged
+          (supertag-git-sync--note-commit-refused
+           (format "%d path(s) still unresolved from a merge conflict: %s. Resolve manually (magit / `git checkout --merge'), then the next debounce cycle will commit normally."
+                   (length unmerged) (mapconcat #'identity unmerged ", ")))
+        (supertag-git-sync--clear-commit-conflict-warning)
+        (setq supertag-git-sync--in-flight t)
+        (let ((pathspecs (supertag-git-sync--commit-pathspecs root)))
+          (if (not pathspecs)
+              ;; Nothing this mode is willing to stage currently exists on
+              ;; disk (e.g. a brand-new vault with no `.org' files yet) --
+              ;; nothing to commit, exactly like the "nothing staged" case
+              ;; below.
+              (setq supertag-git-sync--in-flight nil)
+            (supertag-git-sync--run-git
+             root (append (list "add" "-A" "--") pathspecs)
+             (lambda (add-result)
+               (if (not (supertag-git--ok-p add-result))
+                   (progn (setq supertag-git-sync--in-flight nil)
+                          (supertag-git-sync--report-failure "git add -A" add-result))
+                 (supertag-git-sync--run-git
+                  root (list "diff" "--cached" "--quiet")
+                  (lambda (diff-result)
+                    (cond
+                     ((supertag-git--ok-p diff-result)
+                      ;; Exit 0 = nothing staged -- nothing to commit.
+                      (setq supertag-git-sync--in-flight nil))
+                     ((supertag-git-sync--staged-conflict-markers-p root)
+                      (supertag-git--run root "reset")
+                      (supertag-git-sync--note-commit-refused
+                       "staged content still contains literal git conflict markers (<<<<<<< / ======= / >>>>>>>) -- unstaged; resolve manually, then the next debounce cycle will retry.")
+                      (setq supertag-git-sync--in-flight nil))
+                     (t
+                      (let ((commit-message
+                             (format "supertag-sync: %s %s" (system-name)
+                                     (format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
+                        (supertag-git-sync--run-git
+                         root (list "commit" "-q" "-m" commit-message)
+                         (lambda (commit-result)
+                           (if (not (supertag-git--ok-p commit-result))
+                               (progn (setq supertag-git-sync--in-flight nil)
+                                      (supertag-git-sync--report-failure "git commit" commit-result))
+                             (cl-incf supertag-git-sync--pending-push-count)
+                             (supertag-git-sync--push root))))))))))))))))))
 
 ;;; --- Push, with one fetch/merge/retry on rejection ---
 
@@ -1124,33 +1450,6 @@ another git op is already in flight."
 
 ;;; --- Post-merge handling: DB reload + org text-conflict guard ---
 
-(defun supertag-git-sync--unmerged-paths (root)
-  "Return paths still marked unmerged (conflicted) in ROOT's index
-\(`git diff --name-only --diff-filter=U'). This works whether or not the
-overall `git merge' command itself reported success: a merge DRIVER can
-leave the database path cleanly, automatically resolved (and hence absent
-from this list, even with `:sync-conflicts' recorded inside it -- see
-supertag-merge.el) while some OTHER path in the SAME merge -- typically
-plain `.org' prose, which has no merge driver -- is left with literal
-conflict markers, an unmerged index entry, and a non-zero overall `git
-merge' exit code. `ORIG_HEAD..HEAD' is deliberately NOT used here (unlike
-an earlier version of this function): a merge left mid-conflict never
-advances HEAD at all, so that diff would see nothing."
-  (let ((result (supertag-git--run root "diff" "--name-only" "--diff-filter=U")))
-    (when (supertag-git--ok-p result)
-      (split-string (cdr result) "\n" t))))
-
-(defun supertag-git-sync--file-has-conflict-markers-p (file)
-  "Return non-nil if FILE contains literal, unresolved git conflict
-markers. Reuses `supertag--persistence--buffer-has-conflict-markers-p'
-\(already proven correct for the DB loader's own guard -- see
-supertag-core-persistence.el) rather than re-implementing the same
-three-line-prefix scan; that function only looks at buffer text, so it
-works identically for an org file as for the database file."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (supertag--persistence--buffer-has-conflict-markers-p)))
-
 (defun supertag-git-sync--after-merge (merge-result root)
   "Common post-merge handling for both the periodic/focus pull path and
 the push-reject retry path. Runs regardless of MERGE-RESULT's exit code
@@ -1166,12 +1465,12 @@ scenario it exists for.
   text-merge) resolves it automatically even when other paths in the same
   merge are left conflicted. A harmless no-op reload when the database
   did not actually change.
-- For any still-unmerged `.org' path that contains literal conflict
-  markers: record it in `supertag-git-sync--conflicted-org-files' (so the
-  advice below refuses to let the sync scanner import it) instead of ever
-  importing a conflict-marked file, then nudge the scanner
-  (`supertag-sync-check-now', if available) to pick up whatever else DID
-  merge cleanly."
+- Recompute `supertag-git-sync--conflicted-org-files' fresh via
+  `supertag-git-sync--live-conflicted-org-files' (so the advice below
+  refuses to let the sync scanner import any still-conflicted file)
+  instead of ever importing a conflict-marked file, then nudge the
+  scanner (`supertag-sync-check-now', if available) to pick up whatever
+  else DID merge cleanly."
   (ignore merge-result)
   (let* ((unmerged (supertag-git-sync--unmerged-paths root))
          (db-rel (ignore-errors (file-relative-name (expand-file-name supertag-db-file) root))))
@@ -1187,22 +1486,16 @@ scenario it exists for.
           (funcall #'supertag-load-store)
         (error (message "supertag-git-sync: store reload after merge failed: %s"
                         (error-message-string err)))))
-    (let (conflicted)
-      (dolist (rel unmerged)
-        (when (string-match-p "\\.org\\'" rel)
-          (let ((abs (expand-file-name rel root)))
-            (when (and (file-exists-p abs)
-                       (supertag-git-sync--file-has-conflict-markers-p abs))
-              (push abs conflicted)))))
-      (setq supertag-git-sync--conflicted-org-files conflicted)
-      ;; Same reasoning: the sync scanner is a convenience nudge, not
-      ;; load-bearing (the existing auto-sync timer will pick up whatever
-      ;; this fails to) -- it must never be able to abort this function.
-      (when (fboundp 'supertag-sync-check-now)
-        (condition-case err
-            (funcall #'supertag-sync-check-now)
-          (error (message "supertag-git-sync: sync-scanner nudge failed (next cycle will catch up): %s"
-                          (error-message-string err))))))))
+    (setq supertag-git-sync--conflicted-org-files
+          (supertag-git-sync--live-conflicted-org-files root))
+    ;; Same reasoning: the sync scanner is a convenience nudge, not
+    ;; load-bearing (the existing auto-sync timer will pick up whatever
+    ;; this fails to) -- it must never be able to abort this function.
+    (when (fboundp 'supertag-sync-check-now)
+      (condition-case err
+          (funcall #'supertag-sync-check-now)
+        (error (message "supertag-git-sync: sync-scanner nudge failed (next cycle will catch up): %s"
+                        (error-message-string err)))))))
 
 (defun supertag-git-sync--skip-conflicted-file-advice (orig-fn file &rest args)
   "`:around' advice for `supertag-sync--process-single-file', added only
@@ -1261,6 +1554,7 @@ acceptably (see supertag-git.el's top-level Commentary)."
       (setq supertag-git-sync--vault-root (plist-get status :repo-root))
       (setq supertag-git-sync--pending-push-count 0)
       (setq supertag-git-sync--offline-warned nil)
+      (setq supertag-git-sync--conflict-commit-warned nil)
       (setq supertag-git-sync--conflicted-org-files nil)
       (add-hook 'supertag-persistence-after-save-hook #'supertag-git-sync--on-db-saved)
       (add-hook 'after-save-hook #'supertag-git-sync--on-file-saved)
@@ -1305,8 +1599,17 @@ degradation).
 While enabled:
 - Saving the database (`supertag-save-store' succeeding) or any file
   inside the vault schedules a debounced (`supertag-git-sync-commit-debounce'
-  seconds) `git add -A' + commit (skipped when nothing is actually
-  staged), followed by a push.
+  seconds) scoped `git add -A --' + commit (skipped when nothing is
+  actually staged), followed by a push. Staging is deliberately narrow --
+  ONLY `.org' files, `supertag-db-file' itself, and `.gitattributes'/
+  `.gitignore' (see `supertag-git-sync--commit-pathspecs') -- so any OTHER
+  untracked file inside the vault (credentials, attachments, IDE/OS junk,
+  ...) is never swept into an automatic commit. The commit is refused
+  entirely, with a one-shot warning, whenever the repository still has
+  unresolved conflicted paths from a merge (in this session, an earlier
+  one, or outside Emacs) -- staging over that would mark the conflict
+  resolved and commit literal `<<<<<<<' markers into history; see
+  `supertag-git-sync--fire-commit'.
 - Every `supertag-git-sync-pull-interval' seconds, and at most once every
   `supertag-git-sync-focus-pull-min-interval' seconds on regaining focus,
   this fetches and merges (never rebases) if behind.
@@ -1314,7 +1617,9 @@ While enabled:
   network-looking failure degrades silently to local-only commits, with
   the pending count shown in the lighter.
 - Org files left with unresolved merge conflict markers are never
-  imported by the sync scanner; see M-x supertag-doctor.
+  imported by the sync scanner; see M-x supertag-doctor, which derives
+  this status FRESH from git every time it is run (survives an Emacs
+  restart), not merely from this session's cache.
 
 Disabling cancels all timers (flushing any pending debounced commit
 first), removes all hooks/advice, and clears vault state."
