@@ -1,5 +1,28 @@
 * Changelog
 * [Unreleased]
+** Bug fixes
+- Fixed =Symbol's value as variable is void: --cl-block-...--= errors
+  (seen from the async sync worker when destructive sync is disallowed):
+  eight functions used =cl-return-from= inside a plain =defun=, which
+  lacks the implicit =cl-block= — now =cl-defun=. Affected:
+  =supertag-sync--verify-file-nodes=, =supertag-sync--check-and-sync-legacy=,
+  =supertag-sync--check-and-sync-guarded=, =supertag-sync-full-rescan=,
+  =supertag-field-rename=, =supertag-field-remove=,
+  =supertag-schema--cleanup-inherited-field-associations=, and the
+  =restore-heading-ids= script. A new repo-wide regression test
+  (=test/cl-block-regression-test.el=, wired into =test/run-tests.sh=)
+  locks the pattern down.
+- Fixed deleted-file cleanup being permanently lost when destructive
+  sync is disallowed: both =supertag-sync--check-and-sync-legacy= and
+  =...-guarded= removed the file from sync state before the (guarded)
+  orphan check ran, so its nodes were stranded with no retry. The
+  state entry is now kept until destructive cleanup is allowed, and
+  =supertag-sync--process-single-file= no longer persists the new
+  content hash while node deletions are deferred, so the retry also
+  survives an Emacs restart.
+- Fixed =test/aggregate-test.el= being unloadable: a stray paren
+  closed =test-aggregate-column-all-functions= early, leaving
+  unbalanced top-level forms (caught by the new lint test).
 
 * [5.9.0] - 2026-07-12
 ** Data safety (highlights)
