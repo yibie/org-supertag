@@ -894,6 +894,27 @@ scalar keys (e.g. :version) merged in directly."
            (looking-at-p ";"))
     (forward-line 1)))
 
+(define-error 'supertag-persistence-conflict-markers-error
+  "Supertag: file contains unresolved git merge conflict markers")
+
+(defun supertag--persistence--buffer-has-conflict-markers-p ()
+  "Return non-nil if the current buffer contains unresolved git conflict markers.
+Looks for a line beginning with any of the three literal git conflict
+marker prefixes (`<<<<<<<', `=======', `>>>>>>>') -- the shape git itself
+leaves behind in a file when a merge (or the S2-format degradation path:
+git's own default line-oriented text merge, run because no semantic merge
+driver was configured for this clone -- see `supertag-git-check' and the
+Commentary in supertag-git.el) collides on the very same line/entity.
+Checked BEFORE any attempt to `read' the buffer as Lisp, since a
+conflict-marked file is not valid Lisp in either on-disk format and would
+otherwise merely surface as an opaque `read' error indistinguishable from
+any other corruption."
+  (save-excursion
+    (goto-char (point-min))
+    (or (re-search-forward "^<<<<<<< " nil t)
+        (progn (goto-char (point-min)) (re-search-forward "^=======$" nil t))
+        (progn (goto-char (point-min)) (re-search-forward "^>>>>>>> " nil t)))))
+
 (defun supertag--persistence--try-read-store (path)
   "Return store data read from PATH.
 
@@ -906,9 +927,27 @@ single-sexp read. This build reads either format with zero migration
 step required: old on-disk databases keep loading exactly as before, and
 the very next save always writes canonical format from then on.
 
+Before attempting either read, refuses PATH outright (signaling
+`supertag-persistence-conflict-markers-error', a distinguishable
+condition rather than a bare `error') if it contains unresolved git merge
+conflict markers -- see
+`supertag--persistence--buffer-has-conflict-markers-p'. This is
+deliberately checked ahead of parsing rather than left to surface as a
+generic `read' failure, so the message can name the actual fix
+(`supertag-git-setup' / `git checkout --merge') instead of an opaque
+\"end of file during parsing\". Callers (`supertag-load-store') treat this
+exactly like any other unreadable candidate -- pushed onto that
+function's per-candidate failures list, never silently swallowed into an
+apparently-successful empty read -- see that function's commentary for
+why this specific failure mode cannot lead to a destructive save later.
+
 Signals an error if the file cannot be read or parsed."
   (with-temp-buffer
     (insert-file-contents path)
+    (when (supertag--persistence--buffer-has-conflict-markers-p)
+      (signal 'supertag-persistence-conflict-markers-error
+              (list (format "%s contains unresolved git merge conflict markers (<<<<<<< / ======= / >>>>>>>) and cannot be loaded as a database. This almost always means a merge ran without the semantic merge driver configured for THIS clone -- run `M-x supertag-git-setup' to configure it (see supertag-git.el), then resolve this file with `git checkout --merge %s' (re-triggering the driver) or by hand, before reloading."
+                            (abbreviate-file-name path) path))))
     (supertag--persistence--skip-leading-comments-and-whitespace)
     (if (eq (char-after) ?\()
         (supertag--persistence--read-canonical-forms)
@@ -1429,13 +1468,46 @@ FILE is the optional file path. Defaults to supertag-db-file."
           (supertag--presence-check-and-claim)
           (supertag--maybe-auto-migrate))
       (setq supertag--store (ht-create))
-      (setq load-status :new)
+      (setq failures (nreverse failures))
+      ;; `failures' is only ever non-nil here when at least one candidate
+      ;; FILE EXISTED and failed to parse (the dolist above only attempts a
+      ;; read, and thus only ever pushes onto `failures', when
+      ;; `file-exists-p' held -- see the loop's `when' guard above) -- as
+      ;; opposed to the genuinely-fresh-vault case where no candidate file
+      ;; exists at all. That distinction matters: a parse failure (in
+      ;; particular the git-conflict-markers case detected by
+      ;; `supertag--persistence--try-read-store') must never be reported or
+      ;; recorded the same way as an intentionally-new, empty vault, because
+      ;; `supertag--persistence-guard-violations' -- consulted by every
+      ;; subsequent `supertag-save-store' call, interactive or timer-driven
+      ;; -- already refuses to save whenever the recorded origin `:status'
+      ;; is `:failed' (that check has existed since this function's
+      ;; :status-plist convention was introduced, but nothing previously
+      ;; ever actually produced `:failed'). Recording `:failed' here means
+      ;; that even after the user later creates brand-new nodes in this
+      ;; now-"empty" in-memory store (which would otherwise defeat the
+      ;; separate byte-size-based "Protective skip" guard in
+      ;; `supertag-save-store', since that guard only fires when the live
+      ;; node count is still exactly 0), any save is blocked at the
+      ;; `supertag--persistence-guard-violations' check -- run BEFORE that
+      ;; node-count guard is ever reached -- until the user goes through
+      ;; the proper recovery flow this module's `supertag--persistence-refuse-save'
+      ;; message already points at. The on-disk file (still containing the
+      ;; real, conflict-marked or otherwise corrupt data) is therefore never
+      ;; at risk of being silently overwritten by this fresh empty store.
+      (setq load-status (if failures :failed :new))
       (supertag-clear-dirty)
       (supertag--record-store-origin load-status (list :loaded-from nil
                                                        :load-candidates candidates
-                                                       :load-failures (nreverse failures)))
-      (message "Initialized empty Org-Supertag store (no readable DB found; candidates=%S)."
-               (mapcar #'abbreviate-file-name candidates)))
+                                                       :load-failures failures))
+      (if failures
+          (message "Supertag: FAILED to load the database -- %d candidate(s) existed but could not be parsed (%s). Initialized an EMPTY in-memory store as a placeholder; saving is BLOCKED (see M-x supertag-doctor / M-x supertag-git-setup) until this is resolved and the store is reloaded -- your on-disk data has NOT been modified. candidates=%S"
+                   (length failures)
+                   (mapconcat (lambda (f) (format "%s: %s" (abbreviate-file-name (car f)) (cdr f)))
+                              failures "; ")
+                   (mapcar #'abbreviate-file-name candidates))
+        (message "Initialized empty Org-Supertag store (no readable DB found; candidates=%S)."
+                 (mapcar #'abbreviate-file-name candidates))))
         ;; Rebuild global field caches if the feature is loaded and enabled.
         (when (fboundp 'supertag--maybe-rebuild-global-field-caches)
           (supertag--maybe-rebuild-global-field-caches))))

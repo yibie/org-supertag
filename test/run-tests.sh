@@ -39,6 +39,7 @@ TEST_FILES=(
     "test/query-library-test.el"
     "test/transaction-test.el"
     "test/merge-test.el"
+    "test/git-integration-test.el"
 )
 
 # Allow filtering by keyword
@@ -59,8 +60,9 @@ if [ $# -gt 0 ]; then
             query)     FILTER="$FILTER test/query-block-test.el test/query-library-test.el" ;;
             tx)        FILTER="$FILTER test/transaction-test.el" ;;
             merge)     FILTER="$FILTER test/merge-test.el" ;;
+            git)       FILTER="$FILTER test/git-integration-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query tx merge all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query tx merge git all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

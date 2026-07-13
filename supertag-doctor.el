@@ -31,6 +31,12 @@
 ;; minimal dependency footprint; guarded with `fboundp' at call time.
 (declare-function supertag-sync-cleanup-database "supertag-services-sync")
 
+;; Git-sync diagnostic. `supertag-git.el' is intentionally not part of this
+;; file's require chain either (same reasoning as the sync layer above --
+;; keep `supertag-doctor' cheap to load even when git sync was never set
+;; up); guarded with `fboundp' at call time, same as every other section.
+(declare-function supertag-git-check "supertag-git")
+
 (defgroup supertag-doctor nil
   "Health check and repair tools for Org-Supertag."
   :group 'org-supertag)
@@ -249,6 +255,48 @@ own / foreign-active / foreign-stale / unavailable."
              (t
               (format "foreign, stale (%s, %ds ago)" host age)))))))))))
 
+(defun supertag-doctor--section-git-sync ()
+  "Insert the \"Git Sync\" section into the current buffer.
+Reports this clone's `supertag-git-check' plist (see supertag-git.el):
+whether the database lives inside a git worktree, whether THIS clone's
+`.git/config' has the semantic merge driver configured (the single
+easiest step to forget -- it is per-clone and never travels with the
+repository), `.gitattributes'/tracked/remote status, and the V1
+single-sync-root limitation."
+  (supertag-doctor--insert-header "8. Git Sync")
+  (if (not (fboundp 'supertag-git-check))
+      (insert (supertag-doctor--na) " (supertag-git.el not loaded)\n")
+    (let* ((status (supertag-git-check))
+           (in-repo (plist-get status :in-repo-p)))
+      (insert (format "In a git repository: %s\n" (if in-repo "yes" "no")))
+      (if (not in-repo)
+          (progn
+            (insert "  Hint: run `M-x supertag-git-setup' to initialize/configure git sync for this vault.\n")
+            (when (plist-get status :multiple-sync-roots-p)
+              (insert "  NOTE: multiple `org-supertag-sync-directories' roots are configured -- git sync (V1) only supports a single-root vault; `supertag-git-setup' will refuse until this is consolidated.\n")))
+        (progn
+          (insert (format "  Repo root: %s\n" (plist-get status :repo-root)))
+          (insert (format "  DB path relative to repo root: %s\n" (plist-get status :relative-path)))
+          (insert (format "  Merge driver configured (THIS CLONE): %s%s\n"
+                          (if (plist-get status :driver-configured-p) "yes" "NO")
+                          (if (plist-get status :driver-configured-p)
+                              ""
+                            " -- run `M-x supertag-git-setup' on THIS machine; `.git/config' is never synced by git, so every clone/machine needs this done separately")))
+          (insert (format "  .gitattributes entry present: %s%s\n"
+                          (if (plist-get status :gitattributes-entry-present-p) "yes" "no")
+                          (if (plist-get status :gitattributes-entry-present-p)
+                              ""
+                            " -- run `M-x supertag-git-setup'")))
+          (insert (format "  Database tracked by git: %s\n"
+                          (if (plist-get status :db-tracked-p) "yes" "no (commit it once it exists)")))
+          (insert (format "  Remote configured: %s\n"
+                          (if (plist-get status :remote-configured-p) "yes" "no")))
+          (when (plist-get status :multiple-sync-roots-p)
+            (insert "  WARNING: multiple `org-supertag-sync-directories' roots are configured -- git sync (V1) only supports a single-root vault; consolidate before relying on this.\n"))
+          (when (and (plist-get status :driver-configured-p)
+                     (plist-get status :gitattributes-entry-present-p))
+            (insert "  Degradation note: even if the driver were misconfigured on another clone, git's default line merge still converges disjoint-entity edits; only a same-entity edit produces conflict markers, which the persistence loader refuses to load (see M-x supertag-doctor section \"2. Guards\" / *Messages*) rather than silently treating as an empty database.\n")))))))
+
 (defun supertag-doctor--build-report ()
   "Erase the current buffer and insert the full doctor report."
   (erase-buffer)
@@ -262,6 +310,7 @@ own / foreign-active / foreign-stale / unavailable."
   (supertag-doctor--section-integrity)
   (supertag-doctor--section-backups)
   (supertag-doctor--section-presence)
+  (supertag-doctor--section-git-sync)
   (insert "\n"))
 
 ;;; --- Repairs ---
