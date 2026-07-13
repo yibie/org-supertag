@@ -34,6 +34,7 @@ TEST_FILES=(
     "test/virtual-column-test.el"
     "test/test-field-node-reference.el"
     "test/persistence-hardening-test.el"
+    "test/canonical-serialization-test.el"
     "test/query-block-test.el"
     "test/query-library-test.el"
 )
@@ -52,9 +53,10 @@ if [ $# -gt 0 ]; then
             vc|virtual) FILTER="$FILTER test/virtual-column-test.el" ;;
             field-ref) FILTER="$FILTER test/test-field-node-reference.el" ;;
             persist)   FILTER="$FILTER test/supertag-persistence-test.el test/persistence-hardening-test.el" ;;
+            canon)     FILTER="$FILTER test/canonical-serialization-test.el" ;;
             query)     FILTER="$FILTER test/query-block-test.el test/query-library-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist query all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

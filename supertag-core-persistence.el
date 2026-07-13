@@ -536,15 +536,385 @@ or files with a `.db` extension that still contain an Emacs-lisp printed store."
     (let ((supertag--config-guard-allow t))
       (setq supertag-db-file path))))
 
+;;; --- S2: Canonical, deterministic, line-per-entity serialization ---
+;;
+;; Design goal (see .phrase/phases/phase-git-sync-20260713/PLAN.md "S2 规范化
+;; 序列化"): same logical store content must produce byte-identical output on
+;; any machine, and a single-field change on one entity must show up as a
+;; single-line `git diff'. This is a hard prerequisite for S3's git merge
+;; driver, which parses this exact line format.
+;;
+;; FORMAT (frozen once tests pass — S3 depends on it):
+;;
+;;   ;; -*- mode: lisp-data; coding: utf-8-unix -*-
+;;   ;; supertag-db canonical format 1
+;;   (:version "5.0.0")                              <- root scalars, one line
+;;   (:collection :nodes :id "node-a" :data (...))    <- one line per entity
+;;   (:collection :nodes :id "node-b" :data (...))
+;;   (:collection :tags :id "tag-x" :data (...))
+;;
+;; - Root keys of the store are split into "collections" (hash-table valued
+;;   — printed one entity per line, collections ordered alphabetically by
+;;   keyword name, entities within a collection ordered by `string<' of their
+;;   id's string form) and "scalars" (everything else, e.g. :version —
+;;   merged into a single sorted plist line).
+;; - Every plist appearing inside entity :data is printed with its keys
+;;   sorted alphabetically, RECURSIVELY into nested plists. Ordinary
+;;   (non-plist) lists are walked but never reordered — only their elements
+;;   are recursively canonicalized, preserving original element order.
+;; - PRE-CHECK FINDING (hash tables nested in entity data): the store is NOT
+;;   uniformly plists-all-the-way-down. `supertag-store-get-collection
+;;   :fields' (legacy three-level node -> tag -> field nesting, see
+;;   `supertag--normalize-fields-collection' above) and `:field-values'
+;;   (two-level node -> field nesting, see `supertag-store-put-field-value'
+;;   in supertag-core-store.el) are populated by direct hash-table puts that
+;;   bypass `supertag-store-put-entity'/`supertag--normalize-entity', so the
+;;   ENTITY VALUE for those two collections is itself a hash table, not a
+;;   plist. Rather than assert "always a plist" and error on this (as a
+;;   naive first cut might), `supertag--persistence--canonicalize-value'
+;;   below handles hash tables found ANYWHERE in entity data generically: it
+;;   freezes them into a sorted, re-readable `(:supertag-hash-table ...)'
+;;   marker form (see that function and `supertag--persistence--thaw-value'
+;;   for the inverse). This also means no assumption is silently made about
+;;   which collections may contain nested hash tables — any hash table
+;;   anywhere in the tree is handled the same way.
+;; - PRE-CHECK FINDING (cross-entity shared structure): a probe over the
+;;   10k-node fixture in test/perf-benchmark.el found ~20,000 `eq'-shared
+;;   cons cells — but ALL of it traced back to that fixture building a
+;;   single `field-defs' list once and reusing the SAME object across all 50
+;;   synthetic tags' :fields slot (the fixture docstring says outright it
+;;   "bypass[es] the ops/commit layer entirely"). Real write paths
+;;   (e.g. `supertag-tag-create' in supertag-ops-tag.el) go through
+;;   `supertag--deep-copy-plist' specifically to avoid this kind of aliasing.
+;;   Regardless of which case applies, per-entity independent `prin1' (no
+;;   `print-circle' spanning multiple lines) makes cross-entity sharing a
+;;   pure non-issue for correctness: each entity's data is fully
+;;   materialized on its own line, so shared structure just gets printed
+;;   (and, after a load, held) as separate `equal'-but-not-`eq' copies. No
+;;   coercion-layer surgery was needed in supertag-core-store.el.
+;; - `print-circle' is still bound around each per-line `prin1' call, which
+;;   protects against a genuinely self-referential value WITHIN one entity's
+;;   own data (distinct from cross-entity sharing above); Emacs builds a
+;;   fresh circular-reference table for every top-level `prin1' call, so
+;;   binding it once around the whole write (rather than re-binding inside
+;;   the loop) still gives each line independent, correct handling.
+
+(defconst supertag--persistence-canonical-format-header
+  ";; -*- mode: lisp-data; coding: utf-8-unix -*-\n;; supertag-db canonical format 1\n"
+  "Two-line header written at the top of every canonical-format DB file.")
+
+(defconst supertag--persistence--hash-marker :supertag-hash-table
+  "Marker keyword identifying a frozen hash table in canonical output.
+See `supertag--persistence--canonicalize-value' and
+`supertag--persistence--thaw-value'.")
+
+(defun supertag--persistence--sort-key (key)
+  "Return a string used to order KEY (an entity id or hash-table key).
+Coerces KEY to a string form equivalent to `format \"%s\"' so ids/keys of
+different Lisp types (strings, keywords, numbers, symbols) still sort
+consistently and deterministically against each other. Special-cased for
+the two overwhelmingly common cases — a plain string (most entity ids)
+returned as-is, and a symbol/keyword (all plist keys) via `symbol-name'
+— to skip `format''s general parsing machinery, since this runs on every
+entity id and every plist key in the whole store."
+  (cond
+   ((stringp key) key)
+   ((symbolp key) (symbol-name key))
+   (t (format "%s" key))))
+
+(defun supertag--persistence--sort-pairs-by-key (pairs)
+  "Return PAIRS (each a cons `(KEY . VALUE)') sorted by KEY's sort key.
+A Schwartzian transform: `supertag--persistence--sort-key' is computed
+exactly ONCE per pair up front, rather than repeatedly inside the sort
+comparator. This matters at the DB's real scale — computing it inside the
+comparator costs O(n log n) `format' calls (one measured run over 5k
+entities alone made the canonical writer ~14x slower than a plain
+`prin1' dump, almost entirely `format' overhead in comparators; this
+transform brought it back under the 2x perf-guard budget in
+test/canonical-serialization-test.el)."
+  (mapcar #'cdr
+          (sort (mapcar (lambda (pair)
+                          (cons (supertag--persistence--sort-key (car pair)) pair))
+                        pairs)
+                (lambda (a b) (string< (car a) (car b))))))
+
+(defun supertag--persistence--plist-p (value)
+  "Conservatively detect whether VALUE looks like a plist.
+Returns non-nil only for a proper, non-empty, even-length list whose
+element at every even (0-based) index is a keyword. This deliberately
+excludes nil/empty lists, improper (dotted) lists, and lists of
+non-keyword-prefixed items — e.g. `:tag-field-associations' values (an
+ordinary list of association plists) do not themselves satisfy this
+predicate, so they are walked element-by-element but never key-sorted or
+reordered as a whole.
+
+This predicate alone is used only by callers outside the hot
+canonicalization path (e.g. the canonical-format reader, which calls it
+at most once per line); `supertag--persistence--canonicalize-value' below
+uses the fused `supertag--persistence--plist-pairs-or-nil' instead, which
+detects AND collects in one pass — see that function's docstring for why."
+  (let ((len (proper-list-p value)))
+    (and len
+         (> len 0)
+         (cl-evenp len)
+         (cl-loop for cell on value by #'cddr
+                  always (keywordp (car cell))))))
+
+(defun supertag--persistence--plist-pairs-or-nil (value)
+  "Return VALUE's `(SORT-KEY KEY . RAW-VALUE)' triples if it is a plist, else nil.
+A fused, single-pass replacement for calling
+`supertag--persistence--plist-p' (itself a full traversal) and THEN
+separately collecting key/value pairs (a second full traversal): this
+walks VALUE exactly once, bailing out immediately on the first sign it
+is not a plist (an odd remaining length, or a non-keyword key), and
+precomputes each key's `supertag--persistence--sort-key' along the way so
+the caller's `sort' never needs to recompute it. This is on the hottest
+path in the file — `supertag--persistence--canonicalize-value' runs it on
+every cons it visits — and collapsing several O(n) passes into one made a
+measurable difference on the 5k-node perf-guard benchmark in
+test/canonical-serialization-test.el (originally ~14x the cost of a
+plain `prin1' dump; the budget is 2x)."
+  (let ((cursor value) (pairs nil) (ok t))
+    (while (and ok (consp cursor))
+      (let ((k (car cursor)))
+        (if (and (keywordp k) (consp (cdr cursor)))
+            (progn
+              (push (cons (supertag--persistence--sort-key k) (cons k (cadr cursor))) pairs)
+              (setq cursor (cddr cursor)))
+          (setq ok nil))))
+    (and ok (null cursor) pairs)))
+
+(defsubst supertag--persistence--canonicalize-maybe-atom (value)
+  "Like `supertag--persistence--canonicalize-value', but inlined and with a
+fast exit for anything that cannot possibly need canonicalizing: only
+conses, hash tables, and vectors are ever restructured, so the
+overwhelmingly common case of a plain leaf value (string/number/keyword/
+symbol/nil — most values in most plists) skips the real function call
+entirely. Being a `defsubst', this check itself is inlined at every call
+site rather than adding another call frame. This one change measurably
+mattered on the 10k-node fixture used by the perf-guard test."
+  (if (or (consp value) (hash-table-p value) (vectorp value))
+      (supertag--persistence--canonicalize-value value)
+    value))
+
+(defun supertag--persistence--rebuild-sorted-plist (pairs)
+  "Rebuild a flat, sorted, canonicalized plist from PAIRS.
+PAIRS is the `(SORT-KEY KEY . RAW-VALUE)' triple list returned by
+`supertag--persistence--plist-pairs-or-nil'.
+
+Builds one small `(KEY VALUE)' list per pair and splices them together
+with `nconc' (each pair still in its own freshly-consed 2-element list,
+so this is safe) rather than a single shared `push'/`nreverse'
+accumulator — pushing both KEY and VALUE onto one accumulator and
+reversing once at the end does NOT recover the right order: reversing
+the whole flat sequence also swaps each pair's internal key/value
+positions, not just the pairs' relative order. (Caught by
+test/canonical-serialization-test.el's sorted-invariants test.)"
+  (setq pairs (sort pairs (lambda (a b) (string< (car a) (car b)))))
+  (apply #'nconc
+         (mapcar (lambda (p)
+                   (list (cadr p) (supertag--persistence--canonicalize-maybe-atom (cddr p))))
+                 pairs)))
+
+(defun supertag--persistence--freeze-hash-table (table)
+  "Return a canonical, sorted, re-readable form of hash table TABLE.
+The result is `(:supertag-hash-table ((KEY . VALUE) ...))' with entries
+sorted by `supertag--persistence--sort-key' on KEY and VALUE canonicalized
+recursively. `supertag--persistence--thaw-value' reverses this back into an
+actual (`equal'-test) hash table on load. Sorting a hash table's entries
+for deterministic output is NOT the same thing as reordering an ordinary
+list's elements (which `supertag--persistence--plist-p'/canonicalize-value
+never do) — a hash table has no inherent element order to preserve in the
+first place."
+  (let (pairs)
+    (maphash (lambda (k v) (push (cons (supertag--persistence--sort-key k) (cons k v)) pairs))
+             table)
+    (setq pairs (sort pairs (lambda (a b) (string< (car a) (car b)))))
+    (list supertag--persistence--hash-marker
+          (mapcar (lambda (p) (cons (cadr p) (supertag--persistence--canonicalize-maybe-atom (cddr p))))
+                  pairs))))
+
+(defun supertag--persistence--canonicalize-value (value)
+  "Return VALUE with nested hash tables frozen and plist keys sorted.
+Recurses into plists (sorting keys), ordinary lists (preserving element
+order), improper/dotted conses, and vectors. Atoms are returned unchanged.
+See the commentary above `supertag--persistence-canonical-format-header'
+for why this is safe with respect to cross-entity shared structure."
+  (cond
+   ((hash-table-p value)
+    (supertag--persistence--freeze-hash-table value))
+   ((consp value)
+    (let ((plist-pairs (supertag--persistence--plist-pairs-or-nil value)))
+      (if plist-pairs
+          (supertag--persistence--rebuild-sorted-plist plist-pairs)
+        (let ((len (proper-list-p value)))
+          (if len
+              (mapcar #'supertag--persistence--canonicalize-maybe-atom value)
+            (cons (supertag--persistence--canonicalize-maybe-atom (car value))
+                  (supertag--persistence--canonicalize-maybe-atom (cdr value))))))))
+   ((vectorp value)
+    (apply #'vector
+           (mapcar #'supertag--persistence--canonicalize-maybe-atom (append value nil))))
+   (t value)))
+
+(defun supertag--persistence--thaw-value (value)
+  "Inverse of `supertag--persistence--canonicalize-value'.
+Rebuilds an `equal'-test hash table from any
+`(:supertag-hash-table ((KEY . VALUE) ...))' marker found anywhere in
+VALUE (at any nesting depth), recursing into plists/lists/vectors exactly
+like the canonicalizer. Everything else is returned unchanged."
+  (cond
+   ((and (consp value)
+         (eq (car value) supertag--persistence--hash-marker)
+         (consp (cdr value))
+         (null (cddr value)))
+    (let ((table (ht-create)))
+      (dolist (pair (cadr value))
+        (puthash (car pair) (supertag--persistence--thaw-value (cdr pair)) table))
+      table))
+   ((null value) nil)
+   ((vectorp value)
+    (apply #'vector (mapcar #'supertag--persistence--thaw-value (append value nil))))
+   ((consp value)
+    (let ((len (proper-list-p value)))
+      (if len
+          (mapcar #'supertag--persistence--thaw-value value)
+        (cons (supertag--persistence--thaw-value (car value))
+              (supertag--persistence--thaw-value (cdr value))))))
+   (t value)))
+
+(defun supertag--persistence--write-canonical-store (store buffer)
+  "Insert the canonical, deterministic serialization of STORE into BUFFER.
+STORE must be a hash table (the shape `supertag--store' always has after
+`supertag--ensure-store'). See the format commentary above
+`supertag--persistence-canonical-format-header'."
+  (unless (hash-table-p store)
+    (error "supertag--persistence--write-canonical-store: STORE must be a hash table, got: %S"
+           store))
+  (let (collections scalars)
+    (maphash (lambda (k v)
+               (when (eq k :collection)
+                 (error "supertag--persistence--write-canonical-store: store has a root key literally named :collection, which collides with the canonical entity-line marker"))
+               (if (hash-table-p v)
+                   (push (cons k v) collections)
+                 (push (cons k v) scalars)))
+             store)
+    (with-current-buffer buffer
+      (insert supertag--persistence-canonical-format-header)
+      (let ((print-escape-nonascii t)
+            (print-length nil)
+            (print-level nil)
+            (print-circle t))
+        ;; --- Root scalars: one sorted plist line ---
+        (when scalars
+          (setq scalars (supertag--persistence--sort-pairs-by-key scalars))
+          (prin1 (apply #'append
+                        (mapcar (lambda (pair)
+                                  (list (car pair)
+                                        (supertag--persistence--canonicalize-value (cdr pair))))
+                                scalars))
+                 buffer)
+          (insert "\n"))
+        ;; --- Collections, alphabetical order; entities sorted by id ---
+        (setq collections (supertag--persistence--sort-pairs-by-key collections))
+        (dolist (coll collections)
+          (let ((coll-key (car coll))
+                entries)
+            ;; Precompute each id's sort key inline during the `maphash' walk
+            ;; (rather than a separate pass afterward) — this list is
+            ;; potentially the largest in the whole store (e.g. :nodes), so
+            ;; folding pair-collection and sort-key computation into one
+            ;; pass matters here more than anywhere else in this file.
+            (maphash (lambda (id data)
+                       (push (cons (supertag--persistence--sort-key id) (cons id data)) entries))
+                     (cdr coll))
+            (setq entries (sort entries (lambda (a b) (string< (car a) (car b)))))
+            (setq entries (mapcar #'cdr entries))
+            (dolist (entry entries)
+              ;; The entity's own :id field is very often `eq' to the id used
+              ;; as its collection key (both usually trace back to the same
+              ;; string object a caller built once and reused for both the
+              ;; hash key and the `:id' plist slot). Printed with a shared
+              ;; `print-circle' scope across the WHOLE envelope form below,
+              ;; that would emit `#1="node-a" ... :id #1#' instead of the
+              ;; plain `"node-a"' the format spec shows — still perfectly
+              ;; readable, but needlessly noisy and an unnecessary deviation
+              ;; from the frozen example. A cheap defensive copy of the
+              ;; envelope id (strings only; other id types such as keywords
+              ;; or fixnums are immutable/interned and print-circle does not
+              ;; number them anyway) sidesteps this without touching
+              ;; `:data' itself or giving up `print-circle' as a guard
+              ;; against genuine self-reference elsewhere in the entity.
+              (let ((envelope-id (if (stringp (car entry))
+                                     (copy-sequence (car entry))
+                                   (car entry))))
+                (prin1 (list :collection coll-key
+                             :id envelope-id
+                             :data (supertag--persistence--canonicalize-value (cdr entry)))
+                       buffer))
+              (insert "\n"))))))))
+
+(defun supertag--persistence--read-canonical-forms ()
+  "Read a canonical-format DB from the current buffer.
+Point must be at (or before) the first non-comment sexp. Returns a fresh
+hash table shaped like `supertag--coerce-store-table' would produce:
+collection keywords mapped to hash tables of id -> data, plus any root
+scalar keys (e.g. :version) merged in directly."
+  (let ((store (ht-create))
+        (read-circle t)
+        (keep-reading t))
+    (while keep-reading
+      (let ((form (condition-case nil
+                      (read (current-buffer))
+                    (end-of-file (setq keep-reading nil) nil))))
+        (when keep-reading
+          (cond
+           ((and (consp form) (eq (car form) :collection))
+            (let* ((coll (plist-get form :collection))
+                   (id (plist-get form :id))
+                   (data (supertag--persistence--thaw-value (plist-get form :data)))
+                   (bucket (or (gethash coll store)
+                               (let ((ht (ht-create)))
+                                 (puthash coll ht store)
+                                 ht))))
+              (puthash id data bucket)))
+           ((supertag--persistence--plist-p form)
+            (cl-loop for (k v) on form by #'cddr
+                     do (puthash k (supertag--persistence--thaw-value v) store)))
+           (t
+            (error "supertag-db canonical format: unrecognized top-level form: %S" form))))))
+    store))
+
+(defun supertag--persistence--skip-leading-comments-and-whitespace ()
+  "Move point in the current buffer past leading whitespace/`;'-comment lines."
+  (goto-char (point-min))
+  (while (progn
+           (skip-chars-forward " \t\r\n")
+           (looking-at-p ";"))
+    (forward-line 1)))
+
 (defun supertag--persistence--try-read-store (path)
   "Return store data read from PATH.
+
+Detects which of the two on-disk formats PATH uses by looking at the
+first non-comment, non-whitespace character: `(' means the S2 canonical,
+line-per-entity format (see `supertag--persistence-canonical-format-header'
+commentary); anything else (in practice always `#', from the legacy
+`prin1' of the store hash table directly) falls back to the original
+single-sexp read. This build reads either format with zero migration
+step required: old on-disk databases keep loading exactly as before, and
+the very next save always writes canonical format from then on.
 
 Signals an error if the file cannot be read or parsed."
   (with-temp-buffer
     (insert-file-contents path)
-    (goto-char (point-min))
-    (let ((read-circle t))
-      (read (current-buffer)))))
+    (supertag--persistence--skip-leading-comments-and-whitespace)
+    (if (eq (char-after) ?\()
+        (supertag--persistence--read-canonical-forms)
+      (progn
+        (goto-char (point-min))
+        (let ((read-circle t))
+          (read (current-buffer)))))))
 
 (defun supertag--persistence--canonicalize-store-root (store)
   "Normalize STORE root keys to canonical keyword collections."
@@ -718,11 +1088,15 @@ This function ensures all levels are proper hash tables."
 
 A temporary file is created in the same directory as FILE (so the
 final `rename-file' is atomic on the same filesystem), the in-memory
-store is serialized into it using the same print settings as
-`supertag-save-store', and — when `supertag-db-verify-after-save' is
-non-nil — the temp file is re-read the same way the loader does and
-its :nodes count is compared against the in-memory store's :nodes
-count before it replaces FILE.
+store is serialized into it using the S2 canonical, deterministic,
+line-per-entity format (see `supertag--persistence--write-canonical-store'
+and the format commentary above
+`supertag--persistence-canonical-format-header'), and — when
+`supertag-db-verify-after-save' is non-nil — the temp file is re-read the
+same way the loader does (`supertag--persistence--try-read-store', which
+understands both the canonical and legacy formats) and its :nodes count
+is compared against the in-memory store's :nodes count before it
+replaces FILE.
 
 On any failure, including a verification mismatch or read error, the
 temp file is removed, an error is signaled, and FILE is left
@@ -733,11 +1107,7 @@ untouched."
         (progn
           (with-temp-buffer
             (set-buffer-file-coding-system 'utf-8-unix) ; Ensure UTF-8 encoding
-            (let ((print-escape-nonascii t)  ; Correctly handle non-ASCII characters
-                  (print-length nil)         ; Unlimited print length
-                  (print-level nil)          ; No limit print level
-                  (print-circle t))          ; Handle circular structures
-              (prin1 supertag--store (current-buffer)))
+            (supertag--persistence--write-canonical-store supertag--store (current-buffer))
             (let ((write-region-inhibit-fsync nil))
               (write-region (point-min) (point-max) temp-file nil 'silent)))
           (when supertag-db-verify-after-save
