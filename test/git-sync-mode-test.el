@@ -58,6 +58,26 @@ identical constant/rationale in test/git-integration-test.el.")
 (require 'supertag-doctor)
 (require 'supertag-services-sync)
 
+;; `supertag-git-sync-test-setup-remote-url-pushes' /
+;; `-setup-empty-remote-url-is-local-only' below stub the interactive
+;; `read-string' prompt via `cl-letf' (there being no other seam --
+;; `supertag-git-setup--configure-remote' deliberately calls it directly,
+;; exactly like a real interactive invocation would). `read-string' is a
+;; primitive (subr); on a native-comp Emacs, redefining any subr's
+;; function cell that gets called from natively-compiled Lisp requires an
+;; on-the-fly "trampoline" to be native-compiled, which in turn depends on
+;; a working local gcc/libgccjit toolchain -- broken or absent on some
+;; machines (observed failure: "ld: library 'emutls_w' not found") for
+;; reasons entirely unrelated to this test's own logic. Interpreted Lisp
+;; (which is what `-l file.el' runs, as opposed to a `.eln'/`.elc') always
+;; honors a `cl-letf'-redefined subr correctly regardless of this
+;; variable -- disabling trampoline generation here only removes a native-
+;; compilation optimization step this test suite does not need, never
+;; correctness.
+(if (boundp 'native-comp-enable-subr-trampolines)
+    (setq native-comp-enable-subr-trampolines nil)
+  (with-no-warnings (setq comp-enable-subr-trampolines nil)))
+
 ;; See test/git-integration-test.el's identical declaration + rationale:
 ;; `supertag-git.el' only ever reads this via `boundp', so a plain
 ;; top-level `defvar' here is what makes `let'-binding it below a genuine
@@ -478,6 +498,86 @@ loads it directly (no rebuild) and reports matching node/tag counts."
           (should-not (plist-get result :loaded))
           (should (plist-get result :rebuilt))
           (should (>= (plist-get result :node-count) 1)))))))
+
+;;; ================================================================
+;;; Part 2b: supertag-git-setup completes the machine-1 journey --
+;;; remote configuration, initial commit, push (P1-6)
+;;; ================================================================
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-setup-remote-url-pushes
+    "`supertag-git-setup', given a remote URL from the (stubbed) prompt,
+configures `origin`, creates the vault's initial commit through the
+EXACT SAME scoped-staging pathspec logic `supertag-git-sync-mode' uses
+for its own auto-commits (`supertag-git-setup--commit-all' /
+`supertag-git-sync--commit-pathspecs'), and pushes it: the remote's HEAD
+ends up identical to the local HEAD, the pushed tree contains
+`.gitattributes' and the database, and an untracked junk file sitting in
+the vault is NEVER swept into that commit."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((bare (expand-file-name "bare.git" dir))
+           (root (file-name-as-directory (expand-file-name "vault" dir)))
+           (db (expand-file-name "supertag-db.el" root))
+           (org-file (expand-file-name "notes.org" root))
+           (junk-file (expand-file-name "junk.txt" root)))
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--init-worktree root)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Heading\nBody.\n"))
+      (with-temp-file junk-file (insert "not tracked -- must never be committed\n"))
+      (let ((supertag-db-file db)
+            (supertag-data-directory root)
+            (org-supertag-sync-directories nil))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) bare)))
+          (supertag-git-setup)))
+      ;; `origin' configured to the bare remote.
+      (should (equal bare (string-trim
+                           (supertag-git-sync-test--git! root "config" "--get" "remote.origin.url"))))
+      ;; Local HEAD matches remote HEAD -- the push actually landed.
+      (let ((local-head (string-trim (supertag-git-sync-test--git! root "rev-parse" "HEAD")))
+            (remote-head (string-trim (supertag-git-sync-test--git! bare "rev-parse" "HEAD"))))
+        (should (equal local-head remote-head)))
+      ;; Tracking configured (`push -u`): the branch has an upstream now.
+      (should (supertag-git--ok-p
+               (supertag-git-sync-test--git root "rev-parse" "--abbrev-ref" "@{upstream}")))
+      ;; Pushed tree includes .gitattributes, the database, and the org
+      ;; file -- but NOT the untracked junk file.
+      (let ((tree (supertag-git-sync-test--git! bare "ls-tree" "-r" "--name-only" "HEAD")))
+        (should (string-match-p "\\.gitattributes" tree))
+        (should (string-match-p "supertag-db\\.el" tree))
+        (should (string-match-p "notes\\.org" tree))
+        (should-not (string-match-p "junk\\.txt" tree))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-setup-empty-remote-url-is-local-only
+    "`supertag-git-setup', given an empty string from the (stubbed)
+remote-URL prompt, still configures the merge driver/.gitattributes/
+.gitignore as normal, but does NOT create a remote, an initial commit, or
+attempt any push -- an explicit, error-free, local-only vault."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((root (file-name-as-directory (expand-file-name "vault" dir)))
+           (db (expand-file-name "supertag-db.el" root))
+           (org-file (expand-file-name "notes.org" root)))
+      (supertag-git-sync-test--init-worktree root)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Heading\nBody.\n"))
+      (let ((supertag-db-file db)
+            (supertag-data-directory root)
+            (org-supertag-sync-directories nil))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+          (supertag-git-setup)))
+      ;; No origin configured.
+      (should-not (supertag-git--ok-p
+                   (supertag-git-sync-test--git root "config" "--get" "remote.origin.url")))
+      ;; No commit was created -- HEAD is still unborn.
+      (should-not (supertag-git--ok-p (supertag-git-sync-test--git root "rev-parse" "HEAD")))
+      ;; The driver/.gitattributes/.gitignore steps still ran normally,
+      ;; unaffected by skipping the remote step.
+      (should (equal "supertag-db.el merge=supertag-db"
+                     (string-trim
+                      (with-temp-buffer
+                        (insert-file-contents (expand-file-name ".gitattributes" root))
+                        (buffer-string))))))))
 
 ;;; ================================================================
 ;;; Part 3: supertag-git-sync-mode
@@ -1006,6 +1106,188 @@ After the user unstages it, the next cycle commits only the Org edit."
         (let ((shown (supertag-git-sync-test--git! root "show" "--name-only" "--format=" "HEAD")))
           (should (string-match-p "notes\\.org" shown))
           (should-not (string-match-p "secret\\.txt" shown)))))))
+
+;;; ----------------------------------------------------------------
+;;; Part 3c (P1-7 regression): ahead/behind is derived fresh from git
+;;; every cycle, and a pull cycle pushes accumulated local commits --
+;;; not just fetches/merges -- so neither an offline episode nor an
+;;; Emacs restart ever orphans them. See the ahead/behind Commentary
+;;; above `supertag-git-sync--rev-count' in supertag-git.el.
+;;; ----------------------------------------------------------------
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-pull-catches-up-after-offline-episode
+    "A's remote becomes temporarily unreachable (origin URL pointed at a
+nonexistent path) while a local commit is made; a pull cycle attempted
+while still \"offline\" fails harmlessly (fetch itself fails -- offline
+degradation, no push attempted). Once the remote is restored, the VERY
+NEXT pull cycle both fetches successfully and pushes the accumulated
+local commit (P1-7 offline recovery) -- with no new edit needed to
+trigger it -- landing it on the remote and zeroing the pending count."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((bare (expand-file-name "bare.git" root))
+           (a (file-name-as-directory (expand-file-name "a" root)))
+           (db-a (expand-file-name "supertag-db.el" a))
+           (unreachable (expand-file-name "no-such-remote" root)))
+      (supertag-git-sync-test--init-worktree a)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db-a)
+      (supertag-git--configure-clone a db-a)
+      (supertag-git-sync-test--git! a "add" "-A")
+      (supertag-git-sync-test--git! a "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! a "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! a "push" "-q" "-u" "origin" "main")
+      ;; Simulate going offline: `origin' now points nowhere reachable.
+      (supertag-git-sync-test--git! a "remote" "set-url" "origin" unreachable)
+      (supertag-git-sync-test--edit-node db-a "n1" '(:title "made while offline"))
+      (supertag-git-sync-test--commit-edit a "offline commit")
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-git-sync--vault-root a)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-db-file db-a)
+            (supertag-data-directory a))
+        ;; Cycle while still "offline": fetch itself fails; nothing pushed.
+        (supertag-git-sync--pull)
+        (should-not supertag-git-sync--in-flight)
+        (should supertag-git-sync--offline-warned)
+        ;; Reconnect.
+        (supertag-git-sync-test--git! a "remote" "set-url" "origin" bare)
+        (supertag-git-sync--pull)
+        (should-not supertag-git-sync--in-flight)
+        (should-not supertag-git-sync--offline-warned)
+        (should (= 0 supertag-git-sync--pending-push-count)))
+      (let ((remote-log (supertag-git-sync-test--git! bare "log" "--oneline")))
+        (should (= 2 (length (split-string (string-trim remote-log) "\n" t))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-restart-does-not-orphan-unpushed-commit
+    "A commit exists locally, ahead of `origin`, that was never pushed --
+simulating an Emacs session that committed but quit before its own push
+finished. After resetting all session-local git-sync state to simulate a
+fresh Emacs restart (the OLD, buggy behavior: `supertag-git-sync--pending-push-count'
+starts back at a lying 0), ONE pull cycle must still discover -- fresh
+from git, never from that zeroed session counter -- that this vault is
+ahead, push it, and report the correct (zero, post-push) count."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((bare (expand-file-name "bare.git" root))
+           (a (file-name-as-directory (expand-file-name "a" root)))
+           (db-a (expand-file-name "supertag-db.el" a)))
+      (supertag-git-sync-test--init-worktree a)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db-a)
+      (supertag-git--configure-clone a db-a)
+      (supertag-git-sync-test--git! a "add" "-A")
+      (supertag-git-sync-test--git! a "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! a "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! a "push" "-q" "-u" "origin" "main")
+      ;; A commit made "in a previous session" that never got pushed --
+      ;; created directly via git, never through
+      ;; `supertag-git-sync--fire-commit', so nothing in THIS test run
+      ;; ever incremented any session counter for it.
+      (supertag-git-sync-test--edit-node db-a "n1" '(:title "committed but never pushed"))
+      (supertag-git-sync-test--commit-edit a "orphaned commit")
+      ;; Simulate a fresh Emacs restart: all session-local git-sync state
+      ;; reset to its just-initialized defaults.
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-git-sync--vault-root a)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-db-file db-a)
+            (supertag-data-directory a))
+        (supertag-git-sync--pull)
+        (should-not supertag-git-sync--in-flight)
+        (should (= 0 supertag-git-sync--pending-push-count)))
+      (let ((remote-log (supertag-git-sync-test--git! bare "log" "--oneline")))
+        (should (= 2 (length (split-string (string-trim remote-log) "\n" t))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-enable-pushes-orphaned-commit-immediately
+    "Enabling `supertag-git-sync-mode' itself -- not waiting for the first
+timer tick -- must discover and push a commit that is already ahead of
+`origin', e.g. one made by a previous Emacs session that quit before its
+own push completed (P1-7 item 3: restarting Emacs must not orphan local
+commits)."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((bare (expand-file-name "bare.git" root))
+           (a (file-name-as-directory (expand-file-name "a" root)))
+           (db-a (expand-file-name "supertag-db.el" a)))
+      (supertag-git-sync-test--init-worktree a)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db-a)
+      (supertag-git--configure-clone a db-a)
+      (supertag-git-sync-test--git! a "add" "-A")
+      (supertag-git-sync-test--git! a "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! a "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! a "push" "-q" "-u" "origin" "main")
+      (supertag-git-sync-test--edit-node db-a "n1" '(:title "made before an emacs restart"))
+      (supertag-git-sync-test--commit-edit a "orphaned commit")
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-db-file db-a)
+            (supertag-data-directory a))
+        (unwind-protect
+            (progn
+              (supertag-git-sync-mode 1)
+              (should supertag-git-sync-mode)
+              (should (= 0 supertag-git-sync--pending-push-count)))
+          (when supertag-git-sync-mode (supertag-git-sync-mode 0))))
+      (let ((remote-log (supertag-git-sync-test--git! bare "log" "--oneline")))
+        (should (= 2 (length (split-string (string-trim remote-log) "\n" t))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-pull-cycle-diverged-fetch-merge-push
+    "B has an unpushed local commit AND the remote has independently
+advanced (A pushed first) -- a genuine diverged-history case. ONE
+`supertag-git-sync--pull' cycle must fetch, detect `behind', merge
+\(auto-resolving via the semantic merge driver, since A and B touched
+different nodes), and then -- because the merge leaves B's branch ahead
+by its own local commit plus the merge commit -- push, landing BOTH
+sides' commits on the remote within that single cycle (P1-7 item 2)."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((bare (expand-file-name "bare.git" root))
+           (a (file-name-as-directory (expand-file-name "a" root)))
+           (b (file-name-as-directory (expand-file-name "b" root)))
+           (db-a (expand-file-name "supertag-db.el" a))
+           (db-b (expand-file-name "supertag-db.el" b)))
+      (supertag-git-sync-test--init-worktree a)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1" "n2")) db-a)
+      (supertag-git--configure-clone a db-a)
+      (supertag-git-sync-test--git! a "add" "-A")
+      (supertag-git-sync-test--git! a "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! a "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! a "push" "-q" "origin" "main")
+      (supertag-git-sync-test--git! root "clone" "-q" bare b)
+      (supertag-git-sync-test--git! b "config" "user.name" "Supertag Test")
+      (supertag-git-sync-test--git! b "config" "user.email" "supertag-test@example.com")
+      (supertag-git-sync-test--git! b "config" "commit.gpgsign" "false")
+      (supertag-git--configure-clone b db-b)
+      ;; A advances the remote first (disjoint node from B's upcoming edit).
+      (supertag-git-sync-test--edit-node db-a "n1" '(:title "A advanced remote"))
+      (supertag-git-sync-test--commit-edit a "A advances remote")
+      (supertag-git-sync-test--git! a "push" "-q" "origin" "main")
+      ;; B commits its own, disjoint edit locally -- never pushed.
+      (supertag-git-sync-test--edit-node db-b "n2" '(:title "B local edit"))
+      (supertag-git-sync-test--commit-edit b "B commits locally")
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-git-sync--vault-root b)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-db-file db-b)
+            (supertag-data-directory b))
+        (supertag-git-sync--pull)
+        (should-not supertag-git-sync--in-flight)
+        (should (= 0 supertag-git-sync--pending-push-count)))
+      (let ((store (supertag-git-sync-test--read-store db-b)))
+        (should (equal "A advanced remote"
+                       (plist-get (gethash "n1" (gethash :nodes store)) :title)))
+        (should (equal "B local edit"
+                       (plist-get (gethash "n2" (gethash :nodes store)) :title))))
+      (let ((remote-log (supertag-git-sync-test--git! bare "log" "--oneline")))
+        (should (>= (length (split-string (string-trim remote-log) "\n" t)) 3))))))
 
 (provide 'git-sync-mode-test)
 

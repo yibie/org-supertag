@@ -291,13 +291,41 @@ Org-SuperTag grows with you. Start simple, add power when you need it:
 | Sync state | `~/.emacs.d/org-supertag/sync-state.el` | File mtimes and hashes |
 | Daily backups | `~/.emacs.d/org-supertag/backups/` | Timestamped DB snapshots |
 
-**Your Org files are always the source of truth.** The database is a cache that can be rebuilt at any time with `M-x supertag-sync-full-rescan`.
+**Org files own your text and structure; the database owns your typed data.** Org files (headings, body text, `:ID:` properties) are the source of truth for what a node *is*, and `M-x supertag-sync-full-rescan` can always re-derive nodes and tags from them. But schema definitions, field values, Table/Board view layouts, and automation rules live *only* in `supertag-db.el` — a rescan does not invent them from org text, because plain org text doesn't encode them. Losing the database without a backup or a synced copy loses that data for real, the same as losing any other file you can't regenerate; back it up (see above) or sync it (see below) accordingly.
 
 ---
 
 ## Syncing across machines
 
-If you keep `~/.emacs.d/org-supertag/` (or wherever `supertag-db-file` lives) inside a Dropbox/iCloud/Syncthing-style folder so it follows you between machines, know the tradeoffs before you rely on it:
+Two ways to keep `supertag-db.el` consistent across machines: **git-native sync** (recommended — it actually understands merges), or pointing a sync-folder service at the data directory (simpler to set up, but "last writer wins").
+
+### Git-native sync (recommended)
+
+**Machine 1** (first time setting this up):
+
+```
+M-x supertag-git-setup
+```
+
+This puts your vault under git: it initializes a repository if there isn't one already, migrates the database into `<repo-root>/.supertag/supertag-db.el` if it wasn't already tracked inside the repo, and configures a semantic merge driver for `supertag-db.el` so concurrent edits from different machines merge field-by-field instead of clobbering each other. It then prompts for a remote URL — give it one (any empty git remote: GitHub, a self-hosted server, a NAS) and it creates the first commit and pushes; leave the prompt empty to stay local-only for now (a fully valid, supported state — re-run the command later once you have a remote).
+
+**Machine 2** (and every machine after that):
+
+```
+M-x supertag-git-clone
+```
+
+Give it the same remote URL and a local directory. It clones, configures the merge driver for *this* machine, and loads the database (or rebuilds it from the cloned org files if the database is missing or unreadable).
+
+**Every clone must run its own setup.** `merge.supertag-db.driver` lives in `.git/config`, which git never syncs between clones — so `supertag-git-clone` configuring the driver on machine 2 isn't optional busywork, it's what makes *that* machine's merges semantic instead of falling back to git's default line-based text merge (see "Conflicts" below for what that fallback looks like).
+
+**Optional automation:** `M-x supertag-git-sync-mode` runs a background loop that debounce-commits your changes, fetches/merges on a timer and on focus, and pushes — including catching up any commits that piled up while you were offline, without waiting for a new edit to trigger it. Without this mode, `git pull`/`git push` (or `magit-pull`/`magit-push`) by hand works identically; the mode is a convenience layer, not where correctness lives.
+
+**Conflicts.** The database's own edits merge automatically in the common case — different nodes or fields touched on each side. When the *same* field is edited differently on both sides, or plain `.org` prose is edited on the same line by both sides, git leaves that file with a real, unresolved conflict: for `supertag-db.el` itself, it refuses to load until resolved (the error names the file and points here); for `.org` files, the sync scanner skips importing anything still conflict-marked rather than ingesting garbage. Either way, `M-x supertag-doctor` (section "8. Git Sync") lists exactly what's unresolved — resolve it by hand or with `magit`/`git checkout --merge`, same as any other git conflict.
+
+### Sync-folder services (Dropbox/iCloud/Syncthing)
+
+If you'd rather not use git, you can keep `~/.emacs.d/org-supertag/` (or wherever `supertag-db-file` lives) inside a Dropbox/iCloud/Syncthing-style folder so it follows you between machines — know the tradeoffs before you rely on it:
 
 **Safest mode: one writer at a time.** `supertag-db.el` is a single serialized file. The sync service's job is "replicate the whole file, last writer wins" — it has no idea two Emacs sessions edited different parts of it, so it cannot merge them. If both machines save, one save clobbers the other, silently. The reliable workflow is: **fully quit Emacs on machine A (`C-x C-c`, not just closing the frame) before you start editing on machine B.**
 
@@ -309,7 +337,7 @@ This matters even if you think you're "just reading" on machine A: the auto-save
 
 **Do not sync `sync-state.el` or `backups/`.** Both live in the same data directory as the database but are local, per-machine bookkeeping (`sync-state.el` tracks file mtimes/hashes for *this machine's* filesystem; `backups/` is disk space you don't need to duplicate across machines). If your sync tool syncs the whole data directory, exclude those two paths where the tool allows it; at worst, having them get overwritten just costs an extra full rescan, it doesn't lose data.
 
-This is a stopgap, not a solution — real multi-machine sync needs something that understands merges (git does; a folder-sync service does not). If that's what you're after, watch for an upcoming git-native sync mode; until then, the single-writer discipline above is the supported way to use a synced folder safely.
+This is a stopgap, not a solution — real multi-machine sync needs something that understands merges, which is exactly what the git-native sync described above does. If concurrent editing across machines is what you're after, use that instead; a sync-folder service only ever gives you the single-writer discipline above.
 
 ---
 

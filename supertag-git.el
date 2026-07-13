@@ -10,13 +10,17 @@
 ;; `supertag-git-check' diagnostic plist consumed by both `supertag-git-setup'
 ;; itself and `supertag-doctor'.
 ;;
-;; ## Scope (deliberately narrow)
+;; ## Scope: the full S4 "one URL" user journey, end-to-end
 ;;
-;; This is SETUP-time plumbing only. It does NOT implement the S4 "one URL"
-;; user journey: no repo-layout migration (moving `supertag-db-file' itself
-;; into a vault-rooted `.supertag/' directory), no `remote add`/push, and no
-;; `supertag-git-sync-mode' auto commit/fetch/push loop. Those are later
-;; work; see the plan's "S4 用户旅程" section.
+;; This file implements the whole of the plan's "S4 用户旅程" (S3b's
+;; original per-clone-plumbing scope, described just below, plus
+;; everything S4 added on top of it): repo-layout migration (moving
+;; `supertag-db-file' into a vault-rooted `.supertag/' directory --
+;; `supertag-git--migrate-layout'), machine 1's `supertag-git-setup'
+;; driving that migration through an initial commit, `remote add`/
+;; `set-url', and `push -u`, machine N's `supertag-git-clone', and the
+;; opt-in `supertag-git-sync-mode' auto commit/fetch/merge/push loop. See
+;; the plan's "S4 用户旅程" section for the full user-facing narrative.
 ;;
 ;; ## V1 limitation: single-root vaults only
 ;;
@@ -720,6 +724,125 @@ and we cannot prompt (`noninteractive')."
                       root db-dir))
         root)))))
 
+;;; --- supertag-git-setup: remote / initial commit / push (S4 machine 1) ---
+;;
+;; The rest of the plan's "S4 用户旅程" -> "机器 1" flow, on top of the
+;; per-clone `.gitattributes'/`.gitignore'/driver configuration above:
+;; configure (or confirm) an `origin' remote, create the vault's initial
+;; commit via the exact same scoped-staging pathspec logic
+;; `supertag-git-sync-mode' uses for its own auto-commits (never a bare
+;; `git add -A' -- see `supertag-git-sync--commit-pathspecs', defined
+;; later in this file in the auto-sync section; calling it here from code
+;; defined earlier in the file is an ordinary forward reference, resolved
+;; at call time like any other Lisp symbol -- not a forward DECLARATION,
+;; which is only needed for symbols owned by some OTHER file), and
+;; `push -u origin <branch>'. Deliberately no retry loop here: an
+;; auth/network failure gets one clear diagnostic message pointing at
+;; manual `git push' / ssh-agent / credential-helper troubleshooting --
+;; automatic retrying on reconnect is `supertag-git-sync-mode''s job, not
+;; this one-shot setup command's.
+
+(defun supertag-git-setup--existing-origin-url (root)
+  "Return ROOT's configured `remote.origin.url', or nil if `origin' is not
+configured at all."
+  (supertag-git--get-config root "remote.origin.url"))
+
+(defun supertag-git-setup--remote-add (root url)
+  "Run `git remote add origin URL' in ROOT. Signals a clear error on failure."
+  (let ((result (supertag-git--run root "remote" "add" "origin" url)))
+    (unless (supertag-git--ok-p result)
+      (error "supertag-git-setup: `git remote add origin %s' failed: %s" url (cdr result)))))
+
+(defun supertag-git-setup--remote-set-url (root url)
+  "Run `git remote set-url origin URL' in ROOT. Signals a clear error on
+failure."
+  (let ((result (supertag-git--run root "remote" "set-url" "origin" url)))
+    (unless (supertag-git--ok-p result)
+      (error "supertag-git-setup: `git remote set-url origin %s' failed: %s" url (cdr result)))))
+
+(defun supertag-git-setup--configure-remote (root)
+  "Prompt for an `origin' remote URL for ROOT and configure it, per the
+plan's machine-1 journey. The prompt is pre-filled with the CURRENTLY
+configured `origin' URL, if any (so accepting it with RET is a no-op,
+and the user can also see at a glance what is already set); clearing the
+minibuffer to empty and pressing RET is an explicit, valid choice to skip
+remote setup entirely (local-only vault -- git sync via the merge driver
+still works fine for a single machine, or via manual `git remote add' /
+`magit' later).
+
+Returns the configured URL (a string) on success, or nil when the user
+chose to skip (empty input) -- callers use nil to skip the initial
+commit/push step too, exactly per the plan (\"若给出 URL\" gates all of
+remote-add/commit/push together, not just the remote-add step alone)."
+  (let* ((existing (supertag-git-setup--existing-origin-url root))
+         (input (string-trim
+                 (read-string "Git remote URL for `origin' (empty = local-only, skip for now): "
+                              existing))))
+    (cond
+     ((zerop (length input)) nil)
+     ((not existing)
+      (supertag-git-setup--remote-add root input)
+      input)
+     ((equal input existing) existing)
+     (t
+      (if (y-or-n-p (format "supertag-git-setup: `origin' is already set to %s -- change it to %s? "
+                            existing input))
+          (progn (supertag-git-setup--remote-set-url root input) input)
+        existing)))))
+
+(defun supertag-git-setup--commit-all (root message)
+  "Stage everything `supertag-git-sync--commit-pathspecs' currently allows
+under ROOT (`.org' files, `supertag-db-file' itself, `.gitattributes',
+`.gitignore' -- never a bare, unconditional `git add -A'; see that
+function's docstring for the full rationale, shared verbatim with
+`supertag-git-sync-mode''s own auto-commits) and commit with MESSAGE if
+anything actually ends up staged. Returns non-nil if a commit was
+created, nil if there was nothing new to commit (e.g. re-running setup
+with nothing changed since the last commit)."
+  (let ((pathspecs (supertag-git-sync--commit-pathspecs root)))
+    (when pathspecs
+      (let ((add-result (apply #'supertag-git--run root "add" "-A" "--" pathspecs)))
+        (unless (supertag-git--ok-p add-result)
+          (error "supertag-git-setup: `git add' failed: %s" (cdr add-result))))
+      (let ((diff-result (supertag-git--run root "diff" "--cached" "--quiet")))
+        (cond
+         ((supertag-git--ok-p diff-result) nil) ; exit 0 -- nothing staged
+         ((/= 1 (car diff-result))
+          (error "supertag-git-setup: could not inspect the staged diff: %s" (cdr diff-result)))
+         (t
+          (let ((commit-result (supertag-git--run root "commit" "-q" "-m" message)))
+            (unless (supertag-git--ok-p commit-result)
+              (error "supertag-git-setup: `git commit' failed: %s" (cdr commit-result)))
+            t)))))))
+
+(defun supertag-git-setup--current-branch (root)
+  "Return ROOT's current branch name (`git rev-parse --abbrev-ref HEAD'),
+or nil on failure. Works even before ROOT's first commit -- HEAD is a
+symbolic ref to the branch name from `git init'/`symbolic-ref' onward,
+resolvable without any commit existing yet."
+  (let ((result (supertag-git--run root "rev-parse" "--abbrev-ref" "HEAD")))
+    (when (supertag-git--ok-p result) (cdr result))))
+
+(defun supertag-git-setup--push (root)
+  "Push ROOT's current branch to `origin' with `-u' (so it starts tracking
+it), per the plan's machine-1 journey. On success, returns
+`(:status :ok :branch BRANCH)'. On failure (most commonly auth/network:
+no ssh-agent, no credential helper configured, remote unreachable, ...),
+returns `(:status :failed :branch BRANCH :error STRING)' -- this function
+deliberately does NOT retry; a one-shot setup command retrying a push
+that failed for a persistent reason (bad credentials, unreachable host)
+would just hang or spam identically-failing attempts. `supertag-git-setup'
+turns the `:failed' case into a diagnostic message pointing at manual
+`git push' / ssh-agent / credential-helper troubleshooting; automatic
+retry-on-reconnect is `supertag-git-sync-mode''s job, not this command's."
+  (let ((branch (supertag-git-setup--current-branch root)))
+    (unless branch
+      (error "supertag-git-setup: could not determine the current branch to push"))
+    (let ((result (supertag-git--run root "push" "-u" "origin" branch)))
+      (if (supertag-git--ok-p result)
+          (list :status :ok :branch branch)
+        (list :status :failed :branch branch :error (cdr result))))))
+
 ;;;###autoload
 (defun supertag-git-setup ()
   "Configure the current vault's git repository for semantic supertag-db merges.
@@ -744,6 +867,19 @@ Steps performed (each reported as it happens):
    pointing at wherever `supertag-merge.el' lives on THIS machine.
 4. Append `.gitignore' entries (local-only state that must never be
    synced) next to the database file.
+5. Prompt for an `origin' remote URL (pre-filled with whatever is already
+   configured, if anything; empty input explicitly skips this and every
+   remaining step below, leaving a valid local-only vault -- see
+   `supertag-git-setup--configure-remote'). When a URL is given: configure
+   it (`git remote add`, or `set-url` with confirmation if `origin'
+   already pointed somewhere else), create the vault's initial commit via
+   the exact same scoped-staging pathspec logic `supertag-git-sync-mode'
+   uses for its own auto-commits (`supertag-git-setup--commit-all' /
+   `supertag-git-sync--commit-pathspecs' -- never a bare `git add -A'),
+   then `git push -u origin <current-branch>'. A push failure (almost
+   always auth/network: no ssh-agent, no credential helper, unreachable
+   host, ...) is reported as a diagnostic pointing at manual `git push'
+   troubleshooting -- this step never retries.
 
 Also performs, as its new Step 0 (S4), a one-time vault layout migration
 when `supertag-db-file' lives outside any git repository but a single
@@ -816,7 +952,31 @@ root at all with a non-interactive caller."
                       (format ".gitignore: added %s (in %s)"
                               (plist-get cfg :gitignore-added)
                               (file-name-directory (plist-get cfg :gitignore-file)))
-                    ".gitignore: entries already present (skipped)"))))))
+                    ".gitignore: entries already present (skipped)")))
+          ;; Step 5 (S4 machine-1 journey): remote configuration + initial
+          ;; commit + push. Gated together on a non-empty URL, per the
+          ;; plan -- an explicit empty input skips ALL of this, leaving a
+          ;; valid local-only vault (the merge driver above already works
+          ;; for a single machine; nothing here is required for that).
+          (let ((remote-url (supertag-git-setup--configure-remote toplevel)))
+            (if (not remote-url)
+                (note "No git remote configured -- this vault is local-only for now. Run `supertag-git-setup' again later once you have a remote URL, or configure one yourself (`git remote add origin <url>`) and push manually.")
+              (note "Remote `origin' configured: %s" remote-url)
+              (let ((committed (supertag-git-setup--commit-all
+                                 toplevel (format "supertag-git-setup: initial commit (%s)" (system-name)))))
+                (note "%s" (if committed
+                               "Created the initial commit (org files, database, .gitattributes/.gitignore)."
+                             "Nothing new to commit (already up to date)."))
+                (let ((push-result (supertag-git-setup--push toplevel)))
+                  (pcase (plist-get push-result :status)
+                    (:ok
+                     (note "Pushed branch `%s' to `origin' (now tracking it)."
+                           (plist-get push-result :branch)))
+                    (:failed
+                     (note "`git push -u origin %s' FAILED: %s -- this is usually an auth or network problem. Test manually with `git push' in a shell at %s; check that your ssh-agent has the right key loaded (or your credential helper is configured) and that the remote is reachable. Setup will NOT retry automatically -- push manually once fixed, or re-run `supertag-git-setup', or enable `supertag-git-sync-mode' once a manual push works."
+                           (plist-get push-result :branch)
+                           (string-trim (plist-get push-result :error))
+                           toplevel))))))))))
     (setq report (nreverse report))
     (dolist (line report) (message "supertag-git-setup: %s" line))
     (unless noninteractive
@@ -1052,8 +1212,17 @@ off.")
 Guards ENTRY only -- see this section's Commentary on serialization.")
 
 (defvar supertag-git-sync--pending-push-count 0
-  "Number of local commits not yet successfully pushed. Shown in the
-modeline lighter (e.g. \" STG\\u21913\").")
+  "DISPLAY CACHE ONLY, shown in the modeline lighter (e.g. \" STG\\u21913\").
+Not a source of truth: it is refreshed from git's own ahead-of-upstream
+commit count (`git rev-list --count @{upstream}..HEAD') every pull cycle
+\(`supertag-git-sync--refresh-pending-count', called from
+`supertag-git-sync--pull' and once immediately when the mode is enabled)
+-- 0 when there is no upstream configured at all (a local-only vault,
+which also means no push is ever attempted). An earlier version of this
+variable was instead incremented by hand on every local commit and reset
+on every successful push, which meant it always LIED as 0 immediately
+after any Emacs restart regardless of how many real unpushed commits
+existed -- see this section's Commentary and P1-7 in the review.")
 
 (defvar supertag-git-sync--conflicted-org-files nil
   "Absolute paths of org files, among the most recent merge's changed
@@ -1411,7 +1580,17 @@ committed. All refusals are reported at most once per episode (see
                                  (if (not (supertag-git--ok-p commit-result))
                                      (progn (setq supertag-git-sync--in-flight nil)
                                             (supertag-git-sync--report-failure "git commit" commit-result))
-                                   (cl-incf supertag-git-sync--pending-push-count)
+                                   ;; Refresh the ahead-count display cache
+                                   ;; from git itself (never a manual
+                                   ;; increment -- see
+                                   ;; `supertag-git-sync--pending-push-count')
+                                   ;; before pushing; we just committed, so
+                                   ;; this is guaranteed to be >= 1 (or 0,
+                                   ;; local-only, if there is no upstream --
+                                   ;; `supertag-git-sync--push' below will
+                                   ;; then simply fail harmlessly and report
+                                   ;; offline/no-remote).
+                                   (supertag-git-sync--refresh-pending-count root)
                                    (supertag-git-sync--push root))))))
                         (error
                          (apply #'supertag-git--run root
@@ -1437,10 +1616,14 @@ already t. On success: reset the pending-push counter and clear any
 offline warning. On an ordinary rejection (remote advanced): fetch, merge
 \(never rebase, per the plan), and retry the push exactly ONCE; if that
 retry still fails, give up silently for this cycle -- the pending count
-stays incremented, shown in the modeline, and the next commit or pull
-cycle will try again. On anything else (network/auth failure): treat as
-offline degradation. Always clears `supertag-git-sync--in-flight' exactly
-once, on every branch."
+display cache is left as whatever it was most recently refreshed to
+\(still accurate: nothing here changed how many commits are actually
+ahead), shown in the modeline, and the next pull cycle's own
+ahead/behind refresh (`supertag-git-sync--refresh-pending-count', see
+`supertag-git-sync--maybe-push-after-cycle') will both correct the
+display and retry the push. On anything else (network/auth failure):
+treat as offline degradation. Always clears
+`supertag-git-sync--in-flight' exactly once, on every branch."
   (supertag-git-sync--run-git
    root (list "push")
    (lambda (push-result)
@@ -1474,18 +1657,81 @@ once, on every branch."
        (supertag-git-sync--note-offline "push")
        (setq supertag-git-sync--in-flight nil))))))
 
-;;; --- Pull (timer + rate-limited focus-in) ---
+;;; --- Ahead/behind (derived fresh from git every cycle -- P1-7) ---
+;;
+;; Neither `supertag-git-sync--pending-push-count' (the modeline display
+;; cache) nor whether to push at all is ever decided from session-local
+;; bookkeeping: both are derived, every cycle, from git's own
+;; `rev-list --count' against `@{upstream}' -- exactly the ahead/behind
+;; numbers `git status' itself would report. This is what makes the
+;; count survive an Emacs restart (a fresh session has no memory of
+;; commits made -- or pushes attempted and dropped -- in a previous one,
+;; but git's own history on disk does), and what makes offline recovery
+;; automatic: reconnect, and the very next pull cycle both fetches AND
+;; pushes whatever accumulated locally while offline, without waiting for
+;; a brand new local edit to trigger `supertag-git-sync--fire-commit''s
+;; own push. `rev-list --count' against `@{upstream}' is purely local git
+;; plumbing (no network access -- it reads the last-fetched remote-
+;; tracking ref, not the remote itself), so, like the pre-existing
+;; `supertag-git-sync--behind-p' this generalizes, it is always run
+;; synchronously via `supertag-git--run' even from within an async
+;; callback chain.
+
+(defun supertag-git-sync--rev-count (root range)
+  "Return the integer count from `git rev-list --count RANGE' in ROOT, or
+nil if the command fails -- in particular when RANGE references
+`@{upstream}' and the current branch has no upstream configured at all
+\(a local-only vault: this is the signal every caller below uses to mean
+\"no push is ever attempted, and the lighter shows nothing pending\")."
+  (let ((result (supertag-git--run root "rev-list" "--count" range)))
+    (and (supertag-git--ok-p result) (string-to-number (string-trim (cdr result))))))
 
 (defun supertag-git-sync--behind-p (root)
   "Return non-nil if ROOT's HEAD is behind its upstream, immediately after
 a fetch."
-  (let ((result (supertag-git--run root "rev-list" "--count" "HEAD..@{upstream}")))
-    (and (supertag-git--ok-p result)
-         (> (string-to-number (cdr result)) 0))))
+  (let ((n (supertag-git-sync--rev-count root "HEAD..@{upstream}")))
+    (and n (> n 0))))
+
+(defun supertag-git-sync--refresh-pending-count (root)
+  "Recompute ROOT's ahead-of-upstream commit count via git and refresh the
+DISPLAY CACHE `supertag-git-sync--pending-push-count' from it (0 when
+there is no upstream configured at all). Returns the ahead count (an
+integer), or nil when there is no upstream."
+  (let ((ahead (supertag-git-sync--rev-count root "@{upstream}..HEAD")))
+    (setq supertag-git-sync--pending-push-count (or ahead 0))
+    ahead))
+
+(defun supertag-git-sync--maybe-push-after-cycle (root)
+  "End-of-cycle step: refresh the ahead-count display cache and push when
+ahead > 0. Shared by `supertag-git-sync--pull' (both its \"nothing to
+merge\" and \"just merged\" paths) and `supertag-git-sync--enable' (an
+immediate catch-up check right when the mode turns on) -- this is what
+lets commits accumulated while offline, or a commit whose OWN push never
+finished before a previous Emacs session ended, get pushed on the very
+next cycle once connectivity/an upstream returns, rather than silently
+sitting local until some unrelated new edit happens to trigger
+`supertag-git-sync--fire-commit''s own push. Always clears
+`supertag-git-sync--in-flight' exactly once (`supertag-git-sync--push'
+does so itself on every branch when it runs; this function does so
+directly on the no-push branch)."
+  (let ((ahead (supertag-git-sync--refresh-pending-count root)))
+    (if (and ahead (> ahead 0))
+        (supertag-git-sync--push root)
+      (setq supertag-git-sync--in-flight nil))))
+
+;;; --- Pull (timer + rate-limited focus-in) ---
 
 (defun supertag-git-sync--pull ()
-  "One fetch (+ merge if behind) cycle. A no-op when no vault is active or
-another git op is already in flight."
+  "One fetch (+ merge if behind, + push if ahead) cycle. A no-op when no
+vault is active or another git op is already in flight.
+
+The trailing \"+ push if ahead\" step (P1-7) is what covers OFFLINE
+RECOVERY: a run of local commits made while the remote was unreachable
+(each individual push attempt having failed and degraded silently, per
+this mode's offline handling) are not orphaned forever waiting for a new
+edit -- reconnecting means the very next timer tick's fetch succeeds,
+and `supertag-git-sync--maybe-push-after-cycle' then pushes everything
+that piled up, whether or not anything was behind to merge first."
   (when (and supertag-git-sync--vault-root (not supertag-git-sync--in-flight))
     (setq supertag-git-sync--in-flight t)
     (let ((root supertag-git-sync--vault-root))
@@ -1501,8 +1747,8 @@ another git op is already in flight."
                 root (list "merge" "--no-edit" "@{upstream}")
                 (lambda (merge-result)
                   (supertag-git-sync--after-merge merge-result root)
-                  (setq supertag-git-sync--in-flight nil)))
-             (setq supertag-git-sync--in-flight nil))))))))
+                  (supertag-git-sync--maybe-push-after-cycle root)))
+             (supertag-git-sync--maybe-push-after-cycle root))))))))
 
 (defun supertag-git-sync--maybe-focus-pull ()
   "Run one pull cycle on regaining focus, rate-limited to at most once per
@@ -1610,7 +1856,15 @@ timers. Refuses (turning the mode back off and messaging what to run
 first) when `supertag-db-file' is not yet inside a git repository at
 all -- everything else (driver not configured, no remote yet) is reported
 but does not block enabling, since git's own default merge still degrades
-acceptably (see supertag-git.el's top-level Commentary)."
+acceptably (see supertag-git.el's top-level Commentary).
+
+Also computes this vault's true ahead-of-upstream count immediately
+\(async unless `supertag-git-sync--synchronous') and pushes right away if
+it turns out we are ahead (P1-7): a previous Emacs session's commit whose
+own push never completed (network hiccup, or Emacs simply quit before
+the debounce/push chain finished) must not sit orphaned, local-only,
+until some unrelated new edit happens to trigger the next commit -- see
+`supertag-git-sync--maybe-push-after-cycle'."
   (let ((status (supertag-git-check)))
     (if (not (plist-get status :in-repo-p))
         (progn
@@ -1619,7 +1873,6 @@ acceptably (see supertag-git.el's top-level Commentary)."
       (unless (plist-get status :driver-configured-p)
         (message "supertag-git-sync-mode: warning -- the semantic merge driver is not configured for THIS clone; run `M-x supertag-git-setup' here too (see M-x supertag-doctor \"Git Sync\")."))
       (setq supertag-git-sync--vault-root (plist-get status :repo-root))
-      (setq supertag-git-sync--pending-push-count 0)
       (setq supertag-git-sync--offline-warned nil)
       (setq supertag-git-sync--conflict-commit-warned nil)
       (setq supertag-git-sync--conflicted-org-files nil)
@@ -1633,6 +1886,9 @@ acceptably (see supertag-git.el's top-level Commentary)."
                              supertag-git-sync-pull-interval
                              #'supertag-git-sync--pull))
       (add-function :after after-focus-change-function #'supertag-git-sync--maybe-focus-pull)
+      (unless supertag-git-sync--in-flight
+        (setq supertag-git-sync--in-flight t)
+        (supertag-git-sync--maybe-push-after-cycle supertag-git-sync--vault-root))
       (message "supertag-git-sync-mode: enabled for %s." supertag-git-sync--vault-root))))
 
 (defun supertag-git-sync--disable ()
@@ -1679,7 +1935,22 @@ While enabled:
   `supertag-git-sync--fire-commit'.
 - Every `supertag-git-sync-pull-interval' seconds, and at most once every
   `supertag-git-sync-focus-pull-min-interval' seconds on regaining focus,
-  this fetches and merges (never rebases) if behind.
+  this fetches, merges (never rebases) if behind, and then PUSHES if
+  ahead (P1-7) -- both the ahead and behind counts are re-derived fresh
+  from git (`git rev-list --count`) every cycle, never trusted from a
+  session-local counter alone. This is what makes a period offline (or a
+  push that never finished before Emacs quit) recover on its own: the
+  very next successful fetch after connectivity returns also pushes
+  whatever commits piled up locally, without waiting for a brand new
+  edit.
+- Enabling the mode itself immediately performs this same ahead check and
+  pushes right away if needed, so a fresh Emacs session never orphans
+  commits a previous session made but could not push in time.
+- The modeline lighter's pending count (\" STG\\u2191N\") is a DISPLAY
+  CACHE refreshed from that same git-derived ahead count every cycle --
+  after a restart it shows the true number as soon as the first cycle
+  runs, rather than lying with 0 the way a purely session-local counter
+  would.
 - A rejected push retries once (fetch+merge+push); repeated failure or any
   network-looking failure degrades silently to local-only commits, with
   the pending count shown in the lighter.
