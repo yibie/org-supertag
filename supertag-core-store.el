@@ -255,6 +255,116 @@ Returns the normalized hash table and updates `supertag--store' when DATA is nil
         (supertag-emit-event :store-changed (list :field-values node-id field-id) old nil)
         old))))
 
+;;; --- Legacy Nested Field Collection (:fields) ---
+;;
+;; `:fields' stores node-id -> tag-id -> field-name -> value as three
+;; levels of nested (real, `equal'-test) hash tables — never plists. This
+;; is the one collection shape `supertag--normalize-entity' must NEVER be
+;; allowed to touch: it unconditionally flattens a hash-table VALUE into a
+;; plist, which is exactly correct for the ordinary entity collections it
+;; was designed for (:nodes, :tags, ...) but would corrupt a per-node field
+;; table. The functions below are the transactional seam for this
+;; collection, mirroring `supertag-store-put-field-value'/
+;; `supertag-store-remove-field-value' for `:field-values': they record a
+;; rollback marker the first time each level (node table, tag table, field
+;; slot) is touched in an active transaction, using path shapes
+;; `(:fields NODE-ID)', `(:fields NODE-ID TAG-ID)', and
+;; `(:fields NODE-ID TAG-ID FIELD-NAME)' — all understood by dedicated
+;; arms in `supertag--transaction-restore-entry' (supertag-core-transform.el)
+;; that restore by direct `puthash'/`remhash' on the live hash tables,
+;; bypassing `supertag-store-put-entity'/`supertag--normalize-entity'
+;; entirely.
+
+(defun supertag--legacy-field-coerce-table (data)
+  "Coerce DATA into a hash table for the legacy `:fields' collection.
+Handles the shapes that may still linger from older on-disk formats:
+hash tables (returned as-is), alists, flat plist-style key/value lists,
+and nil. Anything else is stored under a `:value' key so data is never
+silently dropped."
+  (cond
+   ((hash-table-p data) data)
+   ((null data) (ht-create))
+   ((and (listp data) (consp (car data)))
+    (let ((table (ht-create)))
+      (dolist (cell data table)
+        (puthash (car cell) (cdr cell) table))))
+   ((and (listp data) (zerop (% (length data) 2)))
+    (let ((table (ht-create))
+          (cursor data))
+      (while cursor
+        (let ((key (pop cursor))
+              (value (pop cursor)))
+          (puthash key value table)))
+      table))
+   (t
+    (let ((table (ht-create)))
+      (puthash :value data table)
+      table))))
+
+(defun supertag-store-put-legacy-field (node-id tag-id field-name value)
+  "Set VALUE for FIELD-NAME under TAG-ID for NODE-ID in the legacy
+nested `:fields' collection, creating the per-node and per-tag hash
+tables on demand. Records a rollback marker at each level the first
+time it is touched in an active transaction (see the Commentary above
+this section). Returns VALUE."
+  (let* ((fields-root (supertag-store-get-collection :fields))
+         (raw-node (gethash node-id fields-root))
+         (node-table
+          (cond
+           ((hash-table-p raw-node) raw-node)
+           (raw-node
+            ;; Legacy list-shaped data: migrate to a hash table, recording
+            ;; the original value so a rollback restores it verbatim.
+            (supertag--transaction-record-old-value (list :fields node-id) t raw-node)
+            (let ((table (supertag--legacy-field-coerce-table raw-node)))
+              (puthash node-id table fields-root)
+              table))
+           (t
+            (supertag--transaction-record-old-value (list :fields node-id) nil nil)
+            (let ((table (ht-create)))
+              (puthash node-id table fields-root)
+              table)))))
+    (let* ((raw-tag (gethash tag-id node-table))
+           (tag-table
+            (cond
+             ((hash-table-p raw-tag) raw-tag)
+             (raw-tag
+              (supertag--transaction-record-old-value (list :fields node-id tag-id) t raw-tag)
+              (let ((table (supertag--legacy-field-coerce-table raw-tag)))
+                (puthash tag-id table node-table)
+                table))
+             (t
+              (supertag--transaction-record-old-value (list :fields node-id tag-id) nil nil)
+              (let ((table (ht-create)))
+                (puthash tag-id table node-table)
+                table)))))
+      (let* ((had-value (ht-contains? tag-table field-name))
+             (old-value (and had-value (gethash field-name tag-table))))
+        (supertag--transaction-record-old-value
+         (list :fields node-id tag-id field-name) had-value old-value))
+      (puthash field-name value tag-table)
+      value)))
+
+(defun supertag-store-remove-legacy-field (node-id tag-id field-name)
+  "Remove FIELD-NAME under TAG-ID for NODE-ID from the legacy nested
+`:fields' collection. Returns the removed value, or nil when absent.
+Records a rollback marker before mutating, mirroring
+`supertag-store-put-legacy-field'. Never creates node/tag tables that
+do not already exist."
+  (let* ((fields-root (supertag-store-get-collection :fields))
+         (raw-node (gethash node-id fields-root))
+         (node-table (cond ((hash-table-p raw-node) raw-node)
+                            (raw-node (supertag--legacy-field-coerce-table raw-node)))))
+    (when node-table
+      (let* ((raw-tag (gethash tag-id node-table))
+             (tag-table (cond ((hash-table-p raw-tag) raw-tag)
+                               (raw-tag (supertag--legacy-field-coerce-table raw-tag)))))
+        (when (and tag-table (ht-contains? tag-table field-name))
+          (let ((old (gethash field-name tag-table)))
+            (supertag--transaction-record-old-value
+             (list :fields node-id tag-id field-name) t old)
+            (remhash field-name tag-table)
+            old))))))
 
 ;; Direct storage is now the default and only mode for optimal performance
 ;; This hybrid architecture combines old system performance with new system features

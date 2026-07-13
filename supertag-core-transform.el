@@ -61,6 +61,15 @@ Notifications are suppressed until all transformations are complete."
 (defun supertag--transaction-restore-entry (entry)
   "Undo one recorded ENTRY of the form (PATH EXISTED-P OLD-VALUE).
 Dispatches on the shape of PATH:
+- (:fields NODE-ID TAG-ID FIELD-NAME) — a single legacy field value.
+- (:fields NODE-ID TAG-ID) — a per-tag hash table inside the legacy
+  `:fields' collection (only ever recorded via
+  `supertag-store-put-legacy-field''s node/tag creation markers).
+- (:fields NODE-ID) — a per-node hash table inside the legacy `:fields'
+  collection. These three `:fields' arms restore by direct
+  `puthash'/`remhash' on the live nested hash tables — never through
+  `supertag-store-put-entity'/`supertag--normalize-entity', which would
+  flatten a hash-table OLD-VALUE into a plist.
 - (:field-values NODE-ID FIELD-ID) — a single field value.
 - (COLLECTION ID) — a canonical entity (also covers the :field-values
   \"this node's bucket didn't exist yet\" marker, which always has
@@ -72,6 +81,28 @@ Dispatches on the shape of PATH:
         (existed-p (nth 1 entry))
         (old-value (nth 2 entry)))
     (cond
+     ((and (eq (nth 0 path) :fields) (= (length path) 4))
+      (let ((node-id (nth 1 path))
+            (tag-id (nth 2 path))
+            (field-name (nth 3 path)))
+        (if existed-p
+            (supertag-store-put-legacy-field node-id tag-id field-name old-value)
+          (supertag-store-remove-legacy-field node-id tag-id field-name))))
+     ((and (eq (nth 0 path) :fields) (= (length path) 3))
+      (let* ((node-id (nth 1 path))
+             (tag-id (nth 2 path))
+             (fields-root (supertag-store-get-collection :fields))
+             (node-table (gethash node-id fields-root)))
+        (when (hash-table-p node-table)
+          (if existed-p
+              (puthash tag-id old-value node-table)
+            (remhash tag-id node-table)))))
+     ((and (eq (nth 0 path) :fields) (= (length path) 2))
+      (let ((node-id (nth 1 path))
+            (fields-root (supertag-store-get-collection :fields)))
+        (if existed-p
+            (puthash node-id old-value fields-root)
+          (remhash node-id fields-root))))
      ((= (length path) 3)
       (let ((node-id (nth 1 path))
             (field-id (nth 2 path)))

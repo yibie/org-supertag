@@ -41,7 +41,9 @@
 (require 'supertag-core-store)
 (require 'supertag-core-transform)
 (require 'supertag-core-persistence) ; For the obsolete `supertag--with-transaction' alias
+                                      ; and `supertag--persistence--canonicalize-value'
 (require 'supertag-ops-node)
+(require 'supertag-ops-field) ; For P1-4: legacy :fields rollback coverage
 (require 'supertag-automation)
 
 ;;; --- Shared fixture ---
@@ -176,6 +178,123 @@ and does not remove the node's other, untouched field values."
        (supertag-store-remove-field-value "node-x" "field-a")
        (error "boom")))
     (should (equal "original" (supertag-store-get-field-value "node-x" "field-a")))))
+
+;;; --- 2b. Legacy :fields seam (P1-4): supertag-ops-field.el's nested
+;;; node-id -> tag-id -> field-name hash tables used to be mutated by raw
+;;; `puthash'/`remhash' inside `supertag-field-set'/`supertag-field-set-many'/
+;;; `supertag-field-remove', never calling
+;;; `supertag--transaction-record-old-value' -- so a rollback silently left
+;;; every legacy field write in place. These now go through
+;;; `supertag-store-put-legacy-field'/`supertag-store-remove-legacy-field'
+;;; (supertag-core-store.el), and `supertag--transaction-restore-entry' gained
+;;; dedicated `(:fields NODE-ID [TAG-ID [FIELD-NAME]])' arms that restore real
+;;; hash tables directly, bypassing `supertag-store-put-entity'/
+;;; `supertag--normalize-entity' (which would otherwise flatten a hash-table
+;;; OLD-VALUE into a plist). All of these use the real production API
+;;; (`supertag-field-set'/`supertag-field-remove'/`supertag-field-set-many'),
+;;; exactly the review's repro, not the new low-level store seam directly.
+
+(ert-deftest tx-test-rollback-legacy-field-set-restores-old-value ()
+  "The review's exact repro: `supertag-field-set' writes \"before\" -> \"after\"
+inside a transaction that then errors; after rollback the value must be
+\"before\" again, not left at \"after\"."
+  (tx-test--with-temp-env
+    (supertag-field-set "node-x" "tag-a" "status" "before")
+    (should-error
+     (supertag-with-transaction
+       (supertag-field-set "node-x" "tag-a" "status" "after")
+       ;; Confirm the write actually took effect before we blow up the
+       ;; transaction, otherwise this test would pass vacuously.
+       (should (equal "after" (supertag-field-get "node-x" "tag-a" "status")))
+       (error "boom")))
+    (should (equal "before" (supertag-field-get "node-x" "tag-a" "status")))))
+
+(ert-deftest tx-test-rollback-legacy-field-set-creation-leaves-no-trace ()
+  "Setting a field for the first time inside a failed transaction — which
+allocates the per-node and per-tag hash tables from scratch — leaves no
+trace on rollback: the field is gone and the :fields collection's entity
+count is back to what it was before."
+  (tx-test--with-temp-env
+    (let* ((fields-root (supertag-store-get-collection :fields))
+           (count-before (hash-table-count fields-root)))
+      (should-error
+       (supertag-with-transaction
+         (supertag-field-set "node-new" "tag-a" "status" "value")
+         (error "boom")))
+      (should (null (supertag-field-get "node-new" "tag-a" "status")))
+      (should (= count-before (hash-table-count fields-root))))))
+
+(ert-deftest tx-test-rollback-legacy-field-remove-restores-value ()
+  "Rolling back `supertag-field-remove' (production API) restores the
+removed field value."
+  (tx-test--with-temp-env
+    (supertag-field-set "node-x" "tag-a" "status" "before")
+    (should-error
+     (supertag-with-transaction
+       (supertag-field-remove "node-x" "tag-a" "status")
+       ;; Gone mid-transaction, otherwise this test would pass vacuously.
+       (should (null (supertag-field-get "node-x" "tag-a" "status")))
+       (error "boom")))
+    (should (equal "before" (supertag-field-get "node-x" "tag-a" "status")))))
+
+(ert-deftest tx-test-rollback-legacy-field-set-many-restores-values ()
+  "Rolling back `supertag-field-set-many' (the batch/set-many production API)
+restores every field it touched to its pre-transaction value, and leaves no
+trace of a field it created from scratch."
+  (tx-test--with-temp-env
+    (supertag-field-set "node-x" "tag-a" "f1" "before-1")
+    (supertag-field-set "node-x" "tag-b" "f2" "before-2")
+    (should-error
+     (supertag-with-transaction
+       (supertag-field-set-many
+        "node-x"
+        (list (list :tag "tag-a" :field "f1" :value "after-1")
+              (list :tag "tag-b" :field "f2" :value "after-2")
+              (list :tag "tag-c" :field "f3" :value "brand-new")))
+       (error "boom")))
+    (should (equal "before-1" (supertag-field-get "node-x" "tag-a" "f1")))
+    (should (equal "before-2" (supertag-field-get "node-x" "tag-b" "f2")))
+    (should (null (supertag-field-get "node-x" "tag-c" "f3")))))
+
+(ert-deftest tx-test-rollback-legacy-field-nested-hash-structural-integrity ()
+  "After rollback, the legacy :fields nested structure is still real hash
+tables at every level (per-node table, per-tag table) — never flattened
+into plists by `supertag--normalize-entity' — verified via a
+canonical-serialization round-trip (`supertag--persistence--canonicalize-value'),
+which normalizes hash-table iteration order so it is safe to compare
+directly against a pre-transaction snapshot."
+  (tx-test--with-temp-env
+    (supertag-field-set "node-x" "tag-a" "f1" "before")
+    (supertag-field-set "node-x" "tag-a" "f2" "keep")
+    (let* ((fields-root (supertag-store-get-collection :fields))
+           (before-snapshot (supertag--persistence--canonicalize-value fields-root)))
+      (should-error
+       (supertag-with-transaction
+         (supertag-field-set "node-x" "tag-a" "f1" "after")
+         (supertag-field-set "node-y" "tag-b" "f3" "brand-new")
+         (error "boom")))
+      (should (equal before-snapshot
+                     (supertag--persistence--canonicalize-value fields-root)))
+      ;; Still real hash tables at every level, not flattened plists.
+      (should (hash-table-p (gethash "node-x" fields-root)))
+      (should (hash-table-p (gethash "tag-a" (gethash "node-x" fields-root))))
+      (should (null (gethash "node-y" fields-root))))))
+
+(ert-deftest tx-test-rollback-interleaved-legacy-and-modern-field-writes ()
+  "A single failing transaction that writes both a legacy `:fields' value
+(via `supertag-field-set') and a modern `:field-values' value (via
+`supertag-store-put-field-value') rolls both back together, proving the two
+seams share one rollback log."
+  (tx-test--with-temp-env
+    (supertag-field-set "node-x" "tag-a" "status" "legacy-before")
+    (supertag-store-put-field-value "node-x" "field-a" "modern-before")
+    (should-error
+     (supertag-with-transaction
+       (supertag-field-set "node-x" "tag-a" "status" "legacy-after")
+       (supertag-store-put-field-value "node-x" "field-a" "modern-after")
+       (error "boom")))
+    (should (equal "legacy-before" (supertag-field-get "node-x" "tag-a" "status")))
+    (should (equal "modern-before" (supertag-store-get-field-value "node-x" "field-a")))))
 
 ;;; --- 3. Nesting: inner transaction joins the outer, no early commit ---
 

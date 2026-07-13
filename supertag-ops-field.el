@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'ht)
 (require 'subr-x)
+(require 'supertag-core-state) ; For supertag--transaction-record-old-value
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
@@ -68,47 +69,63 @@ When CREATE is non-nil, allocate and store a new table if absent."
     (cond
      ((eq existing supertag-field--node-missing)
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id) nil nil)
         (let ((table (ht-create)))
           (puthash node-id table fields-root)
           table)))
      ((hash-table-p existing) existing)
      ((listp existing)
+      ;; Legacy list-shaped data: migrate to a hash table in place. Record
+      ;; the pre-migration value so a transaction rollback restores the
+      ;; original shape verbatim (see `supertag--transaction-restore-entry's
+      ;; `(:fields NODE-ID)' arm in supertag-core-transform.el).
+      (supertag--transaction-record-old-value (list :fields node-id) t existing)
       (let ((table (supertag-field--list-to-hash existing)))
         (puthash node-id table fields-root)
         table))
      ((null existing)
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id) nil nil)
         (let ((table (ht-create)))
           (puthash node-id table fields-root)
           table)))
      (t
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id) nil nil)
         (let ((table (ht-create)))
           (puthash node-id table fields-root)
           table))))))
 
-(defun supertag-field--ensure-tag-table (node-table tag-id &optional create)
-  "Return hash table for TAG-ID inside NODE-TABLE.
+(defun supertag-field--ensure-tag-table (node-id node-table tag-id &optional create)
+  "Return hash table for TAG-ID inside NODE-TABLE (the per-node table for
+NODE-ID, used only to build the `(:fields NODE-ID TAG-ID)' rollback path).
 When CREATE is non-nil, allocate and store a new table if absent."
   (let ((existing (gethash tag-id node-table supertag-field--tag-missing)))
     (cond
      ((eq existing supertag-field--tag-missing)
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id tag-id) nil nil)
         (let ((table (ht-create)))
           (puthash tag-id table node-table)
           table)))
      ((hash-table-p existing) existing)
      ((listp existing)
+      ;; Legacy list-shaped data: migrate to a hash table in place, recording
+      ;; the pre-migration value for rollback (mirrors the node-level branch
+      ;; in `supertag-field--ensure-node-table').
+      (supertag--transaction-record-old-value (list :fields node-id tag-id) t existing)
       (let ((table (supertag-field--list-to-hash existing)))
         (puthash tag-id table node-table)
         table))
      ((null existing)
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id tag-id) nil nil)
         (let ((table (ht-create)))
           (puthash tag-id table node-table)
           table)))
      (t
       (when create
+        (supertag--transaction-record-old-value (list :fields node-id tag-id) nil nil)
         (let ((table (ht-create)))
           (puthash tag-id table node-table)
           table))))))
@@ -200,13 +217,15 @@ Returns the updated field value."
          :new event-new
          :context (list :node-id node-id :tag-id tag-id :field-name field-name)
          :perform (lambda ()
-                    (let* ((node-table (supertag-field--ensure-node-table node-id t))
-                           (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
-                      (puthash field-name value tag-table)
-                      (when supertag-debug-log-field-events
-                        (message "supertag-field-set WRITE %s/%s/%s old=%S new=%S"
-                                 node-id tag-id field-name old-value value))
-                      event-new)))
+                    ;; Route through the store seam (supertag-core-store.el)
+                    ;; instead of a raw `puthash' on the nested hash tables,
+                    ;; so `supertag--transaction-record-old-value' sees this
+                    ;; write and `supertag-with-transaction' can roll it back.
+                    (supertag-store-put-legacy-field node-id tag-id field-name value)
+                    (when supertag-debug-log-field-events
+                      (message "supertag-field-set WRITE %s/%s/%s old=%S new=%S"
+                               node-id tag-id field-name old-value value))
+                    event-new))
         value))))
 
 (defun supertag-field-set-many (node-id specs)
@@ -243,17 +262,19 @@ SPECS should be a list of plists containing :tag, :field, and :value."
            :new entries
            :context (list :node-id node-id :count (length entries))
            :perform (lambda ()
-                      (let ((node-table (supertag-field--ensure-node-table node-id t)))
-                        (dolist (entry entries)
-                          (let* ((tag-id (plist-get entry :tag))
-                                 (field-name (plist-get entry :field))
-                                 (value (plist-get entry :value))
-                                 (tag-table (supertag-field--ensure-tag-table node-table tag-id t)))
-                            (puthash field-name value tag-table)
-                            (when supertag-debug-log-field-events
-                              (message "supertag-field-set-many WRITE %s/%s/%s -> %S"
-                                       node-id tag-id field-name value))))
-                        entries))))))))
+                      ;; Route each entry through the store seam (see
+                      ;; `supertag-field-set') so every field-level (and any
+                      ;; node/tag-table creation) write is recorded for
+                      ;; transaction rollback.
+                      (dolist (entry entries)
+                        (let* ((tag-id (plist-get entry :tag))
+                               (field-name (plist-get entry :field))
+                               (value (plist-get entry :value)))
+                          (supertag-store-put-legacy-field node-id tag-id field-name value)
+                          (when supertag-debug-log-field-events
+                            (message "supertag-field-set-many WRITE %s/%s/%s -> %S"
+                                     node-id tag-id field-name value))))
+                      entries)))))))
 
 (defun supertag-field-get (node-id tag-id field-name &optional default)
   "Get the value of a tag field for a node.
@@ -265,7 +286,7 @@ Returns the field value, or DEFAULT if it does not exist."
   (let ((node-table (supertag-field--ensure-node-table node-id)))
     (if (not node-table)
         default
-      (let ((tag-table (supertag-field--ensure-tag-table node-table tag-id)))
+      (let ((tag-table (supertag-field--ensure-tag-table node-id node-table tag-id)))
         (if (not tag-table)
             default
           (let ((value (gethash field-name tag-table supertag-field--missing)))
@@ -418,11 +439,10 @@ Returns the removed field value."
          :new event-new
          :context (list :node-id node-id :tag-id tag-id :field-name field-name)
          :perform (lambda ()
-                    (let* ((node-table (supertag-field--ensure-node-table node-id))
-                           (tag-table (and node-table (supertag-field--ensure-tag-table node-table tag-id))))
-                      (when (and node-table tag-table)
-                        (remhash field-name tag-table))
-                      event-old))))
+                    ;; Route through the store seam (see `supertag-field-set')
+                    ;; so this removal is recorded for transaction rollback.
+                    (supertag-store-remove-legacy-field node-id tag-id field-name)
+                    event-old)))
         old-value)))
 
 ;; 4.2 Field Validation and Normalization
