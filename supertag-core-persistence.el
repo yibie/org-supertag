@@ -154,6 +154,20 @@ timer, an explicit \\[supertag-save-store], or `kill-emacs-hook'. Functions
 on this hook take no arguments and must not signal (an error here would
 otherwise interrupt whatever just successfully saved the database).")
 
+(defvar supertag-persistence-after-load-hook nil
+  "Normal hook run after `supertag-load-store' successfully loads a store
+from disk (the branch that sets `supertag--store' from a readable file and
+acquires the lock/presence claim -- NOT the fresh-empty-store branch, and
+NOT a failed/corrupt-file load). Symmetric to
+`supertag-persistence-after-save-hook' and meant for the same purpose:
+letting an optional module react to a persistence lifecycle event without
+this file requiring that module back (avoiding load-order coupling). Its
+first user is `supertag-conflicts.el', which hooks in here (from its own
+file, at its own load time -- this file never requires or knows about
+that one) to message the user once when the just-loaded store carries
+recorded `:sync-conflicts' (e.g. left behind by a git merge). Functions on
+this hook take no arguments and must not signal.")
+
 (defvar supertag--db-lock-conflict nil
   "Non-nil when another Emacs instance holds the DB lock.
 Holds the owner description string returned by `file-locked-p' (for example
@@ -1482,7 +1496,12 @@ FILE is the optional file path. Defaults to supertag-db-file."
                        "")))
           (supertag--db-acquire-lock)
           (supertag--presence-check-and-claim)
-          (supertag--maybe-auto-migrate))
+          (supertag--maybe-auto-migrate)
+          ;; See `supertag-persistence-after-load-hook''s docstring: this is
+          ;; the one seam that fires exactly when a store was just
+          ;; successfully loaded, without this file knowing (or requiring)
+          ;; anything about who is listening.
+          (run-hooks 'supertag-persistence-after-load-hook))
       (setq supertag--store (ht-create))
       (setq failures (nreverse failures))
       ;; `failures' is only ever non-nil here when at least one candidate

@@ -36,6 +36,13 @@
 (declare-function supertag-git-check "supertag-git")
 (declare-function supertag-git-sync--live-conflicted-org-files "supertag-git")
 
+;; Sync-conflicts (semantic merge conflicts recorded by supertag-merge.el
+;; into the `:sync-conflicts' collection) are reported by supertag-conflicts.el.
+;; Not hard-required -- see that file's Commentary for why this file must not
+;; force its load; every call site below is `fboundp'-guarded.
+(declare-function supertag-conflicts-list "supertag-conflicts")
+(declare-function supertag-conflicts-count "supertag-conflicts")
+
 (defgroup supertag-doctor nil
   "Health check and repair tools for Org-Supertag."
   :group 'org-supertag)
@@ -353,6 +360,50 @@ sync-scanner-skipping advice)."
           (dolist (f conflicted)
             (insert (format "    - %s\n" f))))))))
 
+(defun supertag-doctor--conflict-brief (v)
+  "Compact, truncated `format' rendering of one conflict-side value V.
+Mirrors `supertag-conflicts--describe-value' (duplicated rather than
+required -- see this section's fboundp guard) so this report degrades
+gracefully even when supertag-conflicts.el is not loaded."
+  (let ((s (if (eq v :supertag-merge/absent) "<deleted>" (format "%S" v))))
+    (if (> (length s) 80) (concat (substring s 0 77) "...") s)))
+
+(defun supertag-doctor--section-sync-conflicts ()
+  "Insert the \"9. Sync Conflicts\" section into the current buffer.
+Reports every entity recorded in the `:sync-conflicts' collection by
+`supertag-merge.el' (see its Commentary \"Conflict representation\" for
+the record shape, and supertag-conflicts.el's Commentary for how each
+kind is resolved): id, collection/entity, kind, key, and a compact
+ours/theirs/base rendering, capped at 20 entries with the remainder
+noted. Cleanly reports \"None.\" when there are zero conflicts.
+`fboundp'-guarded throughout -- this file must not hard-require
+`supertag-conflicts.el' (see that file's Commentary, \"Load-time
+visibility\")."
+  (supertag-doctor--insert-header "9. Sync Conflicts")
+  (if (not (fboundp 'supertag-conflicts-list))
+      (insert (supertag-doctor--na) " (supertag-conflicts.el not loaded)\n")
+    (let* ((conflicts (supertag-conflicts-list))
+           (count (length conflicts)))
+      (if (zerop count)
+          (insert "None.\n")
+        (insert (format "Count: %d\n\n" count))
+        (let ((shown 0))
+          (dolist (c conflicts)
+            (when (< shown 20)
+              (cl-incf shown)
+              (insert (format "- %s\n" (plist-get c :id)))
+              (insert (format "  Collection/Entity: %s / %s\n"
+                              (or (plist-get c :collection) "root")
+                              (or (plist-get c :entity-id) "-")))
+              (insert (format "  Kind: %s  Key: %s\n"
+                              (plist-get c :kind) (or (plist-get c :key) "-")))
+              (insert (format "  Ours:   %s\n" (supertag-doctor--conflict-brief (plist-get c :ours))))
+              (insert (format "  Theirs: %s\n" (supertag-doctor--conflict-brief (plist-get c :theirs))))
+              (insert (format "  Base:   %s\n" (supertag-doctor--conflict-brief (plist-get c :base)))))))
+        (when (> count 20)
+          (insert (format "  ... and %d more (showing first 20)\n" (- count 20))))
+        (insert "\nResolve with: M-x supertag-conflicts-resolve (bulk: supertag-conflicts-use-ours-all / supertag-conflicts-use-theirs-all)\n")))))
+
 (defun supertag-doctor--build-report ()
   "Erase the current buffer and insert the full doctor report."
   (erase-buffer)
@@ -367,6 +418,7 @@ sync-scanner-skipping advice)."
   (supertag-doctor--section-backups)
   (supertag-doctor--section-presence)
   (supertag-doctor--section-git-sync)
+  (supertag-doctor--section-sync-conflicts)
   (insert "\n"))
 
 ;;; --- Repairs ---

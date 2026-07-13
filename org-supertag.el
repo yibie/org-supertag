@@ -416,6 +416,13 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-core-schema)
 (require 'supertag-core-transform)
 (require 'supertag-core-notify)
+;; supertag-conflicts.el is a thin, dependency-light module (query/resolve
+;; commands over the `:sync-conflicts' collection supertag-merge.el writes
+;; during a git merge); it must be loaded before the first
+;; `supertag-load-store' call below so its
+;; `supertag-persistence-after-load-hook' subscriber is already registered
+;; when that first load runs (see its Commentary, "Load-time visibility").
+(require 'supertag-conflicts)
 
 ;; --- Entity Operations (ops) ---
 (require 'supertag-ops-node)
