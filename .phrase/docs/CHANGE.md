@@ -1,0 +1,27 @@
+# CHANGE Index
+
+- 2025-12-16: phase-foundation-20251216/change_foundation_20251216.md
+- 2025-12-16: phase-extractor-fix-20251216/change_extractor_fix_20251216.md
+- 2025-12-16: phase-sync-improve-20251216/change_sync_improve_20251216.md
+- 2025-12-16: phase-extractor-plugins-20251216/change_extractor_plugins_20251216.md
+- 2025-12-17: DONE-phase-sync-smart-detection-20251217/change_sync_smart_detection_20251217.md
+- 2025-12-17: DONE-phase-view-api-20251217/change_view_api_20251217.md
+- 2025-12-26: phase-view-note-fields-20251226/change_view_note_fields_20251226.md
+- 2025-12-31: phase-sync-integrity-20251226/change_sync_integrity_20251226.md
+- 2025-12-26: phase-ontology-architecture-20251226/change_ontology_architecture_20251226.md
+- 2025-12-31: phase-logic-explainability-20251231/change_logic_explainability_20251231.md
+- 2026-01-16: phase-automation-alignment-20260116/change_automation_alignment_20260116.md
+- 2026-01-21: phase-automation-alignment-20260116/change_automation_alignment_20260116.md
+- 2026-01-21: phase-sync-improve-20251216/change_sync_improve_20251216.md
+- 2026-01-28: phase-virtual-columns-20260128/change_virtual_columns_20260128.md  # NEW: Virtual Columns + Open Viewer Architecture
+- 2026-02-04: phase-view-dsl-20260204/change_view_dsl_20260204.md
+- 2026-02-05: phase-view-dsl-20260204/change_view_dsl_20260204.md
+- 2026-02-22: phase-board-knowledge-ui-20260222/change_board_knowledge_ui_20260222.md
+- 2026-06-24: .phrase/docs/change_nested_tags_20260624.md  # issue009 嵌套标签技术方案
+- 2026-06-25: .phrase/docs/change_svg_tag_style_20260625.md  # 优化 #标签 SVG pill 样式
+- 2026-06-25: .phrase/docs/change_file_node_navigation_20260625.md  # 修复 file-level node 跳转
+- 2026-06-25: .phrase/docs/change_sync_msg_icon_20260625.md  # 同步提示改为图标
+- 2026-06-25: .phrase/docs/change_view_node_hide_side_20260625.md  # 修复 node 视图 q 键 commandp 错误
+- 2026-07-08: phase-concept-mentions-20260708/change_concept_mentions_20260708.md  # CJK concept mentions
+- 2026-07-11: phase-sync-integrity-20251226/change_sync_integrity_20251226.md  # persistence failover + stable mixed file-node identity/links
+- 2026-07-13: phase-git-sync-20260713/CHANGE.md  # Git 原生同步 P0/P1 加固与 release-gate 验收

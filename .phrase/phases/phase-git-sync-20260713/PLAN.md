@@ -1,7 +1,7 @@
 # org-supertag Git 原生同步 — 实施计划
 
 日期：2026-07-13
-状态：已批准（2026-07-13），执行中 — S0–S4 已实现，P0 复审加固中
+状态：已完成（2026-07-13）— S0–S4、P0/P1 复审加固与 release gate 均通过
 前置版本：v5.9.0（原子保存 / 多实例锁 / 自动迁移 / doctor 已具备）
 
 ---
@@ -330,4 +330,6 @@ S0–S4 初版完成后的反例审查发现，完成标准还需同时覆盖以
 4. 自动提交只拥有自己的 allowlist；不得提交或 reset 用户预先 staged 的其他路径。
 5. DB 布局迁移不得绕过既有 persistence origin/guard。
 
-对应记录：`issue013` / `task001`。
+对应记录：`issue013` / `task001`。P0 修复落在 `20cb4b5`、`849206a`；最终
+`./test/run-tests.sh all` 为 245/245，三项真实 Git release-gate 场景见
+`ACCEPTANCE.md`，结论均为 PASS。
