@@ -992,7 +992,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
          (nodes-from-file nil)
          (allow-destructive (supertag-sync--allow-destructive-p))
          (deferred-entry (gethash file supertag-sync--deferred-files))
-         (force-parse (and allow-destructive deferred-entry)))
+         (force-parse (and allow-destructive deferred-entry))
+         (deferred-deletions nil))
 
     ;; 1. Smart Detection / Reading
     (with-temp-buffer
@@ -1040,10 +1041,12 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
             (unless (eq (plist-get old-node-props :level) 0)
             (cond
              ((null new-node-props)
-              (when allow-destructive
-                (supertag-node-mark-deleted-from-file id)
-                (setf (plist-get counters :nodes-deleted)
-                      (1+ (or (plist-get counters :nodes-deleted) 0)))))
+              (if allow-destructive
+                  (progn
+                    (supertag-node-mark-deleted-from-file id)
+                    (setf (plist-get counters :nodes-deleted)
+                          (1+ (or (plist-get counters :nodes-deleted) 0))))
+                (setq deferred-deletions t)))
              ((supertag-node-changed-p old-node-props new-node-props)
               (let ((merged-props (supertag--merge-node-properties new-node-props old-node-props)))
                 (supertag-db-add-with-hash id merged-props counters))
@@ -1059,8 +1062,11 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                          (1+ (or (plist-get counters :nodes-created) 0))))
                  current-nodes-in-file)
 
-        ;; Update sync state
-        (supertag-sync-update-state file content-hash))))
+        ;; Update sync state — but keep the old hash while deletions are
+        ;; deferred, so the retry survives an Emacs restart (the
+        ;; deferred-files marker below is in-memory only).
+        (unless deferred-deletions
+          (supertag-sync-update-state file content-hash)))))
 
     (when (and allow-destructive deferred-entry)
       (remhash file supertag-sync--deferred-files))
@@ -1068,7 +1074,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (puthash file :pending supertag-sync--deferred-files))))
 
 
-(defun supertag-sync--verify-file-nodes (file counters)
+(cl-defun supertag-sync--verify-file-nodes (file counters)
   "Verify that nodes in the database still exist in the file.
 This function checks if nodes associated with FILE still exist in the file.
 If a node exists in the database but not in the file, it's marked as orphaned.
@@ -1119,7 +1125,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                   (1+ (plist-get counters :nodes-deleted)))))))))
 
 
-(defun supertag-sync--check-and-sync-legacy ()
+(cl-defun supertag-sync--check-and-sync-legacy ()
   "Check and synchronize modified files.
   This is the main sync function called periodically.
   It enqueues modified files for asynchronous processing."
@@ -1146,13 +1152,19 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     (when files-to-remove
       (let ((state-table (supertag-sync--get-state-table)))
         (dolist (file files-to-remove)
-          (remhash file state-table)
           ;; If file doesn't exist, we can clean up its nodes synchronously (usually fast)
           ;; or we could enqueue a "deletion job" if we had one.
           ;; For now, keep deletion synchronous to ensure consistency quickly.
-          (unless (file-exists-p file)
-            (supertag-with-transaction
-              (supertag-sync--verify-file-nodes file counters))))
+          (let ((missing (not (file-exists-p file))))
+            (cond
+             ;; Destructive cleanup refused: keep the state entry so a later
+             ;; cycle retries; dropping it would strand the file's nodes.
+             ((and missing (not (supertag-sync--allow-destructive-p))) nil)
+             (t
+              (remhash file state-table)
+              (when missing
+                (supertag-with-transaction
+                  (supertag-sync--verify-file-nodes file counters)))))))
         (supertag-sync-save-state)))
 
     ;; 2. Scan for New Files
@@ -1188,7 +1200,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     ;; Run garbage collection (can be done periodically)
     (supertag-sync-garbage-collect-orphaned-nodes)))
 
-(defun supertag-sync--check-and-sync-guarded ()
+(cl-defun supertag-sync--check-and-sync-guarded ()
   "Check and synchronize modified files with snapshot guard."
   ;; Pre-check: Warn if sync directories are not configured
   (unless (supertag-sync--effective-directories)
@@ -1211,10 +1223,16 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (when files-to-remove
         (let ((state-table (supertag-sync--get-state-table)))
           (dolist (file files-to-remove)
-            (remhash file state-table)
-            (unless (file-exists-p file)
-              (supertag-with-transaction
-                (supertag-sync--verify-file-nodes file counters))))
+            (let ((missing (not (file-exists-p file))))
+              (cond
+               ;; Destructive cleanup refused: keep the state entry so a later
+               ;; cycle retries; dropping it would strand the file's nodes.
+               ((and missing (not (supertag-sync--allow-destructive-p))) nil)
+               (t
+                (remhash file state-table)
+                (when missing
+                  (supertag-with-transaction
+                    (supertag-sync--verify-file-nodes file counters)))))))
           (supertag-sync-save-state))))
 
     ;; 2. Scan for New Files (from snapshot)
@@ -2001,7 +2019,7 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
   (supertag-async-clear))
 
 ;;;###autoload
-(defun supertag-sync-full-rescan ()
+(cl-defun supertag-sync-full-rescan ()
   "Force a full rescan of every file currently managed by Supertag sync.
 When called interactively, display a summary report and return a plist
 describing the work that was performed."
