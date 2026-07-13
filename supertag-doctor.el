@@ -295,7 +295,27 @@ single-sync-root limitation."
             (insert "  WARNING: multiple `org-supertag-sync-directories' roots are configured -- git sync (V1) only supports a single-root vault; consolidate before relying on this.\n"))
           (when (and (plist-get status :driver-configured-p)
                      (plist-get status :gitattributes-entry-present-p))
-            (insert "  Degradation note: even if the driver were misconfigured on another clone, git's default line merge still converges disjoint-entity edits; only a same-entity edit produces conflict markers, which the persistence loader refuses to load (see M-x supertag-doctor section \"2. Guards\" / *Messages*) rather than silently treating as an empty database.\n")))))))
+            (insert "  Degradation note: even if the driver were misconfigured on another clone, git's default line merge still converges disjoint-entity edits; only a same-entity edit produces conflict markers, which the persistence loader refuses to load (see M-x supertag-doctor section \"2. Guards\" / *Messages*) rather than silently treating as an empty database.\n"))))))
+  ;; S4: `supertag-git-sync-mode' status + org-text-conflict list. Read
+  ;; purely via `boundp'/`fboundp' (never `require'd) for the same reason
+  ;; as `supertag-git-check' above.
+  (insert "\n")
+  (if (not (boundp 'supertag-git-sync-mode))
+      (insert "  supertag-git-sync-mode: n/a (supertag-git.el not loaded)\n")
+    (insert (format "  supertag-git-sync-mode: %s\n"
+                    (if (and (boundp 'supertag-git-sync-mode) supertag-git-sync-mode) "ON" "off")))
+    (when (and (boundp 'supertag-git-sync--pending-push-count)
+               (boundp 'supertag-git-sync-mode)
+               supertag-git-sync-mode)
+      (insert (format "  Commits pending push: %d\n" supertag-git-sync--pending-push-count)))
+    (let ((conflicted (and (boundp 'supertag-git-sync--conflicted-org-files)
+                           supertag-git-sync--conflicted-org-files)))
+      (if (not conflicted)
+          (insert "  Text Conflicts: none\n")
+        (insert (format "  Text Conflicts: %d file(s) left un-imported after the last merge -- resolve manually (magit / `git checkout --merge'), then they will be picked up again:\n"
+                        (length conflicted)))
+        (dolist (f conflicted)
+          (insert (format "    - %s\n" f)))))))
 
 (defun supertag-doctor--build-report ()
   "Erase the current buffer and insert the full doctor report."

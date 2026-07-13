@@ -141,6 +141,19 @@ and `supertag--presence-foreign-active-p' returns nil for it."
 (defvar supertag--store-origin nil
   "Metadata about the loaded store and its originating persistence state.")
 
+(defvar supertag-persistence-after-save-hook nil
+  "Normal hook run after `supertag-save-store' successfully writes a
+non-empty, actually-dirty store to disk (i.e. after the atomic write, the
+dirty flag has been cleared, and the daily-backup check has run -- NOT on
+every timer tick, and NOT when a persistence guard skipped or refused the
+save). This is the S4 git-sync-mode commit trigger's hook point (see
+`supertag-git.el', \"supertag-git-sync-mode\" -> commit debounce): it is
+the one clean seam that fires exactly when `supertag-db-file' just changed
+on disk, regardless of whether the save was triggered by the auto-save
+timer, an explicit \\[supertag-save-store], or `kill-emacs-hook'. Functions
+on this hook take no arguments and must not signal (an error here would
+otherwise interrupt whatever just successfully saved the database).")
+
 (defvar supertag--db-lock-conflict nil
   "Non-nil when another Emacs instance holds the DB lock.
 Holds the owner description string returned by `file-locked-p' (for example
@@ -1222,7 +1235,10 @@ recently active for as long as this session keeps running."
           ;; `updatedAt' as fresh as possible right when real writes happen.
           (supertag--presence-write)
           ;; Check if daily backup is needed after successful save
-          (supertag-check-daily-backup))))))))
+          (supertag-check-daily-backup)
+          ;; S4 git-sync-mode commit trigger seam — see
+          ;; `supertag-persistence-after-save-hook''s docstring.
+          (run-hooks 'supertag-persistence-after-save-hook))))))))
 
 (defun supertag-db-migrate-and-normalize ()
   "Run all data migrations and normalizations on the loaded store.
