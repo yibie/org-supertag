@@ -13,6 +13,7 @@
 (require 'supertag-core-notify) ; For supertag-subscribe and supertag-emit-event
 (require 'supertag-core-store) ; For supertag--store
 (require 'supertag-core-index) ; For relation index rebuild after load
+(require 'supertag-core-transform) ; For supertag-with-transaction (real per-entity rollback)
 
 ;;; --- Persistence Configuration ---
 ;; Note: supertag-data-directory is defined in org-supertag.el
@@ -1785,20 +1786,19 @@ BACKUP-DATA should be a backup created by `supertag-backup-store'."
     (supertag-clear-dirty)
     (message "Data store restored from backup")))
 
-(defmacro supertag--with-transaction (&rest body)
-  "Transaction execution wrapper.
-Creates a data backup before executing BODY, and automatically restores it if execution fails.
-Ensures atomicity of data operations."
-  `(let ((backup (supertag-backup-store))
-         (success nil))
-     (unwind-protect
-         (progn
-           ,@body
-           (setq success t))
-       (unless success
-         (when backup
-           (supertag-restore-store backup)
-           (message "Transaction failed, data restored from backup"))))))
+;; `supertag--with-transaction' used to be a *real* transaction (unlike the
+;; formerly-fake `supertag-with-transaction' in supertag-core-transform.el)
+;; but paid for correctness with a full-store deep copy on every use — too
+;; heavy for routine mutations. Now that `supertag-with-transaction' does
+;; real per-entity rollback (see `supertag--transaction-record-old-value')
+;; at a fraction of the cost, this macro is a thin obsolete alias so existing
+;; callers (e.g. `supertag-migrate-tag-ids') keep working unchanged.
+;; `supertag-backup-store'/`supertag-restore-store' are kept as standalone
+;; utilities (doctor/migration full-snapshot use), just no longer wired into
+;; the routine transaction path.
+(define-obsolete-function-alias 'supertag--with-transaction
+  'supertag-with-transaction
+  "org-supertag 5.10 (S1 transaction hardening)")
 
 (defun supertag--validate-tag-references ()
   "Validate tag reference consistency.

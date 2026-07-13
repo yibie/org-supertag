@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'ht) ; Ensures `ht` API availability
 (require 'supertag-core-notify) ; For supertag-core-notify-handle-change and supertag-emit-event
+(require 'supertag-core-state) ; For supertag--transaction-record-old-value
 
 (declare-function supertag-mark-dirty "supertag-core-persistence")
 
@@ -38,17 +39,25 @@ Data is stored in a tree-like structure using nested hash tables.")
   '(:nodes :tags :relations :embeds :field-definitions)
   "Collections expected to contain entity plists keyed by identifier.")
 
+(defconst supertag--not-found (make-symbol "supertag-not-found")
+  "Sentinel used to signal missing entries during path resolution.")
+
 (defun supertag-store--put-and-notify (collection id data &optional emit-event-p)
   "Internal helper to store DATA under COLLECTION/ID and optionally emit event."
-  (let ((bucket (supertag-store-get-collection collection))
-        (canonical (supertag--normalize-entity data)))
+  (let* ((bucket (supertag-store-get-collection collection))
+         (existing (gethash id bucket supertag--not-found))
+         (existed-p (not (eq existing supertag--not-found)))
+         (canonical (supertag--normalize-entity data)))
+    ;; Transaction seam: record the pre-write value (or "did not exist") the
+    ;; first time this path is touched in the active transaction, so
+    ;; `supertag-with-transaction' can roll it back on error. No-op when no
+    ;; transaction is active.
+    (supertag--transaction-record-old-value
+     (list collection id) existed-p (if existed-p existing nil))
     (puthash id canonical bucket)
     (when emit-event-p
       (supertag-emit-event :store-changed (list collection id) nil canonical))
     canonical))
-
-(defconst supertag--not-found (make-symbol "supertag-not-found")
-  "Sentinel used to signal missing entries during path resolution.")
 
 (defun supertag--ensure-store ()
   "Ensure `supertag--store' exists and has canonical collections."
@@ -94,6 +103,7 @@ When EMIT-EVENT-P is non-nil, emit :store-changed notification."
   (let* ((bucket (supertag-store-get-collection collection))
          (old (and bucket (gethash id bucket))))
     (when old
+      (supertag--transaction-record-old-value (list collection id) t old)
       (remhash id bucket)
       (supertag-emit-event :store-changed (list collection id) old nil))
     old))
@@ -206,10 +216,19 @@ Returns the normalized hash table and updates `supertag--store' when DATA is nil
 (defun supertag-store-put-field-value (node-id field-id value &optional emit-event-p)
   "Set VALUE for FIELD-ID on NODE-ID."
   (let* ((root (supertag-store-get-collection :field-values))
-         (node-table (or (gethash node-id root)
-                         (let ((ht (ht-create)))
-                           (puthash node-id ht root)
-                           ht))))
+         (node-table (gethash node-id root)))
+    (unless (hash-table-p node-table)
+      ;; This node's field-value bucket doesn't exist yet. Record that fact
+      ;; *before* creating it so a rollback that undoes every field written
+      ;; under it also removes the whole bucket again, instead of leaving an
+      ;; empty shell that would inflate the :field-values entity count.
+      (supertag--transaction-record-old-value (list :field-values node-id) nil nil)
+      (setq node-table (ht-create))
+      (puthash node-id node-table root))
+    (let* ((had-value (ht-contains? node-table field-id))
+           (old-value (and had-value (gethash field-id node-table))))
+      (supertag--transaction-record-old-value
+       (list :field-values node-id field-id) had-value old-value))
     (puthash field-id value node-table)
     (when emit-event-p
       (supertag-emit-event :store-changed (list :field-values node-id field-id) nil value))
@@ -231,6 +250,7 @@ Returns the normalized hash table and updates `supertag--store' when DATA is nil
     (when (and (hash-table-p node-table)
                (ht-contains? node-table field-id))
       (let ((old (gethash field-id node-table)))
+        (supertag--transaction-record-old-value (list :field-values node-id field-id) t old)
         (remhash field-id node-table)
         (supertag-emit-event :store-changed (list :field-values node-id field-id) old nil)
         old))))
@@ -352,8 +372,10 @@ a collection entity (:nodes \"id\")."
        (if (and (not (eq old-value supertag--not-found))
                 (equal old-value normalized))
            old-value
-         (puthash collection normalized supertag--store)
          (let ((old (if (eq old-value supertag--not-found) nil old-value)))
+           (supertag--transaction-record-old-value
+            path (not (eq old-value supertag--not-found)) old)
+           (puthash collection normalized supertag--store)
            (supertag--notify-change path old normalized)
            (supertag-emit-event :store-changed path old normalized))
          (if (eq old-value supertag--not-found) nil old-value))))
@@ -383,6 +405,7 @@ a collection entity (:nodes \"id\")."
        (if (eq existing supertag--not-found)
            nil
          (let ((cleared (supertag--normalize-collection-value collection nil)))
+           (supertag--transaction-record-old-value path t existing)
            (puthash collection cleared supertag--store)
            (supertag--notify-change path existing nil)
            (supertag-emit-event :store-changed path existing nil)

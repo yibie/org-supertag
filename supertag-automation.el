@@ -465,6 +465,7 @@ Returns the created automation data with assigned ID."
   "Update automation data.
 ID is the automation identifier.
 UPDATER is a function that receives current data and returns updated data."
+  (supertag-with-transaction
   (let ((automation (supertag-automation-get id)))
     (when automation
       (let ((updated-automation (funcall updater automation)))
@@ -488,7 +489,7 @@ UPDATER is a function that receives current data and returns updated data."
               (supertag-automation--register-scheduled-rule final-automation))
             (when (fboundp 'supertag-notify)
               (supertag-notify :automation-updated :automation-id id :data final-automation))
-            final-automation))))))
+            final-automation)))))))
 
 (defun supertag-automation-delete (id)
   "Delete automation by ID.

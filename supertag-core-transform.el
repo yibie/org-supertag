@@ -30,11 +30,11 @@ Canonical store mode restricts PATH to collection or collection-entity locations
          (new-value (apply fn current-value args)))
     ;; Update store with new value directly.
     ;; Validation is handled by specific ops functions in hybrid architecture.
+    ;; Rollback recording (when a transaction is active) happens at the
+    ;; store-level seam inside `supertag-update' itself (which ultimately
+    ;; calls `supertag-store-put-entity' / puthash on the collection), so
+    ;; there is nothing to log here — see `supertag--transaction-record-old-value'.
     (supertag-update path new-value)
-
-    ;; If in a transaction, log the change for potential rollback
-    (when supertag--transaction-active
-      (push (list path current-value new-value) supertag--transaction-log))
 
     ;; Return new value
     new-value))
@@ -58,25 +58,98 @@ Notifications are suppressed until all transformations are complete."
 
 ;;; --- Transaction Support ---
 
+(defun supertag--transaction-restore-entry (entry)
+  "Undo one recorded ENTRY of the form (PATH EXISTED-P OLD-VALUE).
+Dispatches on the shape of PATH:
+- (:field-values NODE-ID FIELD-ID) — a single field value.
+- (COLLECTION ID) — a canonical entity (also covers the :field-values
+  \"this node's bucket didn't exist yet\" marker, which always has
+  EXISTED-P nil and therefore only ever takes the remove branch, so it
+  never risks flattening a per-node field hash table into a plist via
+  `supertag--normalize-entity').
+- (COLLECTION) — a whole-collection replace/clear."
+  (let ((path (nth 0 entry))
+        (existed-p (nth 1 entry))
+        (old-value (nth 2 entry)))
+    (cond
+     ((= (length path) 3)
+      (let ((node-id (nth 1 path))
+            (field-id (nth 2 path)))
+        (if existed-p
+            (supertag-store-put-field-value node-id field-id old-value)
+          (supertag-store-remove-field-value node-id field-id))))
+     ((= (length path) 2)
+      (let ((collection (nth 0 path))
+            (id (nth 1 path)))
+        (if existed-p
+            (supertag-store-put-entity collection id old-value)
+          (supertag-store-remove-entity collection id))))
+     ((= (length path) 1)
+      (if existed-p
+          (supertag-update path old-value)
+        (supertag-delete path)))
+     (t
+      (error "supertag--transaction-restore-entry: unsupported path shape %S" path)))))
+
+(defun supertag--transaction-rollback (log)
+  "Undo every change recorded in LOG, most-recently-touched path first.
+LOG is a list of (PATH EXISTED-P OLD-VALUE) entries as produced by
+`supertag--transaction-record-old-value' — since entries are pushed as they
+are first recorded, LOG is already in the correct (reverse chronological)
+order for `dolist' to walk directly. Restoration itself must not be treated
+as new transactional writes, so the active-transaction flag is bound to nil
+for the duration."
+  (let ((supertag--transaction-active nil)
+        (supertag--transaction-seen nil))
+    (dolist (entry log)
+      (supertag--transaction-restore-entry entry))))
+
 (defmacro supertag-with-transaction (&rest body)
   "Execute BODY within a transaction.
-If an error occurs during BODY execution, all changes will be rolled back.
-Notifications are suppressed until the transaction commits."
+If an error occurs during BODY execution, every path touched during the
+transaction — directly, or transitively via automation actions triggered
+synchronously by those writes — is restored to its exact pre-transaction
+value: entities created during the transaction are removed again, and
+entities deleted during the transaction are resurrected with their original
+value. This works because every low-level store mutation primitive
+(`supertag-store-put-entity', `supertag-store-remove-entity',
+`supertag-store-put-field-value', `supertag-store-remove-field-value', and
+the whole-collection replace/clear paths in `supertag-update'/`supertag-delete')
+calls `supertag--transaction-record-old-value' before mutating, which is a
+no-op unless a transaction is active.
+
+Nesting: invoking `supertag-with-transaction' while one is already active
+simply runs BODY inline so its changes join the *enclosing* transaction's
+log — there is no separate commit, rollback, or notification flush for the
+inner call; only the outermost transaction commits or rolls back.
+
+Notifications are suppressed until the (outermost) transaction commits, at
+which point exactly one batch notification flush happens."
   (declare (indent 0))
-  `(let ((supertag--transaction-active t) ; Flag for transaction
-         (supertag--transaction-log '()) ; Log for rollback
-         result) ; Variable to capture the result
-     (unwind-protect
-         (progn
-           (setq result (supertag-core-state-with-suppressed-notifications
-                         (progn ,@body)))
-           ;; Commit transaction: notify all pending changes
-           (when (fboundp 'supertag--notify-batch-changes)
-             (supertag--notify-batch-changes))
-           result) ; Return the result
-       ;; Ensure flags are reset in cleanup
-       (setq supertag--transaction-active nil)
-       (setq supertag--transaction-log nil))))
+  `(if supertag--transaction-active
+       ;; Already inside a transaction: just run BODY so it joins the
+       ;; enclosing transaction's log instead of starting/ending its own.
+       (progn ,@body)
+     (let ((supertag--transaction-active t) ; Flag for transaction
+           (supertag--transaction-log '()) ; Log for rollback
+           (supertag--transaction-seen nil) ; Dedup set: first-touch only
+           (supertag--tx-success nil)
+           result) ; Variable to capture the result
+       (unwind-protect
+           (progn
+             (setq result (supertag-core-state-with-suppressed-notifications
+                           (progn ,@body)))
+             (setq supertag--tx-success t)
+             ;; Commit transaction: notify all pending changes
+             (when (fboundp 'supertag--notify-batch-changes)
+               (supertag--notify-batch-changes))
+             result) ; Return the result
+         ;; Cleanup: roll back on error, then always reset transaction state.
+         (unless supertag--tx-success
+           (supertag--transaction-rollback supertag--transaction-log))
+         (setq supertag--transaction-active nil)
+         (setq supertag--transaction-log nil)
+         (setq supertag--transaction-seen nil)))))
 
 ;;; --- Path Pattern Matching ---
 

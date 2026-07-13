@@ -195,20 +195,21 @@ Returns the updated node data."
            (let* ((copy (copy-sequence node))
                   (new-tags (cons tag-id (or tags '()))))
              (plist-put copy :tags new-tags)
-             ;; Initialize global field entries for this tag if needed
+             ;; Initialize global field entries for this tag if needed.
+             ;; Routed through `supertag-store-put-field-value' (rather than
+             ;; a direct puthash on the :field-values bucket) so this write
+             ;; is captured by the transaction rollback seam when this runs
+             ;; inside a `supertag-with-transaction'.
              (when supertag-use-global-fields
                (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
                       (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table))))
                  (when (listp entries)
                    (let* ((vals (supertag-store-get-collection :field-values))
-                          (node-table (or (gethash node-id vals)
-                                          (let ((ht (ht-create)))
-                                            (puthash node-id ht vals)
-                                            ht))))
+                          (node-table (and (hash-table-p vals) (gethash node-id vals))))
                      (dolist (entry entries)
                        (let ((fid (plist-get entry :field-id)))
-                         (when (and fid (not (ht-contains? node-table fid)))
-                           (puthash fid nil node-table))))))))
+                         (when (and fid (not (and node-table (ht-contains? node-table fid))))
+                           (supertag-store-put-field-value node-id fid nil))))))))
              copy)))))))
 
 (defun supertag-node-remove-tag (node-id tag-id)
@@ -234,16 +235,16 @@ Returns the updated node data."
     ;; If a tag was actually removed, clear all its field values on this node
     (when removed-p
       (if supertag-use-global-fields
-          ;; Clear global field values associated to this tag
+          ;; Clear global field values associated to this tag. Routed through
+          ;; `supertag-store-remove-field-value' (rather than a direct
+          ;; remhash) so this write joins the transaction rollback seam.
           (let* ((assoc-table (supertag-store-get-collection :tag-field-associations))
-                 (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table)))
-                 (vals (supertag-store-get-collection :field-values))
-                 (node-table (and (hash-table-p vals) (gethash node-id vals))))
-            (when (and (hash-table-p node-table) (listp entries))
+                 (entries (and (hash-table-p assoc-table) (gethash tag-id assoc-table))))
+            (when (listp entries)
               (dolist (entry entries)
                 (let ((fid (plist-get entry :field-id)))
                   (when fid
-                    (remhash fid node-table))))))
+                    (supertag-store-remove-field-value node-id fid))))))
         ;; Legacy: remove nested field values via ops-field
         (let* ((tags-ht (supertag-store-get-collection :tags))
                (tag-data (and (hash-table-p tags-ht) (gethash tag-id tags-ht)))
