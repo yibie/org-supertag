@@ -12,3 +12,4 @@
 - issue010 [x] persistence 候选去重导致显式 DB 被 snapshot 重复项降级（phase-sync-integrity-20251226/issue_sync_integrity_20260711_persistence_failover.md）
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）
+- issue013 [ ] Git 原生同步 P0 边界仍可能静默丢失或越界提交（phase-git-sync-20260713/ISSUE.md）

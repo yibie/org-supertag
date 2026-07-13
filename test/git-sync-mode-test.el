@@ -358,6 +358,56 @@ session's wiring is unchanged, and the failure names the guard reason."
       (should-not (directory-files outside-dir nil "\\.migrated-"))
       (should (equal supertag-db-file outside-db)))))
 
+(supertag-git-sync-test--deftest supertag-git-sync-test-migrate-layout-refuses-unsafe-origin
+    "Migration must not legitimize an untrusted in-memory store.
+Even when the placeholder store is clean, missing, failed, and mismatched
+origins must fail the existing persistence guard before the direct writer
+creates a target or tombstones the only real database."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((vault-root (file-name-as-directory (expand-file-name "vault" dir)))
+           (outside-dir (file-name-as-directory (expand-file-name "outside-db" dir)))
+           (outside-db (expand-file-name "supertag-db.el" outside-dir))
+           (target-db (expand-file-name ".supertag/supertag-db.el" vault-root))
+           (org-supertag-sync-directories (list vault-root))
+           (supertag-data-directory outside-dir)
+           (supertag-db-file outside-db)
+           (supertag-db-backup-directory (expand-file-name "backups" outside-dir))
+           (supertag--store (supertag-git-sync-test--build-store '("placeholder")))
+           (supertag--store-origin nil)
+           original-bytes)
+      (make-directory vault-root t)
+      (make-directory outside-dir t)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("real-node")) outside-db)
+      (setq original-bytes
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally outside-db)
+              (buffer-string)))
+      (cl-letf (((symbol-function 'supertag--persistence--expected-sync-state-file)
+                 (lambda () nil)))
+        (dolist (scenario
+                 (list (cons (list :status :failed :db-file outside-db)
+                             "last load status :failed")
+                       (cons nil "store origin missing")
+                       (cons (list :status :ok
+                                   :db-file (expand-file-name "another-db.el" outside-dir))
+                             "db-file mismatch")))
+          (setq supertag--store-origin (car scenario))
+          (let ((result (supertag-git--migrate-layout)))
+            (should (eq :failed (plist-get result :status)))
+            (should (string-match-p (regexp-quote (cdr scenario))
+                                    (plist-get result :error))))
+          (should (file-exists-p outside-db))
+          (should-not (file-exists-p target-db))
+          (should-not (directory-files outside-dir nil "\\.migrated-"))))
+      (should (equal outside-db supertag-db-file))
+      (should (equal original-bytes
+                     (with-temp-buffer
+                       (set-buffer-multibyte nil)
+                       (insert-file-contents-literally outside-db)
+                       (buffer-string)))))))
+
 ;;; ================================================================
 ;;; Part 2: supertag-git-clone
 ;;; ================================================================
@@ -640,6 +690,90 @@ an unrelated file through), and `supertag-doctor' lists it."
           (with-current-buffer buf
             (should (string-match-p (regexp-quote conflicted-abs) (buffer-string)))))))))
 
+(supertag-git-sync-test--deftest supertag-git-sync-test-modify-delete-org-conflict-guarded
+    "An unmerged Org file is unsafe even when Git emits no text markers.
+A real modify/delete conflict must enter the live conflict set, scanner
+blacklist, and doctor report until the index conflict is resolved."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((db (expand-file-name "supertag-db.el" root))
+           (org-rel "notes.org")
+           (org-file (expand-file-name org-rel root)))
+      (supertag-git-sync-test--init-worktree root)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Original\n"))
+      (supertag-git--configure-clone root db)
+      (supertag-git-sync-test--git! root "add" "-A")
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--git! root "checkout" "-q" "-b" "delete-side")
+      (supertag-git-sync-test--git! root "rm" "-q" "--" org-rel)
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "delete notes")
+      (supertag-git-sync-test--git! root "checkout" "-q" "main")
+      (with-temp-file org-file (insert "* Modified on main\n"))
+      (supertag-git-sync-test--commit-edit root "modify notes")
+      (let ((merge-result (supertag-git-sync-test--git root "merge" "--no-edit" "delete-side")))
+        (should-not (= 0 (car merge-result)))
+        (should (equal (list org-rel) (supertag-git-sync--unmerged-paths root)))
+        (should-not (supertag-git-sync--file-has-conflict-markers-p org-file))
+        (let ((supertag-db-file db)
+              (supertag-data-directory root)
+              (supertag-git-sync--vault-root root)
+              (supertag-git-sync--conflicted-org-files nil))
+          (cl-letf (((symbol-function 'supertag-sync-check-now) #'ignore))
+            (supertag-git-sync--after-merge merge-result root))
+          (should (equal (list org-file) supertag-git-sync--conflicted-org-files))
+          (let ((imported nil))
+            (cl-letf (((symbol-function 'dummy-orig-fn)
+                       (lambda (&rest _) (setq imported t))))
+              (supertag-git-sync--skip-conflicted-file-advice
+               #'dummy-orig-fn org-file)
+              (should-not imported)))
+          (let ((buf (supertag-doctor t)))
+            (with-current-buffer buf
+              (should (string-match-p (regexp-quote org-file) (buffer-string))))))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-doctor-cold-loads-git-diagnostics
+    "Loading doctor alone must still inspect Git state on first use.
+The Git module is loaded lazily by the report section, and an unresolved
+Org conflict already on disk is visible without enabling sync mode."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((db (expand-file-name "supertag-db.el" root))
+           (org-file (expand-file-name "notes.org" root)))
+      (supertag-git-sync-test--init-worktree root)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Original\n"))
+      (supertag-git--configure-clone root db)
+      (supertag-git-sync-test--git! root "add" "-A")
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--git! root "checkout" "-q" "-b" "other")
+      (with-temp-file org-file (insert "* Other\n"))
+      (supertag-git-sync-test--commit-edit root "other edit")
+      (supertag-git-sync-test--git! root "checkout" "-q" "main")
+      (with-temp-file org-file (insert "* Main\n"))
+      (supertag-git-sync-test--commit-edit root "main edit")
+      (should-not (= 0 (car (supertag-git-sync-test--git
+                             root "merge" "--no-edit" "other"))))
+      (unwind-protect
+          (progn
+            (unload-feature 'supertag-doctor t)
+            (unload-feature 'supertag-git t)
+            (require 'supertag-doctor)
+            (should-not (featurep 'supertag-git))
+            (let ((default-directory root)
+                  (supertag-db-file db)
+                  (supertag-data-directory root)
+                  (org-supertag-sync-directories (list root)))
+              (let ((buf (supertag-doctor t)))
+                (should (featurep 'supertag-git))
+                (with-current-buffer buf
+                  (should-not (string-match-p "supertag-git\\.el not loaded"
+                                              (buffer-string)))
+                  (should (string-match-p (regexp-quote org-file)
+                                          (buffer-string)))))))
+        (require 'supertag-git)
+        (require 'supertag-doctor)))))
+
 (supertag-git-sync-test--deftest supertag-git-sync-test-mode-off-cleans-up
     "Disabling `supertag-git-sync-mode' cancels both timers (asserted nil),
 removes its hooks, and flushes (rather than silently drops) any pending
@@ -818,6 +952,60 @@ NEVER be swept into an automatic commit, while a genuine concurrent
       (should (file-exists-p junk-file))
       (should (string-match-p "\\`\\?\\? fake-credentials\\.txt"
                               (supertag-git-sync-test--git! root "status" "--porcelain" "--" junk-file))))))
+
+(supertag-git-sync-test--deftest supertag-git-sync-test-commit-refuses-prestaged-out-of-scope-file
+    "Auto-commit must not own or rewrite a user's unrelated index state.
+If a non-Supertag file is already staged, the cycle refuses before staging
+the Org edit; the staged secret remains staged and no commit is created.
+After the user unstages it, the next cycle commits only the Org edit."
+  (supertag-git-sync-test--with-temp-dir root
+    (supertag-git-sync-test--init-worktree root)
+    (let ((db (expand-file-name "supertag-db.el" root))
+          (org-file (expand-file-name "notes.org" root))
+          (secret-file (expand-file-name "secret.txt" root)))
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (with-temp-file org-file (insert "* Original\n"))
+      (supertag-git--configure-clone root db)
+      (supertag-git-sync-test--git! root "add" "-A")
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "initial")
+      (with-temp-file org-file (insert "* Edited\n"))
+      (with-temp-file secret-file (insert "TOKEN=do-not-commit\n"))
+      (supertag-git-sync-test--git! root "add" "--" "secret.txt")
+      (should (equal "secret.txt\n"
+                     (supertag-git-sync-test--git! root "diff" "--cached" "--name-only")))
+      (let ((supertag-db-file db))
+        (should-not (supertag-git-sync--auto-commit-path-p root "secret.txt")))
+      (let ((head-before (string-trim
+                          (supertag-git-sync-test--git! root "rev-parse" "HEAD")))
+            (supertag-git-sync--synchronous t)
+            (supertag-git-sync--vault-root root)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-git-sync--conflict-commit-warned nil)
+            (supertag-db-file db)
+            (supertag-data-directory root))
+        (supertag-git-sync--fire-commit)
+        (should-not supertag-git-sync--in-flight)
+        (should supertag-git-sync--conflict-commit-warned)
+        (should (equal head-before
+                       (string-trim
+                        (supertag-git-sync-test--git! root "rev-parse" "HEAD"))))
+        (should (equal "secret.txt\n"
+                       (supertag-git-sync-test--git! root "diff" "--cached" "--name-only")))
+        (should (equal "notes.org\n"
+                       (supertag-git-sync-test--git! root "diff" "--name-only")))
+        (supertag-git-sync-test--git! root "reset" "-q" "--" "secret.txt")
+        (supertag-git-sync--fire-commit)
+        (should-not supertag-git-sync--conflict-commit-warned)
+        (should-not
+         (equal head-before
+                (string-trim
+                 (supertag-git-sync-test--git! root "rev-parse" "HEAD"))))
+        (let ((shown (supertag-git-sync-test--git! root "show" "--name-only" "--format=" "HEAD")))
+          (should (string-match-p "notes\\.org" shown))
+          (should-not (string-match-p "secret\\.txt" shown)))))))
 
 (provide 'git-sync-mode-test)
 

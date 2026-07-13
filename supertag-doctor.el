@@ -31,10 +31,8 @@
 ;; minimal dependency footprint; guarded with `fboundp' at call time.
 (declare-function supertag-sync-cleanup-database "supertag-services-sync")
 
-;; Git-sync diagnostic. `supertag-git.el' is intentionally not part of this
-;; file's require chain either (same reasoning as the sync layer above --
-;; keep `supertag-doctor' cheap to load even when git sync was never set
-;; up); guarded with `fboundp' at call time, same as every other section.
+;; Git-sync diagnostics are loaded lazily when that report section runs, so
+;; a cold doctor invocation can inspect conflicts left by an earlier session.
 (declare-function supertag-git-check "supertag-git")
 (declare-function supertag-git-sync--live-conflicted-org-files "supertag-git")
 
@@ -274,6 +272,7 @@ though an unresolved mid-merge repository on disk is not -- this report
 must surface that conflict either way. The session variable is still
 refreshed to match, so it stays a useful cache for other callers (e.g. the
 sync-scanner-skipping advice)."
+  (require 'supertag-git nil t)
   (supertag-doctor--insert-header "8. Git Sync")
   (let* ((status (and (fboundp 'supertag-git-check) (supertag-git-check)))
          (in-repo (and status (plist-get status :in-repo-p)))
@@ -308,9 +307,9 @@ sync-scanner-skipping advice)."
           (when (and (plist-get status :driver-configured-p)
                      (plist-get status :gitattributes-entry-present-p))
             (insert "  Degradation note: even if the driver were misconfigured on another clone, git's default line merge still converges disjoint-entity edits; only a same-entity edit produces conflict markers, which the persistence loader refuses to load (see M-x supertag-doctor section \"2. Guards\" / *Messages*) rather than silently treating as an empty database.\n")))))
-    ;; S4: `supertag-git-sync-mode' status + org-text-conflict list. Read
-    ;; purely via `boundp'/`fboundp' (never `require'd) for the same reason
-    ;; as `supertag-git-check' above.
+    ;; S4: `supertag-git-sync-mode' status + org-text-conflict list. The
+    ;; module was required softly at section entry; keep the guards so a
+    ;; missing/broken optional module still degrades to an honest report.
     (insert "\n")
     (if (not (boundp 'supertag-git-sync-mode))
         (insert "  supertag-git-sync-mode: n/a (supertag-git.el not loaded)\n")
@@ -338,8 +337,8 @@ sync-scanner-skipping advice)."
               ;; predates this session entirely.
               ((and in-repo repo-root (fboundp 'supertag-git-sync--live-conflicted-org-files))
                (supertag-git-sync--live-conflicted-org-files repo-root))
-              ;; Last resort (supertag-git.el not loaded at all): fall back
-              ;; to whatever the session cache happens to hold.
+              ;; Last resort (the soft require failed): fall back to
+              ;; whatever the session cache happens to hold.
               (t (and (boundp 'supertag-git-sync--conflicted-org-files)
                       supertag-git-sync--conflicted-org-files)))))
         ;; Refresh the session cache to match what was just computed live,

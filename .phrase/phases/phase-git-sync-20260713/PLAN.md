@@ -1,7 +1,7 @@
 # org-supertag Git 原生同步 — 实施计划
 
 日期：2026-07-13
-状态：已批准（2026-07-13），执行中 — S0 起步
+状态：已批准（2026-07-13），执行中 — S0–S4 已实现，P0 复审加固中
 前置版本：v5.9.0（原子保存 / 多实例锁 / 自动迁移 / doctor 已具备）
 
 ---
@@ -279,3 +279,18 @@ merge driver，自动化循环只是便利层。
 
 > 两台机器同时开着 Emacs 各自编辑，任何一侧的修改要么自动收敛、要么成为 doctor
 > 里可见可裁决的冲突条目——不存在第三种（静默丢失）结局。
+
+## P0 复审门槛（2026-07-13）
+
+S0–S4 初版完成后的反例审查发现，完成标准还需同时覆盖以下边界：
+
+1. `:tag-field-associations` 的 legacy/异常 shape 不得进入专用合并器后被跳过；
+   无法证明 shape 安全时整体三方裁决。
+2. 有序 association 的并发插入必须保留两侧顺序约束；冲突 ID 必须区分字段键与
+   合并器元数据键。
+3. 所有 Git unmerged Org 路径都必须进入 doctor 与 scanner 黑名单，不以文本
+   conflict marker 为前提。
+4. 自动提交只拥有自己的 allowlist；不得提交或 reset 用户预先 staged 的其他路径。
+5. DB 布局迁移不得绕过既有 persistence origin/guard。
+
+对应记录：`issue013` / `task001`。

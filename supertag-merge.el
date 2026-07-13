@@ -75,9 +75,9 @@
 ;;      field-id touched by only one side's diff from base is included as
 ;;      that side left it; the same field-id changed differently on both
 ;;      sides is a whole-association (not sub-field) conflict for that
-;;      field-id; if the surviving field-ids common to both ours and theirs
-;;      are placed in a different relative order by each side, ours' order
-;;      wins and one extra `:order' conflict is recorded.
+;;      field-id.  Concurrent ordering constraints are combined when possible;
+;;      incompatible orders keep ours as the complete fallback and record one
+;;      `:order' conflict containing all three original orders.
 ;;   2. Positively plist-shaped entities (per `supertag--persistence--plist-p',
 ;;      REUSED rather than reinvented -- the exact same conservative
 ;;      discriminator the canonicalizer already uses to decide this exact
@@ -122,6 +122,8 @@
 ;; entity in a new collection, `:sync-conflicts', with a deterministic id
 ;; (`supertag-merge--conflict-id') of the shape:
 ;;   "COLLECTION/ENTITY-ID/KEY"   (a field-level conflict)
+;;   "tag-field-associations/ENTITY-ID/field|meta/KEY"
+;;                                  (association slot vs list metadata)
 ;;   "COLLECTION/ENTITY-ID"       (a delete-vs-modify conflict; no single key)
 ;;   "root/KEY"                   (a root-scalar conflict, e.g. "root/version")
 ;; Determinism of the id is what makes re-merging idempotent: the same three
@@ -361,9 +363,13 @@ Each element of PLISTS may be nil (treated as the empty plist)."
 
 (defun supertag-merge--conflict-id (collection entity-id key)
   "Return the deterministic `:sync-conflicts' id for one conflict.
-See the Commentary section \"Conflict representation\" above for the three
+See the Commentary section \"Conflict representation\" above for the
 shapes this can take."
   (cond
+   ((and (eq collection :tag-field-associations) entity-id key)
+    (format "%s/%s/%s/%s" (supertag-merge--name collection) entity-id
+            (if (keywordp key) "meta" "field")
+            (supertag-merge--name key)))
    ((and collection entity-id key)
     (format "%s/%s/%s" (supertag-merge--name collection) entity-id
             (supertag-merge--name key)))
@@ -440,29 +446,33 @@ granularity\"."
 ;;; --- :tag-field-associations ordered-set merge ---
 
 (defun supertag-merge--assoc-field-id (assoc)
-  "Return ASSOC's `:field-id', or nil if ASSOC is not a well-formed
-tag-field-association plist (defensive only; real entities are always
-well-formed by the time they reach this file)."
-  (and (supertag-merge--plist-like-p assoc) (consp assoc)
-       (plist-get assoc :field-id)))
+  "Return `:field-id' from a prevalidated association plist ASSOC."
+  (plist-get assoc :field-id))
+
+(defun supertag-merge--assoc-list-p (value)
+  "Return non-nil when VALUE is a safe association list to decompose.
+Every element must be a plist with a unique, non-empty string `:field-id'.
+The absent sentinel is valid for a missing BASE value."
+  (or (eq value supertag-merge--absent)
+      (let ((seen (make-hash-table :test 'equal)))
+        (and (proper-list-p value)
+             (cl-every
+              (lambda (assoc)
+                (and (supertag--persistence--plist-p assoc)
+                     (let ((field-id (plist-get assoc :field-id)))
+                       (and (stringp field-id)
+                            (not (string= field-id ""))
+                            (not (gethash field-id seen))
+                            (progn (puthash field-id t seen) t)))))
+              value)))))
 
 (defun supertag-merge--assoc-field-ids (list)
-  "Return the ordered, deduplicated list of `:field-id's found in LIST.
-LIST is one side's whole `:tag-field-associations' entity value (an
-ordered list of association plists).  Malformed elements (no `:field-id')
-are silently skipped; first occurrence wins the position on a duplicate
-`:field-id'."
-  (let ((seen (make-hash-table :test 'equal)) order)
-    (dolist (a list)
-      (let ((fid (supertag-merge--assoc-field-id a)))
-        (when (and fid (not (gethash fid seen)))
-          (puthash fid t seen)
-          (push fid order))))
-    (nreverse order)))
+  "Return ordered `:field-id's from prevalidated association LIST."
+  (mapcar #'supertag-merge--assoc-field-id list))
 
 (defun supertag-merge--assoc-index (list)
   "Return an `equal'-test hash table mapping `:field-id' -> association
-plist for LIST.  Last occurrence wins on a duplicate `:field-id'."
+plist for prevalidated LIST."
   (let ((h (make-hash-table :test 'equal)))
     (dolist (a list)
       (let ((fid (supertag-merge--assoc-field-id a)))
@@ -473,6 +483,51 @@ plist for LIST.  Last occurrence wins on a duplicate `:field-id'."
   "Return the subsequence of ORDER whose elements are `member' of SET.
 Preserves ORDER's own relative element order."
   (cl-remove-if (lambda (f) (not (member f set))) order))
+
+(defun supertag-merge--merge-assoc-order (survivors base-order ours-order theirs-order)
+  "Return (ORDER . CONFLICT-P) for the surviving association ids.
+Single-side order changes win normally.  Concurrent changes are combined as
+ordering constraints; a cycle falls back to a complete ours-first order and
+sets CONFLICT-P."
+  (let* ((base (supertag-merge--assoc-restrict base-order survivors))
+         (ours (supertag-merge--assoc-restrict ours-order survivors))
+         (theirs (supertag-merge--assoc-restrict theirs-order survivors))
+         (decision (supertag-merge--3way-raw base ours theirs))
+         (chosen (and (not (eq decision :conflict)) (cdr decision))))
+    (if (and chosen (= (length chosen) (length survivors)))
+        (cons chosen nil)
+      (let ((edges (make-hash-table :test 'equal))
+            (indegree (make-hash-table :test 'equal))
+            (preference (delete-dups (append ours theirs base (copy-sequence survivors))))
+            (remaining (copy-sequence survivors))
+            result)
+        (dolist (fid survivors)
+          (puthash fid nil edges)
+          (puthash fid 0 indegree))
+        (dolist (side (list ours theirs))
+          (cl-loop for from in side
+                   for to in (cdr side)
+                   do (unless (member to (gethash from edges))
+                        (push to (gethash from edges))
+                        (puthash to (1+ (gethash to indegree)) indegree))))
+        ;; ponytail: O(n²) is deliberate; tag schemas are short.  Use a
+        ;; priority queue only if real per-tag association lists grow large.
+        (while (and remaining
+                    (let ((next
+                           (cl-find-if
+                            (lambda (fid)
+                              (and (member fid remaining)
+                                   (zerop (gethash fid indegree))))
+                            preference)))
+                      (when next
+                        (setq remaining (delete next remaining))
+                        (push next result)
+                        (dolist (to (gethash next edges))
+                          (puthash to (1- (gethash to indegree)) indegree))
+                        t))))
+        (if remaining
+            (cons preference t)
+          (cons (nreverse result) nil))))))
 
 (defun supertag-merge--merge-assoc-slot (collection entity-id field-id base ours theirs)
   "Merge one `:field-id' slot inside a `:tag-field-associations' entity.
@@ -546,20 +601,15 @@ granularity\" for the algorithm.  Returns (MERGED-LIST . CONFLICTS)."
           (push (cons fid (car result)) merged-alist))))
     (setq merged-alist (nreverse merged-alist))
     (let* ((survivors (mapcar #'car merged-alist))
-           (common (cl-intersection ours-order theirs-order :test #'equal))
-           (base-common (supertag-merge--assoc-restrict base-order common))
-           (ours-common (supertag-merge--assoc-restrict ours-order common))
-           (theirs-common (supertag-merge--assoc-restrict theirs-order common))
-           (order-decision (supertag-merge--3way-raw base-common ours-common theirs-common))
-           (leftover (cl-set-difference survivors ours-order :test #'equal))
-           (final-order (append (supertag-merge--assoc-restrict ours-order survivors)
-                                 (supertag-merge--assoc-restrict theirs-order leftover))))
-      (when (eq order-decision :conflict)
+           (order-result (supertag-merge--merge-assoc-order
+                          survivors base-order ours-order theirs-order))
+           (final-order (car order-result)))
+      (when (cdr order-result)
         (setq conflicts
               (nconc conflicts
                      (list (supertag-merge--make-conflict
                             collection entity-id :order
-                            :ours ours-common :theirs theirs-common :base base-common
+                            :ours ours-order :theirs theirs-order :base base-order
                             :kind :field-conflict)))))
       (cons (mapcar (lambda (f) (cdr (assoc f merged-alist))) final-order)
             conflicts))))
@@ -617,9 +667,13 @@ Dispatches:
      intact in the conflict record.
 See the Commentary section \"Conflict granularity\" for the full rationale."
   (cond
-   ((eq collection :tag-field-associations)
+   ((and (eq collection :tag-field-associations)
+         (supertag-merge--assoc-list-p base)
+         (supertag-merge--assoc-list-p ours)
+         (supertag-merge--assoc-list-p theirs))
     (supertag-merge--merge-tag-field-associations collection entity-id base ours theirs))
-   ((and (supertag-merge--plist-like-p base)
+   ((and (not (eq collection :tag-field-associations))
+         (supertag-merge--plist-like-p base)
          (supertag-merge--plist-like-p ours)
          (supertag-merge--plist-like-p theirs))
     (supertag-merge--field-level-merge

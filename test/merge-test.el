@@ -660,6 +660,65 @@ zero conflicts and the full, correct entity count."
 interleaved-nil corruption the P0 bug produced)."
   (not (memq nil list)))
 
+(ert-deftest supertag-merge-test-tag-field-associations-legacy-shape-falls-back-whole ()
+  "Legacy string associations are preserved wholesale, never skipped."
+  (let* ((base-value '("f0"))
+         (ours-value '("f0" "f1"))
+         (theirs-value '("f0" "f2"))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") base-value))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") ours-value))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1") theirs-value))))
+         (result (supertag-merge-3way base ours theirs))
+         (data (cdr (car (cdr result)))))
+    (should (equal (supertag-merge-test--entity
+                    (car result) :tag-field-associations "tag1")
+                   ours-value))
+    (should (= 1 (length (cdr result))))
+    (should (null (plist-get data :key)))
+    (should (equal (plist-get data :base) base-value))
+    (should (equal (plist-get data :ours) ours-value))
+    (should (equal (plist-get data :theirs) theirs-value))))
+
+(ert-deftest supertag-merge-test-tag-field-associations-invalid-shapes-fall-back-whole ()
+  "Any malformed side forces a whole-value conflict without data loss."
+  (dolist
+      (case
+       (list
+        (list "malformed-base"
+              (list '(:field-id "f0" :order))
+              (list (supertag-merge-test--assoc "f0" 1))
+              (list (supertag-merge-test--assoc "f0" 2)))
+        (list "duplicate-ours"
+              (list (supertag-merge-test--assoc "f0" 0))
+              (list (supertag-merge-test--assoc "f0" 1)
+                    (supertag-merge-test--assoc "f0" 2))
+              (list (supertag-merge-test--assoc "f0" 3)))
+        (list "empty-id-theirs"
+              (list (supertag-merge-test--assoc "f0" 0))
+              (list (supertag-merge-test--assoc "f0" 1))
+              (list (supertag-merge-test--assoc "" 2)))))
+    (cl-destructuring-bind (name base-value ours-value theirs-value) case
+      (ert-info ((format "shape: %s" name))
+        (let* ((base (supertag-merge-test--parsed
+                      nil (list (cons (cons :tag-field-associations "tag1") base-value))))
+               (ours (supertag-merge-test--parsed
+                      nil (list (cons (cons :tag-field-associations "tag1") ours-value))))
+               (theirs (supertag-merge-test--parsed
+                        nil (list (cons (cons :tag-field-associations "tag1") theirs-value))))
+               (result (supertag-merge-3way base ours theirs))
+               (data (cdr (car (cdr result)))))
+          (should (equal (supertag-merge-test--entity
+                          (car result) :tag-field-associations "tag1")
+                         ours-value))
+          (should (= 1 (length (cdr result))))
+          (should (null (plist-get data :key)))
+          (should (equal (plist-get data :base) base-value))
+          (should (equal (plist-get data :ours) ours-value))
+          (should (equal (plist-get data :theirs) theirs-value)))))))
+
 (ert-deftest supertag-merge-test-tag-field-associations-p0-repro ()
   "The exact reviewer repro: base/ours/theirs each independently name a
 DIFFERENT single field-id.  Must merge to a valid ordered list containing
@@ -705,6 +764,24 @@ all three present in the merge, zero conflicts."
                                  (supertag-merge-test--assoc "f1" 1)
                                  (supertag-merge-test--assoc "f2" 2))))))
 
+(ert-deftest supertag-merge-test-tag-field-associations-concurrent-inserts-keep-both-orders ()
+  "Concurrent inserts between the same anchors retain both side orders."
+  (let* ((a (supertag-merge-test--assoc "a" 0))
+         (x (supertag-merge-test--assoc "x" 1))
+         (b (supertag-merge-test--assoc "b" 2))
+         (c (supertag-merge-test--assoc "c" 3))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") (list a c)))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") (list a x c)))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1") (list a b c)))))
+         (result (supertag-merge-3way base ours theirs))
+         (merged (supertag-merge-test--entity
+                  (car result) :tag-field-associations "tag1")))
+    (should (null (cdr result)))
+    (should (equal merged (list a x b c)))))
+
 (ert-deftest supertag-merge-test-tag-field-associations-same-field-id-conflict ()
   "Both sides modify f0's :order differently -> a conflict record naming
 that field-id specifically, ours written into the merged list."
@@ -730,7 +807,8 @@ that field-id specifically, ours written into the merged list."
       (should (equal (plist-get data :ours) (supertag-merge-test--assoc "f0" 1)))
       (should (equal (plist-get data :theirs) (supertag-merge-test--assoc "f0" 2)))
       (should (equal (plist-get data :base) (supertag-merge-test--assoc "f0" 0)))
-      (should (equal (plist-get data :id) "tag-field-associations/tag1/f0")))))
+      (should (equal (plist-get data :id)
+                     "tag-field-associations/tag1/field/f0")))))
 
 (ert-deftest supertag-merge-test-tag-field-associations-order-conflict ()
   "Same field-ids on all three sides, but ours and theirs each reorder them
@@ -757,6 +835,29 @@ per-field-id conflicts)."
       (should (equal (plist-get data :ours) '("f2" "f0" "f1")))
       (should (equal (plist-get data :theirs) '("f1" "f2" "f0")))
       (should (equal (plist-get data :base) '("f0" "f1" "f2"))))))
+
+(ert-deftest supertag-merge-test-tag-field-associations-order-ids-do-not-collide ()
+  "A field named order and the list-order metadata keep distinct conflicts."
+  (let* ((base-order (supertag-merge-test--assoc "order" 0))
+         (ours-order (supertag-merge-test--assoc "order" 1))
+         (theirs-order (supertag-merge-test--assoc "order" 2))
+         (f1 (supertag-merge-test--assoc "f1" 1))
+         (f2 (supertag-merge-test--assoc "f2" 2))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list base-order f1 f2)))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list f2 ours-order f1)))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list f1 f2 theirs-order)))))
+         (result (supertag-merge-3way base ours theirs))
+         (ids (sort (mapcar #'car (cdr result)) #'string<)))
+    (should (equal ids '("tag-field-associations/tag1/field/order"
+                         "tag-field-associations/tag1/meta/order")))
+    (dolist (id ids)
+      (should (supertag-merge-test--entity (car result) :sync-conflicts id)))))
 
 ;;; --- 10. Hash-table-shaped entities (:field-values / legacy :fields):
 ;;; whole-value granularity, never per-nested-key decomposition ---

@@ -274,9 +274,20 @@ Returns a plist:
    :driver-package-dir DIR :driver-command CMD
    :gitignore-file FILE :gitignore-added (LINE ...))
 The two *-added slots list only the lines that were newly appended by
-THIS call -- empty on a re-run, which is how idempotence is verified."
-  (let* ((root (file-name-as-directory (expand-file-name repo-root)))
-         (rel (file-relative-name (expand-file-name db-file) root))
+THIS call -- empty on a re-run, which is how idempotence is verified.
+
+REPO-ROOT and DB-FILE are both resolved through `file-truename' before
+the relative `.gitattributes' path is computed: REPO-ROOT frequently
+arrives as a truename already (everything derived from
+`supertag-git--repo-toplevel' is -- git prints resolved paths), while
+DB-FILE typically arrives as the user-configured, possibly
+symlink-traversing spelling (`/tmp/...' vs `/private/tmp/...' on macOS
+being the canonical example). Mixing the two produces a
+repository-escaping `../../..' relative path, which `.gitattributes'
+matches against NOTHING -- the semantic merge driver then silently never
+applies. Found by a real-environment E2E run, not code review."
+  (let* ((root (supertag-git--truename-dir repo-root))
+         (rel (file-relative-name (file-truename (expand-file-name db-file)) root))
          (attrs-file (expand-file-name ".gitattributes" root))
          (attrs-line (format "%s merge=supertag-db" rel))
          (attrs-added (supertag-git--ensure-lines attrs-file (list attrs-line)))
@@ -443,6 +454,11 @@ sequence)."
         (when (file-exists-p target-db)
           (error "migration target %s already exists -- resolve manually before retrying (are two migrations racing?)"
                  target-db))
+        (when (and old-exists store-loaded-p)
+          (let ((reasons (supertag--persistence-guard-violations old-db-file)))
+            (when reasons
+              (error "refusing to migrate the in-memory database: %s"
+                     (mapconcat #'identity reasons "; ")))))
         (unless (file-directory-p root)
           (make-directory root t))
         (unless (supertag-git--repo-toplevel root)
@@ -640,7 +656,13 @@ Keys:
               :driver-configured-p nil :gitattributes-entry-present-p nil
               :db-tracked-p nil :remote-configured-p nil
               :multiple-sync-roots-p multi)
-      (let* ((rel (file-relative-name db-file toplevel))
+      ;; Truename BOTH sides of the relative-path computation, for the same
+      ;; symlink-mismatch reason documented on `supertag-git--configure-clone'
+      ;; (whose `.gitattributes' entry this :relative-path is compared
+      ;; against): `toplevel' is already a truename (git resolves it), so a
+      ;; non-truenamed DB-FILE under a symlinked prefix would yield a bogus
+      ;; `../..'-escaping rel here and a spurious "entry missing" report.
+      (let* ((rel (file-relative-name (file-truename db-file) toplevel))
              (driver (supertag-git--get-config toplevel "merge.supertag-db.driver"))
              (attrs-lines (supertag-git--file-lines (expand-file-name ".gitattributes" toplevel)))
              (attrs-present (cl-some
@@ -1157,22 +1179,20 @@ works identically for an org file as for the database file."
     (supertag--persistence--buffer-has-conflict-markers-p)))
 
 (defun supertag-git-sync--live-conflicted-org-files (root)
-  "Return `.org' files under ROOT that are BOTH still unmerged (per
-`supertag-git-sync--unmerged-paths') AND actually contain literal conflict
-markers, computed FRESH from git's current on-disk state every time this
-is called -- callable at any time (right after a merge, from
-`supertag-git-sync--fire-commit', or from `supertag-doctor' in a session
-that never even turned `supertag-git-sync-mode' on), unlike the
-session-local `supertag-git-sync--conflicted-org-files' cache, which only
+  "Return `.org' files under ROOT that are still unmerged (per
+`supertag-git-sync--unmerged-paths'), computed FRESH from git's current
+index state every time this is called.  Text markers are not required:
+modify/delete and rename/delete conflicts have unmerged index entries but
+may contain no marker text at all.  Callable at any time (right after a
+merge, from `supertag-git-sync--fire-commit', or from `supertag-doctor'
+in a session that never even turned `supertag-git-sync-mode' on), unlike
+the session-local `supertag-git-sync--conflicted-org-files' cache, which only
 ever gets written by `supertag-git-sync--after-merge' and is simply gone
 after an Emacs restart regardless of what is actually on disk."
   (let (conflicted)
     (dolist (rel (supertag-git-sync--unmerged-paths root))
       (when (string-match-p "\\.org\\'" rel)
-        (let ((abs (expand-file-name rel root)))
-          (when (and (file-exists-p abs)
-                     (supertag-git-sync--file-has-conflict-markers-p abs))
-            (push abs conflicted)))))
+        (push (expand-file-name rel root) conflicted)))
     (nreverse conflicted)))
 
 (defvar supertag-git-sync--conflict-commit-warned nil
@@ -1220,9 +1240,10 @@ introduced some other way, not by an actual in-progress git merge). Only
 lines the diff ADDS (a leading `+') count, so a marker that already existed
 in a previous commit's context lines is not a false positive."
   (let ((result (supertag-git--run root "diff" "--cached")))
-    (and (supertag-git--ok-p result)
-         (string-match-p "^\\+<<<<<<< \\|^\\+=======$\\|^\\+>>>>>>> "
-                         (cdr result)))))
+    (unless (supertag-git--ok-p result)
+      (error "could not inspect staged content: %s" (string-trim (cdr result))))
+    (string-match-p "^\\+<<<<<<< \\|^\\+=======$\\|^\\+>>>>>>> "
+                    (cdr result))))
 
 (defun supertag-git-sync--pathspec-matches-p (root pathspec)
   "Return non-nil if PATHSPEC matches at least one path git already knows
@@ -1243,11 +1264,25 @@ exists before ever invoking `git add'."
                                     pathspec)))
     (and (supertag-git--ok-p result) (> (length (cdr result)) 0))))
 
+(defun supertag-git-sync--commit-candidate-pathspecs (root)
+  "Return the complete allowlist of pathspecs auto-commit may own in ROOT."
+  (let* ((true-root (supertag-git--truename-dir root))
+         (db-file (file-truename (expand-file-name supertag-db-file)))
+         (db-dir (file-name-directory db-file)))
+    (delete-dups
+     (list "*.org"
+           (file-relative-name db-file true-root)
+           (file-relative-name (file-truename (expand-file-name ".gitattributes" root))
+                               true-root)
+           (file-relative-name (file-truename (expand-file-name ".gitignore" db-dir))
+                               true-root)))))
+
 (defun supertag-git-sync--commit-pathspecs (root)
-  "Return the git pathspecs `supertag-git-sync--fire-commit' stages via
-`git add -A --', filtered down to only those that currently match
-something (see `supertag-git-sync--pathspec-matches-p' for why that
-filtering is required, not optional).
+  "Return the currently matching auto-commit pathspecs under ROOT.
+The complete allowlist comes from
+`supertag-git-sync--commit-candidate-pathspecs'; unmatched candidates are
+filtered because `git add' rejects the entire invocation when one literal
+pathspec matches nothing.
 
 Deliberately narrow -- replacing an earlier, unconditional `git add -A'
 -- per this mode's docstring: only `.org' files under ROOT (recursively,
@@ -1270,19 +1305,14 @@ truename-identical to ROOT (e.g. one side under a symlinked `/tmp' or
 `/var' on macOS, the other resolved through it) produces a bogus,
 repository-escaping `../../...' relative pathspec that git rejects
 outright -- silently dropping the database from every auto-commit."
-  (let* ((true-root (supertag-git--truename-dir root))
-         (db-file (file-truename (expand-file-name supertag-db-file)))
-         (db-dir (file-name-directory db-file))
-         (candidates
-          (delete-dups
-           (list "*.org"
-                 (file-relative-name db-file true-root)
-                 (file-relative-name (file-truename (expand-file-name ".gitattributes" root))
-                                     true-root)
-                 (file-relative-name (file-truename (expand-file-name ".gitignore" db-dir))
-                                     true-root)))))
+  (let ((candidates (supertag-git-sync--commit-candidate-pathspecs root)))
     (cl-remove-if-not (lambda (p) (supertag-git-sync--pathspec-matches-p root p))
                        candidates)))
+
+(defun supertag-git-sync--auto-commit-path-p (root path)
+  "Return non-nil when repository-relative PATH is owned by auto-commit."
+  (or (string-match-p "\\.org\\'" path)
+      (member path (cdr (supertag-git-sync--commit-candidate-pathspecs root)))))
 
 (defun supertag-git-sync--fire-commit ()
   "The debounce timer function: scoped `git add -A --' (never a bare,
@@ -1302,18 +1332,35 @@ outside Emacs entirely (e.g. a manual `git pull'); staging over that with
 markers into history. As a second, belt-and-suspenders check AFTER
 staging (in case something conflict-marker-shaped slipped past the first
 one), the newly staged content itself is scanned for literal conflict
-markers and, if found, unstaged (`git reset') rather than committed. Both
-refusals are reported at most once per episode (see
+markers and, if found, only this mode's pathspecs are unstaged rather than
+committed. All refusals are reported at most once per episode (see
 `supertag-git-sync--note-commit-refused')."
   (setq supertag-git-sync--commit-timer nil)
   (when (and supertag-git-sync--vault-root (not supertag-git-sync--in-flight))
     (let* ((root supertag-git-sync--vault-root)
-           (unmerged (supertag-git-sync--unmerged-paths root)))
-      (if unmerged
+           (unmerged (supertag-git-sync--unmerged-paths root))
+           (staged-result (supertag-git--run root "diff" "--cached" "--name-only" "-z"))
+           (staged-paths (and (supertag-git--ok-p staged-result)
+                              (split-string (cdr staged-result) "\0" t)))
+           (outside-staged
+            (and staged-paths
+                 (cl-remove-if
+                  (lambda (path) (supertag-git-sync--auto-commit-path-p root path))
+                  staged-paths))))
+      (cond
+       (unmerged
           (supertag-git-sync--note-commit-refused
            (format "%d path(s) still unresolved from a merge conflict: %s. Resolve manually (magit / `git checkout --merge'), then the next debounce cycle will commit normally."
-                   (length unmerged) (mapconcat #'identity unmerged ", ")))
-        (supertag-git-sync--clear-commit-conflict-warning)
+                   (length unmerged) (mapconcat #'identity unmerged ", "))))
+       ((not (supertag-git--ok-p staged-result))
+        (supertag-git-sync--note-commit-refused
+         (format "could not inspect the existing git index safely: %s"
+                 (string-trim (cdr staged-result)))))
+       (outside-staged
+        (supertag-git-sync--note-commit-refused
+         (format "the git index already contains out-of-scope path(s): %s. Commit or unstage them manually first; their staged state was left untouched."
+                 (mapconcat #'identity outside-staged ", "))))
+       (t
         (setq supertag-git-sync--in-flight t)
         (let ((pathspecs (supertag-git-sync--commit-pathspecs root)))
           (if (not pathspecs)
@@ -1321,7 +1368,9 @@ refusals are reported at most once per episode (see
               ;; disk (e.g. a brand-new vault with no `.org' files yet) --
               ;; nothing to commit, exactly like the "nothing staged" case
               ;; below.
-              (setq supertag-git-sync--in-flight nil)
+              (progn
+                (supertag-git-sync--clear-commit-conflict-warning)
+                (setq supertag-git-sync--in-flight nil))
             (supertag-git-sync--run-git
              root (append (list "add" "-A" "--") pathspecs)
              (lambda (add-result)
@@ -1334,24 +1383,42 @@ refusals are reported at most once per episode (see
                     (cond
                      ((supertag-git--ok-p diff-result)
                       ;; Exit 0 = nothing staged -- nothing to commit.
+                      (supertag-git-sync--clear-commit-conflict-warning)
                       (setq supertag-git-sync--in-flight nil))
-                     ((supertag-git-sync--staged-conflict-markers-p root)
-                      (supertag-git--run root "reset")
+                     ((/= 1 (car diff-result))
+                      (apply #'supertag-git--run root
+                             (append (list "reset" "--") pathspecs))
                       (supertag-git-sync--note-commit-refused
-                       "staged content still contains literal git conflict markers (<<<<<<< / ======= / >>>>>>>) -- unstaged; resolve manually, then the next debounce cycle will retry.")
+                       (format "could not inspect the staged diff safely: %s"
+                               (string-trim (cdr diff-result))))
                       (setq supertag-git-sync--in-flight nil))
                      (t
-                      (let ((commit-message
-                             (format "supertag-sync: %s %s" (system-name)
-                                     (format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
-                        (supertag-git-sync--run-git
-                         root (list "commit" "-q" "-m" commit-message)
-                         (lambda (commit-result)
-                           (if (not (supertag-git--ok-p commit-result))
-                               (progn (setq supertag-git-sync--in-flight nil)
-                                      (supertag-git-sync--report-failure "git commit" commit-result))
-                             (cl-incf supertag-git-sync--pending-push-count)
-                             (supertag-git-sync--push root))))))))))))))))))
+                      (condition-case err
+                          (if (supertag-git-sync--staged-conflict-markers-p root)
+                              (progn
+                                (apply #'supertag-git--run root
+                                       (append (list "reset" "--") pathspecs))
+                                (supertag-git-sync--note-commit-refused
+                                 "staged content still contains literal git conflict markers (<<<<<<< / ======= / >>>>>>>) -- unstaged; resolve manually, then the next debounce cycle will retry.")
+                                (setq supertag-git-sync--in-flight nil))
+                            (supertag-git-sync--clear-commit-conflict-warning)
+                            (let ((commit-message
+                                   (format "supertag-sync: %s %s" (system-name)
+                                           (format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
+                              (supertag-git-sync--run-git
+                               root (list "commit" "-q" "-m" commit-message)
+                               (lambda (commit-result)
+                                 (if (not (supertag-git--ok-p commit-result))
+                                     (progn (setq supertag-git-sync--in-flight nil)
+                                            (supertag-git-sync--report-failure "git commit" commit-result))
+                                   (cl-incf supertag-git-sync--pending-push-count)
+                                   (supertag-git-sync--push root))))))
+                        (error
+                         (apply #'supertag-git--run root
+                                (append (list "reset" "--") pathspecs))
+                         (supertag-git-sync--note-commit-refused
+                          (error-message-string err))
+                         (setq supertag-git-sync--in-flight nil)))))))))))))))))
 
 ;;; --- Push, with one fetch/merge/retry on rejection ---
 
@@ -1506,7 +1573,7 @@ markers (see `supertag-git-sync--conflicted-org-files') -- the same
 loader's own conflict-marker check, applied to org files."
   (if (member (expand-file-name file) supertag-git-sync--conflicted-org-files)
       (progn
-        (message "supertag-git-sync: skipping import of %s -- unresolved merge conflict markers; resolve manually (see M-x supertag-doctor), then it will be picked up again."
+        (message "supertag-git-sync: skipping import of %s -- unresolved merge conflict; resolve manually (see M-x supertag-doctor), then it will be picked up again."
                  file)
         nil)
     (apply orig-fn file args)))
