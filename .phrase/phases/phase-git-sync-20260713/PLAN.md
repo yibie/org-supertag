@@ -124,6 +124,43 @@ docstring 承诺回滚，实际 unwind-protect 只清 `supertag--transaction-log
 5. **读取端零迁移**：sexp reader 对空白/换行不敏感，旧版本可读新格式、新版本可读
    旧格式。不 bump 数据版本，不触发迁移。
 
+   > **修订 2026-07-13（P1-8 review 发现，此条为错误结论，不删除原文，仅订正）**：
+   > 上面"旧版本可读新格式"一句是**假的**。旧版本（<= 5.9.x）的
+   > `supertag--persistence--try-read-store` 对文件只做**一次** `read`
+   > （见 git 历史 commit `c1224f5`，S2 引入前的最后一个提交），拿到的就是
+   > `(read (current-buffer))` 返回的第一个、也是唯一一个顶层 sexp。canonical
+   > 格式恰恰是"每 entity 一行"——也就是**每行一个独立顶层 sexp**——旧版本那一次
+   > `read` 只会消费掉文件的第一行（根标量行，如
+   > `(:version "6.0.0" ...)`），后面所有 `(:collection ...)` entity 行永远不会
+   > 被读到。旧版本并不会报错：`supertag--coerce-store-table`
+   > （同一函数自 S0 前到现在字节级未变）把这个 plist 强制转成一个哈希表，
+   > 里面只有 `:version` 等根标量键，没有 `:nodes`/`:tags`/... —— 用户看到的是
+   > 一个"成功加载"但没有任何实体的空库，数据在会话内**静默消失**。
+   >
+   > 采纳 review 给出的两个方案中的**方案一：诚实的破坏性格式升级**（不采用方案
+   > 二重新设计格式——逐行属性正是让 git merge 可行的关键，不能动）。具体做法见
+   > `supertag-core-persistence.el`：
+   > 1. `supertag-data-version` 从 `"5.0.0"` bump 到 `"6.0.0"`，让
+   >    `supertag--maybe-auto-migrate` 至少对"版本号确实过期"的旧库触发一次
+   >    （附带它自带的 premigrate 快照）。
+   > 2. 新增一次性 `supertag-db-preformat6-<timestamp>.el` 快照
+   >    （`supertag--persistence--snapshot-preformat6`）：只要即将被覆盖的
+   >    on-disk 文件仍是 legacy 格式，就在原子 rename 之前存一份——这条覆盖了
+   >    "版本号已经是 6.0.0 但文件格式其实还没被重新保存过"的缺口，纯版本号判断
+   >    覆盖不到。
+   > 3. 每次 canonical 保存的根标量行强制带上
+   >    `:supertag-format 1` / `:incompatible-notice "..."` 哨兵键
+   >    （`supertag--persistence-write-canonical-store`）：不能改老版本的代码，
+   >    但至少让任何"碰巧把原始 first-form 展示出来"的路径（如老版本的
+   >    `supertag-db-inspect-file`）有机会显示一句可操作的提示，而不是一个无声的
+   >    空 plist。
+   >
+   > 详见 `supertag-core-persistence.el` 中 `supertag-data-version`、
+   > `supertag--persistence--write-canonical-store`、
+   > `supertag--persistence--snapshot-preformat6` 的 docstring，以及
+   > `test/canonical-serialization-test.el` 的 "P1-8" 测试小节（含对旧 reader
+   > 行为的本地复现测试）。
+
 验收：
 - 同一 store 连续两次序列化字节相同；save→load→save 字节相同。
 - 修改一个字段后 git diff 恰为一行替换。

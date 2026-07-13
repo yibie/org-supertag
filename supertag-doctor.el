@@ -166,7 +166,26 @@
     (insert (format "Target version (supertag-data-version): %s\n" (or target (supertag-doctor--na))))
     (insert (format "Store version: %s\n" current))
     (when (and target store-loaded (stringp current))
-      (insert (format "Match: %s\n" (if (string= target current) "yes" "NO - mismatch"))))))
+      (insert (format "Match: %s\n" (if (string= target current) "yes" "NO - mismatch")))))
+  ;; P1-8 (.phrase/phases/phase-git-sync-20260713/PLAN.md "S2 规范化序列化",
+  ;; 修订 2026-07-13): the on-disk FILE FORMAT (legacy single-`prin1' vs. S2
+  ;; canonical line-per-entity) is a separate axis from the data VERSION
+  ;; above -- a database can be stamped at the current `supertag-data-version'
+  ;; and still be sitting on disk in the legacy format if it has not been
+  ;; saved since upgrading. Surfaced here because a pre-6.0 (<= 5.9.x) build
+  ;; cannot read entities out of the canonical format at all (see
+  ;; `supertag-data-version''s docstring) -- this line is the first place a
+  ;; user checking `M-x supertag-doctor' before downgrading would see that.
+  (let ((active (and (boundp 'supertag-db-file) supertag-db-file)))
+    (insert (format "On-disk format: %s\n"
+                    (cond
+                     ((not (fboundp 'supertag--persistence--legacy-format-file-p))
+                      (supertag-doctor--na))
+                     ((not (and active (file-exists-p active) (not (file-directory-p active))))
+                      "n/a (no on-disk file)")
+                     ((supertag--persistence--legacy-format-file-p active)
+                      "legacy (single prin1 of a hash table -- pre-6.0)")
+                     (t "canonical (S2 line-per-entity, >= 6.0)"))))))
 
 (defun supertag-doctor--section-integrity ()
   "Insert the \"Integrity\" section into the current buffer."
@@ -213,7 +232,22 @@
     (insert (format "Retention (supertag-db-backup-keep-days): %s\n"
                     (if (boundp 'supertag-db-backup-keep-days)
                         (format "%s days" supertag-db-backup-keep-days)
-                      (supertag-doctor--na))))))
+                      (supertag-doctor--na))))
+    ;; Downgrade escape-hatch snapshots -- both kinds are deliberately never
+    ;; touched by the daily-backup retention above (different filename
+    ;; pattern), so they are worth surfacing separately: `premigrate' is
+    ;; written by `supertag--maybe-auto-migrate' on a stale :version; the
+    ;; newer `preformat6' (P1-8) is written by
+    ;; `supertag--persistence--snapshot-preformat6' the first time a
+    ;; canonical save is about to overwrite a still-legacy-format on-disk
+    ;; file -- the case a version-only check misses (format changed without
+    ;; the stored :version being stale). See `supertag-data-version'.
+    (if (not (and dir (file-directory-p dir)))
+        (insert "Downgrade snapshots (never auto-deleted): n/a (no backup directory)\n")
+      (let ((premigrate (directory-files dir nil "\\`supertag-db-premigrate-.*\\.el\\'"))
+            (preformat6 (directory-files dir nil "\\`supertag-db-preformat6-.*\\.el\\'")))
+        (insert (format "Downgrade snapshots (never auto-deleted): %d premigrate, %d preformat6\n"
+                        (length premigrate) (length preformat6)))))))
 
 (defun supertag-doctor--section-presence ()
   "Insert the \"Presence\" section into the current buffer.

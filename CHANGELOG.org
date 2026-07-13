@@ -1,5 +1,30 @@
 * Changelog
 * [Unreleased]
+** Data safety
+*** Breaking: database format version bump 5.0.0 -> 6.0.0
+- =supertag-data-version= is now =6.0.0=. A review of the git-sync S2
+  canonical (line-per-entity) serialization found its "old versions can
+  read the new format" claim false: a 5.9.x (or earlier) build's loader
+  does exactly one =read= of the database file, so against the
+  line-per-entity format it only ever sees the first line and silently
+  ends up with an empty-looking store -- not a parse error. The format
+  itself is unchanged (still frozen for git merging); this is an honest
+  acknowledgment that reading it requires >= 6.0.0.
+- New one-time snapshot: the first canonical save over a still
+  legacy-format on-disk database is preserved to
+  =backups/supertag-db-preformat6-<timestamp>.el= before the atomic
+  rename, covering the case a stale =:version= alone would miss (format
+  changed on disk without the stored version being out of date). Like
+  =premigrate= snapshots, never touched by daily-backup cleanup.
+- Every canonical save's root line now also carries =:supertag-format= and
+  a plain-language =:incompatible-notice= sentinel, and the format header
+  comment embeds the current data version -- so a raw glance at the file
+  (or an old build's own inspection tooling) has a chance of surfacing
+  what happened instead of an inert, silently-empty plist.
+- =M-x supertag-doctor= now reports the on-disk format (legacy vs.
+  canonical) and counts both snapshot kinds.
+- See README "Data storage" / "Migration from older versions" for the
+  user-facing upgrade/downgrade notes.
 
 * [5.9.0] - 2026-07-12
 ** Data safety (highlights)

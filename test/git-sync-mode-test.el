@@ -136,9 +136,15 @@ Returns just the OUTPUT string."
   (supertag-git-sync-test--git! dir "config" "commit.gpgsign" "false"))
 
 (defun supertag-git-sync-test--build-store (ids)
-  "Return a store hash table with one minimal :node entity per id in IDS."
+  "Return a store hash table with one minimal :node entity per id in IDS.
+Stamped with the CURRENT `supertag-data-version' (not a hardcoded literal)
+so loading this fixture never itself triggers `supertag--maybe-auto-migrate'
+-- these tests are about git-sync/layout-migration behavior, not data
+version migration, and a stale-looking version would leave the store
+dirty (and possibly snapshot/migrate) as an unrelated side effect of
+`supertag-load-store', independent of anything the test itself does."
   (let ((store (ht-create)) (nodes (ht-create)))
-    (puthash :version "5.0.0" store)
+    (puthash :version supertag-data-version store)
     (dolist (id ids)
       (puthash id (list :id id :type :node :title (format "Node %s" id)
                         :priority "low" :file "/tmp/f.org")

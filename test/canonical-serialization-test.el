@@ -224,6 +224,205 @@ order, only on entity id."
       (supertag-load-store)
       (should (= 2 (hash-table-count (supertag-store-get-collection :nodes)))))))
 
+;;; --- 3.5. P1-8: honest breaking format upgrade (5.0.0 -> 6.0.0) ---
+;;
+;; Regression tests for the review finding that S2's original "old versions
+;; can read the new format -- no version bump needed" claim was FALSE: a
+;; pre-6.0 (<= 5.9.x) reader does exactly ONE `read' of the file and gets
+;; only the FIRST top-level form -- against the canonical, line-per-entity
+;; format that is the root scalar line, never any entity. See
+;; `supertag-data-version''s docstring and
+;; .phrase/phases/phase-git-sync-20260713/PLAN.md "S2 规范化序列化" (修订
+;; 2026-07-13) for the full writeup this covers:
+;;   1. the data version bump itself (so `supertag--maybe-auto-migrate' at
+;;      least fires against a genuinely stale-versioned old database);
+;;   2. the one-time `supertag-db-preformat6-*' downgrade snapshot, which
+;;      additionally covers a database already stamped at the current
+;;      version whose on-disk FORMAT is nonetheless still legacy;
+;;   3. the `:supertag-format' / `:incompatible-notice' sentinel forced onto
+;;      every canonical save's root scalar line;
+;;   4. a from-source simulation of the actual pre-6.0 reader, proving it
+;;      does NOT recover a valid-looking store from a canonical file.
+
+(defun supertag-canon-test--old-reader-single-read (path)
+  "Replicate org-supertag <= 5.9.x's `supertag--persistence--try-read-store'.
+See commit c1224f5 in this project's git history (the last commit before
+git-sync S2 introduced the canonical, line-per-entity format and the
+format-sniffing/multi-form reader that goes with it): that function's
+ENTIRE body was `(with-temp-buffer (insert-file-contents path) (goto-char
+(point-min)) (let ((read-circle t)) (read (current-buffer))))' -- exactly
+ONE `read' call, no format sniffing, no loop. Against a >= 6.0 canonical
+file (one top-level sexp PER LINE, not one sexp for the whole store), that
+single `read' returns only the FIRST line/form; every subsequent
+`(:collection ...)' entity line is simply never reached by this call."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (goto-char (point-min))
+    (let ((read-circle t))
+      (read (current-buffer)))))
+
+(ert-deftest supertag-canon-test-header-embeds-data-version ()
+  "The canonical format header's second (comment) line embeds the CURRENT
+`supertag-data-version', not just the frozen format-generation number --
+see `supertag--persistence-canonical-format-header'."
+  (supertag-canon-test--with-temp-env
+    (let ((store (supertag-canon-test--build-store '("n1")))
+          (file (expand-file-name "s.el" supertag-data-directory)))
+      (with-temp-buffer
+        (supertag--persistence--write-canonical-store store (current-buffer))
+        (write-region (point-min) (point-max) file nil 'silent))
+      (let ((second-line (nth 1 (supertag-canon-test--file-lines file))))
+        (should (string-match-p "canonical format" second-line))
+        (should (string-match-p (regexp-quote supertag-data-version) second-line))))))
+
+(ert-deftest supertag-canon-test-root-scalar-line-carries-format-sentinel ()
+  "The root scalar line always carries `:supertag-format' and
+`:incompatible-notice' (P1-8), forced in unconditionally by
+`supertag--persistence--write-canonical-store' regardless of whether the
+in-memory store itself ever set those keys -- so a pre-6.0 reader's single
+`read' of this line at least has a chance of surfacing something
+actionable if the raw form is ever inspected."
+  (supertag-canon-test--with-temp-env
+    (let ((store (supertag-canon-test--build-store '("n1")))
+          (file (expand-file-name "s.el" supertag-data-directory)))
+      (with-temp-buffer
+        (supertag--persistence--write-canonical-store store (current-buffer))
+        (write-region (point-min) (point-max) file nil 'silent))
+      (let* ((lines (supertag-canon-test--file-lines file))
+             ;; Header is exactly 2 lines; the root scalar line is next.
+             (root-line (nth 2 lines))
+             (form (car (read-from-string root-line))))
+        (should (equal (plist-get form :supertag-format) 1))
+        (should (stringp (plist-get form :incompatible-notice)))
+        (should (> (length (plist-get form :incompatible-notice)) 0))
+        ;; The store built by the fixture stamped :version "5.0.0" itself;
+        ;; that value is NOT overridden (only the two sentinel keys are).
+        (should (equal (plist-get form :version) "5.0.0"))))))
+
+(ert-deftest supertag-canon-test-old-reader-does-not-recover-entities ()
+  "A simulated pre-6.0 single-`read' load of a real, non-trivial >= 6.0
+canonical file recovers ZERO nodes, even though the file has several --
+the read only ever consumes the root scalar line, and coercing that
+result (via `supertag--coerce-store-table', BYTE-FOR-BYTE UNCHANGED since
+before git-sync S2 -- see the git history cited in
+`supertag-canon-test--old-reader-single-read') never produces a usable
+:nodes collection. This is the exact 'entities silently vanish' failure
+mode the P1-8 version bump / snapshot / sentinel above cannot retroactively
+fix in an already-released old build, only make loud where possible."
+  (supertag-canon-test--with-temp-env
+    (supertag-persistence-ensure-data-directory)
+    (setq supertag--store
+          (supertag-canon-test--build-store
+           '("n1" "n2" "n3" "n4" "n5" "n6" "n7" "n8" "n9" "n10")))
+    (supertag--persistence-write-store-atomically supertag-db-file)
+    (let* ((old-form (supertag-canon-test--old-reader-single-read supertag-db-file))
+           (old-store (supertag--coerce-store-table old-form)))
+      ;; The single `read' got a plist (the root scalar line), not a hash
+      ;; table -- nothing here even LOOKS like the whole store.
+      (should (listp old-form))
+      (should (keywordp (car old-form)))
+      (should (equal (plist-get old-form :version) "5.0.0"))
+      ;; Coerced exactly the way the old build's `supertag-load-store' did,
+      ;; this becomes a hash table with NO usable :nodes bucket -- i.e. a
+      ;; store that LOOKS successfully loaded (no error) but has silently
+      ;; lost all ten real nodes still sitting in the rest of the file.
+      (should (hash-table-p old-store))
+      (let ((nodes (gethash :nodes old-store)))
+        (should (or (null nodes)
+                    (not (hash-table-p nodes))
+                    (= 0 (hash-table-count nodes))))))))
+
+(ert-deftest supertag-canon-test-old-reader-result-refused-by-save-guard ()
+  "If an old (<= 5.9.x) build adopted the empty-looking store from the
+previous test as its live `supertag--store' and then tried to save, the
+SAME \"Protective skip\" guard `supertag-save-store' has carried since
+BEFORE git-sync S2 even existed (0 live nodes vs. a non-trivial on-disk
+file) refuses the write outright -- the real, non-trivial canonical file
+already on disk is left byte-for-byte untouched. This is the actual
+mechanism that keeps the P1-8 scenario from being worse than 'entities
+look gone in that one session': it can never silently escalate into 'and
+then that session overwrote the real data', because this guard already
+predates S2 and was never bypassed by anything in this change."
+  (supertag-canon-test--with-temp-env
+    (supertag-persistence-ensure-data-directory)
+    (setq supertag--store
+          (supertag-canon-test--build-store
+           '("n1" "n2" "n3" "n4" "n5" "n6" "n7" "n8" "n9" "n10")))
+    (supertag--persistence-write-store-atomically supertag-db-file)
+    ;; Confirm the on-disk file really is "non-trivial" by the guard's own
+    ;; > 1KB threshold before relying on that threshold below.
+    (should (> (file-attribute-size (file-attributes supertag-db-file)) 1024))
+    (let* ((old-form (supertag-canon-test--old-reader-single-read supertag-db-file))
+           (old-store (supertag--coerce-store-table old-form))
+           (before (supertag-canon-test--read-file-bytes supertag-db-file)))
+      (setq supertag--store old-store)
+      (supertag--record-store-origin :ok)
+      (supertag-mark-dirty)
+      ;; Neutralize the separate, unrelated "sync-state not loaded for
+      ;; current vault" guard (this isolated test never loads the sync
+      ;; module) -- same technique test/persistence-hardening-test.el's
+      ;; auto-migrate test uses -- so the refusal observed below is
+      ;; specifically attributable to the node-count "Protective skip"
+      ;; guard, not incidentally to that other one.
+      (cl-letf (((symbol-function 'supertag--persistence--expected-sync-state-file)
+                 (lambda () nil)))
+        (supertag-save-store))
+      (should (equal before (supertag-canon-test--read-file-bytes supertag-db-file))))))
+
+(ert-deftest supertag-canon-test-preformat6-snapshot-created-once ()
+  "The FIRST canonical save over a legacy-format on-disk DB snapshots that
+legacy file to backups/supertag-db-preformat6-*.el exactly once; a second
+save (now over an already-canonical file) does not add a duplicate."
+  (supertag-canon-test--with-temp-env
+    (let ((legacy-store (ht-create))
+          (nodes (ht-create)))
+      (puthash "A" (list :id "A" :type :node :title "t" :file "/tmp/f") nodes)
+      (puthash :nodes nodes legacy-store)
+      (puthash :version supertag-data-version legacy-store)
+      (supertag-canon-test--write-legacy-db supertag-db-file legacy-store))
+    (supertag--record-store-origin :ok)
+    (supertag-load-store)
+    (should (= 1 (hash-table-count (supertag-store-get-collection :nodes))))
+    (supertag-mark-dirty)
+    (supertag--persistence-write-store-atomically supertag-db-file)
+    (let ((snaps (directory-files supertag-db-backup-directory nil
+                                   "\\`supertag-db-preformat6-.*\\.el\\'")))
+      (should (= 1 (length snaps))))
+    ;; Second save: the on-disk file is canonical now, so no further
+    ;; snapshot is taken.
+    (supertag-mark-dirty)
+    (supertag--persistence-write-store-atomically supertag-db-file)
+    (let ((snaps (directory-files supertag-db-backup-directory nil
+                                   "\\`supertag-db-preformat6-.*\\.el\\'")))
+      (should (= 1 (length snaps))))))
+
+(ert-deftest supertag-canon-test-preformat6-snapshot-survives-daily-cleanup ()
+  "A `preformat6' snapshot is never deleted by `supertag-cleanup-old-backups'
+-- its filename deliberately does not match that function's daily-backup
+date regex (see `supertag--persistence--snapshot-preformat6')."
+  (supertag-canon-test--with-temp-env
+    (let ((legacy-store (ht-create))
+          (nodes (ht-create)))
+      (puthash "A" (list :id "A" :type :node :title "t" :file "/tmp/f") nodes)
+      (puthash :nodes nodes legacy-store)
+      (puthash :version supertag-data-version legacy-store)
+      (supertag-canon-test--write-legacy-db supertag-db-file legacy-store))
+    (supertag--record-store-origin :ok)
+    (supertag-load-store)
+    (supertag-mark-dirty)
+    (supertag--persistence-write-store-atomically supertag-db-file)
+    (let* ((snaps (directory-files supertag-db-backup-directory t
+                                    "\\`supertag-db-preformat6-.*\\.el\\'"))
+           (snapshot (car snaps))
+           (old-time (time-subtract (current-time) (days-to-time 30)))
+           (supertag-db-backup-keep-days 3))
+      (should (= 1 (length snaps)))
+      ;; Backdate the snapshot so it WOULD be cleaned up if its name
+      ;; matched the daily-backup regex (it deliberately does not).
+      (set-file-times snapshot old-time)
+      (supertag-cleanup-old-backups)
+      (should (file-exists-p snapshot)))))
+
 ;;; --- 4. Single-line diff ---
 
 (ert-deftest supertag-canon-test-single-field-change-is-single-line-diff ()

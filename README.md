@@ -293,6 +293,8 @@ Org-SuperTag grows with you. Start simple, add power when you need it:
 
 **Org files own your text and structure; the database owns your typed data.** Org files (headings, body text, `:ID:` properties) are the source of truth for what a node *is*, and `M-x supertag-sync-full-rescan` can always re-derive nodes and tags from them. But schema definitions, field values, Table/Board view layouts, and automation rules live *only* in `supertag-db.el` — a rescan does not invent them from org text, because plain org text doesn't encode them. Losing the database without a backup or a synced copy loses that data for real, the same as losing any other file you can't regenerate; back it up (see above) or sync it (see below) accordingly.
 
+**6.0 changed the on-disk format of `supertag-db.el` — this is a one-way upgrade.** Since 6.0, the database is written in a deterministic, one-entity-per-line format (what makes git-native sync's field-level merging possible). Older builds (5.9.x and earlier) cannot read entities out of this format — a 5.9.x Emacs pointed at a 6.0+ database will look like it loaded successfully but show an empty store, because the old code only reads the file's first line. Upgrading is safe and automatic (opening an old database with 6.0+ migrates and re-saves it), but **going back to 5.9.x afterward is not** unless you restore a pre-upgrade copy. Two safety nets exist for that: an automatic `backups/supertag-db-premigrate-<old-version>-<timestamp>.el` snapshot the moment an out-of-date database is first loaded, and a `backups/supertag-db-preformat6-<timestamp>.el` snapshot the moment a database still in the old file format is first re-saved (covering the case where the stored version already looked current but the file itself had not been re-saved yet). Neither is ever deleted by the daily-backup cleanup. To downgrade: quit Emacs, restore the newest matching snapshot over `supertag-db.el`, then reopen with the older build. `M-x supertag-doctor` reports both the current on-disk format and how many of each snapshot type exist.
+
 ---
 
 ## Syncing across machines
@@ -342,6 +344,8 @@ This is a stopgap, not a solution — real multi-machine sync needs something th
 ---
 
 ## Migration from older versions
+
+> **⚠️ 5.9.x → 6.0.0**: The database file format changed (see "Data storage" above) — upgrading is automatic, but downgrading afterward needs a restored backup. Back up `~/.emacs.d/org-supertag/` before upgrading if you might need to go back.
 
 > **⚠️ 5.2.0 → 5.3.0**: Complete the [global field migration](doc/GLOBAL-FIELD-MIGRATION-GUIDE.md) before enabling `supertag-use-global-fields`.
 

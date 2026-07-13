@@ -25,9 +25,31 @@ This is a fallback definition. The primary definition is in org-supertag.el.")
 
 (defvar supertag--config-guard-allow)
 
-(defconst supertag-data-version "5.0.0"
+(defconst supertag-data-version "6.0.0"
   "Current data format version.
-Used for data format compatibility checks and automatic migration.")
+Used for data format compatibility checks and automatic migration.
+
+Bumped 5.0.0 -> 6.0.0 (P1-8, see .phrase/phases/phase-git-sync-20260713/PLAN.md
+\"S2 规范化序列化\", 修订 2026-07-13): the S2 canonical, line-per-entity
+serialization is NOT actually readable by pre-6.0 (<= 5.9.x) builds the way
+the original S2 writeup assumed. Those builds' `supertag--persistence--try-read-store'
+does exactly ONE `read' of the file and returns whatever single form that
+call happens to consume; against the canonical format's line-per-entity
+layout, that first `read' only ever sees the root scalar line (e.g.
+`(:version \"6.0.0\" ...)') and never reaches any of the following
+`(:collection ...)' entity lines -- so an old build loads what LOOKS like a
+valid, merely-empty store, not a parse error. Bumping the data version at
+least makes `supertag--maybe-auto-migrate' fire (with its own pre-migration
+snapshot) the first time a pre-6.0 database is loaded by THIS (>= 6.0)
+build, and keeps `supertag--get-data-version'/`supertag--run-migrations'
+honest about the fact that the format actually changed here. See
+`supertag--persistence--write-canonical-store' for the belt-and-suspenders
+`supertag-db-preformat6-*' snapshot, which covers the case this version
+bump alone does not: a database already stamped `:version \"6.0.0\"' (or
+any version equal to `supertag-data-version') by a subsequent save, so
+`supertag--maybe-auto-migrate' sees no version mismatch and never runs,
+yet the on-disk file might still be the pre-canonical (legacy single-`prin1')
+format if it was never resaved since upgrading this package.")
 
 (defun supertag-data-file (filename)
   "Get full path for data file.
@@ -627,14 +649,54 @@ or files with a `.db` extension that still contain an Emacs-lisp printed store."
 ;;   binding it once around the whole write (rather than re-binding inside
 ;;   the loop) still gives each line independent, correct handling.
 
-(defconst supertag--persistence-canonical-format-header
-  ";; -*- mode: lisp-data; coding: utf-8-unix -*-\n;; supertag-db canonical format 1\n"
-  "Two-line header written at the top of every canonical-format DB file.")
+(defun supertag--persistence-canonical-format-header ()
+  "Return the two-line header written at the top of every canonical DB file.
+The second line embeds the CURRENT `supertag-data-version' (computed at
+call time, not baked into a `defconst', so it always reflects whatever
+this build's version actually is) alongside the canonical format-generation
+number -- see P1-8 / .phrase/phases/phase-git-sync-20260713/PLAN.md \"S2
+规范化序列化\", 修订 2026-07-13. This is a `;'-comment, skipped by
+`supertag--persistence--skip-leading-comments-and-whitespace' before any
+`read', so it carries no parsing weight -- it exists purely so a human (or
+a pre-6.0 build's `supertag-db-inspect-file', which still does its own raw
+`read' + `hash-table-p' check on whatever the first form turns out to be)
+has a fighting chance of noticing the format at a glance. The load-bearing
+machine-readable sentinel is the root scalar line printed by
+`supertag--persistence--write-canonical-store' below (`:supertag-format' /
+`:incompatible-notice'), not this comment."
+  (format ";; -*- mode: lisp-data; coding: utf-8-unix -*-\n;; supertag-db canonical format 1, data version %s\n"
+          supertag-data-version))
 
 (defconst supertag--persistence--hash-marker :supertag-hash-table
   "Marker keyword identifying a frozen hash table in canonical output.
 See `supertag--persistence--canonicalize-value' and
 `supertag--persistence--thaw-value'.")
+
+(defconst supertag--persistence-format-marker 1
+  "Canonical on-disk format generation number.
+Distinct from `supertag-data-version' (the application-level data-shape
+version): this tracks the S2 line-per-entity FILE FORMAT itself, which has
+not changed since its introduction (git-sync S2) even though the data
+version has been bumped (P1-8). Embedded, unconditionally, into every
+canonical save's root scalar line via `:supertag-format' -- see
+`supertag--persistence--write-canonical-store'.")
+
+(defconst supertag--persistence-incompatible-notice
+  "This DB uses org-supertag >= 6.0 canonical format. An org-supertag < 6.0 (e.g. 5.9.x) session reads only this single header form as its ENTIRE database via one `read' call and will show zero nodes/tags -- your data is NOT lost, it is still in this file below this line, but do not keep editing or saving from that old session. To downgrade, restore the newest backups/supertag-db-preformat6-*.el snapshot over this file (see supertag--persistence--write-store-atomically / README \"Syncing across machines\")."
+  "Sentinel text embedded, verbatim, into every canonical save's root scalar
+line under the `:incompatible-notice' key (P1-8). Deliberately kept on a
+SINGLE physical line (no embedded newlines): the canonical writer does not
+bind `print-escape-newlines', so a literal newline inside this string would
+print as an actual line break and break the \"one line per top-level form\"
+property the whole S2 format depends on for clean `git diff' output and
+for `supertag--persistence--read-canonical-forms' treating each buffer
+line as one `read'. This cannot retroactively fix a pre-6.0 reader (which
+never gets far enough to see this key at all -- its one `read' call
+returns before this string would even be reached if it did), but it
+means ANY code path that DOES surface the raw first form of a >= 6.0
+canonical file (an old build's `supertag-db-inspect-file', `find-file' +
+manual `read', etc.) has a chance of showing the user something
+actionable instead of an inert, silently-empty-looking plist.")
 
 (defun supertag--persistence--sort-key (key)
   "Return a string used to order KEY (an entity id or hash-table key).
@@ -815,7 +877,13 @@ like the canonicalizer. Everything else is returned unchanged."
   "Insert the canonical, deterministic serialization of STORE into BUFFER.
 STORE must be a hash table (the shape `supertag--store' always has after
 `supertag--ensure-store'). See the format commentary above
-`supertag--persistence-canonical-format-header'."
+`supertag--persistence-canonical-format-header'.
+
+The root scalar line ALWAYS carries `:supertag-format' and
+`:incompatible-notice' (P1-8), overriding any value STORE itself happens to
+have under those two keys -- so the embedded notice never goes stale even
+if it were somehow carried forward from an older save, and the root scalar
+line is therefore never empty even for an otherwise all-default store."
   (unless (hash-table-p store)
     (error "supertag--persistence--write-canonical-store: STORE must be a hash table, got: %S"
            store))
@@ -827,8 +895,15 @@ STORE must be a hash table (the shape `supertag--store' always has after
                    (push (cons k v) collections)
                  (push (cons k v) scalars)))
              store)
+    ;; Force the P1-8 sentinel keys onto the root scalar line unconditionally
+    ;; -- see this function's docstring above.
+    (setq scalars (cl-remove-if (lambda (pair)
+                                   (memq (car pair) '(:supertag-format :incompatible-notice)))
+                                 scalars))
+    (push (cons :incompatible-notice supertag--persistence-incompatible-notice) scalars)
+    (push (cons :supertag-format supertag--persistence-format-marker) scalars)
     (with-current-buffer buffer
-      (insert supertag--persistence-canonical-format-header)
+      (insert (supertag--persistence-canonical-format-header))
       (let ((print-escape-nonascii t)
             (print-length nil)
             (print-level nil)
@@ -1150,6 +1225,84 @@ This function ensures all levels are proper hash tables."
         (supertag-mark-dirty)))))
 
 
+(defun supertag--persistence--legacy-format-file-p (file)
+  "Return non-nil if FILE exists and is NOT in S2 canonical format.
+Uses the identical format sniffer `supertag--persistence--try-read-store'
+uses to dispatch between readers -- the first non-comment, non-whitespace
+character is `(' for canonical, anything else (in practice always `#', from
+the legacy single-`prin1'-of-a-hash-table format) for legacy -- but never
+actually `read's the content, only peeks at that one character, so a
+truncated or otherwise corrupt FILE cannot make this signal an error.
+
+Returns nil (never legacy) when FILE does not exist, is a directory, or
+cannot be read for any reason -- this predicate must never itself block a
+save; on doubt, it says \"not legacy\" and the P1-8 preformat6 snapshot below
+is simply skipped, same as if FILE had already been canonical."
+  (and (stringp file)
+       (file-exists-p file)
+       (not (file-directory-p file))
+       (condition-case nil
+           (with-temp-buffer
+             (insert-file-contents file)
+             (supertag--persistence--skip-leading-comments-and-whitespace)
+             (not (eq (char-after) ?\()))
+         (error nil))))
+
+(defun supertag--persistence--snapshot-preformat6 (file)
+  "Copy legacy-format FILE to a never-auto-deleted `preformat6' backup.
+Part of P1-8 (.phrase/phases/phase-git-sync-20260713/PLAN.md \"S2 规范化
+序列化\", 修订 2026-07-13): the FIRST time a canonical save is about to
+overwrite an on-disk database still in the legacy (pre-6.0) format, this
+preserves that legacy file as
+`supertag-db-backup-directory'/supertag-db-preformat6-<TIMESTAMP>.el --
+the downgrade escape hatch back to org-supertag < 6.0, which cannot read
+entities out of the canonical format at all (see `supertag-data-version').
+
+This is independent of, and a superset of, the pre-migration snapshot
+`supertag--maybe-auto-migrate' takes: that one only fires when the STORED
+`:version' differs from `supertag-data-version', which does not cover a
+database already stamped at the current data version by an intervening
+save whose on-disk FORMAT is nonetheless still legacy (the exact S2 gap
+this task starts from -- format changed without a version bump). Runs
+exactly once per legacy-to-canonical transition: after this save succeeds
+the on-disk file is canonical, so the next call's
+`supertag--persistence--legacy-format-file-p' check on FILE is false and no
+further snapshot is taken -- no timestamp-collision bookkeeping needed.
+
+The `preformat6' name deliberately does NOT match
+`supertag-cleanup-old-backups''s daily-backup regex
+\(\"^supertag-db-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\.el$\"), for the same
+reason `premigrate' snapshots don't: this file must never be automatically
+deleted by daily-backup retention.
+
+Never signals: any error is caught, reported via `message', and treated as
+\"proceed with the save anyway\" -- a failed snapshot must not block a
+legitimate save, though it does mean this particular downgrade escape
+hatch was not created for this transition."
+  (condition-case err
+      (progn
+        (supertag-persistence-ensure-data-directory)
+        (let ((snapshot-file
+               (expand-file-name
+                (format "supertag-db-preformat6-%s.el" (format-time-string "%Y%m%d-%H%M%S"))
+                supertag-db-backup-directory)))
+          ;; Sub-second re-entrancy within the same save call is not a
+          ;; realistic concern, but a cheap guard against clobbering an
+          ;; existing same-second snapshot costs nothing.
+          (when (file-exists-p snapshot-file)
+            (setq snapshot-file
+                  (make-temp-file
+                   (expand-file-name "supertag-db-preformat6-" supertag-db-backup-directory)
+                   nil ".el")))
+          (copy-file file snapshot-file t)
+          (message "Supertag: legacy-format database detected; saved a pre-6.0-format downgrade snapshot to %s (restore this file over %s to go back to org-supertag < 6.0)."
+                   (abbreviate-file-name snapshot-file) (abbreviate-file-name file))
+          snapshot-file))
+    (error
+     (message "Supertag: failed to create pre-format-6 downgrade snapshot before canonical save (%s); proceeding with the save anyway."
+              (error-message-string err))
+     nil)))
+
 (defun supertag--persistence-write-store-atomically (file)
   "Write `supertag--store' to FILE atomically.
 
@@ -1164,6 +1317,14 @@ same way the loader does (`supertag--persistence--try-read-store', which
 understands both the canonical and legacy formats) and its :nodes count
 is compared against the in-memory store's :nodes count before it
 replaces FILE.
+
+Immediately before the atomic rename -- i.e. only once the new canonical
+content is fully written and verified, and FILE (still holding whatever
+was there before) is about to be replaced -- if FILE currently exists and
+is still in the legacy (pre-6.0) format, `supertag--persistence--snapshot-preformat6'
+preserves it as a downgrade escape hatch (P1-8). This is a one-time event
+per database: once FILE itself becomes canonical, the check is false on
+every subsequent save.
 
 On any failure, including a verification mismatch or read error, the
 temp file is removed, an error is signaled, and FILE is left
@@ -1195,6 +1356,8 @@ untouched."
                          file verify-count live-count)))))
           (when (file-exists-p file)
             (set-file-modes temp-file (file-modes file)))
+          (when (supertag--persistence--legacy-format-file-p file)
+            (supertag--persistence--snapshot-preformat6 file))
           (rename-file temp-file file t)
           (setq success t))
       (unless success
