@@ -58,22 +58,62 @@
 ;;
 ;; ## Conflict granularity
 ;;
-;; "Field-level 3-way on the entity plist" is implemented as exactly one
-;; level of decomposition: when an entity's plist keys differ between ours
-;; and theirs, each KEY is decided independently via the same 3-way rule: two
-;; sides agreeing but differing from base -> that value; both sides
-;; disagreeing with each other -> a true, per-key conflict.  Keys are not
-;; recursively decomposed further even if a key's value happens to itself be
-;; a nested plist -- "same key, both sides changed it differently" already IS
-;; the true conflict at that key, per the plan.  A handful of collections
-;; (`:field-values', and the legacy `:fields') store each entity's data as a
-;; raw (frozen) hash table rather than a plist; those are naturally still
-;; covered by the exact same per-"key" logic once frozen (a frozen hash table
-;; prints as `(:supertag-hash-table ((K . V) ...))', which the plist-shaped
-;; field walk sees as a single pseudo-key) -- such entities therefore get
-;; whole-value-granularity conflict detection rather than per-nested-field
-;; granularity when they conflict.  Zero data is ever lost either way: both
-;; full sides are always recorded in the conflict entity.
+;; NOT every entity value is a plist.  `:tag-field-associations' entity
+;; values are ORDERED LISTS OF PLISTS (tag-id -> a list of `(:field-id ID
+;; :order N)' association plists) -- decomposing that shape with plain
+;; `plist-get'/`plist-put' (as an earlier version of this file did
+;; unconditionally for every conflicting entity) silently produces
+;; interleaved garbage, because a proper, even-length list of PLISTS looks
+;; superficially plist-shaped by length alone; it is not, since its
+;; elements are not keywords.  Every entity-level conflict therefore goes
+;; through `supertag-merge--decompose-conflict', which dispatches on
+;; COLLECTION identity and shape rather than assuming a plist:
+;;
+;;   1. `:tag-field-associations' (dispatched by COLLECTION, not shape):
+;;      `supertag-merge--merge-tag-field-associations' merges as an ordered
+;;      set keyed by the stable `:field-id' of each association -- a
+;;      field-id touched by only one side's diff from base is included as
+;;      that side left it; the same field-id changed differently on both
+;;      sides is a whole-association (not sub-field) conflict for that
+;;      field-id; if the surviving field-ids common to both ours and theirs
+;;      are placed in a different relative order by each side, ours' order
+;;      wins and one extra `:order' conflict is recorded.
+;;   2. Positively plist-shaped entities (per `supertag--persistence--plist-p',
+;;      REUSED rather than reinvented -- the exact same conservative
+;;      discriminator the canonicalizer already uses to decide this exact
+;;      question: a proper, non-empty, even-length list whose element at
+;;      EVERY even index, not merely the first, is a keyword; checking only
+;;      the first element is not sufficient -- the `:tag-field-associations'
+;;      shape above has a plist, not a keyword, at index 0, and a naive
+;;      first-element check would misclassify it): "field-level 3-way on
+;;      the entity plist" as before -- when an entity's plist keys differ
+;;      between ours and theirs, each KEY is decided independently via the
+;;      same 3-way rule: two sides agreeing but differing from base -> that
+;;      value; both sides disagreeing with each other -> a true, per-key
+;;      conflict.  Keys are not recursively decomposed further even if a
+;;      key's value happens to itself be a nested plist -- "same key, both
+;;      sides changed it differently" already IS the true conflict at that
+;;      key, per the plan.  A handful of collections (`:field-values', and
+;;      the legacy `:fields') store each entity's data as a raw (frozen)
+;;      hash table rather than a plist; those are naturally still covered
+;;      by the exact same per-"key" logic once frozen (a frozen hash table
+;;      prints as `(:supertag-hash-table ((K . V) ...))', which -- being
+;;      itself a genuine 2-element plist with one keyword key -- the
+;;      plist-shaped field walk sees as a single pseudo-key) -- such
+;;      entities therefore get whole-value-granularity conflict detection
+;;      rather than per-nested-field granularity when they conflict (see
+;;      merge-test.el's dedicated regression test for this).
+;;   3. Anything else -- NEVER guessed to be a plist -- gets whole-value
+;;      3-way: a conflicting entity becomes one whole-entity conflict
+;;      record (`:kind :field-conflict', `:key' nil), with ours written in
+;;      place (the same ours-preference tiebreak used everywhere else in
+;;      this file when `:modified-at' does not decide a winner).  This is
+;;      the safety net that makes any future, not-yet-invented collection
+;;      shape safe by construction instead of by omission.
+;;
+;; Zero data is ever lost in any of the three paths: both full sides always
+;; survive intact in the conflict record, even when the entity/field/slot
+;; written into the merged store prefers one side over the other.
 ;;
 ;; ## Conflict representation
 ;;
@@ -375,6 +415,155 @@ tiebreak for the value written into a conflicting key."
         :theirs
       :ours)))
 
+;;; --- Shape discriminator ---
+
+(defun supertag-merge--plist-like-p (v)
+  "Return non-nil if V is positively identified as plist-shaped.
+Used only to decide whether an entity-level (or root-scalar) conflict may
+be decomposed field-by-field with `plist-get'/`plist-put'.  `nil' (the
+empty plist) and `supertag-merge--absent' (no common-ancestor value at
+all) both count as plist-compatible -- neither contributes any keys to
+decompose.  Anything else is delegated to
+`supertag--persistence--plist-p', the one frozen, conservative
+discriminator already used by the canonicalizer to decide this exact
+question (a proper, non-empty, even-length list whose element at EVERY
+even index -- not merely the first -- is a keyword), reused rather than
+reinvented so the two call sites can never drift apart.  This deliberately
+returns nil (never guesses \"plist\") for anything that does not positively
+match, including an ordered list of nested plists such as
+`:tag-field-associations' values -- see the Commentary section \"Conflict
+granularity\"."
+  (or (eq v supertag-merge--absent)
+      (null v)
+      (supertag--persistence--plist-p v)))
+
+;;; --- :tag-field-associations ordered-set merge ---
+
+(defun supertag-merge--assoc-field-id (assoc)
+  "Return ASSOC's `:field-id', or nil if ASSOC is not a well-formed
+tag-field-association plist (defensive only; real entities are always
+well-formed by the time they reach this file)."
+  (and (supertag-merge--plist-like-p assoc) (consp assoc)
+       (plist-get assoc :field-id)))
+
+(defun supertag-merge--assoc-field-ids (list)
+  "Return the ordered, deduplicated list of `:field-id's found in LIST.
+LIST is one side's whole `:tag-field-associations' entity value (an
+ordered list of association plists).  Malformed elements (no `:field-id')
+are silently skipped; first occurrence wins the position on a duplicate
+`:field-id'."
+  (let ((seen (make-hash-table :test 'equal)) order)
+    (dolist (a list)
+      (let ((fid (supertag-merge--assoc-field-id a)))
+        (when (and fid (not (gethash fid seen)))
+          (puthash fid t seen)
+          (push fid order))))
+    (nreverse order)))
+
+(defun supertag-merge--assoc-index (list)
+  "Return an `equal'-test hash table mapping `:field-id' -> association
+plist for LIST.  Last occurrence wins on a duplicate `:field-id'."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (a list)
+      (let ((fid (supertag-merge--assoc-field-id a)))
+        (when fid (puthash fid a h))))
+    h))
+
+(defun supertag-merge--assoc-restrict (order set)
+  "Return the subsequence of ORDER whose elements are `member' of SET.
+Preserves ORDER's own relative element order."
+  (cl-remove-if (lambda (f) (not (member f set))) order))
+
+(defun supertag-merge--merge-assoc-slot (collection entity-id field-id base ours theirs)
+  "Merge one `:field-id' slot inside a `:tag-field-associations' entity.
+BASE/OURS/THEIRS are each that FIELD-ID's whole association plist, or
+`supertag-merge--absent'.  Whole-association-value granularity only (never
+decomposed further into `:order' etc. -- the plan asks for a per-field-id
+conflict, not a per-sub-field one).  Self-contained (does not call back
+into `supertag-merge--merge-entity'/`supertag-merge--decompose-conflict'):
+COLLECTION is still `:tag-field-associations' at this nesting level, and
+recursing back through the collection-based dispatch would incorrectly
+try to re-apply the ordered-set merge to a single association plist.
+Returns (VALUE . CONFLICTS); VALUE may be `supertag-merge--absent' (the
+field-id is dropped from the merged association list)."
+  (let ((absent supertag-merge--absent))
+    (cond
+     ((and (not (eq ours absent)) (not (eq theirs absent)))
+      (let ((decision (supertag-merge--3way-raw base ours theirs)))
+        (if (eq decision :conflict)
+            (cons ours
+                  (list (supertag-merge--make-conflict
+                         collection entity-id field-id
+                         :ours ours :theirs theirs :base base
+                         :kind :field-conflict)))
+          (cons (cdr decision) nil))))
+     ((and (eq ours absent) (eq theirs absent)) (cons absent nil))
+     ((eq ours absent)
+      (cond
+       ((eq base absent) (cons theirs nil))
+       ((supertag-merge--val-equal base theirs) (cons absent nil))
+       (t (cons theirs
+                (list (supertag-merge--make-conflict
+                       collection entity-id field-id
+                       :ours supertag-merge--absent :theirs theirs :base base
+                       :kind :delete-vs-modify))))))
+     (t
+      (cond
+       ((eq base absent) (cons ours nil))
+       ((supertag-merge--val-equal base ours) (cons absent nil))
+       (t (cons ours
+                (list (supertag-merge--make-conflict
+                       collection entity-id field-id
+                       :ours ours :theirs supertag-merge--absent :base base
+                       :kind :delete-vs-modify)))))))))
+
+(defun supertag-merge--merge-tag-field-associations (collection entity-id base ours theirs)
+  "Ordered-set 3-way merge for one `:tag-field-associations' entity value.
+BASE/OURS/THEIRS are each an ordered list of association plists (BASE may
+be `supertag-merge--absent').  See the Commentary section \"Conflict
+granularity\" for the algorithm.  Returns (MERGED-LIST . CONFLICTS)."
+  (let* ((base-list (if (eq base supertag-merge--absent) nil base))
+         (base-order (supertag-merge--assoc-field-ids base-list))
+         (base-idx (supertag-merge--assoc-index base-list))
+         (ours-order (supertag-merge--assoc-field-ids ours))
+         (ours-idx (supertag-merge--assoc-index ours))
+         (theirs-order (supertag-merge--assoc-field-ids theirs))
+         (theirs-idx (supertag-merge--assoc-index theirs))
+         (fids (let ((seen (make-hash-table :test 'equal)) all)
+                 (dolist (fid (append base-order ours-order theirs-order))
+                   (unless (gethash fid seen)
+                     (puthash fid t seen)
+                     (push fid all)))
+                 (nreverse all)))
+         merged-alist conflicts)
+    (dolist (fid fids)
+      (let* ((bv (or (gethash fid base-idx) supertag-merge--absent))
+             (ov (or (gethash fid ours-idx) supertag-merge--absent))
+             (tv (or (gethash fid theirs-idx) supertag-merge--absent))
+             (result (supertag-merge--merge-assoc-slot collection entity-id fid bv ov tv)))
+        (setq conflicts (nconc conflicts (copy-sequence (cdr result))))
+        (unless (eq (car result) supertag-merge--absent)
+          (push (cons fid (car result)) merged-alist))))
+    (setq merged-alist (nreverse merged-alist))
+    (let* ((survivors (mapcar #'car merged-alist))
+           (common (cl-intersection ours-order theirs-order :test #'equal))
+           (base-common (supertag-merge--assoc-restrict base-order common))
+           (ours-common (supertag-merge--assoc-restrict ours-order common))
+           (theirs-common (supertag-merge--assoc-restrict theirs-order common))
+           (order-decision (supertag-merge--3way-raw base-common ours-common theirs-common))
+           (leftover (cl-set-difference survivors ours-order :test #'equal))
+           (final-order (append (supertag-merge--assoc-restrict ours-order survivors)
+                                 (supertag-merge--assoc-restrict theirs-order leftover))))
+      (when (eq order-decision :conflict)
+        (setq conflicts
+              (nconc conflicts
+                     (list (supertag-merge--make-conflict
+                            collection entity-id :order
+                            :ours ours-common :theirs theirs-common :base base-common
+                            :kind :field-conflict)))))
+      (cons (mapcar (lambda (f) (cdr (assoc f merged-alist))) final-order)
+            conflicts))))
+
 ;;; --- Field-level (and root-scalar) merge ---
 
 (defun supertag-merge--field-level-merge (collection entity-id base ours theirs newer-side)
@@ -407,6 +596,42 @@ Returns (MERGED-PLIST . CONFLICTS)."
 
 ;;; --- Entity-level merge ---
 
+(defun supertag-merge--decompose-conflict (collection entity-id base ours theirs)
+  "Decide HOW to decompose an entity-level conflict for COLLECTION/ENTITY-ID.
+BASE/OURS/THEIRS genuinely differ from each other (the caller has already
+ruled out unchanged/single-side-change/both-changed-to-the-same-value).
+Dispatches:
+  1. By COLLECTION identity first: `:tag-field-associations' values are
+     ORDERED LISTS OF PLISTS, not plists themselves, so they get their own
+     ordered-set-by-`:field-id' merge rather than ever being decomposed
+     with `plist-get'/`plist-put'.
+  2. Otherwise, only when BASE/OURS/THEIRS are ALL positively plist-shaped
+     (`supertag-merge--plist-like-p', never guessed): per-key field-level
+     3-way, as before.
+  3. Otherwise (anything not positively identified as one of the above --
+     the safety net): whole-value 3-way.  One whole-entity conflict record
+     is emitted (`:kind :field-conflict', `:key' nil), and the value
+     written into the merged store is whichever side has the newer
+     `:modified-at' (falling back to ours, the same tiebreak used
+     everywhere else in this file) -- both sides always still survive
+     intact in the conflict record.
+See the Commentary section \"Conflict granularity\" for the full rationale."
+  (cond
+   ((eq collection :tag-field-associations)
+    (supertag-merge--merge-tag-field-associations collection entity-id base ours theirs))
+   ((and (supertag-merge--plist-like-p base)
+         (supertag-merge--plist-like-p ours)
+         (supertag-merge--plist-like-p theirs))
+    (supertag-merge--field-level-merge
+     collection entity-id base ours theirs
+     (supertag-merge--newer-side ours theirs)))
+   (t
+    (cons (if (eq (supertag-merge--newer-side ours theirs) :theirs) theirs ours)
+          (list (supertag-merge--make-conflict
+                 collection entity-id nil
+                 :ours ours :theirs theirs :base base
+                 :kind :field-conflict))))))
+
 (defun supertag-merge--merge-present (collection entity-id base ours theirs)
   "Merge one (collection . entity-id) slot when OURS and THEIRS both exist.
 BASE may be `supertag-merge--absent'.  Returns (VALUE . CONFLICTS)."
@@ -416,9 +641,7 @@ BASE may be `supertag-merge--absent'.  Returns (VALUE . CONFLICTS)."
       (`(:single . ,v) (cons v nil))
       (`(:same . ,v) (cons v nil))
       (:conflict
-       (supertag-merge--field-level-merge
-        collection entity-id base ours theirs
-        (supertag-merge--newer-side ours theirs))))))
+       (supertag-merge--decompose-conflict collection entity-id base ours theirs)))))
 
 (defun supertag-merge--merge-entity (collection entity-id base ours theirs)
   "Merge one (COLLECTION . ENTITY-ID) slot per the plan's decision table.
@@ -483,7 +706,22 @@ result."
 ;;; --- Root scalar merge ---
 
 (defun supertag-merge--merge-roots (base-root ours-root theirs-root)
-  "Merge the three root scalar plists.  Returns (MERGED-PLIST . CONFLICTS)."
+  "Merge the three root scalar plists.  Returns (MERGED-PLIST . CONFLICTS).
+
+Audited for the same never-guess-plist rule applied to entity values (see
+`supertag-merge--decompose-conflict'): BASE-ROOT/OURS-ROOT/THEIRS-ROOT
+themselves are unconditionally real plists here, by construction --
+`supertag-merge--parse-file' is the only producer of a `-root' value, and
+it builds one exclusively via `plist-put' over root-level scalar keys
+only (collection values, e.g. `:tag-field-associations', live in
+`entities', never in `root') -- so decomposing the ROOT STRUCTURE itself
+with `plist-get'/`plist-put' is safe unconditionally, unlike an entity
+value.  Each individual root KEY's VALUE (bv/ov/tv below), by contrast, is
+never itself decomposed as a plist: a conflicting value is always taken
+whole -- either `supertag-merge--higher-version' for `:version', or the
+ours-preference tiebreak for anything else -- so there is no plist-shape
+assumption at the value level to guess wrong, even if some future root
+scalar's value happened to be a list-of-plists shape."
   (let* ((keys (supertag-merge--union-plist-keys base-root ours-root theirs-root))
          merged conflicts)
     (dolist (k keys)

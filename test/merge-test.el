@@ -642,6 +642,261 @@ zero conflicts and the full, correct entity count."
                  (supertag-merge--parsed-entities (car result)))
         (should (= count supertag-merge-test--scale-n))))))
 
+;;; --- 9. :tag-field-associations: the confirmed P0 corruption repro ---
+;; `:tag-field-associations' entity values are ORDERED LISTS OF PLISTS, e.g.
+;; `((:field-id "f0" :order 0))', NOT a plist themselves.  Before the fix,
+;; `supertag-merge-3way' decomposed every conflicting entity with
+;; `plist-get'/`plist-put' unconditionally, which -- on this shape --
+;; silently produced an interleaved-nil garbage list with zero conflict
+;; records.  These tests pin the fixed behavior: a real, deterministic
+;; ordered-set-by-`:field-id' merge.
+
+(defun supertag-merge-test--assoc (field-id order)
+  "Build one tag-field-association plist for FIELD-ID/ORDER."
+  (list :field-id field-id :order order))
+
+(defun supertag-merge-test--no-nils-p (list)
+  "Return non-nil if no element of LIST is nil (guards against the
+interleaved-nil corruption the P0 bug produced)."
+  (not (memq nil list)))
+
+(ert-deftest supertag-merge-test-tag-field-associations-p0-repro ()
+  "The exact reviewer repro: base/ours/theirs each independently name a
+DIFFERENT single field-id.  Must merge to a valid ordered list containing
+ours' and theirs' additions (f0 was dropped by both sides -> mutual
+delete, no conflict), never an interleaved-nil garbage list, and with zero
+conflicts (no two sides ever touched the same field-id)."
+  (let* ((base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f0" 0))))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f1" 1))))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list (supertag-merge-test--assoc "f2" 2))))))
+         (result (supertag-merge-3way base ours theirs))
+         (merged (supertag-merge-test--entity (car result) :tag-field-associations "tag1")))
+    (should (null (cdr result)))
+    (should (listp merged))
+    (should (supertag-merge-test--no-nils-p merged))
+    (should (= 2 (length merged)))
+    (should (equal merged (list (supertag-merge-test--assoc "f1" 1)
+                                 (supertag-merge-test--assoc "f2" 2))))))
+
+(ert-deftest supertag-merge-test-tag-field-associations-disjoint-additions-no-conflict ()
+  "base has f0; ours additionally adds f1, theirs additionally adds f2 ->
+all three present in the merge, zero conflicts."
+  (let* ((base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f0" 0))))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f0" 0)
+                                       (supertag-merge-test--assoc "f1" 1))))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list (supertag-merge-test--assoc "f0" 0)
+                                         (supertag-merge-test--assoc "f2" 2))))))
+         (result (supertag-merge-3way base ours theirs))
+         (merged (supertag-merge-test--entity (car result) :tag-field-associations "tag1")))
+    (should (null (cdr result)))
+    (should (equal merged (list (supertag-merge-test--assoc "f0" 0)
+                                 (supertag-merge-test--assoc "f1" 1)
+                                 (supertag-merge-test--assoc "f2" 2))))))
+
+(ert-deftest supertag-merge-test-tag-field-associations-same-field-id-conflict ()
+  "Both sides modify f0's :order differently -> a conflict record naming
+that field-id specifically, ours written into the merged list."
+  (let* ((base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f0" 0))))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1")
+                                 (list (supertag-merge-test--assoc "f0" 1))))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list (supertag-merge-test--assoc "f0" 2))))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :tag-field-associations "tag1")))
+    (should (= 1 (length conflicts)))
+    (should (equal merged (list (supertag-merge-test--assoc "f0" 1))))
+    (let ((data (cdr (car conflicts))))
+      (should (equal (plist-get data :collection) :tag-field-associations))
+      (should (equal (plist-get data :entity-id) "tag1"))
+      (should (equal (plist-get data :key) "f0"))
+      (should (eq (plist-get data :kind) :field-conflict))
+      (should (equal (plist-get data :ours) (supertag-merge-test--assoc "f0" 1)))
+      (should (equal (plist-get data :theirs) (supertag-merge-test--assoc "f0" 2)))
+      (should (equal (plist-get data :base) (supertag-merge-test--assoc "f0" 0)))
+      (should (equal (plist-get data :id) "tag-field-associations/tag1/f0")))))
+
+(ert-deftest supertag-merge-test-tag-field-associations-order-conflict ()
+  "Same field-ids on all three sides, but ours and theirs each reorder them
+differently from base AND from each other -> ours' order wins, plus one
+extra `:order' conflict record (values themselves are untouched, so no
+per-field-id conflicts)."
+  (let* ((f0 (supertag-merge-test--assoc "f0" 0))
+         (f1 (supertag-merge-test--assoc "f1" 1))
+         (f2 (supertag-merge-test--assoc "f2" 2))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") (list f0 f1 f2)))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :tag-field-associations "tag1") (list f2 f0 f1)))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1") (list f1 f2 f0)))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :tag-field-associations "tag1")))
+    (should (= 1 (length conflicts)))
+    (should (equal merged (list f2 f0 f1)))
+    (let ((data (cdr (car conflicts))))
+      (should (equal (plist-get data :key) :order))
+      (should (eq (plist-get data :kind) :field-conflict))
+      (should (equal (plist-get data :ours) '("f2" "f0" "f1")))
+      (should (equal (plist-get data :theirs) '("f1" "f2" "f0")))
+      (should (equal (plist-get data :base) '("f0" "f1" "f2"))))))
+
+;;; --- 10. Hash-table-shaped entities (:field-values / legacy :fields):
+;;; whole-value granularity, never per-nested-key decomposition ---
+
+(ert-deftest supertag-merge-test-hash-shaped-entity-whole-value-conflict ()
+  "A :field-values entity's data is a frozen hash table -- printed as
+`(:supertag-hash-table ((K . V) ...))' -- which IS itself a genuine
+2-element plist with one keyword key.  A conflict on such an entity must
+therefore produce exactly ONE conflict record (whole-value granularity),
+never one conflict per nested hash key, and the merged value must be
+ours' hash table taken whole (no :modified-at present -> ours-preference
+tiebreak)."
+  (let* ((base-val (list :supertag-hash-table (list (cons "f1" "old1") (cons "f2" "old2"))))
+         (ours-val (list :supertag-hash-table (list (cons "f1" "ours1") (cons "f2" "old2"))))
+         (theirs-val (list :supertag-hash-table (list (cons "f1" "theirs1") (cons "f2" "old2"))))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :field-values "node1") base-val))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :field-values "node1") ours-val))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :field-values "node1") theirs-val))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :field-values "node1")))
+    ;; Exactly one conflict -- not two (one per nested "f1"/"f2" hash key).
+    (should (= 1 (length conflicts)))
+    (should (eq (plist-get (cdr (car conflicts)) :key) :supertag-hash-table))
+    (should (equal merged ours-val))))
+
+;;; --- 11. Safety net: non-plist, non-tag-field-associations even-length
+;;; list shapes never guessed to be a plist ---
+;; For each handcrafted shape below, BASE/OURS/THEIRS differ pairwise (a
+;; genuine three-way conflict).  None of these are plist-shaped (each
+;; fails `supertag--persistence--plist-p' for a different reason -- some
+;; because the very first element isn't a keyword, one deliberately
+;; because a LATER even-index element isn't a keyword even though the
+;; first one is) and none use the `:tag-field-associations' collection, so
+;; every one of them must fall through to the whole-value safety net:
+;; exactly one whole-entity conflict record, and the merged value must be
+;; exactly one side taken wholesale -- never an interleaved-nil result.
+
+(defconst supertag-merge-test--nonplist-shape-triples
+  (list
+   (list "plain-ints"
+         '(1 2 3 4) '(1 2 3 40) '(1 2 3 400))
+   (list "plain-strings"
+         '("a" "b" "c" "d") '("a" "b" "c" "dd") '("a" "b" "c" "ddd"))
+   (list "list-of-bare-plists"
+         '((:field-id "f0") (:field-id "f1"))
+         '((:field-id "f0") (:field-id "f9"))
+         '((:field-id "f0") (:field-id "f99")))
+   (list "list-of-plists-under-wrong-collection"
+         (list (supertag-merge-test--assoc "f0" 0) (supertag-merge-test--assoc "f1" 1))
+         (list (supertag-merge-test--assoc "f0" 0) (supertag-merge-test--assoc "f1" 11))
+         (list (supertag-merge-test--assoc "f0" 0) (supertag-merge-test--assoc "f1" 111)))
+   (list "keyword-first-but-not-every-even-index"
+         (list :field-id "f0" (list :nested 1) "v")
+         (list :field-id "f0" (list :nested 2) "v")
+         (list :field-id "f0" (list :nested 3) "v"))
+   (list "all-nil"
+         '(nil nil nil nil) '(nil nil nil t) (list nil nil nil :marker))
+   (list "booleans"
+         '(t nil t nil) '(t nil t t) (list t nil t :marker))
+   (list "conses"
+         '((1 . 2) (3 . 4)) '((1 . 2) (3 . 40)) '((1 . 2) (3 . 400)))
+   (list "vectors"
+         (list [1 2] [3 4]) (list [1 2] [3 40]) (list [1 2] [3 400]))
+   (list "string-keys"
+         '("k1" "v1" "k2" "v2") '("k1" "v1" "k2" "v22") '("k1" "v1" "k2" "v222")))
+  "10 handcrafted (NAME BASE OURS THEIRS) triples: proper, even-length
+lists that must never be misclassified as plists.")
+
+(ert-deftest supertag-merge-test-nonplist-shapes-safety-net ()
+  "Property-style loop over `supertag-merge-test--nonplist-shape-triples':
+every shape must merge without interleaving nils, and must record a
+conflict whenever (as constructed here) the merged result differs from a
+side taken wholesale."
+  (dolist (triple supertag-merge-test--nonplist-shape-triples)
+    (cl-destructuring-bind (name base-val ours-val theirs-val) triple
+      (ert-info ((format "shape: %s" name))
+        ;; None of these are plist-shaped: pin that down directly first,
+        ;; so a future change to the discriminator can't silently make
+        ;; this test vacuous.
+        (should-not (supertag--persistence--plist-p base-val))
+        (should-not (supertag--persistence--plist-p ours-val))
+        (should-not (supertag--persistence--plist-p theirs-val))
+        (let* ((base (supertag-merge-test--parsed
+                      nil (list (cons (cons :nodes "n1") base-val))))
+               (ours (supertag-merge-test--parsed
+                      nil (list (cons (cons :nodes "n1") ours-val))))
+               (theirs (supertag-merge-test--parsed
+                        nil (list (cons (cons :nodes "n1") theirs-val))))
+               (result (supertag-merge-3way base ours theirs))
+               (conflicts (cdr result))
+               (merged (supertag-merge-test--entity (car result) :nodes "n1")))
+          ;; Never an interleaved-nil garbage result: the merged value is
+          ;; always exactly one side taken wholesale (never a
+          ;; plist-decomposed hybrid, which is what would introduce spurious
+          ;; nils from mismatched plist-get/plist-put on a non-plist list)
+          ;; -- and since base/ours/theirs are pairwise distinct here, a
+          ;; conflict is always recorded.  (A blanket "no nil elements"
+          ;; check would be wrong here since some shapes, e.g. "all-nil"
+          ;; and "booleans", legitimately contain nil as real data --
+          ;; byte-exact equality with a whole legitimate side is the
+          ;; correct, stronger guarantee.)
+          (should (listp merged))
+          (should (or (equal merged ours-val) (equal merged theirs-val)))
+          (should (= 1 (length conflicts)))
+          (should (eq (plist-get (cdr (car conflicts)) :kind) :field-conflict))
+          (should (null (plist-get (cdr (car conflicts)) :key)))
+          ;; No :modified-at on either side -> ours-preference tiebreak.
+          (should (equal merged ours-val)))))))
+
+;;; --- 12. Determinism/idempotence on the new (ordered-list / safety-net)
+;;; paths ---
+
+(ert-deftest supertag-merge-test-idempotent-ordered-list-inputs-byte-identical ()
+  "Re-running the merge on the same :tag-field-associations + safety-net
+inputs twice produces byte-identical serialized output, exactly like the
+existing plist-entity idempotence test."
+  (supertag-merge-test--with-temp-dir dir
+    (let* ((base (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list (supertag-merge-test--assoc "f0" 0)))
+                            (cons (cons :nodes "n1") '(1 2 3 4)))))
+           (ours (supertag-merge-test--parsed
+                  nil (list (cons (cons :tag-field-associations "tag1")
+                                   (list (supertag-merge-test--assoc "f1" 1)))
+                            (cons (cons :nodes "n1") '(1 2 3 40)))))
+           (theirs (supertag-merge-test--parsed
+                    nil (list (cons (cons :tag-field-associations "tag1")
+                                     (list (supertag-merge-test--assoc "f2" 2)))
+                              (cons (cons :nodes "n1") '(1 2 3 400)))))
+           (out1 (expand-file-name "out1.el" dir))
+           (out2 (expand-file-name "out2.el" dir)))
+      (supertag-merge--write-merged (car (supertag-merge-3way base ours theirs)) out1)
+      (supertag-merge--write-merged (car (supertag-merge-3way base ours theirs)) out2)
+      (should (equal (supertag-merge-test--read-file-bytes out1)
+                     (supertag-merge-test--read-file-bytes out2))))))
+
 (provide 'merge-test)
 
 ;;; merge-test.el ends here
