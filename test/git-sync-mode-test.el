@@ -776,7 +776,7 @@ an unrelated file through), and `supertag-doctor' lists it."
              (supertag-data-directory b)
              (supertag--store (supertag-git-sync-test--build-store '("n1")))
              (supertag--store-origin nil)
-             (conflicted-abs (expand-file-name org-rel b)))
+             (conflicted-abs (file-truename (expand-file-name org-rel b))))
         (supertag-git-sync--pull)
         (should (member conflicted-abs supertag-git-sync--conflicted-org-files))
         ;; The advice refuses the conflicted file but still lets an
@@ -827,7 +827,8 @@ blacklist, and doctor report until the index conflict is resolved."
               (supertag-git-sync--conflicted-org-files nil))
           (cl-letf (((symbol-function 'supertag-sync-check-now) #'ignore))
             (supertag-git-sync--after-merge merge-result root))
-          (should (equal (list org-file) supertag-git-sync--conflicted-org-files))
+          (should (equal (list (file-truename org-file))
+                         supertag-git-sync--conflicted-org-files))
           (let ((imported nil))
             (cl-letf (((symbol-function 'dummy-orig-fn)
                        (lambda (&rest _) (setq imported t))))
@@ -836,7 +837,50 @@ blacklist, and doctor report until the index conflict is resolved."
               (should-not imported)))
           (let ((buf (supertag-doctor t)))
             (with-current-buffer buf
-              (should (string-match-p (regexp-quote org-file) (buffer-string))))))))))
+              (should (string-match-p (regexp-quote (file-truename org-file))
+                                      (buffer-string))))))))))
+
+(ert-deftest supertag-git-sync-test-conflict-guards-normalize-symlinked-vault-paths ()
+  "Conflict guards must identify files by truename, not path spelling.
+On macOS, Git commonly reports a repository below `/private/tmp' while a
+scanner or user setting still names the same files below `/tmp'.  The Org
+scanner must still skip an unmerged file, and post-merge handling must not
+reload an unmerged database through the alternate spelling."
+  (supertag-git-sync-test--with-temp-dir root
+    (let* ((real-root
+            (file-name-as-directory (expand-file-name "real-vault" root)))
+           (alias-root
+            (file-name-as-directory (expand-file-name "alias-vault" root)))
+           (real-org (expand-file-name "notes.org" real-root))
+           (alias-org (expand-file-name "notes.org" alias-root))
+           (real-db (expand-file-name ".supertag/supertag-db.el" real-root))
+           (alias-db (expand-file-name ".supertag/supertag-db.el" alias-root)))
+      (make-directory (file-name-directory real-db) t)
+      (with-temp-file real-org (insert "* Conflicted\n"))
+      (with-temp-file real-db (insert "(:version 6)\n"))
+      (make-symbolic-link real-root alias-root t)
+      (let ((supertag-git-sync--conflicted-org-files nil)
+            (imported nil))
+        (cl-letf (((symbol-function 'supertag-git-sync--unmerged-paths)
+                   (lambda (_) '("notes.org")))
+                  ((symbol-function 'dummy-orig-fn)
+                   (lambda (&rest _) (setq imported t))))
+          (setq supertag-git-sync--conflicted-org-files
+                (supertag-git-sync--live-conflicted-org-files alias-root))
+          (should (equal (list (file-truename real-org))
+                         supertag-git-sync--conflicted-org-files))
+          (supertag-git-sync--skip-conflicted-file-advice
+           #'dummy-orig-fn alias-org)
+          (should-not imported)))
+      (let ((supertag-db-file alias-db)
+            (reloaded 0))
+        (cl-letf (((symbol-function 'supertag-git-sync--unmerged-paths)
+                   (lambda (_) '(".supertag/supertag-db.el")))
+                  ((symbol-function 'supertag-load-store)
+                   (lambda () (cl-incf reloaded)))
+                  ((symbol-function 'supertag-sync-check-now) #'ignore))
+          (supertag-git-sync--after-merge '(1 . "conflict") real-root)
+          (should (= 0 reloaded)))))))
 
 (supertag-git-sync-test--deftest supertag-git-sync-test-doctor-cold-loads-git-diagnostics
     "Loading doctor alone must still inspect Git state on first use.

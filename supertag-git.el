@@ -1358,10 +1358,11 @@ in a session that never even turned `supertag-git-sync-mode' on), unlike
 the session-local `supertag-git-sync--conflicted-org-files' cache, which only
 ever gets written by `supertag-git-sync--after-merge' and is simply gone
 after an Emacs restart regardless of what is actually on disk."
-  (let (conflicted)
+  (let ((true-root (supertag-git--truename-dir root))
+        conflicted)
     (dolist (rel (supertag-git-sync--unmerged-paths root))
       (when (string-match-p "\\.org\\'" rel)
-        (push (expand-file-name rel root) conflicted)))
+        (push (file-truename (expand-file-name rel true-root)) conflicted)))
     (nreverse conflicted)))
 
 (defvar supertag-git-sync--conflict-commit-warned nil
@@ -1785,8 +1786,12 @@ scenario it exists for.
   scanner (`supertag-sync-check-now', if available) to pick up whatever
   else DID merge cleanly."
   (ignore merge-result)
-  (let* ((unmerged (supertag-git-sync--unmerged-paths root))
-         (db-rel (ignore-errors (file-relative-name (expand-file-name supertag-db-file) root))))
+  (let* ((true-root (supertag-git--truename-dir root))
+         (unmerged (supertag-git-sync--unmerged-paths root))
+         (db-rel (ignore-errors
+                   (file-relative-name
+                    (file-truename (expand-file-name supertag-db-file))
+                    true-root))))
     (when (and (not (and db-rel (member db-rel unmerged)))
                (file-exists-p supertag-db-file)
                (fboundp 'supertag-load-store))
@@ -1817,7 +1822,8 @@ import a file the most recent merge left with unresolved conflict
 markers (see `supertag-git-sync--conflicted-org-files') -- the same
 \"refuse rather than silently ingest garbage\" guard philosophy as the DB
 loader's own conflict-marker check, applied to org files."
-  (if (member (expand-file-name file) supertag-git-sync--conflicted-org-files)
+  (if (member (file-truename (expand-file-name file))
+              supertag-git-sync--conflicted-org-files)
       (progn
         (message "supertag-git-sync: skipping import of %s -- unresolved merge conflict; resolve manually (see M-x supertag-doctor), then it will be picked up again."
                  file)
