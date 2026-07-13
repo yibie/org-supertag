@@ -9,20 +9,15 @@
   =supertag-sync--check-and-sync-guarded=, =supertag-sync-full-rescan=,
   =supertag-field-rename=, =supertag-field-remove=,
   =supertag-schema--cleanup-inherited-field-associations=, and the
-  =restore-heading-ids= script. A new repo-wide regression test
-  (=test/cl-block-regression-test.el=, wired into =test/run-tests.sh=)
-  locks the pattern down.
-- Fixed deleted-file cleanup being permanently lost when destructive
-  sync is disallowed: both =supertag-sync--check-and-sync-legacy= and
-  =...-guarded= removed the file from sync state before the (guarded)
-  orphan check ran, so its nodes were stranded with no retry. The
-  state entry is now kept until destructive cleanup is allowed, and
-  =supertag-sync--process-single-file= no longer persists the new
-  content hash while node deletions are deferred, so the retry also
-  survives an Emacs restart.
+  =restore-heading-ids= script. A byte-compiled behavioral regression
+  test locks down the guarded sync-worker path.
+- Fixed heading deletion cleanup being lost across restart when the same
+  file also updated another node: deferred cleanup now leaves both the
+  old content hash and mtime intact until destructive sync is allowed.
 - Fixed =test/aggregate-test.el= being unloadable: a stray paren
   closed =test-aggregate-column-all-functions= early, leaving
-  unbalanced top-level forms (caught by the new lint test).
+  unbalanced top-level forms. The repaired tests now run in the default
+  suite.
 
 * [5.9.0] - 2026-07-12
 ** Data safety (highlights)

@@ -1152,19 +1152,13 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     (when files-to-remove
       (let ((state-table (supertag-sync--get-state-table)))
         (dolist (file files-to-remove)
+          (remhash file state-table)
           ;; If file doesn't exist, we can clean up its nodes synchronously (usually fast)
           ;; or we could enqueue a "deletion job" if we had one.
           ;; For now, keep deletion synchronous to ensure consistency quickly.
-          (let ((missing (not (file-exists-p file))))
-            (cond
-             ;; Destructive cleanup refused: keep the state entry so a later
-             ;; cycle retries; dropping it would strand the file's nodes.
-             ((and missing (not (supertag-sync--allow-destructive-p))) nil)
-             (t
-              (remhash file state-table)
-              (when missing
-                (supertag-with-transaction
-                  (supertag-sync--verify-file-nodes file counters)))))))
+          (unless (file-exists-p file)
+            (supertag-with-transaction
+              (supertag-sync--verify-file-nodes file counters))))
         (supertag-sync-save-state)))
 
     ;; 2. Scan for New Files
@@ -1223,16 +1217,10 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (when files-to-remove
         (let ((state-table (supertag-sync--get-state-table)))
           (dolist (file files-to-remove)
-            (let ((missing (not (file-exists-p file))))
-              (cond
-               ;; Destructive cleanup refused: keep the state entry so a later
-               ;; cycle retries; dropping it would strand the file's nodes.
-               ((and missing (not (supertag-sync--allow-destructive-p))) nil)
-               (t
-                (remhash file state-table)
-                (when missing
-                  (supertag-with-transaction
-                    (supertag-sync--verify-file-nodes file counters)))))))
+            (remhash file state-table)
+            (unless (file-exists-p file)
+              (supertag-with-transaction
+                (supertag-sync--verify-file-nodes file counters))))
           (supertag-sync-save-state))))
 
     ;; 2. Scan for New Files (from snapshot)
@@ -1975,7 +1963,6 @@ Processes FILE for synchronization."
         ;;          (plist-get counters :nodes-created)
         ;;          (plist-get counters :nodes-updated)
         ;;          (plist-get counters :nodes-deleted))
-        (supertag-sync-update-state file)
         (supertag-sync-save-state)))))
 
 ;;;###autoload
