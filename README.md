@@ -325,6 +325,8 @@ Give it the same remote URL and a local directory. It clones, configures the mer
 
 **Conflicts.** The database's own edits merge automatically in the common case — different nodes or fields touched on each side. When the *same* field is edited differently on both sides, or plain `.org` prose is edited on the same line by both sides, git leaves that file with a real, unresolved conflict: for `supertag-db.el` itself, it refuses to load until resolved (the error names the file and points here); for `.org` files, the sync scanner skips importing anything still conflict-marked rather than ingesting garbage. Either way, `M-x supertag-doctor` (section "8. Git Sync") lists exactly what's unresolved — resolve it by hand or with `magit`/`git checkout --merge`, same as any other git conflict.
 
+**Upgrade all synced machines together.** The 6.0 database format (see "Data storage" above) is readable only by 6.0+. A 5.9.x machine that pulls a database saved by a 6.0 machine will *appear* to load it successfully but show an empty store — old code reads only the file's first line and never errors. Its save guards prevent actual data loss (an empty in-memory store refuses to overwrite a non-trivial file), but everything will look gone until you upgrade that machine. So: upgrade org-supertag on **every** machine that shares the vault before any of them saves under 6.0.
+
 ### Sync-folder services (Dropbox/iCloud/Syncthing)
 
 If you'd rather not use git, you can keep `~/.emacs.d/org-supertag/` (or wherever `supertag-db-file` lives) inside a Dropbox/iCloud/Syncthing-style folder so it follows you between machines — know the tradeoffs before you rely on it:
