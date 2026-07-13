@@ -14,6 +14,9 @@
 - Fixed heading deletion cleanup being lost across restart when the same
   file also updated another node: deferred cleanup now leaves both the
   old content hash and mtime intact until destructive sync is allowed.
+- Fixed deferred cleanup becoming permanently stuck after an async worker
+  error: complete snapshots re-enqueue deferred files and rely on the
+  async queue's existing deduplication instead of a stale =:queued= marker.
 - Fixed =test/aggregate-test.el= being unloadable: a stray paren
   closed =test-aggregate-column-all-functions= early, leaving
   unbalanced top-level forms. The repaired tests now run in the default

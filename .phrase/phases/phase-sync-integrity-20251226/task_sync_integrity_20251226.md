@@ -76,9 +76,10 @@
   - 验证方式：中英文配置值一致；Markdown diff 检查通过
   - 影响范围：`README.md`、`README_CN.md`
 
-- task015 [x] 修复 snapshot guard 延迟删除跨重启丢失重试（issue014）
+- task015 [x] 修复 snapshot guard 延迟删除丢失重试（issue014）
   - 产出：single-file processor 独占 sync-state 推进；async processor 不再覆盖
-    deferred mtime；删除不可达 guard 和不可靠源码 walker
-  - 验证方式：混合删除/更新回归 RED→GREEN；完整 ERT 115/115；aggregate 3/3
+    deferred mtime；worker 失败后允许 deferred file 重新入队；删除不可达 guard 和
+    不可靠源码 walker
+  - 验证方式：跨重启与 worker 异常回归均 RED→GREEN；完整 ERT 116/116；aggregate 3/3
   - 影响范围：`supertag-services-sync.el`、`test/sync-worker-regression-test.el`、
     `test/run-tests.sh`、`CHANGELOG.org`

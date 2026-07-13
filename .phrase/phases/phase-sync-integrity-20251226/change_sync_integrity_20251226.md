@@ -3,13 +3,14 @@
 ## 2026-07-14 — task015 / issue014
 
 - Modify `supertag-services-sync.el`：移除 async processor 的重复 sync-state 推进，
-  保证 deferred deletion 的旧 mtime 跨重启保留；删除两段不可达 guard。
+  保证 deferred deletion 的旧 mtime 跨重启保留；删除无回滚的 `:queued` 门控，
+  让 worker 异常后的 deferred file 重新入队；删除两段不可达 guard。
 - Modify `test/sync-worker-regression-test.el`：以真实混合删除/更新重启回归替换不可靠
-  的 repo-wide 源码 walker。
+  的 repo-wide 源码 walker；增加 worker 异常后重新入队回归。
 - Modify `test/run-tests.sh`：aggregate 测试进入默认 `all`。
 - Modify `CHANGELOG.org`：收窄为已经验证的行为承诺。
 
-验证：完整 ERT 115/115；cl-block 2/2；aggregate 3/3；byte-compile、bash 语法和
+验证：完整 ERT 116/116；sync-worker 3/3；aggregate 3/3；byte-compile、bash 语法和
 `git diff --check` 通过。实现提交：`4ea00e7`。
 
 - 2026-07-11 Docs
@@ -73,100 +74,100 @@
     - `supertag--store-origin` 记录 `:loaded-from`/`:load-candidates`，启动重试输出 candidates，便于定位“文件存在但加载为空”。
   - Related: `task009` (task_sync_integrity_20251226), `issue005`
 
-- 2025-12-31 Modify  
-  - Files:  
-    - `supertag-view-table.el`  
-    - `CHANGELOG.org`  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - Refs 列显示/编辑合并 `add-reference` 创建的 `:reference` 关系；  
-    - 编辑 Refs 时以关系集为基准同步 backlinks。  
+- 2025-12-31 Modify
+  - Files:
+    - `supertag-view-table.el`
+    - `CHANGELOG.org`
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - Refs 列显示/编辑合并 `add-reference` 创建的 `:reference` 关系；
+    - 编辑 Refs 时以关系集为基准同步 backlinks。
   - Related: `task008` (task_sync_integrity_20251226)
-- 2025-12-31 Modify  
-  - Files:  
-    - `supertag-view-table.el`  
-    - `CHANGELOG.org`  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - Refs 列默认作为 `node-reference` 字段并可编辑；  
-    - 全局字段模式下自动创建/关联 `Refs` 字段；  
-    - Refs 行内容携带跳转元数据，`C-o` 可跳转引用目标。  
+- 2025-12-31 Modify
+  - Files:
+    - `supertag-view-table.el`
+    - `CHANGELOG.org`
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - Refs 列默认作为 `node-reference` 字段并可编辑；
+    - 全局字段模式下自动创建/关联 `Refs` 字段；
+    - Refs 行内容携带跳转元数据，`C-o` 可跳转引用目标。
   - Related: `task007` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `supertag-services-sync.el`  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - 绑定 sync-state 到 data-directory 并在切换时强制重载；  
-    - 补充 per-vault sync-state 约束与风险说明；  
-    - 新增并完成 task006 跟踪。  
+- 2025-12-26 Modify
+  - Files:
+    - `supertag-services-sync.el`
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - 绑定 sync-state 到 data-directory 并在切换时强制重载；
+    - 补充 per-vault sync-state 约束与风险说明；
+    - 新增并完成 task006 跟踪。
   - Related: `task006` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `supertag-services-sync.el`  
-  - Changes:  
-    - 修复 `supertag-sync--ensure-state-format` 括号不匹配导致的加载错误。  
-    - 重写 `supertag-sync--process-single-file` 函数体以修复括号不匹配。  
+- 2025-12-26 Modify
+  - Files:
+    - `supertag-services-sync.el`
+  - Changes:
+    - 修复 `supertag-sync--ensure-state-format` 括号不匹配导致的加载错误。
+    - 重写 `supertag-sync--process-single-file` 函数体以修复括号不匹配。
   - Related: `task004` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `supertag-services-sync.el`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - 引入同步快照采样/对比/应用流水线与状态守卫；  
-    - 不可用/不完整快照时禁用破坏性同步，并延迟删除验证；  
-    - 更新 task004 状态。  
+- 2025-12-26 Modify
+  - Files:
+    - `supertag-services-sync.el`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - 引入同步快照采样/对比/应用流水线与状态守卫；
+    - 不可用/不完整快照时禁用破坏性同步，并延迟删除验证；
+    - 更新 task004 状态。
   - Related: `task004` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-  - Changes:  
-    - 明确状态机开关与入口函数命名；  
-    - 完善回滚开关说明。  
+- 2025-12-26 Modify
+  - Files:
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+  - Changes:
+    - 明确状态机开关与入口函数命名；
+    - 完善回滚开关说明。
   - Related: `task003` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - 增加同步快照状态机定义与允许的变更边界；  
-    - 更新 task003 状态。  
+- 2025-12-26 Modify
+  - Files:
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - 增加同步快照状态机定义与允许的变更边界；
+    - 更新 task003 状态。
   - Related: `task003` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - 补充兼容性约束与回滚策略；  
-    - 更新 task005 状态。  
+- 2025-12-26 Modify
+  - Files:
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - 补充兼容性约束与回滚策略；
+    - 更新 task005 状态。
   - Related: `task005` (task_sync_integrity_20251226)
-- 2025-12-26 Add  
-  - Files:  
-    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/change_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-  - Reason: 为同步机制结构性回顾与修复建立独立 phase 与 issue 跟踪  
+- 2025-12-26 Add
+  - Files:
+    - `.phrase/phases/phase-sync-integrity-20251226/spec_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/plan_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/change_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+  - Reason: 为同步机制结构性回顾与修复建立独立 phase 与 issue 跟踪
   - Related: `task001` (task_sync_integrity_20251226)
-- 2025-12-26 Modify  
-  - Files:  
-    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`  
-    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`  
-  - Changes:  
-    - 补充同步数据结构与破坏性路径分析；  
-    - 更新 task002 状态。  
+- 2025-12-26 Modify
+  - Files:
+    - `.phrase/phases/phase-sync-integrity-20251226/issue_sync_integrity_20251226.md`
+    - `.phrase/phases/phase-sync-integrity-20251226/task_sync_integrity_20251226.md`
+  - Changes:
+    - 补充同步数据结构与破坏性路径分析；
+    - 更新 task002 状态。
   - Related: `task002` (task_sync_integrity_20251226)

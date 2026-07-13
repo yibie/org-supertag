@@ -2,7 +2,8 @@
 
 ;;; Commentary:
 ;; Behavioral regressions for the guarded sync worker: early return from
-;; byte-compiled code and restart-safe deferred heading deletion.
+;; byte-compiled code and deferred heading deletion retries after restart or
+;; async worker failure.
 ;;
 ;; Run:
 ;;   emacs -Q --batch -L . --eval "(package-initialize)" \
@@ -101,6 +102,46 @@ the old mtime until destructive cleanup is allowed."
           (cl-letf (((symbol-function 'supertag-sync--in-sync-scope-p)
                      (lambda (_file) t)))
             (should (equal (list file) (supertag-get-modified-files)))))
+      (ignore-errors (delete-file file)))))
+
+(ert-deftest supertag-sync-deferred-file-requeues-after-worker-error ()
+  "A failed worker does not leave a deferred file permanently queued."
+  (let* ((file (make-temp-file "supertag-deferred-worker-" nil ".org" "* Keep\n"))
+         (directory (file-name-directory file))
+         (supertag-sync--state
+          (list :sync-state (make-hash-table :test 'equal)))
+         (supertag-sync--deferred-files (make-hash-table :test 'equal))
+         (supertag-async--queue nil)
+         (supertag-async--timer nil)
+         (supertag-async--processor-fn
+          (lambda (_file) (error "deliberate worker failure")))
+         (supertag-async-batch-size 1)
+         (supertag-sync-quiet-when-idle t))
+    (unwind-protect
+        (progn
+          (puthash file :pending supertag-sync--deferred-files)
+          (cl-letf (((symbol-function 'supertag-sync--effective-directories)
+                     (lambda () (list directory)))
+                    ((symbol-function 'supertag-sync--snapshot-build)
+                     (lambda () (list :status 'complete :files (list file))))
+                    ((symbol-function 'supertag-get-modified-files)
+                     (lambda () nil))
+                    ((symbol-function 'supertag-sync--snapshot-files-to-remove)
+                     (lambda (_files) nil))
+                    ((symbol-function 'supertag-sync--snapshot-new-files)
+                     (lambda (_files) nil))
+                    ((symbol-function 'supertag-sync--in-sync-scope-p)
+                     (lambda (_file) t))
+                    ((symbol-function 'supertag-sync-garbage-collect-orphaned-nodes)
+                     (lambda () nil))
+                    ((symbol-function 'supertag-async--ensure-timer)
+                     (lambda () nil)))
+            (supertag-sync--check-and-sync-guarded)
+            (should (equal supertag-async--queue (list file)))
+            (supertag-async--worker)
+            (should (null supertag-async--queue))
+            (supertag-sync--check-and-sync-guarded)
+            (should (equal supertag-async--queue (list file)))))
       (ignore-errors (delete-file file)))))
 
 (provide 'sync-worker-regression-test)

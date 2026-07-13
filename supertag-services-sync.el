@@ -1232,14 +1232,12 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     ;; 2.5 Re-verify deferred files when snapshot becomes complete
     (when (eq status 'complete)
       (let ((deferred-files '()))
-        (maphash (lambda (file state)
+        (maphash (lambda (file _state)
                    (cond
                     ((not (file-exists-p file))
                      (remhash file supertag-sync--deferred-files))
-                    ((and (not (eq state :queued))
-                          (supertag-sync--in-sync-scope-p file))
-                     (push file deferred-files)
-                     (puthash file :queued supertag-sync--deferred-files))))
+                    ((supertag-sync--in-sync-scope-p file)
+                     (push file deferred-files))))
                  supertag-sync--deferred-files)
         (when deferred-files
           (setq modified-files

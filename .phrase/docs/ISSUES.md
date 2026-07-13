@@ -12,4 +12,4 @@
 - issue010 [x] persistence 候选去重导致显式 DB 被 snapshot 重复项降级（phase-sync-integrity-20251226/issue_sync_integrity_20260711_persistence_failover.md）
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）
-- issue014 [ ] snapshot guard 下混合删除/更新在重启后失去重试（实现完成，待用户验收；phase-sync-integrity-20251226/issue_sync_integrity_20260714_deferred_retry.md）
+- issue014 [ ] snapshot guard 延迟删除在重启或 worker 异常后失去重试（实现完成，待用户验收；phase-sync-integrity-20251226/issue_sync_integrity_20260714_deferred_retry.md）
