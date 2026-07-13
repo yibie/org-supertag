@@ -203,6 +203,52 @@
                         (format "%s days" supertag-db-backup-keep-days)
                       (supertag-doctor--na))))))
 
+(defun supertag-doctor--section-presence ()
+  "Insert the \"Presence\" section into the current buffer.
+Reports the advisory cross-machine presence file (see
+`supertag--presence-file' in supertag-core-persistence.el): its path,
+whether it exists, the host and age of the last claim, and a verdict of
+own / foreign-active / foreign-stale / unavailable."
+  (supertag-doctor--insert-header "7. Presence")
+  (if (not (fboundp 'supertag--presence-file))
+      (insert (supertag-doctor--na) "\n")
+    (let ((file (supertag--presence-file))
+          (enabled (if (boundp 'supertag-presence-enable) supertag-presence-enable t)))
+      (insert (format "Presence enabled (supertag-presence-enable): %s\n"
+                      (if enabled "yes" "no")))
+      (insert (format "Presence file: %s\n" (or file (supertag-doctor--na))))
+      (cond
+       ((not file)
+        (insert "  Exists: n/a (supertag-db-file unset)\n"))
+       ((not (file-exists-p file))
+        (insert "  Exists: no\n"))
+       (t
+        (insert "  Exists: yes\n")
+        (let* ((data (and (fboundp 'supertag--presence-read)
+                          (ignore-errors (supertag--presence-read))))
+               (host (and data (cdr (assq 'host data))))
+               (updated-at (and data (cdr (assq 'updatedAt data))))
+               (parsed (and (stringp updated-at)
+                           (fboundp 'parse-iso8601-time-string)
+                           (ignore-errors (parse-iso8601-time-string updated-at))))
+               (age (and parsed (round (float-time (time-subtract (current-time) parsed))))))
+          (insert (format "  Host: %s\n" (or host (supertag-doctor--na))))
+          (insert (format "  Updated at: %s\n" (or updated-at (supertag-doctor--na))))
+          (insert (format "  Age: %s\n" (if age (format "%d seconds" age) (supertag-doctor--na))))
+          (insert
+           (format
+            "  Verdict: %s\n"
+            (cond
+             ((not (stringp host)) "n/a (unparseable presence file)")
+             ((string= host (system-name)) "own (claimed by this host)")
+             ((null age) "n/a (unparseable updatedAt timestamp)")
+             ((and (boundp 'supertag-presence-stale-seconds)
+                   (< age supertag-presence-stale-seconds))
+              (format "FOREIGN, ACTIVE (%s, %ds ago; stale threshold %ds)"
+                      host age supertag-presence-stale-seconds))
+             (t
+              (format "foreign, stale (%s, %ds ago)" host age)))))))))))
+
 (defun supertag-doctor--build-report ()
   "Erase the current buffer and insert the full doctor report."
   (erase-buffer)
@@ -215,6 +261,7 @@
   (supertag-doctor--section-version)
   (supertag-doctor--section-integrity)
   (supertag-doctor--section-backups)
+  (supertag-doctor--section-presence)
   (insert "\n"))
 
 ;;; --- Repairs ---

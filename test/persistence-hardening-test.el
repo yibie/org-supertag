@@ -232,7 +232,7 @@ and internal state variables, so tests never touch the real
 ;;; --- 4. Doctor ---
 
 (ert-deftest supertag-hardening-test-doctor-batch-report-renders-sections ()
-  "`supertag-doctor' in report-only mode renders all six report sections."
+  "`supertag-doctor' in report-only mode renders all seven report sections."
   (supertag-hardening-test--with-temp-env
     (setq supertag--store (supertag-hardening-test--make-store '("A")))
     (let* ((buf (supertag-doctor t))
@@ -242,7 +242,69 @@ and internal state variables, so tests never touch the real
       (should (string-match-p "3\\. Lock" text))
       (should (string-match-p "4\\. Version" text))
       (should (string-match-p "5\\. Integrity" text))
-      (should (string-match-p "6\\. Backups" text)))))
+      (should (string-match-p "6\\. Backups" text))
+      (should (string-match-p "7\\. Presence" text)))))
+
+;;; --- 5. Cross-machine presence (advisory) ---
+
+(defun supertag-hardening-test--write-presence-file (host seconds-ago &optional pid)
+  "Write a presence JSON file for HOST whose `updatedAt' is SECONDS-AGO in the past.
+Mirrors the on-disk shape written by `supertag--presence-write', without
+depending on it, so these tests can independently pin down the exact
+timestamp under test. Returns the presence file path."
+  (let* ((file (supertag--presence-file))
+         (ts (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                  (time-subtract (current-time) (seconds-to-time seconds-ago))
+                                  t)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (insert (json-encode (list (cons 'host host)
+                                  (cons 'updatedAt ts)
+                                  (cons 'pid (or pid 12345))))))
+    file))
+
+(ert-deftest supertag-hardening-test-presence-foreign-fresh-is-active ()
+  "A foreign host's presence written moments ago is reported as active."
+  (supertag-hardening-test--with-temp-env
+    (supertag-hardening-test--write-presence-file "other-machine" 5)
+    (let ((foreign (supertag--presence-foreign-active-p)))
+      (should (equal foreign "other-machine")))
+    ;; Guard-style check: callers branch on truthiness of the return value.
+    (should (if (supertag--presence-foreign-active-p) t nil))))
+
+(ert-deftest supertag-hardening-test-presence-foreign-stale-is-nil ()
+  "A foreign host's presence written 10 minutes ago is stale, not active."
+  (supertag-hardening-test--with-temp-env
+    (supertag-hardening-test--write-presence-file "other-machine" 600)
+    (should (null (supertag--presence-foreign-active-p)))))
+
+(ert-deftest supertag-hardening-test-presence-own-host-is-nil ()
+  "This host's own (fresh) presence claim never counts as foreign."
+  (supertag-hardening-test--with-temp-env
+    (supertag-hardening-test--write-presence-file (system-name) 5)
+    (should (null (supertag--presence-foreign-active-p)))))
+
+(ert-deftest supertag-hardening-test-presence-write-creates-valid-json ()
+  "`supertag--presence-write' produces a parseable file naming this host."
+  (supertag-hardening-test--with-temp-env
+    (supertag-persistence-ensure-data-directory)
+    (supertag--presence-write)
+    (let ((file (supertag--presence-file)))
+      (should (file-exists-p file))
+      (let* ((data (json-read-file file))
+             (host (cdr (assq 'host data)))
+             (updated-at (cdr (assq 'updatedAt data))))
+        (should (equal host (system-name)))
+        (should (stringp updated-at))
+        (should (ignore-errors (parse-iso8601-time-string updated-at)))))))
+
+(ert-deftest supertag-hardening-test-presence-write-is-atomic ()
+  "`supertag--presence-write' leaves no `.tmp' residue next to the DB file."
+  (supertag-hardening-test--with-temp-env
+    (supertag-persistence-ensure-data-directory)
+    (supertag--presence-write)
+    (should (null (supertag-hardening-test--tmp-residues
+                   (file-name-directory (supertag--presence-file)))))))
 
 (provide 'persistence-hardening-test)
 

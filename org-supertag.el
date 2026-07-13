@@ -640,6 +640,12 @@ Consider running: M-x supertag-sync-full-rescan" db-file)
 ;; — given the other entries above are added without APPEND, i.e. prepended —
 ;; runs after all of them).
 (add-hook 'kill-emacs-hook #'supertag--db-release-lock t)
+;; Best-effort delete this host's own cross-machine presence claim on exit
+;; (only if it still names this host; see `supertag--presence-release').
+;; Order relative to the lock release above does not matter — presence and
+;; the local lock are independent mechanisms — but it belongs in this same
+;; "final cleanup" group of appended hooks.
+(add-hook 'kill-emacs-hook #'supertag--presence-release t)
 ;; If Emacs has already finished startup by the time this file loads
 ;; (lazy-load via autoload / use-package :defer / late require), the
 ;; `emacs-startup-hook' has already fired, so hooking into it silently

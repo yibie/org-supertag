@@ -8,6 +8,8 @@
 
 (require 'cl-lib)
 (require 'ht)
+(require 'json) ; For presence-file encode/decode
+(require 'parse-time) ; For parse-iso8601-time-string, used by presence
 (require 'supertag-core-notify) ; For supertag-subscribe and supertag-emit-event
 (require 'supertag-core-store) ; For supertag--store
 (require 'supertag-core-index) ; For relation index rebuild after load
@@ -97,6 +99,32 @@ databases are left as-is after loading; migrate manually with
   :type 'boolean
   :group 'org-supertag)
 
+(defcustom supertag-presence-enable t
+  "When non-nil, write and check an advisory presence file for cross-machine
+awareness.
+
+Org-SuperTag's database is a single serialized file. Users who sync it via
+Dropbox/iCloud/etc. get that sync service's \"whole file, last writer wins,
+no warning\" semantics — running Emacs against the same synced database on
+two machines at once can silently discard one side's edits. This is NOT a
+lock (a sync service's minutes-scale propagation delay means it cannot
+physically be one); it is a best-effort, advisory heads-up: a small JSON
+file recording which host last touched the database, and when, is written
+next to `supertag-db-file' on load and periodically while this session
+runs. When another host's presence looks recently active, loading warns
+loudly. See README \"Syncing across machines\" for the supported
+single-writer workflow this is meant to nudge users toward."
+  :type 'boolean
+  :group 'org-supertag)
+
+(defcustom supertag-presence-stale-seconds 300
+  "Age in seconds beyond which a foreign presence record is ignored.
+A presence record written by another host more than this many seconds ago
+is treated as stale — that machine is presumed no longer actively editing —
+and `supertag--presence-foreign-active-p' returns nil for it."
+  :type 'integer
+  :group 'org-supertag)
+
 (defvar supertag-db--auto-save-timer nil
   "Timer for auto-save.")
 
@@ -181,6 +209,170 @@ it over so saves can resume."
                (abbreviate-file-name supertag-db-file) supertag--db-lock-conflict)
     (message "Supertag: database lock acquired for %s."
              (abbreviate-file-name supertag-db-file))))
+
+;;; --- Cross-machine Presence (advisory; S0 of the git-sync hardening plan) ---
+;;
+;; `supertag--db-acquire-lock' above only ever sees *this machine's* other
+;; Emacs instances (`lock-file' writes a local symlink next to the DB file,
+;; which most sync services do not even propagate reliably, and certainly
+;; not promptly). It cannot detect a second machine editing the same
+;; Dropbox/iCloud-synced database. Presence closes that visibility gap with
+;; an ordinary, sync-friendly JSON file instead of a lock primitive: it is
+;; written periodically and read on load, purely advisory, and never blocks
+;; a save the way a lock conflict does.
+
+(defvar supertag--presence-write-failed nil
+  "Non-nil once a presence-file write has failed and been warned about.
+Keeps `supertag--presence-write' from spamming a `display-warning' on every
+auto-save timer tick after the first failure — the underlying condition
+(for example an unwritable data directory) is unlikely to resolve itself
+between ticks, so warn once per session and go quiet.")
+
+(defun supertag--presence-file ()
+  "Return the path of the advisory cross-machine presence file, or nil.
+The file lives NEXT TO `supertag-db-file' (same directory) rather than in a
+dedicated state directory, because that shared directory is exactly what
+sync services like Dropbox/iCloud propagate for the users this feature is
+for. For local-only users, an extra small file there is harmless.
+Returns nil when `supertag-db-file' is unset or empty."
+  (when (and (stringp supertag-db-file) (> (length supertag-db-file) 0))
+    (expand-file-name "supertag-presence.json"
+                       (file-name-directory supertag-db-file))))
+
+(defun supertag--presence-write ()
+  "Best-effort, atomic write of this session's presence claim.
+Writes `{\"host\": ..., \"updatedAt\": ..., \"pid\": ...}' (via
+`json-encode') to `supertag--presence-file', using the same temp-file +
+`rename-file' pattern as `supertag--persistence-write-store-atomically' so a
+concurrent reader never observes a half-written file. `updatedAt' is an
+ISO 8601 UTC timestamp.
+
+Never signals: `supertag-presence-enable' nil is a no-op, a nil
+`supertag--presence-file' (unset `supertag-db-file') is a no-op, and any
+other error is caught and reported via `display-warning' at most once per
+session (see `supertag--presence-write-failed') rather than propagated —
+a presence-file problem must never break a save or a load."
+  (when supertag-presence-enable
+    (condition-case err
+        (let ((file (supertag--presence-file)))
+          (when file
+            (let* ((dir (file-name-directory file))
+                   (payload (json-encode
+                             (list (cons 'host (system-name))
+                                   (cons 'updatedAt
+                                         (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                                              nil t))
+                                   (cons 'pid (emacs-pid)))))
+                   (temp-file (make-temp-file (concat file ".tmp")))
+                   (success nil))
+              (unless (file-exists-p dir)
+                (make-directory dir t))
+              (unwind-protect
+                  (progn
+                    (with-temp-buffer
+                      (set-buffer-file-coding-system 'utf-8-unix)
+                      (insert payload)
+                      (write-region (point-min) (point-max) temp-file nil 'silent))
+                    (rename-file temp-file file t)
+                    (setq success t))
+                (unless success
+                  (ignore-errors (delete-file temp-file)))))))
+      (error
+       (unless supertag--presence-write-failed
+         (setq supertag--presence-write-failed t)
+         (display-warning
+          'org-supertag
+          (format "Supertag: failed to write cross-machine presence file: %s"
+                  (error-message-string err))
+          :warning))))))
+
+(defun supertag--presence-read ()
+  "Return the parsed presence file as an alist, or nil on any error.
+Parses `supertag--presence-file' via `json-read-file'. Returns nil when
+`supertag-db-file' is unset, the presence file does not exist, or it fails
+to parse as JSON — callers must treat nil as \"no usable presence
+information\", never as an error."
+  (let ((file (supertag--presence-file)))
+    (when (and file (file-exists-p file))
+      (condition-case nil
+          (json-read-file file)
+        (error nil)))))
+
+(defun supertag--presence-foreign-active-p ()
+  "Return the foreign host string when another machine's presence is active.
+Non-nil only when all of the following hold: the presence file exists and
+parses, its recorded `host' differs from `(system-name)', its `updatedAt'
+parses as ISO 8601 (via `parse-iso8601-time-string'), and that timestamp is
+within `supertag-presence-stale-seconds' of now. Returns nil when the file
+is missing/unparseable, records this host, or is stale (older than the
+threshold)."
+  (let* ((data (supertag--presence-read))
+         (host (and data (cdr (assq 'host data))))
+         (updated-at (and data (cdr (assq 'updatedAt data)))))
+    (when (and (stringp host)
+               (not (string= host (system-name)))
+               (stringp updated-at))
+      (let ((parsed (ignore-errors (parse-iso8601-time-string updated-at))))
+        (when parsed
+          (let ((age (float-time (time-subtract (current-time) parsed))))
+            (when (< age supertag-presence-stale-seconds)
+              host)))))))
+
+(defun supertag--presence-check-and-claim ()
+  "Warn about a recently-active foreign presence, then claim this host's.
+Meant to run right after a successful `supertag-load-store'. When
+`supertag--presence-foreign-active-p' reports another host was recently
+active on this database, shows a loud, actionable `display-warning' (not a
+`message': a status-bar message is too easy to miss at exactly the moment
+this matters, right after opening a database another machine may still be
+writing to). Afterwards — whether or not a warning was shown — writes this
+session's own presence via `supertag--presence-write', claiming the
+database for this host going forward."
+  (when supertag-presence-enable
+    (let ((foreign-host (supertag--presence-foreign-active-p)))
+      (when foreign-host
+        (let* ((data (supertag--presence-read))
+               (updated-at (and data (cdr (assq 'updatedAt data))))
+               (parsed (and (stringp updated-at)
+                            (ignore-errors (parse-iso8601-time-string updated-at))))
+               (age (and parsed (round (float-time (time-subtract (current-time) parsed))))))
+          (display-warning
+           'org-supertag
+           (format "SUPERTAG: ANOTHER MACHINE MAY STILL BE EDITING THIS DATABASE.
+
+Host %s was active on this database %s ago (%s).
+
+This database file has no merge support: if you keep editing on both
+machines at the same time, whichever one saves LAST WINS and the other
+machine's changes are silently discarded — there will be no error, no
+conflict marker, just quietly lost work.
+
+If you are done editing on %s, this warning is safe to ignore.
+Otherwise, quit Emacs there before continuing to edit here.
+
+See README \"Syncing across machines\" for the supported workflow."
+                   foreign-host
+                   (if age (format "%d second%s" age (if (= age 1) "" "s")) "recently")
+                   (abbreviate-file-name supertag-db-file)
+                   foreign-host)
+           :warning))))
+    (supertag--presence-write)))
+
+(defun supertag--presence-release ()
+  "Best-effort delete of this host's own presence claim.
+Meant to run on `kill-emacs-hook'. Deletes `supertag--presence-file' ONLY
+when it still names this host (`(system-name)') — if another, newer machine
+has since overwritten it with its own claim, that claim is left alone,
+since deleting it would erase real presence information that other host's
+own load-time check depends on. Any error is ignored: a failed delete must
+never interrupt shutdown."
+  (when supertag-presence-enable
+    (ignore-errors
+      (let* ((file (supertag--presence-file))
+             (data (and file (file-exists-p file) (supertag--presence-read)))
+             (host (and data (cdr (assq 'host data)))))
+        (when (and file (stringp host) (string= host (system-name)))
+          (delete-file file))))))
 
 ;;; --- Backup Functions ---
 
@@ -573,8 +765,17 @@ untouched."
 
 (defun supertag-save-store (&optional file)
   "Save the current `supertag--store` to a file.
-FILE is the optional file path. Defaults to `supertag-db-file`."
+FILE is the optional file path. Defaults to `supertag-db-file`.
+
+This is also the function `supertag-setup-auto-save' and
+`supertag-schedule-save' hand to their timers, so it doubles as the
+presence heartbeat: `supertag--presence-write' below runs unconditionally
+on every call — including timer ticks where the store turns out not to be
+dirty and nothing else in this function does any work — so a foreign
+machine's `supertag--presence-foreign-active-p' check sees this host as
+recently active for as long as this session keeps running."
   (interactive)
+  (supertag--presence-write)
   (let* ((file-to-save (or file supertag-db-file))
          (reasons (supertag--persistence-guard-violations file-to-save))
          (interactive-call (called-interactively-p 'any)))
@@ -606,6 +807,10 @@ FILE is the optional file path. Defaults to `supertag-db-file`."
           (supertag--persistence-write-store-atomically file-to-save)
           (supertag-clear-dirty)
           (supertag--record-store-origin :ok)
+          ;; Re-claim presence after a successful save too, not just on the
+          ;; unconditional heartbeat write above — keeps the recorded
+          ;; `updatedAt' as fresh as possible right when real writes happen.
+          (supertag--presence-write)
           ;; Check if daily backup is needed after successful save
           (supertag-check-daily-backup))))))))
 
@@ -850,6 +1055,7 @@ FILE is the optional file path. Defaults to supertag-db-file."
                          " For migrations, run M-x supertag-db-migrate-and-normalize."
                        "")))
           (supertag--db-acquire-lock)
+          (supertag--presence-check-and-claim)
           (supertag--maybe-auto-migrate))
       (setq supertag--store (ht-create))
       (setq load-status :new)

@@ -295,6 +295,24 @@ Org-SuperTag grows with you. Start simple, add power when you need it:
 
 ---
 
+## Syncing across machines
+
+If you keep `~/.emacs.d/org-supertag/` (or wherever `supertag-db-file` lives) inside a Dropbox/iCloud/Syncthing-style folder so it follows you between machines, know the tradeoffs before you rely on it:
+
+**Safest mode: one writer at a time.** `supertag-db.el` is a single serialized file. The sync service's job is "replicate the whole file, last writer wins" — it has no idea two Emacs sessions edited different parts of it, so it cannot merge them. If both machines save, one save clobbers the other, silently. The reliable workflow is: **fully quit Emacs on machine A (`C-x C-c`, not just closing the frame) before you start editing on machine B.**
+
+This matters even if you think you're "just reading" on machine A: the auto-save timer (`supertag-db-auto-save-interval`, default 300 seconds) writes the database in the background whenever anything in the session marked it dirty, so an Emacs process left open is a background writer whether you're actively typing or not.
+
+**The 5.9.0 database lock does not cover this.** Since 5.9.0, Org-SuperTag takes an advisory lock (`supertag-db-lock`) on the database file to stop two Emacs instances *on the same machine* from stepping on each other. That lock is a local file-locking primitive (a symlink next to the DB file) — it only ever protects against a same-machine double-open, and most sync services don't propagate lock artifacts reliably or promptly enough for it to mean anything across machines.
+
+**The presence warning.** To give sync-folder users at least a heads-up (not a lock — a sync service's multi-minute propagation delay means it can't physically be one), Org-SuperTag writes a small `supertag-presence.json` file next to the database recording which host last touched it and when. When you load the database and another host's presence looks like it was active in roughly the last 5 minutes (`supertag-presence-stale-seconds`), you'll see a loud warning naming that host and the risk. **What to do when you see it:** if you're sure the other machine is done (Emacs quit there), it's safe to proceed — the warning is one-shot and won't repeat until the other host claims presence again. If you're not sure, go quit Emacs on that other machine first. Run `M-x supertag-doctor` any time to see the current presence file's host, age, and verdict (own / foreign-active / foreign-stale). Set `supertag-presence-enable` to `nil` to turn this off entirely.
+
+**Do not sync `sync-state.el` or `backups/`.** Both live in the same data directory as the database but are local, per-machine bookkeeping (`sync-state.el` tracks file mtimes/hashes for *this machine's* filesystem; `backups/` is disk space you don't need to duplicate across machines). If your sync tool syncs the whole data directory, exclude those two paths where the tool allows it; at worst, having them get overwritten just costs an extra full rescan, it doesn't lose data.
+
+This is a stopgap, not a solution — real multi-machine sync needs something that understands merges (git does; a folder-sync service does not). If that's what you're after, watch for an upcoming git-native sync mode; until then, the single-writer discipline above is the supported way to use a synced folder safely.
+
+---
+
 ## Migration from older versions
 
 > **⚠️ 5.2.0 → 5.3.0**: Complete the [global field migration](doc/GLOBAL-FIELD-MIGRATION-GUIDE.md) before enabling `supertag-use-global-fields`.
