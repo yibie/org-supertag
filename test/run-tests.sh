@@ -30,12 +30,14 @@ TEST_FILES=(
     "test/node-ops-test.el"
     "test/view-framework-test.el"
     "test/formula-test.el"
+    "test/aggregate-test.el"
     "test/reference-test.el"
     "test/virtual-column-test.el"
     "test/test-field-node-reference.el"
     "test/persistence-hardening-test.el"
     "test/query-block-test.el"
     "test/query-library-test.el"
+    "test/sync-worker-regression-test.el"
 )
 
 # Allow filtering by keyword
@@ -53,8 +55,9 @@ if [ $# -gt 0 ]; then
             field-ref) FILTER="$FILTER test/test-field-node-reference.el" ;;
             persist)   FILTER="$FILTER test/supertag-persistence-test.el test/persistence-hardening-test.el" ;;
             query)     FILTER="$FILTER test/query-block-test.el test/query-library-test.el" ;;
+            cl-block|sync-worker) FILTER="$FILTER test/sync-worker-regression-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist query all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist query cl-block sync-worker all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

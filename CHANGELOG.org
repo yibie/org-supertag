@@ -1,5 +1,26 @@
 * Changelog
 * [Unreleased]
+** Bug fixes
+- Fixed =Symbol's value as variable is void: --cl-block-...--= errors
+  (seen from the async sync worker when destructive sync is disallowed):
+  eight functions used =cl-return-from= inside a plain =defun=, which
+  lacks the implicit =cl-block= — now =cl-defun=. Affected:
+  =supertag-sync--verify-file-nodes=, =supertag-sync--check-and-sync-legacy=,
+  =supertag-sync--check-and-sync-guarded=, =supertag-sync-full-rescan=,
+  =supertag-field-rename=, =supertag-field-remove=,
+  =supertag-schema--cleanup-inherited-field-associations=, and the
+  =restore-heading-ids= script. A byte-compiled behavioral regression
+  test locks down the guarded sync-worker path.
+- Fixed heading deletion cleanup being lost across restart when the same
+  file also updated another node: deferred cleanup now leaves both the
+  old content hash and mtime intact until destructive sync is allowed.
+- Fixed deferred cleanup becoming permanently stuck after an async worker
+  error: complete snapshots re-enqueue deferred files and rely on the
+  async queue's existing deduplication instead of a stale =:queued= marker.
+- Fixed =test/aggregate-test.el= being unloadable: a stray paren
+  closed =test-aggregate-column-all-functions= early, leaving
+  unbalanced top-level forms. The repaired tests now run in the default
+  suite.
 
 * [5.9.0] - 2026-07-12
 ** Data safety (highlights)

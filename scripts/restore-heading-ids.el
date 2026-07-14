@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'org-id)
 
@@ -14,7 +15,7 @@
   (and (stringp title)
        (string-match-p "#[a-zA-Z][a-zA-Z0-9_-]*" title)))
 
-(defun restore-heading-ids-in-file (file)
+(cl-defun restore-heading-ids-in-file (file)
   "为指定文件中有 #tag 但没有 ID 的 heading 创建 ID。
 返回 (created . total) 表示创建的 ID 数量和总的 heading 数量。
 如果文件不存在或处理过程中出错，返回 nil。"
