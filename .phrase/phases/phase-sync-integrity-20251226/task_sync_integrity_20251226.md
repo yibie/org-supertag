@@ -83,3 +83,13 @@
   - 验证方式：跨重启与 worker 异常回归均 RED→GREEN；完整 ERT 116/116；aggregate 3/3
   - 影响范围：`supertag-services-sync.el`、`test/sync-worker-regression-test.el`、
     `test/run-tests.sh`、`CHANGELOG.org`
+
+- task016 [x] 按 file-node 自身 link type 验证持久身份（issue015）
+  - 产出：Org-ID/Denote file node 校验对应文件身份；缺少 link type 的 legacy node
+    继续以文件存在为安全兜底
+  - 验证方式：Org-ID 与 Denote 的匹配/变更回归；legacy/live、deleted file 与 heading
+    回归；完整 ERT、byte-compile、`git diff --check`
+  - 影响范围：`supertag-services-sync.el`、`test/sync-worker-regression-test.el`、
+    `CHANGELOG.org`
+  - 完成：Org-ID/Denote 身份变更回归、legacy/deleted/heading 回归和完整 ERT
+    119/119 通过；issue015 保持待用户验收状态

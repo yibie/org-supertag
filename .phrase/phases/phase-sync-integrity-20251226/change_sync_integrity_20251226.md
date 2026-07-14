@@ -1,5 +1,21 @@
 # Sync Integrity Change Log
 
+## 2026-07-14 — task016 / issue015
+
+- Modify `supertag-services-sync.el`：file-node validation 改为读取节点自身的
+  `:link-type`；Org-ID 校验顶部 `:ID:`，Denote 校验 `#+IDENTIFIER:`，未知或缺失
+  link type 的 legacy node 继续以文件存在为保守兜底。
+- Modify `test/sync-worker-regression-test.el`：锁定 Org-ID 与 Denote 身份替换后旧节点
+  orphan、新节点成为文件唯一入口的行为；保留 legacy/live、deleted file 与 heading
+  回归。
+- Modify `CHANGELOG.org`：删除“所有 file-node 只按文件存在校验”的错误承诺，记录
+  per-node identity 与 legacy fallback 的实际边界。
+- Add `issue_sync_integrity_20260714_file_node_validation.md`：登记 PR #182 的身份变化
+  回归与用户验收状态。
+
+验证：sync-worker 6/6；完整 ERT 119/119；byte-compile、bash 语法和
+`git diff --check` 通过。
+
 ## 2026-07-14 — task015 / issue014
 
 - Modify `supertag-services-sync.el`：移除 async processor 的重复 sync-state 推进，

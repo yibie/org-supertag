@@ -13,3 +13,4 @@
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）
 - issue014 [ ] snapshot guard 延迟删除在重启或 worker 异常后失去重试（实现完成，待用户验收；phase-sync-integrity-20251226/issue_sync_integrity_20260714_deferred_retry.md）
+- issue015 [ ] file-node 验证忽略持久身份并保留失效节点（phase-sync-integrity-20251226/issue_sync_integrity_20260714_file_node_validation.md）

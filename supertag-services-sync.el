@@ -840,6 +840,11 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
                    "|")))
     (secure-hash 'sha1 (format "%s|%s" id payload))))
 
+(defun supertag-node-file-node-p (node)
+  "Return non-nil when NODE is a file node (level 0).
+File nodes represent file-level identity rather than Org headings."
+  (eq (plist-get node :level) 0))
+
 (defun supertag-node-mark-deleted-from-file (id)
   "Mark a node as deleted from its file by setting its :file property to nil.
 This does not remove the node from the store immediately."
@@ -1038,7 +1043,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                  (old-node-props (cdr existing-node-pair))
                  (new-node-props (gethash id current-nodes-in-file)))
             ;; ponytail: file nodes (level 0) are not managed by heading sync
-            (unless (eq (plist-get old-node-props :level) 0)
+            (unless (supertag-node-file-node-p old-node-props)
             (cond
              ((null new-node-props)
               (if allow-destructive
@@ -1101,7 +1106,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                    (new-node-props (gethash id current-nodes-in-file)))
               ;; Skip file nodes (level 0) - they are NOT orphaned while file exists
               ;; ponytail: file node lifecycle mirrors the file itself
-              (unless (eq (plist-get old-node-props :level) 0)
+              (unless (supertag-node-file-node-p old-node-props)
               ;; If node exists in store but not in file, mark it as orphaned
               (when (null new-node-props)
                 (let ((db-node (supertag-node-get id)))
@@ -1376,6 +1381,18 @@ Returns t if the node ID is found, nil otherwise."
          (goto-char (point-min))
          (re-search-forward (concat ":ID:[ \t]+" (regexp-quote id)) nil t))))
 
+(defun supertag-sync--file-identity-matches-p (id node file)
+  "Return non-nil when NODE's persisted identity in FILE still equals ID."
+  (let ((policy (pcase (plist-get node :link-type)
+                  ('id 'org-id)
+                  ('denote 'denote))))
+    (and policy
+         (file-exists-p file)
+         (with-temp-buffer
+           (insert-file-contents-literally file)
+           (let ((org-supertag-file-id-source policy))
+             (equal id (plist-get (supertag-sync--parse-file-header) :id)))))))
+
 (defun supertag-sync-validate-nodes (&optional counters)
   "Validate all nodes in the database against their source files.
 This function iterates through all nodes in the store and checks if they
@@ -1386,13 +1403,26 @@ COUNTERS is a plist for tracking changes."
    (lambda (id node)
      (let ((file (plist-get node :file))
            (type (plist-get node :type)))
-       ;; Only check nodes that are supposed to be in a file, and are of type :node.
+       ;; Only check :node entities that claim to live in a file.
        ;; If :file is already nil, it's already an orphan.
        (when (and file (eq type :node))
-         (unless (supertag-sync--id-exists-in-file-p id file)
-           (supertag-node-mark-deleted-from-file id)
-           (when counters
-             (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))))))
+         ;; Current file nodes carry their identity kind.  Legacy nodes do
+         ;; not, so preserve them while the file exists rather than guessing.
+         (let* ((file-node (supertag-node-file-node-p node))
+                (link-type (plist-get node :link-type))
+                (stale
+                 (cond
+                  ((not file-node)
+                   (not (supertag-sync--id-exists-in-file-p id file)))
+                  ((not (file-exists-p file)) t)
+                  ((memq link-type '(id denote))
+                   (not (supertag-sync--file-identity-matches-p id node file)))
+                  (t nil))))
+           (when stale
+             (supertag-node-mark-deleted-from-file id)
+             (when counters
+               (setf (plist-get counters :nodes-deleted)
+                     (1+ (plist-get counters :nodes-deleted)))))))))))
 
 
 ;; --- Org Parser ---
