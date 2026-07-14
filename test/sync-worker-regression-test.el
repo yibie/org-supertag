@@ -144,5 +144,43 @@ the old mtime until destructive cleanup is allowed."
             (should (equal supertag-async--queue (list file)))))
       (ignore-errors (delete-file file)))))
 
+(ert-deftest supertag-sync-validate-nodes-keeps-file-nodes ()
+  "`supertag-sync-validate-nodes' validates a file node by file existence.
+A file node's UUID is never written into the org file as an :ID: drawer, so
+`supertag-sync--id-exists-in-file-p' always fails for it; validating file
+nodes that way orphans every file whose file still exists (mass `:file nil'
+corruption, then aborted GC). A file node whose file EXISTS is kept, a file
+node whose file is GONE is orphaned, and a heading node whose ID is absent
+from the file is orphaned."
+  (let* ((file (make-temp-file "supertag-validate-" nil ".org"
+                               "#+title: ai\n* Heading\nno id drawer here\n"))
+         (gone-file (concat (make-temp-name
+                             (expand-file-name "supertag-validate-gone-"
+                                               temporary-file-directory))
+                            ".org"))
+         (marked '()))
+    (unwind-protect
+        (cl-letf (((symbol-function 'supertag-traverse-nodes)
+                   (lambda (fn)
+                     (funcall fn "FILE-NODE-UUID"
+                              (list :id "FILE-NODE-UUID" :type :node
+                                    :level 0 :file file :title "ai"))
+                     (funcall fn "FILE-NODE-GONE"
+                              (list :id "FILE-NODE-GONE" :type :node
+                                    :level 0 :file gone-file :title "gone-file"))
+                     (funcall fn "MISSING-HEADING"
+                              (list :id "MISSING-HEADING" :type :node
+                                    :level 1 :file file :title "gone"))))
+                  ((symbol-function 'supertag-node-mark-deleted-from-file)
+                   (lambda (id) (push id marked))))
+          (supertag-sync-validate-nodes)
+          ;; File node with a live file is kept; the deleted-file node and the
+          ;; genuinely missing heading are orphaned.
+          (should-not (member "FILE-NODE-UUID" marked))
+          (should (member "FILE-NODE-GONE" marked))
+          (should (member "MISSING-HEADING" marked))
+          (should (= (length marked) 2)))
+      (ignore-errors (delete-file file)))))
+
 (provide 'sync-worker-regression-test)
 ;;; sync-worker-regression-test.el ends here

@@ -840,6 +840,13 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
                    "|")))
     (secure-hash 'sha1 (format "%s|%s" id payload))))
 
+(defun supertag-node-file-node-p (node)
+  "Return non-nil when NODE is a file node (level 0).
+File nodes represent the file itself; their UUID is never written into the
+org file as an :ID: drawer, so heading-oriented sync and validation must skip
+them."
+  (eq (plist-get node :level) 0))
+
 (defun supertag-node-mark-deleted-from-file (id)
   "Mark a node as deleted from its file by setting its :file property to nil.
 This does not remove the node from the store immediately."
@@ -1038,7 +1045,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                  (old-node-props (cdr existing-node-pair))
                  (new-node-props (gethash id current-nodes-in-file)))
             ;; ponytail: file nodes (level 0) are not managed by heading sync
-            (unless (eq (plist-get old-node-props :level) 0)
+            (unless (supertag-node-file-node-p old-node-props)
             (cond
              ((null new-node-props)
               (if allow-destructive
@@ -1101,7 +1108,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                    (new-node-props (gethash id current-nodes-in-file)))
               ;; Skip file nodes (level 0) - they are NOT orphaned while file exists
               ;; ponytail: file node lifecycle mirrors the file itself
-              (unless (eq (plist-get old-node-props :level) 0)
+              (unless (supertag-node-file-node-p old-node-props)
               ;; If node exists in store but not in file, mark it as orphaned
               (when (null new-node-props)
                 (let ((db-node (supertag-node-get id)))
@@ -1386,13 +1393,23 @@ COUNTERS is a plist for tracking changes."
    (lambda (id node)
      (let ((file (plist-get node :file))
            (type (plist-get node :type)))
-       ;; Only check nodes that are supposed to be in a file, and are of type :node.
+       ;; Only check :node entities that claim to live in a file.
        ;; If :file is already nil, it's already an orphan.
        (when (and file (eq type :node))
-         (unless (supertag-sync--id-exists-in-file-p id file)
-           (supertag-node-mark-deleted-from-file id)
-           (when counters
-             (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))))))
+         ;; A file node (level 0) is valid iff its file still exists: its UUID
+         ;; is never written into the org file as an :ID: drawer, so the
+         ;; id-in-file check below would wrongly orphan every file node whose
+         ;; file still exists (mass `:file nil' corruption -> aborted GC). A
+         ;; heading node is valid iff its ID still appears in the file. This
+         ;; keeps deleted-file cleanup working for both kinds.
+         (let ((stale (if (supertag-node-file-node-p node)
+                          (not (file-exists-p file))
+                        (not (supertag-sync--id-exists-in-file-p id file)))))
+           (when stale
+             (supertag-node-mark-deleted-from-file id)
+             (when counters
+               (setf (plist-get counters :nodes-deleted)
+                     (1+ (plist-get counters :nodes-deleted)))))))))))
 
 
 ;; --- Org Parser ---
