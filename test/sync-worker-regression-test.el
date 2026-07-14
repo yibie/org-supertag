@@ -144,14 +144,10 @@ the old mtime until destructive cleanup is allowed."
             (should (equal supertag-async--queue (list file)))))
       (ignore-errors (delete-file file)))))
 
-(ert-deftest supertag-sync-validate-nodes-keeps-file-nodes ()
-  "`supertag-sync-validate-nodes' validates a file node by file existence.
-A file node's UUID is never written into the org file as an :ID: drawer, so
-`supertag-sync--id-exists-in-file-p' always fails for it; validating file
-nodes that way orphans every file whose file still exists (mass `:file nil'
-corruption, then aborted GC). A file node whose file EXISTS is kept, a file
-node whose file is GONE is orphaned, and a heading node whose ID is absent
-from the file is orphaned."
+(ert-deftest supertag-sync-validate-nodes-keeps-legacy-file-nodes ()
+  "Validate legacy file nodes without identity metadata by file existence.
+Such nodes predate `:link-type', so a live file is the only safe evidence.
+A deleted-file node and a heading whose ID is absent are still orphaned."
   (let* ((file (make-temp-file "supertag-validate-" nil ".org"
                                "#+title: ai\n* Heading\nno id drawer here\n"))
          (gone-file (concat (make-temp-name
@@ -181,6 +177,45 @@ from the file is orphaned."
           (should (member "MISSING-HEADING" marked))
           (should (= (length marked) 2)))
       (ignore-errors (delete-file file)))))
+
+(defun supertag-sync-worker-test--identity-replacement
+    (link-type contents old-id new-id)
+  "Verify identity replacement for LINK-TYPE using CONTENTS and node IDs."
+  (let* ((tmp (make-temp-file "supertag-validate-identity-" t))
+         (file (expand-file-name "note.org" tmp))
+         (supertag-data-directory tmp)
+         (supertag-db-file (expand-file-name "supertag-db.el" tmp))
+         (supertag--store nil)
+         (counters (list :nodes-deleted 0)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert contents))
+          (supertag--ensure-store)
+          (supertag-node-create
+           (list :id old-id :type :node :level 0 :link-type link-type
+                 :file file :title "Old"))
+          (supertag-node-create
+           (list :id new-id :type :node :level 0 :link-type link-type
+                 :file file :title "New"))
+          (supertag-sync-validate-nodes counters)
+          (should-not (plist-get (supertag-node-get old-id) :file))
+          (should (equal (plist-get (supertag-node-get new-id) :file) file))
+          (should (equal (car (supertag-find-file-node file)) new-id))
+          (should (= (plist-get counters :nodes-deleted) 1)))
+      (ignore-errors (delete-directory tmp t)))))
+
+(ert-deftest supertag-sync-validate-nodes-orphans-replaced-org-id ()
+  "A file node stops owning a file after its top-level Org ID changes."
+  (supertag-sync-worker-test--identity-replacement
+   'id ":PROPERTIES:\n:ID: new-file-id\n:END:\n#+TITLE: Note\n"
+   "old-file-id" "new-file-id"))
+
+(ert-deftest supertag-sync-validate-nodes-orphans-replaced-denote-id ()
+  "A file node stops owning a file after its Denote identifier changes."
+  (supertag-sync-worker-test--identity-replacement
+   'denote "#+TITLE: Note\n#+IDENTIFIER: new-denote-id\n"
+   "old-denote-id" "new-denote-id"))
 
 (provide 'sync-worker-regression-test)
 ;;; sync-worker-regression-test.el ends here

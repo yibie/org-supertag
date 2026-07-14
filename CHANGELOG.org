@@ -1,16 +1,13 @@
 * Changelog
 * [Unreleased]
 ** Bug fixes
-- Fixed =supertag-sync-validate-nodes= mass-orphaning every file node:
-  it marked a node orphaned when the node ID was absent from the file
-  body, but a level-0 file node's UUID is never written into the file
-  as an =:ID:= drawer, so the check always failed and orphaned every
-  file whose file still existed. This produced =GC aborted= warnings
-  (the mass-deletion safety cap correctly refusing to delete ~92% of
-  nodes). Validation now checks file nodes by file existence (valid
-  while the file exists, orphaned once it is gone) and heading nodes by
-  ID presence, so deleted-file cleanup still works for both. Regression
-  tests cover the kept, deleted-file, and missing-heading cases.
+- Fixed =supertag-sync-validate-nodes= mass-orphaning legacy file nodes that
+  predate persisted identity metadata. Current file nodes are validated by
+  their own link type: Org-ID nodes match the top-level =:ID:= and Denote
+  nodes match =#+IDENTIFIER:=. Legacy nodes without =:link-type= fall back to
+  file existence, while deleted files and missing headings are still
+  orphaned. Identity changes now retire the old file node instead of leaving
+  two nodes pointing at one file.
 - Fixed =Symbol's value as variable is void: --cl-block-...--= errors
   (seen from the async sync worker when destructive sync is disallowed):
   eight functions used =cl-return-from= inside a plain =defun=, which

@@ -842,9 +842,7 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
 
 (defun supertag-node-file-node-p (node)
   "Return non-nil when NODE is a file node (level 0).
-File nodes represent the file itself; their UUID is never written into the
-org file as an :ID: drawer, so heading-oriented sync and validation must skip
-them."
+File nodes represent file-level identity rather than Org headings."
   (eq (plist-get node :level) 0))
 
 (defun supertag-node-mark-deleted-from-file (id)
@@ -1383,6 +1381,18 @@ Returns t if the node ID is found, nil otherwise."
          (goto-char (point-min))
          (re-search-forward (concat ":ID:[ \t]+" (regexp-quote id)) nil t))))
 
+(defun supertag-sync--file-identity-matches-p (id node file)
+  "Return non-nil when NODE's persisted identity in FILE still equals ID."
+  (let ((policy (pcase (plist-get node :link-type)
+                  ('id 'org-id)
+                  ('denote 'denote))))
+    (and policy
+         (file-exists-p file)
+         (with-temp-buffer
+           (insert-file-contents-literally file)
+           (let ((org-supertag-file-id-source policy))
+             (equal id (plist-get (supertag-sync--parse-file-header) :id)))))))
+
 (defun supertag-sync-validate-nodes (&optional counters)
   "Validate all nodes in the database against their source files.
 This function iterates through all nodes in the store and checks if they
@@ -1396,15 +1406,18 @@ COUNTERS is a plist for tracking changes."
        ;; Only check :node entities that claim to live in a file.
        ;; If :file is already nil, it's already an orphan.
        (when (and file (eq type :node))
-         ;; A file node (level 0) is valid iff its file still exists: its UUID
-         ;; is never written into the org file as an :ID: drawer, so the
-         ;; id-in-file check below would wrongly orphan every file node whose
-         ;; file still exists (mass `:file nil' corruption -> aborted GC). A
-         ;; heading node is valid iff its ID still appears in the file. This
-         ;; keeps deleted-file cleanup working for both kinds.
-         (let ((stale (if (supertag-node-file-node-p node)
-                          (not (file-exists-p file))
-                        (not (supertag-sync--id-exists-in-file-p id file)))))
+         ;; Current file nodes carry their identity kind.  Legacy nodes do
+         ;; not, so preserve them while the file exists rather than guessing.
+         (let* ((file-node (supertag-node-file-node-p node))
+                (link-type (plist-get node :link-type))
+                (stale
+                 (cond
+                  ((not file-node)
+                   (not (supertag-sync--id-exists-in-file-p id file)))
+                  ((not (file-exists-p file)) t)
+                  ((memq link-type '(id denote))
+                   (not (supertag-sync--file-identity-matches-p id node file)))
+                  (t nil))))
            (when stale
              (supertag-node-mark-deleted-from-file id)
              (when counters
