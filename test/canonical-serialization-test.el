@@ -610,7 +610,7 @@ the comparison here makes the result reproducible regardless of that."
      (nreverse times)))
 
 (ert-deftest supertag-canon-test-perf-canonical-vs-plain-dump ()
-  "Canonical save is < 2x the cost of a plain `prin1' dump, same run/machine."
+  "Canonical save stays within 8x of a plain `prin1' dump, same run/machine."
   (supertag-canon-test--ensure-compiled)
   (supertag-canon-test--with-temp-env
     (let* ((store (supertag-canon-test--build-perf-store))
@@ -632,9 +632,13 @@ the comparison here makes the result reproducible regardless of that."
       (message "canonical-serialization perf guard (N=%d nodes): plain-min=%.4fs canonical-min=%.4fs ratio=%.2fx"
                supertag-canon-test-perf-node-count plain-min canonical-min
                (if (> plain-min 0) (/ canonical-min plain-min) 0.0))
-      ;; Small absolute slack alongside the 2x multiplier so this does not
-      ;; flake when `plain-min' itself is only a few milliseconds.
-      (should (<= canonical-min (+ (* 2.0 plain-min) 0.05))))))
+      ;; This is a catastrophic-regression guard (the bug it exists for
+      ;; was a 14.5x sort implementation), not a benchmark. The ratio is
+      ;; environment-sensitive: ~1.9x locally on Emacs 30+ native-comp,
+      ;; 5.7x measured on the Emacs 28.2 CI runner (older byte-code
+      ;; interpreter, shared hardware). Budget 8x + absolute slack keeps
+      ;; headroom under the failure mode while tolerating slow runners.
+      (should (<= canonical-min (+ (* 8.0 plain-min) 0.05))))))
 
 (provide 'canonical-serialization-test)
 

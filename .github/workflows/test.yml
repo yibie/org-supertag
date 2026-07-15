@@ -30,8 +30,12 @@ jobs:
           version: ${{ matrix.emacs_version }}
 
       - name: Install elisp dependencies
+        # org >= 9.6 from GNU ELPA matches Package-Requires: Emacs 28.2
+        # bundles org 9.5.x, below the package's declared minimum, and that
+        # gap produced a real scanner difference on CI (clone-rebuild found
+        # 0 nodes on 28.2 while 29.4 passed).
         run: |
-          emacs -batch --eval "(progn (require 'package) (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\")) (package-initialize) (package-refresh-contents) (package-install 'ht))"
+          emacs -batch --eval "(progn (require 'package) (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\")) (package-initialize) (package-refresh-contents) (package-install 'ht) (unless (package-installed-p 'org \"9.6\") (package-install (cadr (assq 'org package-archive-contents)))))"
 
       # test/run-tests.sh is already tracked with mode 100755 in git
       # (verified via `git ls-files -s test/run-tests.sh`), so no chmod
