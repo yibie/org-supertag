@@ -10,17 +10,6 @@
 (require 'cl-lib) ; For cl-loop, cl-find, etc.
 (require 'ht) ; Provides basic `ht` operations when library missing
 
-;;; --- Emacs 28 compatibility ---
-;; `plistp' was added in Emacs 29; Package-Requires declares 28.1. This
-;; file sits at the bottom of the require chain, so the polyfill is in
-;; place before any caller. (Caught by CI's 28.2 matrix: every rescan
-;; skipped every file with "void function plistp".)
-(unless (fboundp 'plistp)
-  (defun plistp (object)
-    "Non-nil if OBJECT is a valid plist (even-length proper list)."
-    (let ((len (proper-list-p object)))
-      (and len (zerop (% len 2))))))
-
 ;;; --- Shared Core State Variables ---
 
 (defvar supertag--suppress-notifications nil

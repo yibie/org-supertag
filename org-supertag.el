@@ -27,7 +27,7 @@
 ;; org-supertag is a powerful tagging system for Org mode that extends the
 ;; traditional tagging capabilities with advanced features
 
-;; Package-Requires: ((emacs "28.1") (org "9.6") (ht "2.4"))
+;; Package-Requires: ((emacs "29.1") (org "9.6") (ht "2.4"))
 
 ;;; Code:
 

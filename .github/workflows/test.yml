@@ -16,11 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The package's declared minimum is Emacs 28.1 (see Package-Requires
-        # in org-supertag.el), but jcs090218/setup-emacs on Linux is more
-        # reliable installing 28.2 than 28.1, so we test against 28.2 as the
-        # floor plus the current stable release.
-        emacs_version: ['28.2', '29.4']
+        # Test the declared minimum (Package-Requires: emacs 29.1, which
+        # also bundles org 9.6) plus the current stable release.
+        emacs_version: ['29.1', '29.4']
 
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +28,9 @@ jobs:
           version: ${{ matrix.emacs_version }}
 
       - name: Install elisp dependencies
-        # org >= 9.6 from GNU ELPA matches Package-Requires: Emacs 28.2
-        # bundles org 9.5.x, below the package's declared minimum, and that
-        # gap produced a real scanner difference on CI (clone-rebuild found
-        # 0 nodes on 28.2 while 29.4 passed).
+        # Emacs 29.1+ bundles org >= 9.6, satisfying Package-Requires; the
+        # guarded org install stays as a safety net should the floor or the
+        # runner image ever drift.
         run: |
           emacs -batch --eval "(progn (require 'package) (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\")) (package-initialize) (package-refresh-contents) (package-install 'ht) (unless (package-installed-p 'org '(9 6)) (package-install (cadr (assq 'org package-archive-contents)))))"
 
