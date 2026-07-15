@@ -55,6 +55,41 @@
 ;; `supertag-conflicts--absent-placeholder' below), documented so the two
 ;; can't silently drift without a human noticing.
 ;;
+;; ## Nested-leaf records (`:key-path')
+;;
+;; supertag-merge.el now recurses INTO a frozen hash-table entity's own map
+;; (`:field-values', legacy `:fields') instead of only ever producing one
+;; whole-entity conflict for it -- see its Commentary, "Conflict
+;; granularity" point 2, and `supertag-merge--merge-hash-marker-map'. A true
+;; leaf-level disagreement found that way is still shaped like an ordinary
+;; field-conflict record (`:collection'/`:entity-id'/`:key' read exactly
+;; like a non-nested one), PLUS an additive `:key-path' property: the full
+;; list of ALIST-key segments from the entity down to the leaf (`:key' is
+;; always `:key-path''s own last element) -- e.g. `:collection :fields
+;; :entity-id "node1" :key "status" :key-path ("project" "status")', id
+;; "fields/node1/project/status". The OLD whole-entity-value shape (`:key'
+;; equal to `supertag--persistence--hash-marker', no `:key-path' at all)
+;; can still occur for a collection whose entity value is not hash-marker-
+;; shaped on some side (the safety net in
+;; `supertag-merge--decompose-conflict') -- both shapes are handled here,
+;; by different apply paths (`supertag-conflicts--resolve-hash-entity-one'
+;; for the old whole-value shape, `supertag-conflicts--apply-nested-leaf'
+;; for the new `:key-path' shape), dispatched on which property the record
+;; actually carries.
+;;
+;; `supertag-conflicts--apply-nested-leaf' resolves a `:key-path' record
+;; through the SAME collection-specific store seam a live write would use
+;; (`supertag-store-put-legacy-field'/`-remove-legacy-field' for `:fields',
+;; `supertag-store-put-field-value'/`-remove-field-value' for
+;; `:field-values') rather than hand-walking the live nested hash tables --
+;; see that function's own docstring for why this is safe (both seams
+;; create missing intermediate levels the same way a fresh write would, and
+;; both have participated in `supertag-with-transaction''s rollback log
+;; since P1-4), and doctor rendering needs no changes at all: the section
+;; renders each conflict's own `:id' verbatim, and
+;; `supertag-merge--path-conflict-id' already produces the readable
+;; "fields/node1/project/status" form for these records.
+;;
 ;; ## Load-time visibility (hook choice, justified)
 ;;
 ;; supertag-core-persistence.el must not `require' this file. Rather than
@@ -170,11 +205,95 @@ never silently dropped just because it postdates the conflict record."
       (let ((rest (cl-remove-if (lambda (a) (gethash (plist-get a :field-id) seen)) current)))
         (supertag-store-put-tag-field-associations tag-id (append ordered rest) t)))))
 
-(defun supertag-conflicts--apply (collection entity-id key value)
+(defun supertag-conflicts--apply-nested-leaf (collection entity-id key-path value)
+  "Apply resolved VALUE to a granular `:key-path' leaf conflict.
+COLLECTION/ENTITY-ID/KEY-PATH identify the leaf exactly as recorded by
+`supertag-merge--make-path-conflict' (see this file's Commentary,
+\"Nested-leaf records\"). KEY-PATH is the list of ALIST-key segments
+beneath ENTITY-ID: for the legacy `:fields' collection that is
+`(TAG-ID FIELD-NAME)' (two segments -- `:fields' nests node -> tag ->
+field), and for `:field-values' it is `(FIELD-ID)' (one segment --
+`:field-values' nests node -> field only); see
+`supertag-store-put-legacy-field'/`-remove-legacy-field' and
+`supertag-store-put-field-value'/`-remove-field-value' in
+supertag-core-store.el, whose own argument lists mirror this nesting
+exactly. VALUE equal to `supertag-conflicts--absent-placeholder' means
+remove the leaf (a delete-vs-modify record's missing side); anything
+else is the leaf's new value, thawed via
+`supertag--persistence--thaw-value' first (mirrors the ordinary
+plist-field path in `supertag-conflicts--apply' below).
+
+Routed through those collection-specific seams rather than a hand-rolled
+walk of the live nested hash tables: both seams already (a) create every
+missing intermediate level on demand, exactly like a fresh write would
+(so use-ours/use-theirs/edit-value all work even when a level was pruned
+away since the merge), and (b) have, since P1-4, recorded every level
+they touch into the active `supertag-with-transaction' rollback log
+themselves (`supertag--transaction-restore-entry' understands the
+`(:fields NODE TAG FIELD)'/`(:fields NODE TAG)'/`(:fields NODE)' and
+`(:field-values NODE FIELD)' path shapes) -- so the caller
+(`supertag-conflicts--resolve-one') gets the same atomic
+apply-and-remove-record guarantee as the ordinary plist-field path
+merely by calling this from inside its existing `supertag-with-transaction'
+block, with none of this file's own hand-rolled capture/restore (compare
+`supertag-conflicts--resolve-hash-entity-one', whose target -- an entire
+raw hash table with no per-level seam -- has no such seam to route
+through and must capture/restore by hand instead).
+
+Neither seam creates or removes a leaf's own removal side-effects
+(`:store-changed'/dirty-marking) uniformly: `supertag-store-put-field-value'/
+`-remove-field-value' do (an explicit EMIT-EVENT-P argument for the
+put, unconditionally for the remove), matching every other collection
+this file resolves against; `supertag-store-put-legacy-field'/
+`-remove-legacy-field' are the bare transactional seam only (real
+callers layer `supertag-ops-commit' on top for that -- see
+supertag-ops-field.el), so this function marks the store dirty and
+emits `:store-changed' itself for `:fields', mirroring
+`supertag-conflicts--resolve-hash-entity-one''s manual final step."
+  (let* ((remove-p (eq value supertag-conflicts--absent-placeholder))
+         (thawed (unless remove-p (supertag--persistence--thaw-value value))))
+    (pcase collection
+      (:fields
+       (unless (= (length key-path) 2)
+         (error "supertag-conflicts: unexpected :fields key-path %S" key-path))
+       (let ((tag-id (nth 0 key-path)) (field-name (nth 1 key-path)))
+         (if remove-p
+             (supertag-store-remove-legacy-field entity-id tag-id field-name)
+           (supertag-store-put-legacy-field entity-id tag-id field-name thawed))
+         ;; Mark dirty only -- deliberately do NOT `supertag-emit-event
+         ;; :store-changed' here. The legacy-field automation-sync listener
+         ;; (`supertag-automation-sync--handle-field-event') expects that
+         ;; event's NEW/OLD-VALUE arguments to be RICH plists shaped
+         ;; `(:node-id :tag-id :field-name :value ...)' -- the shape
+         ;; `supertag-field-set' builds via `supertag-ops-commit', never the
+         ;; bare leaf value this function has on hand. Fabricating that
+         ;; shape here would mean also fabricating a plausible OLD value and
+         ;; opting this file into triggering relation-sync/automation rules
+         ;; as a *side effect of conflict resolution*, which is well beyond
+         ;; what this file's atomicity contract (apply the resolved value,
+         ;; remove the record, both or neither) promises. Mark-dirty alone
+         ;; is exactly what this section's transaction needs: the resolved
+         ;; leaf is already live in the store; `supertag--persistence--handle-
+         ;; store-changed' is not required to make that fact durable, only
+         ;; `supertag-save-store' seeing the dirty flag is (see
+         ;; `supertag-conflicts--save-and-report').
+         (supertag-mark-dirty)))
+      (:field-values
+       (unless (= (length key-path) 1)
+         (error "supertag-conflicts: unexpected :field-values key-path %S" key-path))
+       (let ((field-id (nth 0 key-path)))
+         (if remove-p
+             (supertag-store-remove-field-value entity-id field-id)
+           (supertag-store-put-field-value entity-id field-id thawed t))))
+      (_
+       (error "supertag-conflicts: nested key-path conflict on unsupported collection %S"
+              collection)))))
+
+(defun supertag-conflicts--apply (collection entity-id key key-path value)
   "Apply resolved VALUE to the live store for one non-root conflict.
-Dispatches on COLLECTION/KEY per the shapes documented in this file's
-Commentary. Does not touch the `:sync-conflicts' record itself -- see
-`supertag-conflicts--resolve-one', which wraps this together with the
+Dispatches on COLLECTION/KEY/KEY-PATH per the shapes documented in this
+file's Commentary. Does not touch the `:sync-conflicts' record itself --
+see `supertag-conflicts--resolve-one', which wraps this together with the
 record removal in one transaction. NOTE: does not handle the
 `supertag--persistence--hash-marker' key (see
 `supertag-conflicts--resolve-hash-entity-one', which the caller dispatches
@@ -186,6 +305,8 @@ both need their own atomicity strategy, documented at those functions."
     (supertag-conflicts--apply-assoc-order entity-id value))
    ((eq collection :tag-field-associations)
     (supertag-conflicts--apply-assoc-slot entity-id key value))
+   (key-path
+    (supertag-conflicts--apply-nested-leaf collection entity-id key-path value))
    ((null key)
     ;; Whole-entity replace/delete. Every CURRENT collection's whole-entity
     ;; conflicts carry a plist (or another non-hash-table value -- see the
@@ -331,12 +452,13 @@ Returns `:applied', `:dropped', or `:not-found' (ID was already gone from
       (let* ((collection (plist-get conflict :collection))
              (entity-id (plist-get conflict :entity-id))
              (key (plist-get conflict :key))
+             (key-path (plist-get conflict :key-path))
              (target-exists (supertag-conflicts--target-exists-p collection entity-id))
              (effective (if (and (not (eq action :drop)) (not target-exists)) :drop action)))
         (cond
          ((null collection)
           (supertag-conflicts--resolve-root-one conflict id effective value))
-         ((eq key supertag--persistence--hash-marker)
+         ((and (eq key supertag--persistence--hash-marker) (not key-path))
           (supertag-conflicts--resolve-hash-entity-one
            conflict id collection entity-id effective value))
          (t
@@ -347,7 +469,7 @@ Returns `:applied', `:dropped', or `:not-found' (ID was already gone from
                               (:use-ours (plist-get conflict :ours))
                               (:use-theirs (plist-get conflict :theirs))
                               (:edit value))))
-                (supertag-conflicts--apply collection entity-id key chosen)
+                (supertag-conflicts--apply collection entity-id key key-path chosen)
                 (supertag-store-remove-entity :sync-conflicts id))))
           (if (eq effective :drop) :dropped :applied)))))))
 

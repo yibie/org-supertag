@@ -234,12 +234,31 @@ leaving the resurrected entity in place."
       (should (null (supertag-store-get-entity :nodes "n2")))
       (should (= 0 (supertag-conflicts-count))))))
 
-;;; --- 4. Whole-entity/hash-shaped (:field-values) ---
+;;; --- 4. Nested-leaf conflicts inside frozen hash-table entities
+;;; (:field-values / legacy :fields) ---
+;;
+;; supertag-merge.el now recurses INTO a hash-shaped entity's own map
+;; instead of only ever producing one whole-entity conflict for it (see its
+;; Commentary, "Conflict granularity" point 2, and
+;; `supertag-merge--merge-hash-marker-map'). A true leaf-level disagreement
+;; found that way carries an additive `:key-path' -- see
+;; supertag-conflicts.el's own Commentary, "Nested-leaf records" -- and is
+;; resolved through `supertag-conflicts--apply-nested-leaf', NOT the
+;; generic plist-put path (which would `wrong-type-argument' against the
+;; live hash table). Every fixture below mirrors merge-test.el's own
+;; dedicated tests for this recursion
+;; (`supertag-merge-test-fields-same-field-leaf-conflict' and
+;; `-fields-delete-vs-modify-field-level'), run through the SAME real
+;; `supertag-merge-3way' + write + `supertag-load-store' pipeline every
+;; other fixture in this file uses.
 
-(defun conflicts-test--seed-hash-shaped-conflict ()
-  "Load a store with one whole-value conflict on a :field-values entity
-(a frozen hash table, which freezes to a single-pseudo-key plist -- see
-supertag-merge.el's Commentary \"Conflict granularity\" point 2)."
+(defun conflicts-test--seed-field-values-leaf-conflict ()
+  "Load a store with one granular `:field-values' leaf conflict: node
+\"node1\"'s field \"f1\" differs on both sides from base \"old1\"; sibling
+field \"f2\" is untouched so it is NOT also a conflict. `:field-values'
+nests only node -> field (one level), so `:key-path' here is the
+single-segment `(\"f1\")' -- contrast the two-segment `:fields' key-path
+below."
   (let* ((base-val (list :supertag-hash-table (list (cons "f1" "old1") (cons "f2" "old2"))))
          (ours-val (list :supertag-hash-table (list (cons "f1" "ours1") (cons "f2" "old2"))))
          (theirs-val (list :supertag-hash-table (list (cons "f1" "theirs1") (cons "f2" "old2"))))
@@ -248,18 +267,288 @@ supertag-merge.el's Commentary \"Conflict granularity\" point 2)."
          (theirs (conflicts-test--parsed nil (list (cons (cons :field-values "node1") theirs-val)))))
     (conflicts-test--load-merged base ours theirs)))
 
-(ert-deftest conflicts-test-hash-shaped-whole-value-use-ours-thaws-hash-table ()
-  "Resolving a :field-values whole-value conflict rebuilds a REAL live hash
-table for the entity (not the frozen `(:supertag-hash-table ...)' printable
-form), with the chosen side's field values."
+(ert-deftest conflicts-test-field-values-leaf-use-ours-applies-into-live-hash ()
+  "The `:field-values' whole-entity scenario that used to produce a
+`:supertag-hash-table' whole-value record now legitimately produces a
+GRANULAR leaf record (`:key' \"f1\", `:key-path' (\"f1\")) -- this is the
+corrected replacement for the old
+`conflicts-test-hash-shaped-whole-value-use-ours-thaws-hash-table' test.
+use-ours applies the leaf into the live nested hash (still a real hash
+table, never the frozen printable form), leaves the untouched sibling
+field alone, and removes the record."
   (conflicts-test--with-temp-env
-    (conflicts-test--seed-hash-shaped-conflict)
+    (conflicts-test--seed-field-values-leaf-conflict)
+    (should (= 1 (supertag-conflicts-count)))
     (let* ((conflict (car (supertag-conflicts-list)))
            (id (plist-get conflict :id)))
+      (should (equal id "field-values/node1/f1"))
       (should (eq (plist-get conflict :kind) :field-conflict))
-      (should (eq (plist-get conflict :key) :supertag-hash-table))
+      (should (equal (plist-get conflict :key) "f1"))
+      (should (equal (plist-get conflict :key-path) '("f1")))
       ;; Already ours by the tiebreak (no :modified-at) -- resolving
-      ;; use-ours is a content no-op but must still thaw + remove the record.
+      ;; use-ours is a content no-op but must still apply through the seam
+      ;; and remove the record.
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-ours)))
+      (should (equal "ours1" (supertag-store-get-field-value "node1" "f1")))
+      (should (equal "old2" (supertag-store-get-field-value "node1" "f2")))
+      (let ((raw (gethash "node1" (supertag-store-get-collection :field-values))))
+        (should (hash-table-p raw)))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-field-values-leaf-use-theirs-applies-and-removes-record ()
+  "use-theirs on the granular `:field-values' leaf conflict writes theirs'
+value through the live seam and removes the record."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-field-values-leaf-conflict)
+    (let ((id "field-values/node1/f1"))
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-theirs)))
+      (should (equal "theirs1" (supertag-store-get-field-value "node1" "f1")))
+      (should (equal "old2" (supertag-store-get-field-value "node1" "f2")))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(defun conflicts-test--seed-fields-leaf-conflict ()
+  "Load a store with one granular legacy `:fields' leaf conflict: node
+\"node1\", tag \"project\", field \"status\" differs on both sides from base
+\"todo\". `:fields' nests node -> tag -> field (two levels), so the
+recorded `:key-path' is the two-segment `(\"project\" \"status\")', id
+\"fields/node1/project/status\" -- the exact fixture
+`supertag-merge-test-fields-same-field-leaf-conflict' in merge-test.el
+pins at the merge layer; this reruns it through the real
+`supertag-load-store' pipeline to exercise resolution."
+  (let* ((base-val (list :supertag-hash-table
+                          (list (cons "project" (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (ours-val (list :supertag-hash-table
+                         (list (cons "project" (list :supertag-hash-table (list (cons "status" "doing")))))))
+         (theirs-val (list :supertag-hash-table
+                           (list (cons "project" (list :supertag-hash-table (list (cons "status" "done")))))))
+         (base (conflicts-test--parsed nil (list (cons (cons :fields "node1") base-val))))
+         (ours (conflicts-test--parsed nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (conflicts-test--parsed nil (list (cons (cons :fields "node1") theirs-val)))))
+    (conflicts-test--load-merged base ours theirs)))
+
+(ert-deftest conflicts-test-fields-leaf-use-ours-applies-into-live-nested-hash ()
+  "use-ours on a granular `:fields' leaf conflict applies the leaf into the
+LIVE, two-level-deep nested hash tables (node -> tag -> field): every
+level is a genuine hash table (never the frozen printable form), and the
+record is removed."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-leaf-conflict)
+    (should (= 1 (supertag-conflicts-count)))
+    (let* ((conflict (car (supertag-conflicts-list)))
+           (id (plist-get conflict :id)))
+      (should (equal id "fields/node1/project/status"))
+      (should (equal (plist-get conflict :key) "status"))
+      (should (equal (plist-get conflict :key-path) '("project" "status")))
+      (should (eq (plist-get conflict :kind) :field-conflict))
+      ;; Already ours by the tiebreak (no :modified-at).
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-ours)))
+      (let* ((fields-root (supertag-store-get-collection :fields))
+             (node-table (gethash "node1" fields-root))
+             (tag-table (and (hash-table-p node-table) (gethash "project" node-table))))
+        (should (hash-table-p node-table))
+        (should (hash-table-p tag-table))
+        (should (equal "doing" (gethash "status" tag-table))))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-fields-leaf-use-theirs-applies-and-removes-record ()
+  "use-theirs on the same granular `:fields' leaf conflict writes theirs'
+value into the live nested hash and removes the record."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-leaf-conflict)
+    (let ((id "fields/node1/project/status"))
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-theirs)))
+      (let* ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (equal "done" (gethash "status" tag-table))))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-fields-leaf-edit-value-applies-custom-value ()
+  "edit-value on a granular `:fields' leaf conflict writes the
+user-supplied replacement, not either recorded side, and removes the
+record."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-leaf-conflict)
+    (let ((id "fields/node1/project/status"))
+      (should (eq :applied (supertag-conflicts--resolve-one id :edit "blocked")))
+      (let* ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (equal "blocked" (gethash "status" tag-table))))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-fields-leaf-atomicity-rollback-on-error ()
+  "An error injected between applying the resolved leaf and removing the
+conflict record rolls back the WHOLE transaction: the leaf write is undone
+too (back to whatever the merge itself wrote), and the conflict record
+survives untouched. Mirrors
+`conflicts-test-field-conflict-atomicity-rollback-on-error''s technique,
+proving the same atomicity guarantee holds for the new nested-leaf apply
+path even though it is routed through `supertag-store-put-legacy-field'
+instead of `supertag-store-put-entity'."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-leaf-conflict)
+    (let* ((id "fields/node1/project/status")
+           (before (gethash "status"
+                            (gethash "project"
+                                     (gethash "node1" (supertag-store-get-collection :fields))))))
+      (should (equal before "doing"))
+      (cl-letf (((symbol-function 'supertag-store-remove-entity)
+                 (lambda (&rest _args) (error "simulated failure removing conflict record"))))
+        (should-error (supertag-conflicts--resolve-one id :use-theirs)))
+      (let* ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (hash-table-p tag-table))
+        (should (equal before (gethash "status" tag-table))))
+      (should (= 1 (supertag-conflicts-count))))))
+
+(defun conflicts-test--seed-fields-delete-vs-modify ()
+  "Load a store where ours deleted \"priority\" under node1/project entirely
+while theirs concurrently modified it: resurrected with theirs' value,
+plus one `:delete-vs-modify' conflict naming the full key path. Sibling
+leaf \"status\" is untouched on both sides so it is NOT also a conflict,
+and stays present in project's tag-table (so removing \"priority\" alone
+does not empty the whole tag-table -- see the dedicated
+empty-parent-bucket test below for that case). Mirrors
+`supertag-merge-test-fields-delete-vs-modify-field-level' in
+merge-test.el."
+  (let* ((base-val (list :supertag-hash-table
+                          (list (cons "project"
+                                      (list :supertag-hash-table
+                                            (list (cons "priority" "low") (cons "status" "todo")))))))
+         (ours-val (list :supertag-hash-table
+                         (list (cons "project"
+                                     (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (theirs-val (list :supertag-hash-table
+                           (list (cons "project"
+                                       (list :supertag-hash-table
+                                             (list (cons "priority" "high") (cons "status" "todo")))))))
+         (base (conflicts-test--parsed nil (list (cons (cons :fields "node1") base-val))))
+         (ours (conflicts-test--parsed nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (conflicts-test--parsed nil (list (cons (cons :fields "node1") theirs-val)))))
+    (conflicts-test--load-merged base ours theirs)))
+
+(ert-deftest conflicts-test-fields-delete-vs-modify-use-theirs-keeps-leaf ()
+  "use-theirs on a field-level delete-vs-modify keeps the resurrected,
+modified leaf and removes the record; the untouched sibling leaf
+(\"status\") is unaffected."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-delete-vs-modify)
+    (let* ((conflict (car (supertag-conflicts-list)))
+           (id (plist-get conflict :id)))
+      (should (equal id "fields/node1/project/priority"))
+      (should (eq (plist-get conflict :kind) :delete-vs-modify))
+      (should (eq (plist-get conflict :ours) :supertag-merge/absent))
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-theirs)))
+      (let* ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (equal "high" (gethash "priority" tag-table)))
+        (should (equal "todo" (gethash "status" tag-table))))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-fields-delete-vs-modify-use-ours-removes-leaf ()
+  "use-ours on a field-level delete-vs-modify re-applies the deletion
+(ours' side, the absent-placeholder here): the leaf is removed from the
+live nested hash, but the sibling leaf and the parent hash tables at
+every level remain in place."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-delete-vs-modify)
+    (let ((id "fields/node1/project/priority"))
+      (should (gethash "priority" (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+      (should (eq :applied (supertag-conflicts--resolve-one id :use-ours)))
+      (let* ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (hash-table-p tag-table))
+        (should-not (ht-contains? tag-table "priority"))
+        (should (equal "todo" (gethash "status" tag-table))))
+      (should (= 0 (supertag-conflicts-count))))))
+
+(ert-deftest conflicts-test-fields-delete-vs-modify-empty-tag-bucket-remains ()
+  "When the removed leaf was the ONLY field left under its tag, use-ours
+removes just that leaf: the now-empty tag-table (and the node-table above
+it) are left in place as empty hash tables. This pins the ACTUAL behavior
+of the underlying store seam
+(`supertag-store-remove-legacy-field'/`supertag-store-remove-field-value'
+never walk back to prune now-empty parent levels -- verified directly
+against supertag-core-store.el, not assumed), so resolution never invents
+cleanup the live store itself does not do."
+  (conflicts-test--with-temp-env
+    (let* ((base-val (list :supertag-hash-table
+                            (list (cons "project" (list :supertag-hash-table (list (cons "priority" "low")))))))
+           (ours-val (list :supertag-hash-table
+                           (list (cons "project" (list :supertag-hash-table nil)))))
+           (theirs-val (list :supertag-hash-table
+                             (list (cons "project" (list :supertag-hash-table (list (cons "priority" "high")))))))
+           (base (conflicts-test--parsed nil (list (cons (cons :fields "node1") base-val))))
+           (ours (conflicts-test--parsed nil (list (cons (cons :fields "node1") ours-val))))
+           (theirs (conflicts-test--parsed nil (list (cons (cons :fields "node1") theirs-val)))))
+      (conflicts-test--load-merged base ours theirs)
+      (let* ((conflict (car (supertag-conflicts-list)))
+             (id (plist-get conflict :id)))
+        (should (equal id "fields/node1/project/priority"))
+        (should (eq :applied (supertag-conflicts--resolve-one id :use-ours)))
+        (let* ((fields-root (supertag-store-get-collection :fields))
+               (node-table (gethash "node1" fields-root))
+               (tag-table (and (hash-table-p node-table) (gethash "project" node-table))))
+          (should (hash-table-p node-table))
+          (should (hash-table-p tag-table))
+          (should (= 0 (hash-table-count tag-table))))
+        (should (= 0 (supertag-conflicts-count)))))))
+
+;;; --- 4b. Legacy whole-value hash-marker record (pre-recursion shape;
+;;; no longer producible by a real merge -- kept as a hand-shaped
+;;; compatibility test) ---
+;;
+;; Before supertag-merge.el learned to recurse into a hash-shaped entity's
+;; own map, ANY conflicting `:field-values'/legacy-`:fields' entity produced
+;; exactly this shape: one whole-entity conflict keyed by the
+;; `:supertag-hash-table' pseudo-key, `:ours'/`:theirs' the entity's own
+;; frozen ALIST, no `:key-path' at all. A real `supertag-merge-3way' run can
+;; no longer produce this shape for these two collections: the entity-level
+;; decompose dispatch sees any hash-marker value as plist-like (a
+;; 2-element list, keyword at index 0) and always takes the
+;; field-level-merge path, which always recurses at the
+;; `:supertag-hash-table' pseudo-key whenever both sides' values there are
+;; lists (see `supertag-merge--field-level-merge') -- true for every
+;; genuinely hash-shaped entity, so every conflict on one decomposes at
+;; least one level further now. `supertag-conflicts--resolve-hash-entity-one'
+;; is still reachable in principle (a `:sync-conflicts' record written by
+;; an older version of supertag-merge.el, still sitting unresolved in
+;; someone's store from before this fix, or any future collection whose
+;; entity-level safety net still emits this shape), so this test
+;; hand-shapes the record directly instead of trying to coax a real merge
+;; into producing an unreachable case.
+
+(defun conflicts-test--seed-legacy-hash-marker-record ()
+  "Hand-insert one legacy whole-value `:field-values' conflict record (the
+pre-recursion shape) directly into a fresh store, bypassing
+`supertag-merge-3way' entirely -- see this section's Commentary for why.
+Returns the record's id."
+  (supertag--ensure-store)
+  (let ((live (ht-create)))
+    (puthash "f1" "ours1" live)
+    (puthash "f2" "old2" live)
+    (puthash "node1" live (supertag-store-get-collection :field-values)))
+  (let* ((id "field-values/node1/:supertag-hash-table")
+         (data (list :id id
+                     :collection :field-values
+                     :entity-id "node1"
+                     :key :supertag-hash-table
+                     :ours (list (cons "f1" "ours1") (cons "f2" "old2"))
+                     :theirs (list (cons "f1" "theirs1") (cons "f2" "old2"))
+                     :base (list (cons "f1" "old1") (cons "f2" "old2"))
+                     :kind :field-conflict
+                     :detected-at nil)))
+    (supertag-store-put-entity :sync-conflicts id data)
+    id))
+
+(ert-deftest conflicts-test-legacy-hash-marker-whole-value-use-ours-thaws-hash-table ()
+  "Legacy-record compatibility: a hand-shaped, pre-recursion whole-value
+`:field-values' conflict (no `:key-path', `:key' the hash-marker keyword
+itself -- never produced by a real merge any more, see this section's
+Commentary) still resolves through
+`supertag-conflicts--resolve-hash-entity-one', rebuilding a REAL live hash
+table for the entity from the chosen side's ALIST."
+  (conflicts-test--with-temp-env
+    (let ((id (conflicts-test--seed-legacy-hash-marker-record)))
+      (should (= 1 (supertag-conflicts-count)))
+      (let ((conflict (car (supertag-conflicts-list))))
+        (should (eq (plist-get conflict :kind) :field-conflict))
+        (should (eq (plist-get conflict :key) :supertag-hash-table))
+        (should (null (plist-get conflict :key-path))))
       (should (eq :applied (supertag-conflicts--resolve-one id :use-ours)))
       (should (equal "ours1" (supertag-store-get-field-value "node1" "f1")))
       (should (equal "old2" (supertag-store-get-field-value "node1" "f2")))
@@ -382,6 +671,52 @@ the count at 0, and actually saves (dirty flag clear afterward)."
       ;; `supertag-load-store').
       (should-not (supertag-dirty-p)))))
 
+(ert-deftest conflicts-test-bulk-use-theirs-all-mixed-conflict-shapes ()
+  "`supertag-conflicts-use-theirs-all' resolves a mix of an ordinary
+plist-field conflict (`:nodes'), a granular nested-leaf conflict (legacy
+`:fields'), and a `:tag-field-associations' slot conflict all in the same
+batch -- proving the new `:key-path' apply path plugs into the existing
+bulk resolver (which tolerates and counts each conflict independently)
+exactly like every other conflict shape, with no special-casing needed at
+the bulk-resolution layer."
+  (conflicts-test--with-temp-env
+    (let* ((a1 (conflicts-test--node "n1" "Original"))
+           (b1 (conflicts-test--node "n1" "Ours Title"))
+           (c1 (conflicts-test--node "n1" "Theirs Title"))
+           (fields-base (list :supertag-hash-table
+                               (list (cons "project" (list :supertag-hash-table (list (cons "status" "todo")))))))
+           (fields-ours (list :supertag-hash-table
+                               (list (cons "project" (list :supertag-hash-table (list (cons "status" "doing")))))))
+           (fields-theirs (list :supertag-hash-table
+                                 (list (cons "project" (list :supertag-hash-table (list (cons "status" "done")))))))
+           (assoc-base (list (conflicts-test--assoc "f0" 0)))
+           (assoc-ours (list (conflicts-test--assoc "f0" 10)))
+           (assoc-theirs (list (conflicts-test--assoc "f0" 20)))
+           (base (conflicts-test--parsed
+                  nil (list (cons (cons :nodes "n1") a1)
+                            (cons (cons :fields "node1") fields-base)
+                            (cons (cons :tag-field-associations "tag1") assoc-base))))
+           (ours (conflicts-test--parsed
+                  nil (list (cons (cons :nodes "n1") b1)
+                            (cons (cons :fields "node1") fields-ours)
+                            (cons (cons :tag-field-associations "tag1") assoc-ours))))
+           (theirs (conflicts-test--parsed
+                    nil (list (cons (cons :nodes "n1") c1)
+                              (cons (cons :fields "node1") fields-theirs)
+                              (cons (cons :tag-field-associations "tag1") assoc-theirs)))))
+      (conflicts-test--load-merged base ours theirs)
+      (should (= 3 (supertag-conflicts-count)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        (supertag-conflicts-use-theirs-all))
+      (should (= 0 (supertag-conflicts-count)))
+      (should (equal (plist-get (supertag-store-get-entity :nodes "n1") :title) "Theirs Title"))
+      (let ((tag-table (gethash "project" (gethash "node1" (supertag-store-get-collection :fields)))))
+        (should (equal "done" (gethash "status" tag-table))))
+      (let* ((assocs (supertag-store-get-tag-field-associations "tag1"))
+             (f0 (cl-find-if (lambda (a) (equal (plist-get a :field-id) "f0")) assocs)))
+        (should (= 20 (plist-get f0 :order))))
+      (should-not (supertag-dirty-p)))))
+
 ;;; --- 8. Doctor rendering ---
 
 (ert-deftest conflicts-test-doctor-renders-conflicts-section-with-conflicts ()
@@ -405,6 +740,22 @@ conflict-free store."
            (text (with-current-buffer buf (buffer-string))))
       (should (string-match-p "9\\. Sync Conflicts" text))
       (should (string-match-p "None\\." text)))))
+
+(ert-deftest conflicts-test-doctor-renders-nested-leaf-key-path-conflict ()
+  "Doctor's \"9. Sync Conflicts\" section renders a `:key-path' nested-leaf
+conflict's id in the same readable \"fields/node1/project/status\" form as
+every other conflict shape -- no doctor-side change was needed for this:
+the section reads each conflict's own `:id', and
+`supertag-merge--path-conflict-id' already produces this exact string.
+This test pins that (no regression if a future change stops doing so)."
+  (conflicts-test--with-temp-env
+    (conflicts-test--seed-fields-leaf-conflict)
+    (let* ((buf (supertag-doctor t))
+           (text (with-current-buffer buf (buffer-string))))
+      (should (string-match-p "9\\. Sync Conflicts" text))
+      (should (string-match-p "Count: 1" text))
+      (should (string-match-p "fields/node1/project/status" text))
+      (should (string-match-p "Key: status" text)))))
 
 ;;; --- 9. Load-time visibility ---
 

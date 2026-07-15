@@ -91,7 +91,7 @@
 ;;      same 3-way rule: two sides agreeing but differing from base -> that
 ;;      value; both sides disagreeing with each other -> a true, per-key
 ;;      conflict.  Keys are not recursively decomposed further even if a
-;;      key's value happens to itself be a nested plist -- "same key, both
+;;      key's value happens to itself be a nested PLIST -- "same key, both
 ;;      sides changed it differently" already IS the true conflict at that
 ;;      key, per the plan.  A handful of collections (`:field-values', and
 ;;      the legacy `:fields') store each entity's data as a raw (frozen)
@@ -99,10 +99,32 @@
 ;;      by the exact same per-"key" logic once frozen (a frozen hash table
 ;;      prints as `(:supertag-hash-table ((K . V) ...))', which -- being
 ;;      itself a genuine 2-element plist with one keyword key -- the
-;;      plist-shaped field walk sees as a single pseudo-key) -- such
-;;      entities therefore get whole-value-granularity conflict detection
-;;      rather than per-nested-field granularity when they conflict (see
-;;      merge-test.el's dedicated regression test for this).
+;;      plist-shaped field walk sees as a single pseudo-key).
+;;
+;;      UNLIKE a nested PLIST value (never decomposed further, above), the
+;;      pseudo-key's VALUE here is not a plist at all -- it is the frozen
+;;      hash table's own `(KEY . VALUE)' ALIST, i.e. exactly the map this
+;;      collection actually stores.  A conflict at this pseudo-key
+;;      therefore recurses one level further, map-style, keyed by each
+;;      ALIST entry's own KEY (`supertag-merge--merge-hash-marker-map'):
+;;      a key touched by only one side is adopted without conflict -- this
+;;      is what makes the flagship dogfood scenario (machine A sets field
+;;      "priority", machine B concurrently sets field "deadline" on the
+;;      SAME node/tag) merge cleanly instead of colliding as one
+;;      whole-entity conflict; the same key changed differently on both
+;;      sides recurses AGAIN, exactly the same way, when BOTH sides'
+;;      values for it are themselves hash-marker forms -- this is what
+;;      makes the legacy `:fields' collection's node -> tag -> field
+;;      nesting merge field-by-field even when two machines touch
+;;      different fields under the SAME tag; otherwise (a genuine,
+;;      non-map leaf disagreement) it is the true, per-key-path conflict,
+;;      the recursion's own safety net, one level at a time, all the way
+;;      down.  See `supertag-merge--merge-hash-marker-map' and
+;;      `supertag-merge--merge-hash-map-entry' below, and merge-test.el's
+;;      dedicated tests for this, including the regression test pinning
+;;      the now-narrower case where a hash-shaped entity's conflict is
+;;      STILL whole-leaf-value granularity (because the disagreeing leaf
+;;      itself is not a nested map on both sides).
 ;;   3. Anything else -- NEVER guessed to be a plist -- gets whole-value
 ;;      3-way: a conflicting entity becomes one whole-entity conflict
 ;;      record (`:kind :field-conflict', `:key' nil), with ours written in
@@ -126,6 +148,12 @@
 ;;                                  (association slot vs list metadata)
 ;;   "COLLECTION/ENTITY-ID"       (a delete-vs-modify conflict; no single key)
 ;;   "root/KEY"                   (a root-scalar conflict, e.g. "root/version")
+;;   "COLLECTION/ENTITY-ID/SEG1/SEG2/.../SEGN"
+;;                                  (a conflict at a leaf inside a frozen
+;;                                  hash-marker map, e.g.
+;;                                  "fields/NODE-ID/TAG-ID/FIELD-NAME" --
+;;                                  see `supertag-merge--merge-hash-marker-map'
+;;                                  and `supertag-merge--make-path-conflict')
 ;; Determinism of the id is what makes re-merging idempotent: the same three
 ;; inputs always produce the same conflict ids (and, since everything else in
 ;; this file is equally deterministic, byte-identical merged output).
@@ -134,6 +162,28 @@
 ;;   (:id ID :collection C :entity-id ID-OR-NIL :key K-OR-NIL
 ;;    :ours V1 :theirs V2 :base V0 :kind :field-conflict|:delete-vs-modify
 ;;    :detected-at nil)
+;; A nested hash-marker-map conflict (the last id shape above) additionally
+;; carries `:key-path PATH', a list of the ALIST keys from the entity down to
+;; the conflicting leaf (e.g. `("TAG-ID" "FIELD-NAME")'); `:key' itself is
+;; still set to PATH's own last (leaf) element, so the record's `:collection'
+;; /`:entity-id'/`:key' triple alone already reads exactly like an ordinary,
+;; non-nested field-conflict record on this collection -- `:key-path' is
+;; purely additive, for anything that wants the full nesting instead of just
+;; the leaf.  IMPORTANT, READ BEFORE WIRING UP RESOLUTION: this file's sibling
+;; supertag-conflicts.el pre-dates this key-path shape entirely and was
+;; audited (not modified -- see that file, which this one deliberately does
+;; not `require') against it: its dispatch would send such a record down the
+;; ordinary per-key `supertag-conflicts--apply' path (COLLECTION non-nil,
+;; KEY non-nil and not the hash marker), which assumes the live entity is a
+;; PLIST and calls `plist-put' on it -- but `:fields'/`:field-values'
+;; entities are genuinely raw hash tables live, not plists, so resolving one
+;; of these new leaf conflicts interactively today fails loudly (a
+;; `wrong-type-argument' from `plist-put', caught and reported per-conflict
+;; by the bulk resolvers, or signaled back to the interactive caller) rather
+;; than corrupting the entity or silently doing nothing.  `:drop' (discard
+;; the stale conflict record without touching the target) still works fine.
+;; Teaching supertag-conflicts.el to apply `:key-path' against the real
+;; nested hash tables is intentionally left as followup work, not done here.
 ;; `:detected-at' is always nil in this file: a merge driver run must be a
 ;; pure function of its three inputs (see the idempotence test), and a
 ;; wall-clock timestamp would break that.  A live/interactive caller (S3b or
@@ -614,6 +664,173 @@ granularity\" for the algorithm.  Returns (MERGED-LIST . CONFLICTS)."
       (cons (mapcar (lambda (f) (cdr (assoc f merged-alist))) final-order)
             conflicts))))
 
+;;; --- Frozen hash-table map recursive merge ---
+;;
+;; See the top-of-file Commentary section "Conflict granularity", point 2's
+;; discussion of the `:supertag-hash-table' pseudo-key, for the rationale.
+;; This section implements the recursion that lets a conflict AT that
+;; pseudo-key (i.e. a genuine 3-way disagreement between the frozen ALISTs
+;; of a `:field-values'/legacy-`:fields' entity) merge map-key-by-map-key
+;; instead of unconditionally falling back to one whole-entity conflict --
+;; the dogfood-repro fix.  Structurally this mirrors the
+;; `:tag-field-associations' ordered-set merge above
+;; (`supertag-merge--merge-assoc-slot' / `-merge-tag-field-associations'):
+;; same three-way absent-sentinel cases per map key, same
+;; resurrect-on-delete-vs-modify semantics -- the one addition is that a
+;; genuine both-changed-differently disagreement on one key recurses BACK
+;; into this same map merge, one level deeper, whenever both sides' values
+;; for that key are themselves frozen hash-marker forms (this is what lets
+;; the legacy `:fields' node -> tag -> field nesting merge field-by-field);
+;; otherwise it is the true, per-key-path leaf conflict.
+
+(defun supertag-merge--hash-marker-value-p (v)
+  "Return non-nil if V is a frozen hash-table marker value.
+That is, a proper 2-element list `(:supertag-hash-table ALIST)' as produced
+by `supertag--persistence--freeze-hash-table' -- see
+`supertag--persistence--thaw-value', which recognizes the exact same shape."
+  (and (consp v)
+       (eq (car v) supertag--persistence--hash-marker)
+       (consp (cdr v))
+       (null (cddr v))))
+
+(defun supertag-merge--hash-marker-alist (v)
+  "Return the `(KEY . VALUE)' ALIST inside hash-marker value V.
+V must satisfy `supertag-merge--hash-marker-value-p'."
+  (cadr v))
+
+(defun supertag-merge--hash-map-keys (&rest alists)
+  "Return the sorted union of keys across ALISTS.
+Each element of ALISTS is an alist of `(KEY . VALUE)' conses, or nil."
+  (let ((seen (make-hash-table :test 'equal)) keys)
+    (dolist (al alists)
+      (dolist (pair al)
+        (unless (gethash (car pair) seen)
+          (puthash (car pair) t seen)
+          (push (car pair) keys))))
+    (sort keys (lambda (a b) (string< (supertag--persistence--sort-key a)
+                                       (supertag--persistence--sort-key b))))))
+
+(defun supertag-merge--path-conflict-id (collection entity-id path)
+  "Return the deterministic conflict id for nested hash-map PATH.
+PATH is a non-empty list of ALIST-key segments beneath ENTITY-ID inside a
+frozen hash-table entity (see `supertag-merge--merge-hash-marker-map').
+Produces \"COLLECTION/ENTITY-ID/SEG1/SEG2/.../SEGN\", e.g.
+\"fields/NODE-ID/TAG-ID/FIELD-NAME\"."
+  (format "%s/%s/%s" (supertag-merge--name collection) entity-id
+          (mapconcat #'supertag-merge--name path "/")))
+
+(cl-defun supertag-merge--make-path-conflict (collection entity-id path &key ours theirs base kind)
+  "Return an (ID . DATA) pair for one nested hash-map conflict at PATH.
+Shaped as closely as possible to an ordinary field-conflict record (see
+`supertag-merge--make-conflict'), per this file's Commentary section
+\"Conflict representation\": `:key' is PATH's own final (leaf) segment, so
+the record's `:collection'/`:entity-id'/`:key' triple alone already reads
+exactly like a non-nested field conflict on this collection; the full PATH
+is additionally available under `:key-path' for anything that wants more
+than the leaf.  See that Commentary section for the supertag-conflicts.el
+compatibility assessment of this shape."
+  (let ((id (supertag-merge--path-conflict-id collection entity-id path)))
+    (cons id
+          (list :id id
+                :collection collection
+                :entity-id entity-id
+                :key (car (last path))
+                :key-path (copy-sequence path)
+                :ours (supertag-merge--printable ours)
+                :theirs (supertag-merge--printable theirs)
+                :base (supertag-merge--printable base)
+                :kind kind
+                :detected-at nil))))
+
+(defun supertag-merge--merge-hash-map-entry (collection entity-id path newer-side key base ours theirs)
+  "Merge one KEY of a frozen hash-table map found at PATH (the parent
+segments, NOT including KEY itself).  BASE/OURS/THEIRS are that key's raw
+values, or `supertag-merge--absent'.  NEWER-SIDE is `:ours' or `:theirs',
+threaded down unchanged from the entity-level call (there is no per-nested
+-key `:modified-at' to recompute it from -- the same tiebreak decided once
+for the whole entity applies to every leaf conflict inside it, exactly like
+ordinary field-level conflicts).  Returns (VALUE . CONFLICTS); VALUE may be
+`supertag-merge--absent' (the key is dropped from the merged map)."
+  (let* ((absent supertag-merge--absent)
+         (full-path (append path (list key))))
+    (cond
+     ((and (not (eq ours absent)) (not (eq theirs absent)))
+      (let ((decision (supertag-merge--3way-raw base ours theirs)))
+        (pcase decision
+          (`(:unchanged . ,v) (cons v nil))
+          (`(:single . ,v) (cons v nil))
+          (`(:same . ,v) (cons v nil))
+          (:conflict
+           (if (and (supertag-merge--hash-marker-value-p ours)
+                    (supertag-merge--hash-marker-value-p theirs))
+               (let ((sub (supertag-merge--merge-hash-marker-map
+                           collection entity-id full-path newer-side
+                           (and (supertag-merge--hash-marker-value-p base)
+                                (supertag-merge--hash-marker-alist base))
+                           (supertag-merge--hash-marker-alist ours)
+                           (supertag-merge--hash-marker-alist theirs))))
+                 ;; Re-wrap the recursed-into ALIST back into marker form --
+                 ;; this key's merged VALUE must still look like a frozen
+                 ;; hash table (matching what OURS/THEIRS held at this key),
+                 ;; not a bare alist, so a further level up (or the final
+                 ;; entity re-wrap in `supertag-merge--field-level-merge')
+                 ;; sees the shape it expects.
+                 (cons (list supertag--persistence--hash-marker (car sub)) (cdr sub)))
+             (cons (if (eq newer-side :theirs) theirs ours)
+                   (list (supertag-merge--make-path-conflict
+                          collection entity-id full-path
+                          :ours ours :theirs theirs :base base
+                          :kind :field-conflict))))))))
+     ((and (eq ours absent) (eq theirs absent)) (cons absent nil))
+     ((eq ours absent)
+      (cond
+       ((eq base absent) (cons theirs nil))
+       ((supertag-merge--val-equal base theirs) (cons absent nil))
+       (t (cons theirs
+                (list (supertag-merge--make-path-conflict
+                       collection entity-id full-path
+                       :ours supertag-merge--absent :theirs theirs :base base
+                       :kind :delete-vs-modify))))))
+     (t
+      (cond
+       ((eq base absent) (cons ours nil))
+       ((supertag-merge--val-equal base ours) (cons absent nil))
+       (t (cons ours
+                (list (supertag-merge--make-path-conflict
+                       collection entity-id full-path
+                       :ours ours :theirs supertag-merge--absent :base base
+                       :kind :delete-vs-modify)))))))))
+
+(defun supertag-merge--merge-hash-marker-map (collection entity-id path newer-side base-alist ours-alist theirs-alist)
+  "Recursively 3-way merge one nesting level of a frozen hash-table map.
+BASE-ALIST/OURS-ALIST/THEIRS-ALIST are each an alist of `(KEY . VALUE)'
+conses (BASE-ALIST may be nil -- \"no common-ancestor map at this level\",
+the same `none | B | C' row used elsewhere in this file).  PATH is the
+list of ALIST-key segments already traversed above this level (empty at
+the entity's own top level).  Returns (MERGED-ALIST . CONFLICTS);
+MERGED-ALIST is sorted by `supertag--persistence--sort-key' on each key, so
+re-serializing it never needs to re-sort (see the on-disk format's
+sorted-alist invariant for the `:supertag-hash-table' marker)."
+  (let ((keys (supertag-merge--hash-map-keys base-alist ours-alist theirs-alist))
+        merged-alist conflicts)
+    (dolist (k keys)
+      (let* ((bc (assoc k base-alist))
+             (oc (assoc k ours-alist))
+             (tc (assoc k theirs-alist))
+             (bv (if bc (cdr bc) supertag-merge--absent))
+             (ov (if oc (cdr oc) supertag-merge--absent))
+             (tv (if tc (cdr tc) supertag-merge--absent))
+             (result (supertag-merge--merge-hash-map-entry
+                      collection entity-id path newer-side k bv ov tv)))
+        (setq conflicts (nconc conflicts (copy-sequence (cdr result))))
+        (unless (eq (car result) supertag-merge--absent)
+          (push (cons k (car result)) merged-alist))))
+    (setq merged-alist
+          (sort merged-alist (lambda (a b)
+                                (string< (supertag--persistence--sort-key (car a))
+                                         (supertag--persistence--sort-key (car b))))))
+    (cons merged-alist conflicts)))
+
 ;;; --- Field-level (and root-scalar) merge ---
 
 (defun supertag-merge--field-level-merge (collection entity-id base ours theirs newer-side)
@@ -623,6 +840,19 @@ OURS/THEIRS are real plists that differ overall.  NEWER-SIDE is `:ours' or
 `:theirs', from `supertag-merge--newer-side', used to pick the value
 written into the merged entity at each conflicting key -- both sides
 always additionally survive intact in the conflict record.
+
+Special-cased for the single `:supertag-hash-table' pseudo-key produced
+when the whole entity is a frozen hash-table map (`:field-values', legacy
+`:fields'; see this file's Commentary \"Conflict granularity\"): a
+conflict AT that key does not become one whole-entity conflict record the
+way an ordinary plist key's conflict would -- OV/TV at that key are
+already the frozen map's own ALIST (not re-wrapped), so it recurses,
+map-key-by-map-key, via `supertag-merge--merge-hash-marker-map', and the
+merged ALIST is re-wrapped back into marker form for the entity's merged
+value.  Any other key's conflict (including a non-map value inside a
+hash-marker map recursing down to a genuine leaf) still becomes a plain
+field-conflict record, unchanged from before.
+
 Returns (MERGED-PLIST . CONFLICTS)."
   (let* ((base-plist (if (eq base supertag-merge--absent) nil base))
          (keys (supertag-merge--union-plist-keys base-plist ours theirs))
@@ -637,12 +867,29 @@ Returns (MERGED-PLIST . CONFLICTS)."
           (`(:single . ,v) (setq merged (plist-put merged k v)))
           (`(:same . ,v) (setq merged (plist-put merged k v)))
           (:conflict
-           (push (supertag-merge--make-conflict collection entity-id k
-                                                 :ours ov :theirs tv :base bv
-                                                 :kind :field-conflict)
-                 conflicts)
-           (setq merged (plist-put merged k (if (eq newer-side :theirs) tv ov)))))))
-    (cons merged (nreverse conflicts))))
+           (if (and (eq k supertag--persistence--hash-marker) (listp ov) (listp tv))
+               (let* ((base-alist (and (listp bv) bv))
+                      (result (supertag-merge--merge-hash-marker-map
+                               collection entity-id nil newer-side base-alist ov tv)))
+                 (setq conflicts (nconc conflicts (copy-sequence (cdr result))))
+                 ;; NOTE: unlike a recursed-into NESTED key (see
+                 ;; `supertag-merge--merge-hash-map-entry', which re-wraps
+                 ;; its own recursion result), K here already IS the marker
+                 ;; keyword itself -- `(plist-put merged k (car result))'
+                 ;; below produces `(:supertag-hash-table MERGED-ALIST)'
+                 ;; directly, matching the entity's own frozen shape.
+                 ;; Wrapping `(car result)' in ANOTHER marker layer here
+                 ;; would double-wrap the entity (caught by this file's
+                 ;; regression test).
+                 (setq merged (plist-put merged k (car result))))
+             (progn
+               (setq conflicts
+                     (nconc conflicts
+                            (list (supertag-merge--make-conflict collection entity-id k
+                                                                  :ours ov :theirs tv :base bv
+                                                                  :kind :field-conflict))))
+               (setq merged (plist-put merged k (if (eq newer-side :theirs) tv ov)))))))))
+    (cons merged conflicts)))
 
 ;;; --- Entity-level merge ---
 

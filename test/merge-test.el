@@ -860,16 +860,45 @@ per-field-id conflicts)."
       (should (supertag-merge-test--entity (car result) :sync-conflicts id)))))
 
 ;;; --- 10. Hash-table-shaped entities (:field-values / legacy :fields):
-;;; whole-value granularity, never per-nested-key decomposition ---
+;;; recursive per-map-key/leaf granularity (the dogfood-repro fix), with
+;;; whole-LEAF-value granularity as the terminal fallback for a genuine
+;;; non-map leaf disagreement ---
+;;
+;; PRE-FIX BEHAVIOR (pinned by this suite's git history): every conflict on
+;; one of these entities produced exactly ONE whole-entity conflict record
+;; naming the `:supertag-hash-table' pseudo-key itself, no matter how many
+;; (or how few) of the underlying hash table's keys actually differed.  Live
+;; GitHub dogfooding found this to be a real product gap: machine A setting
+;; field "priority" and machine B concurrently setting field "deadline" on
+;; the SAME node both write into this same frozen-hash entity, and the two
+;; DIFFERENT fields collided as one whole-value conflict instead of merging
+;; -- exactly contradicting the "merge field-by-field" promise, because the
+;; only test coverage for this shape (this section) exercised a plist NODE
+;; entity, never the `:fields' storage `supertag-field-set' actually writes.
+;;
+;; POST-FIX BEHAVIOR: a conflict on the entity's own `:supertag-hash-table'
+;; pseudo-key recurses map-key-by-map-key (`supertag-merge--merge-hash-marker-map');
+;; a key touched by only one side is adopted without conflict; the same key
+;; changed differently on both sides recurses AGAIN when both sides' values
+;; are themselves frozen hash-marker forms (the legacy `:fields' node -> tag
+;; -> field nesting); a genuine, non-map leaf disagreement is the true
+;; conflict, now recorded with the full key path, not the pseudo-key.
 
-(ert-deftest supertag-merge-test-hash-shaped-entity-whole-value-conflict ()
-  "A :field-values entity's data is a frozen hash table -- printed as
-`(:supertag-hash-table ((K . V) ...))' -- which IS itself a genuine
-2-element plist with one keyword key.  A conflict on such an entity must
-therefore produce exactly ONE conflict record (whole-value granularity),
-never one conflict per nested hash key, and the merged value must be
-ours' hash table taken whole (no :modified-at present -> ours-preference
-tiebreak)."
+(ert-deftest supertag-merge-test-hash-shaped-entity-single-leaf-conflict-still-narrow ()
+  "UPDATED regression test (see this section's Commentary): this exact
+scenario -- a :field-values entity where exactly one nested key (\"f1\")
+is set differently on both sides and another (\"f2\") is untouched -- is
+now GRANULAR, not whole-value: only \"f1\" conflicts (recorded with a
+key-path conflict naming \"f1\", not the `:supertag-hash-table' pseudo-key),
+\"f2\" survives untouched with zero conflict, and the merged entity ends up
+equal to `ours-val' only because \"f1\"'s conflict tiebreak (no
+:modified-at present -> ours-preference) happens to pick the same value
+`ours-val' already had -- not because the whole entity was ever taken
+wholesale.  This is the direct, deliberately-updated descendant of the old
+`supertag-merge-test-hash-shaped-entity-whole-value-conflict': its old
+assertion (`:key' is the `:supertag-hash-table' pseudo-key) is precisely
+the whole-value behavior the dogfood fix replaces for map-shaped
+disagreements, so it is updated here rather than kept as-is."
   (let* ((base-val (list :supertag-hash-table (list (cons "f1" "old1") (cons "f2" "old2"))))
          (ours-val (list :supertag-hash-table (list (cons "f1" "ours1") (cons "f2" "old2"))))
          (theirs-val (list :supertag-hash-table (list (cons "f1" "theirs1") (cons "f2" "old2"))))
@@ -881,11 +910,238 @@ tiebreak)."
                   nil (list (cons (cons :field-values "node1") theirs-val))))
          (result (supertag-merge-3way base ours theirs))
          (conflicts (cdr result))
-         (merged (supertag-merge-test--entity (car result) :field-values "node1")))
-    ;; Exactly one conflict -- not two (one per nested "f1"/"f2" hash key).
+         (merged (supertag-merge-test--entity (car result) :field-values "node1"))
+         (data (cdr (car conflicts))))
+    ;; Exactly one conflict -- "f2" never touched, so never conflicts.
     (should (= 1 (length conflicts)))
-    (should (eq (plist-get (cdr (car conflicts)) :key) :supertag-hash-table))
+    (should (equal (plist-get data :collection) :field-values))
+    (should (equal (plist-get data :entity-id) "node1"))
+    ;; The leaf key itself, NOT the whole-entity pseudo-key.
+    (should (equal (plist-get data :key) "f1"))
+    (should (equal (plist-get data :key-path) '("f1")))
+    (should (equal (plist-get data :ours) "ours1"))
+    (should (equal (plist-get data :theirs) "theirs1"))
+    (should (equal (plist-get data :base) "old1"))
+    (should (equal (plist-get data :id) "field-values/node1/f1"))
     (should (equal merged ours-val))))
+
+(ert-deftest supertag-merge-test-dogfood-different-fields-same-node-clean-merge ()
+  "THE flagship dogfood repro (live GitHub dogfooding, two-machine
+scenario): machine A runs `supertag-field-set' setting \"priority\" on tag
+\"project\"; machine B concurrently sets \"deadline\" on the SAME tag on
+the SAME node.  Both write into the legacy `:fields' collection, whose
+entity value is a nested hash table (node -> tag -> field -> value),
+freezing to nested `:supertag-hash-table' marker forms.  Before the fix
+this collided as ONE whole-entity conflict (A's field landing only in the
+conflict record, not the store) -- exactly the case the README's \"merge
+field-by-field\" promise was supposed to cover, and exactly what E2E-2
+missed by testing plist node entities instead of this `:fields' shape.
+After the fix: base has {project: {status}}; ours adds \"priority\";
+theirs adds \"deadline\" -- merged has ALL THREE fields under \"project\",
+with ZERO conflicts."
+  (let* ((base-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table
+                                  (list (cons "status" "todo")))))))
+         (ours-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table
+                                  (list (cons "priority" "high")
+                                        (cons "status" "todo")))))))
+         (theirs-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table
+                                  (list (cons "deadline" "2026-08-01")
+                                        (cons "status" "todo")))))))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") base-val))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :fields "node1") theirs-val))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :fields "node1"))
+         (project-fields (cadr (cdr (assoc "project" (cadr merged))))))
+    (should (null conflicts))
+    (should (equal (sort (mapcar #'car project-fields) #'string<)
+                   '("deadline" "priority" "status")))
+    (should (equal (cdr (assoc "deadline" project-fields)) "2026-08-01"))
+    (should (equal (cdr (assoc "priority" project-fields)) "high"))
+    (should (equal (cdr (assoc "status" project-fields)) "todo"))))
+
+(ert-deftest supertag-merge-test-fields-different-tags-clean-merge ()
+  "Deeper nesting, still zero conflicts: ours edits a field under tag1;
+theirs edits a (different) field under a DIFFERENT tag, tag2.  The two
+sides never touch the same tag at all, so this already resolves at the
+first (tag-id) recursion level as two single-side changes -- confirming
+the recursion cascades correctly through the top `:supertag-hash-table'
+pseudo-key without needing to go a level deeper for THIS scenario."
+  (let* ((base-val
+          (list :supertag-hash-table
+                (list (cons "tag1" (list :supertag-hash-table (list (cons "status" "todo"))))
+                      (cons "tag2" (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (ours-val
+          (list :supertag-hash-table
+                (list (cons "tag1" (list :supertag-hash-table (list (cons "status" "doing"))))
+                      (cons "tag2" (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (theirs-val
+          (list :supertag-hash-table
+                (list (cons "tag1" (list :supertag-hash-table (list (cons "status" "todo"))))
+                      (cons "tag2" (list :supertag-hash-table (list (cons "status" "done")))))))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") base-val))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :fields "node1") theirs-val))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :fields "node1"))
+         (tag1-fields (cadr (cdr (assoc "tag1" (cadr merged)))))
+         (tag2-fields (cadr (cdr (assoc "tag2" (cadr merged))))))
+    (should (null conflicts))
+    (should (equal (cdr (assoc "status" tag1-fields)) "doing"))
+    (should (equal (cdr (assoc "status" tag2-fields)) "done"))))
+
+(ert-deftest supertag-merge-test-fields-same-field-leaf-conflict ()
+  "True leaf conflict: both sides set the SAME field under the SAME tag to
+DIFFERENT values.  Exactly one conflict, its id naming the full key path,
+ours written in place (no :modified-at -> ours-preference tiebreak), and
+theirs fully preserved in the conflict record (zero data loss)."
+  (let* ((base-val
+          (list :supertag-hash-table
+                (list (cons "project" (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (ours-val
+          (list :supertag-hash-table
+                (list (cons "project" (list :supertag-hash-table (list (cons "status" "doing")))))))
+         (theirs-val
+          (list :supertag-hash-table
+                (list (cons "project" (list :supertag-hash-table (list (cons "status" "done")))))))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") base-val))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :fields "node1") theirs-val))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :fields "node1"))
+         (project-fields (cadr (cdr (assoc "project" (cadr merged)))))
+         (data (cdr (car conflicts))))
+    (should (= 1 (length conflicts)))
+    (should (equal (plist-get data :id) "fields/node1/project/status"))
+    (should (equal (plist-get data :collection) :fields))
+    (should (equal (plist-get data :entity-id) "node1"))
+    (should (equal (plist-get data :key) "status"))
+    (should (equal (plist-get data :key-path) '("project" "status")))
+    (should (eq (plist-get data :kind) :field-conflict))
+    (should (equal (plist-get data :ours) "doing"))
+    (should (equal (plist-get data :theirs) "done"))
+    (should (equal (plist-get data :base) "todo"))
+    ;; Ours written in place; theirs still fully present above, not lost.
+    (should (equal (cdr (assoc "status" project-fields)) "doing"))))
+
+(ert-deftest supertag-merge-test-fields-delete-vs-modify-field-level ()
+  "Delete-vs-modify at the FIELD level: ours deletes \"priority\" entirely
+(the key is simply absent from ours' tag alist); theirs concurrently
+modifies it.  Same resurrect-plus-conflict semantics as an entity-level
+delete-vs-modify, just one level down: theirs' value survives in the
+merged store, and one `:delete-vs-modify' conflict is recorded naming the
+full key path."
+  (let* ((base-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table
+                                  (list (cons "priority" "low") (cons "status" "todo")))))))
+         (ours-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table (list (cons "status" "todo")))))))
+         (theirs-val
+          (list :supertag-hash-table
+                (list (cons "project"
+                            (list :supertag-hash-table
+                                  (list (cons "priority" "high") (cons "status" "todo")))))))
+         (base (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") base-val))))
+         (ours (supertag-merge-test--parsed
+                nil (list (cons (cons :fields "node1") ours-val))))
+         (theirs (supertag-merge-test--parsed
+                  nil (list (cons (cons :fields "node1") theirs-val))))
+         (result (supertag-merge-3way base ours theirs))
+         (conflicts (cdr result))
+         (merged (supertag-merge-test--entity (car result) :fields "node1"))
+         (project-fields (cadr (cdr (assoc "project" (cadr merged)))))
+         (data (cdr (car conflicts))))
+    (should (= 1 (length conflicts)))
+    (should (eq (plist-get data :kind) :delete-vs-modify))
+    (should (equal (plist-get data :key) "priority"))
+    (should (equal (plist-get data :key-path) '("project" "priority")))
+    (should (equal (plist-get data :id) "fields/node1/project/priority"))
+    (should (eq (plist-get data :ours) :supertag-merge/absent))
+    (should (equal (plist-get data :theirs) "high"))
+    (should (equal (plist-get data :base) "low"))
+    ;; Resurrected: theirs' modified value survives in the merged store.
+    (should (equal (cdr (assoc "priority" project-fields)) "high"))
+    (should (equal (cdr (assoc "status" project-fields)) "todo"))))
+
+(ert-deftest supertag-merge-test-fields-determinism-argument-order-and-idempotence ()
+  "Determinism/idempotence for the new nested-hash-map path: (1) re-merging
+the same three inputs twice produces byte-identical serialized output
+(idempotence, exactly like the existing plist-entity test); (2) merging
+with ours/theirs swapped still yields exactly one conflict naming the same
+key path, with only the OURS/THEIRS labels (and, per the documented
+tiebreak, the winning value) swapping -- never a different shape or a
+different number of conflicts."
+  (supertag-merge-test--with-temp-dir dir
+    (let* ((base-val
+            (list :supertag-hash-table
+                  (list (cons "project" (list :supertag-hash-table (list (cons "status" "todo")))))))
+           (left-val
+            (list :supertag-hash-table
+                  (list (cons "project" (list :supertag-hash-table (list (cons "status" "doing")))))))
+           (right-val
+            (list :supertag-hash-table
+                  (list (cons "project" (list :supertag-hash-table (list (cons "status" "done")))))))
+           (base (supertag-merge-test--parsed
+                  nil (list (cons (cons :fields "node1") base-val))))
+           (p-left (supertag-merge-test--parsed
+                    nil (list (cons (cons :fields "node1") left-val))))
+           (p-right (supertag-merge-test--parsed
+                     nil (list (cons (cons :fields "node1") right-val))))
+           (out1 (expand-file-name "out1.el" dir))
+           (out2 (expand-file-name "out2.el" dir)))
+      ;; Idempotence: same arguments, twice, byte-identical output.
+      (supertag-merge--write-merged (car (supertag-merge-3way base p-left p-right)) out1)
+      (supertag-merge--write-merged (car (supertag-merge-3way base p-left p-right)) out2)
+      (should (equal (supertag-merge-test--read-file-bytes out1)
+                     (supertag-merge-test--read-file-bytes out2)))
+      ;; Argument-order swap: same conflict shape/count, ours-preference
+      ;; tiebreak flips the winning value (no :modified-at anywhere here).
+      (let* ((result-1 (supertag-merge-3way base p-left p-right))
+             (result-2 (supertag-merge-3way base p-right p-left))
+             (conflicts-1 (cdr result-1))
+             (conflicts-2 (cdr result-2))
+             (data-1 (cdr (car conflicts-1)))
+             (data-2 (cdr (car conflicts-2)))
+             (merged-1 (supertag-merge-test--entity (car result-1) :fields "node1"))
+             (merged-2 (supertag-merge-test--entity (car result-2) :fields "node1")))
+        (should (= 1 (length conflicts-1)))
+        (should (= 1 (length conflicts-2)))
+        (should (equal (plist-get data-1 :id) (plist-get data-2 :id)))
+        (should (equal (plist-get data-1 :id) "fields/node1/project/status"))
+        (should (equal (list (plist-get data-1 :ours) (plist-get data-1 :theirs))
+                       '("doing" "done")))
+        (should (equal (list (plist-get data-2 :ours) (plist-get data-2 :theirs))
+                       '("done" "doing")))
+        (should (equal (cdr (assoc "status" (cadr (cdr (assoc "project" (cadr merged-1))))))
+                       "doing"))
+        (should (equal (cdr (assoc "status" (cadr (cdr (assoc "project" (cadr merged-2))))))
+                       "done"))))))
 
 ;;; --- 11. Safety net: non-plist, non-tag-field-associations even-length
 ;;; list shapes never guessed to be a plist ---
