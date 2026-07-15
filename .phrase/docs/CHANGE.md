@@ -25,3 +25,4 @@
 - 2026-07-08: phase-concept-mentions-20260708/change_concept_mentions_20260708.md  # CJK concept mentions
 - 2026-07-11: phase-sync-integrity-20251226/change_sync_integrity_20251226.md  # persistence failover + stable mixed file-node identity/links
 - 2026-07-13: phase-git-sync-20260713/CHANGE.md  # Git 原生同步 P0/P1 加固与 release-gate 验收
+- 2026-07-14: phase-sync-integrity-20251226/change_sync_integrity_20251226.md  # PR #181 retry hardening + PR #182 file-node identity validation

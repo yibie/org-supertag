@@ -840,6 +840,11 @@ Includes the node's ID to ensure absolute uniqueness of the state fingerprint."
                    "|")))
     (secure-hash 'sha1 (format "%s|%s" id payload))))
 
+(defun supertag-node-file-node-p (node)
+  "Return non-nil when NODE is a file node (level 0).
+File nodes represent file-level identity rather than Org headings."
+  (eq (plist-get node :level) 0))
+
 (defun supertag-node-mark-deleted-from-file (id)
   "Mark a node as deleted from its file by setting its :file property to nil.
 This does not remove the node from the store immediately."
@@ -992,7 +997,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
          (nodes-from-file nil)
          (allow-destructive (supertag-sync--allow-destructive-p))
          (deferred-entry (gethash file supertag-sync--deferred-files))
-         (force-parse (and allow-destructive deferred-entry)))
+         (force-parse (and allow-destructive deferred-entry))
+         (deferred-deletions nil))
 
     ;; 1. Smart Detection / Reading
     (with-temp-buffer
@@ -1037,13 +1043,15 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                  (old-node-props (cdr existing-node-pair))
                  (new-node-props (gethash id current-nodes-in-file)))
             ;; ponytail: file nodes (level 0) are not managed by heading sync
-            (unless (eq (plist-get old-node-props :level) 0)
+            (unless (supertag-node-file-node-p old-node-props)
             (cond
              ((null new-node-props)
-              (when allow-destructive
-                (supertag-node-mark-deleted-from-file id)
-                (setf (plist-get counters :nodes-deleted)
-                      (1+ (or (plist-get counters :nodes-deleted) 0)))))
+              (if allow-destructive
+                  (progn
+                    (supertag-node-mark-deleted-from-file id)
+                    (setf (plist-get counters :nodes-deleted)
+                          (1+ (or (plist-get counters :nodes-deleted) 0))))
+                (setq deferred-deletions t)))
              ((supertag-node-changed-p old-node-props new-node-props)
               (let ((merged-props (supertag--merge-node-properties new-node-props old-node-props)))
                 (supertag-db-add-with-hash id merged-props counters))
@@ -1059,8 +1067,11 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                          (1+ (or (plist-get counters :nodes-created) 0))))
                  current-nodes-in-file)
 
-        ;; Update sync state
-        (supertag-sync-update-state file content-hash))))
+        ;; Update sync state — but keep the old hash while deletions are
+        ;; deferred, so the retry survives an Emacs restart (the
+        ;; deferred-files marker below is in-memory only).
+        (unless deferred-deletions
+          (supertag-sync-update-state file content-hash)))))
 
     (when (and allow-destructive deferred-entry)
       (remhash file supertag-sync--deferred-files))
@@ -1068,7 +1079,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
       (puthash file :pending supertag-sync--deferred-files))))
 
 
-(defun supertag-sync--verify-file-nodes (file counters)
+(cl-defun supertag-sync--verify-file-nodes (file counters)
   "Verify that nodes in the database still exist in the file.
 This function checks if nodes associated with FILE still exist in the file.
 If a node exists in the database but not in the file, it's marked as orphaned.
@@ -1095,7 +1106,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                    (new-node-props (gethash id current-nodes-in-file)))
               ;; Skip file nodes (level 0) - they are NOT orphaned while file exists
               ;; ponytail: file node lifecycle mirrors the file itself
-              (unless (eq (plist-get old-node-props :level) 0)
+              (unless (supertag-node-file-node-p old-node-props)
               ;; If node exists in store but not in file, mark it as orphaned
               (when (null new-node-props)
                 (let ((db-node (supertag-node-get id)))
@@ -1119,7 +1130,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
                   (1+ (plist-get counters :nodes-deleted)))))))))
 
 
-(defun supertag-sync--check-and-sync-legacy ()
+(cl-defun supertag-sync--check-and-sync-legacy ()
   "Check and synchronize modified files.
   This is the main sync function called periodically.
   It enqueues modified files for asynchronous processing."
@@ -1188,7 +1199,7 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     ;; Run garbage collection (can be done periodically)
     (supertag-sync-garbage-collect-orphaned-nodes)))
 
-(defun supertag-sync--check-and-sync-guarded ()
+(cl-defun supertag-sync--check-and-sync-guarded ()
   "Check and synchronize modified files with snapshot guard."
   ;; Pre-check: Warn if sync directories are not configured
   (unless (supertag-sync--effective-directories)
@@ -1226,14 +1237,12 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
     ;; 2.5 Re-verify deferred files when snapshot becomes complete
     (when (eq status 'complete)
       (let ((deferred-files '()))
-        (maphash (lambda (file state)
+        (maphash (lambda (file _state)
                    (cond
                     ((not (file-exists-p file))
                      (remhash file supertag-sync--deferred-files))
-                    ((and (not (eq state :queued))
-                          (supertag-sync--in-sync-scope-p file))
-                     (push file deferred-files)
-                     (puthash file :queued supertag-sync--deferred-files))))
+                    ((supertag-sync--in-sync-scope-p file)
+                     (push file deferred-files))))
                  supertag-sync--deferred-files)
         (when deferred-files
           (setq modified-files
@@ -1372,6 +1381,18 @@ Returns t if the node ID is found, nil otherwise."
          (goto-char (point-min))
          (re-search-forward (concat ":ID:[ \t]+" (regexp-quote id)) nil t))))
 
+(defun supertag-sync--file-identity-matches-p (id node file)
+  "Return non-nil when NODE's persisted identity in FILE still equals ID."
+  (let ((policy (pcase (plist-get node :link-type)
+                  ('id 'org-id)
+                  ('denote 'denote))))
+    (and policy
+         (file-exists-p file)
+         (with-temp-buffer
+           (insert-file-contents-literally file)
+           (let ((org-supertag-file-id-source policy))
+             (equal id (plist-get (supertag-sync--parse-file-header) :id)))))))
+
 (defun supertag-sync-validate-nodes (&optional counters)
   "Validate all nodes in the database against their source files.
 This function iterates through all nodes in the store and checks if they
@@ -1382,13 +1403,26 @@ COUNTERS is a plist for tracking changes."
    (lambda (id node)
      (let ((file (plist-get node :file))
            (type (plist-get node :type)))
-       ;; Only check nodes that are supposed to be in a file, and are of type :node.
+       ;; Only check :node entities that claim to live in a file.
        ;; If :file is already nil, it's already an orphan.
        (when (and file (eq type :node))
-         (unless (supertag-sync--id-exists-in-file-p id file)
-           (supertag-node-mark-deleted-from-file id)
-           (when counters
-             (setf (plist-get counters :nodes-deleted) (1+ (plist-get counters :nodes-deleted))))))))))
+         ;; Current file nodes carry their identity kind.  Legacy nodes do
+         ;; not, so preserve them while the file exists rather than guessing.
+         (let* ((file-node (supertag-node-file-node-p node))
+                (link-type (plist-get node :link-type))
+                (stale
+                 (cond
+                  ((not file-node)
+                   (not (supertag-sync--id-exists-in-file-p id file)))
+                  ((not (file-exists-p file)) t)
+                  ((memq link-type '(id denote))
+                   (not (supertag-sync--file-identity-matches-p id node file)))
+                  (t nil))))
+           (when stale
+             (supertag-node-mark-deleted-from-file id)
+             (when counters
+               (setf (plist-get counters :nodes-deleted)
+                     (1+ (plist-get counters :nodes-deleted)))))))))))
 
 
 ;; --- Org Parser ---
@@ -1957,7 +1991,6 @@ Processes FILE for synchronization."
         ;;          (plist-get counters :nodes-created)
         ;;          (plist-get counters :nodes-updated)
         ;;          (plist-get counters :nodes-deleted))
-        (supertag-sync-update-state file)
         (supertag-sync-save-state)))))
 
 ;;;###autoload
@@ -2001,7 +2034,7 @@ If INTERVAL is nil, use `supertag-sync-auto-interval`."
   (supertag-async-clear))
 
 ;;;###autoload
-(defun supertag-sync-full-rescan ()
+(cl-defun supertag-sync-full-rescan ()
   "Force a full rescan of every file currently managed by Supertag sync.
 When called interactively, display a summary report and return a plist
 describing the work that was performed."

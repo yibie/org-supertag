@@ -732,7 +732,7 @@ Tries three strategies in order:
             (supertag-schema-refresh)
             (message "Batch extends complete.")))))))
 
-(defun supertag-schema--cleanup-inherited-field-associations (tag-id)
+(cl-defun supertag-schema--cleanup-inherited-field-associations (tag-id)
   "Remove field associations from TAG-ID that are inherited from parent tags.
 This cleans up redundant associations where a field is defined on both
 a parent tag and a child tag."

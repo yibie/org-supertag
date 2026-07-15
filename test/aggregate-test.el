@@ -42,7 +42,7 @@
                                     :field "value"
                                     :function func)))))
       (should col)
-      (should (eq (plist-get (plist-get col :params) :function) func)))))
+      (should (eq (plist-get (plist-get col :params) :function) func))))
   ;; Clean up
   (dolist (func '(:sum :count :avg :max :min :first :last))
     (supertag-virtual-column-delete (format "test-%s" func))))

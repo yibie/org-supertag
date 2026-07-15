@@ -292,7 +292,7 @@ Returns the field value, or DEFAULT if it does not exist."
           (let ((value (gethash field-name tag-table supertag-field--missing)))
             (if (eq value supertag-field--missing) default value)))))))
 
-(defun supertag-field-rename (tag-id old-name new-name)
+(cl-defun supertag-field-rename (tag-id old-name new-name)
   "Rename a field on TAG-ID from OLD-NAME to NEW-NAME across schema and data.
 Signals an error if the source field is missing or the target already exists.
 All node field values are migrated atomically inside a transaction."
@@ -406,7 +406,7 @@ Supports global field storage when `supertag-use-global-fields' is enabled."
               (if (functionp default) (funcall default) default)))
         value))))
 
-(defun supertag-field-remove (node-id tag-id field-name)
+(cl-defun supertag-field-remove (node-id tag-id field-name)
   "Remove the value of a tag field for a node using the unified commit system.
 NODE-ID is the unique identifier of the node.
 TAG-ID is the unique identifier of the tag.
