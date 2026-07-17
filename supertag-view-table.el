@@ -35,6 +35,28 @@
   "Face used for the parent-title line in the Title column."
   :group 'supertag-view)
 
+(defface supertag-view-table-title-next-face
+  '((t :inherit org-level-1))
+  "Face for Title cells of nodes in NEXT state."
+  :group 'supertag-view)
+
+(defface supertag-view-table-title-todo-face
+  '((t :inherit org-level-2))
+  "Face for Title cells of nodes in TODO state."
+  :group 'supertag-view)
+
+(defface supertag-view-table-title-done-face
+  '((t :inherit (org-done org-level-3)))
+  "Face for Title cells of nodes in DONE state.
+Color comes from `org-done', size from `org-level-3'."
+  :group 'supertag-view)
+
+(defface supertag-view-table-title-other-face
+  '((t :inherit org-level-2 :foreground reset))
+  "Face for Title cells of nodes in any other status.
+Keeps `org-level-2' sizing but the normal text color."
+  :group 'supertag-view)
+
 ;;; --- Core State Management ---
 
 (defvar supertag-view-table--active-views (make-hash-table :test 'equal)
@@ -189,6 +211,26 @@ You can customize this list to match your org-mode TODO keywords."
   :type '(repeat string)
   :group 'supertag-view)
 
+(defcustom supertag-view-table-status-field "Status"
+  "Name of the tag field that holds a node's workflow status.
+Used to color and size Title cells by status.  When a node has no
+value for this field, the Org TODO keyword is used as a fallback."
+  :type 'string
+  :group 'supertag-view)
+
+(defun supertag-view-table--node-status-value (entity-data)
+  "Return the status string for ENTITY-DATA, or nil.
+Prefers the tag field named by `supertag-view-table-status-field';
+falls back to the node's Org TODO keyword."
+  (let* ((node-id (plist-get entity-data :id))
+         (tag-id (supertag-view-table--get-current-tag-id))
+         (val (when (and node-id tag-id supertag-view-table-status-field)
+                (supertag-view-api-node-field-in-tag
+                 node-id tag-id supertag-view-table-status-field))))
+    (if (and (stringp val) (not (string-empty-p val)))
+        val
+      (plist-get entity-data :todo))))
+
 (defun supertag-view-table--strip-todo-keyword (title)
   "Remove TODO keywords from TITLE if configured to do so.
 Removes org-mode TODO keywords based on `supertag-view-table-todo-keywords'.
@@ -203,6 +245,16 @@ Only strips keywords if `supertag-view-table-strip-todo-keywords' is non-nil."
       (if (string-match keywords-regexp title)
           (string-trim (substring title (match-end 0)))
         title))))
+
+(defun supertag-view-table--title-status-face (status)
+  "Return the Title-cell face for STATUS, or nil when STATUS is empty."
+  (pcase status
+    ("NEXT" 'supertag-view-table-title-next-face)
+    ("TODO" 'supertag-view-table-title-todo-face)
+    ("DONE" 'supertag-view-table-title-done-face)
+    ((and (pred stringp) (guard (not (string-empty-p status))))
+     'supertag-view-table-title-other-face)
+    (_ nil)))
 
 ;;; --- Grid Rendering Engine ---
 
@@ -669,6 +721,37 @@ Automatically detects virtual databases and uses their database fields."
         (concat text-str (make-string padding ?\s))
       text-str)))
 
+(defun supertag-view-table--line-scale (line)
+  "Return the largest relative face :height applied on LINE, or 1.0.
+Only float (relative) heights count; absolute pixel heights are ignored."
+  (let ((scale 1.0)
+        (idx 0)
+        (len (length line)))
+    (while (and idx (< idx len))
+      (let ((faces (get-text-property idx 'face line)))
+        (dolist (f (ensure-list faces))
+          (when (facep f)
+            (let ((h (face-attribute f :height nil t)))
+              (when (floatp h)
+                (setq scale (max scale h))))))
+        (setq idx (next-single-property-change idx 'face line))))
+    scale))
+
+(defun supertag-view-table--pad-string-pixel (text width)
+  "Pad TEXT to WIDTH canonical columns with a pixel-sized display space.
+Character counting misaligns the column borders once a face scales the
+font, so the padding is computed in pixels from TEXT's rendered width.
+The pad still contains (WIDTH - string-width) space characters sharing
+one display spec, so later char-based re-padding sees a full cell and
+no-ops."
+  (let* ((target-px (* width (frame-char-width)))
+         (pad-px (- target-px (string-pixel-width text)))
+         (pad-chars (- width (string-width text))))
+    (if (and (> pad-px 0) (> pad-chars 0))
+        (concat text (propertize (make-string pad-chars ?\s)
+                                 'display `(space :width (,pad-px))))
+      text)))
+
 ;;; --- Additional Layouts: Node Detail ---
 
 (defun supertag-view-table--build-node-detail-state (node-id)
@@ -870,11 +953,19 @@ Uses improved styling from old version."
                          ;; Render org-style links inside the title so [[id:...][desc]]
                          ;; shows as clickable `desc` within the cell.
                          (rendered-title (supertag-view-helper-render-org-links base-title))
+                         (status-face (supertag-view-table--title-status-face
+                                       (supertag-view-table--node-status-value entity-data)))
                          (olp (plist-get entity-data :olp))
                          (parent-title (and (listp olp)
                                             (> (length olp) 1)
                                             ;; OLP is [root ... parent current]
                                            (nth (- (length olp) 2) olp))))
+                    ;; Status face is appended so link faces inside the title
+                    ;; keep their own colors; it only supplies size/color where
+                    ;; nothing else does.
+                    (when (and status-face (> (length rendered-title) 0))
+                      (add-face-text-property 0 (length rendered-title)
+                                              status-face t rendered-title))
                     (if (and parent-title (not (string-empty-p parent-title)))
                         ;; First line: current title (with org links rendered);
                         ;; second line: parent title (subdued).
@@ -1076,12 +1167,19 @@ If VALUE is text, wrap it into multiple lines within WIDTH and apply org-mode ma
              (lambda (line)
                ;; We assume markup (and faces) have already been applied in
                ;; `supertag-view-table--get-cell-value` where needed; here we
-               ;; only wrap and pad without touching faces.
-               (supertag-view-table--wrap-text line width))
+               ;; only wrap and pad without touching faces.  Lines whose faces
+               ;; scale the font get a narrower wrap width so the scaled text
+               ;; still fits within the column's pixel width.
+               (let ((scale (supertag-view-table--line-scale line)))
+                 (supertag-view-table--wrap-text
+                  line
+                  (if (> scale 1.0) (max 4 (floor (/ width scale))) width))))
              logical-lines)))
       (mapcar
        (lambda (line)
-         (let* ((padded (supertag-view-table--pad-string line width))
+         (let* ((padded (if (> (supertag-view-table--line-scale line) 1.0)
+                            (supertag-view-table--pad-string-pixel line width)
+                          (supertag-view-table--pad-string line width)))
                 (copy (copy-sequence padded))
                 (ref-id (get-text-property 0 'supertag-ref-id line)))
            (add-text-properties 0 (length copy)

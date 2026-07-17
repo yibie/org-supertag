@@ -1,5 +1,17 @@
 * Changelog
 * [Unreleased]
+** UI
+- Table view Title cells are now styled by status: NEXT inherits
+  =org-level-1= (size and color), TODO inherits =org-level-2=, DONE uses
+  =org-level-3= sizing with the =org-done= color, and any other status
+  keeps =org-level-2= sizing with the normal text color. Status is read
+  from the tag field named by =supertag-view-table-status-field=
+  (default ="Status"=), falling back to the node's Org TODO keyword.
+  Faces: =supertag-view-table-title-{next,todo,done,other}-face=.
+- Column borders stay pixel-aligned under scaled title fonts: lines whose
+  faces scale the font wrap to a narrower character width and are padded
+  with a pixel-sized display space instead of counted spaces.
+
 ** Data safety
 *** Breaking: database format version bump 5.0.0 -> 6.0.0
 - =supertag-data-version= is now =6.0.0=. A review of the git-sync S2
