@@ -12,9 +12,16 @@
 (require 'org-id)
 (require 'supertag-view-helper)
 
+(declare-function supertag-add-reference "supertag-ui-commands" ())
+(declare-function supertag-add-tag "supertag-ui-commands" (&optional beg end))
+(declare-function supertag-delete-tag-everywhere "supertag-ui-commands" (&optional tag-id))
 (declare-function supertag-goto-node "supertag-services-ui" (node-id &optional other-window))
 (declare-function supertag-menu "supertag-menu" ())
+(declare-function supertag-remove-tag-from-node "supertag-ui-commands" ())
+(declare-function supertag-rename-tag "supertag-ui-commands" (&optional tag-id))
 (declare-function supertag-schema--edit-field-definition-at-point "supertag-view-schema" ())
+(declare-function supertag-ui-quick-edit-field "supertag-ui-commands" ())
+(declare-function supertag-view-schema "supertag-view-schema" ())
 (declare-function supertag-view-node--focus-view "supertag-view-node" ())
 (declare-function supertag-view-node--show-side "supertag-view-node" (&optional node-id))
 (declare-function supertag-view-node-edit-at-point "supertag-view-node" ())
@@ -148,16 +155,131 @@ This recognizer is read-only; it does not create Org IDs or mutate the store."
     (:command (call-interactively (plist-get target :command)))
     (_ (user-error "No default action for target: %S" target))))
 
+(defun supertag--assist-call (feature command &rest args)
+  "Load FEATURE and call COMMAND, passing ARGS when present."
+  (unless (fboundp command)
+    (require feature))
+  (if args
+      (apply command args)
+    (call-interactively command)))
+
+(defun supertag--open-main-menu ()
+  "Open the complete Org-Supertag command menu."
+  (supertag--assist-call 'supertag-menu 'supertag-menu))
+
+(defun supertag--target-label (target)
+  "Return a concise user-facing label for TARGET."
+  (pcase (plist-get target :kind)
+    (:tag (format "#%s" (plist-get target :tag-id)))
+    ((or :field :field-value)
+     (format "%s.%s"
+             (or (plist-get target :tag-id) "field")
+             (or (plist-get target :field-name) "value")))
+    ((or :concept :node-reference)
+     (format "node %s" (plist-get target :node-id)))
+    (:node (if-let* ((node-id (plist-get target :node-id)))
+               (format "node %s" node-id)
+             "current heading"))
+    (:table-cell (format "table cell %s" (plist-get target :column)))
+    (:org-link (format "%s:%s"
+                       (plist-get target :type)
+                       (plist-get target :path)))
+    (:button "button")
+    (:command "command")
+    (_ "object")))
+
+(defun supertag--assist-actions (target)
+  "Return context-relevant action choices for TARGET."
+  (let* ((kind (plist-get target :kind))
+         (default-label
+          (pcase kind
+            (:tag "Open tagged nodes")
+            (:field-value "Edit field value")
+            (:field "Edit field definition")
+            ((or :concept :node-reference) "Open node")
+            (:table-cell (if (eq (plist-get target :column) :title)
+                             "Open source node"
+                           "Edit cell"))
+            (:button "Activate button")
+            (:org-link "Open Org link")
+            (:node "Open node view")
+            (:command "Run command")
+            (_ "Run default action")))
+         (default-action
+          (cons (format "%s (default)" default-label)
+                (apply-partially #'supertag--activate-target target)))
+         (specific-actions
+          (pcase kind
+            (:tag
+             (let ((tag-id (plist-get target :tag-id)))
+               (list
+                (cons "Open schema"
+                      (apply-partially #'supertag--assist-call
+                                       'supertag-view-schema 'supertag-view-schema))
+                (cons "Rename tag..."
+                      (apply-partially #'supertag--assist-call
+                                       'supertag-ui-commands 'supertag-rename-tag tag-id))
+                (cons "Delete tag everywhere..."
+                      (apply-partially #'supertag--assist-call
+                                       'supertag-ui-commands
+                                       'supertag-delete-tag-everywhere tag-id)))))
+            (:field-value
+             (list
+              (cons "Open schema"
+                    (apply-partially #'supertag--assist-call
+                                     'supertag-view-schema 'supertag-view-schema))))
+            (:node
+             (list
+              (cons "Add tag..."
+                    (apply-partially #'supertag--assist-call
+                                     'supertag-ui-commands 'supertag-add-tag))
+              (cons "Remove tag..."
+                    (apply-partially #'supertag--assist-call
+                                     'supertag-ui-commands 'supertag-remove-tag-from-node))
+              (cons "Quick edit field..."
+                    (apply-partially #'supertag--assist-call
+                                     'supertag-ui-commands 'supertag-ui-quick-edit-field))
+              (cons "Add reference..."
+                    (apply-partially #'supertag--assist-call
+                                     'supertag-ui-commands 'supertag-add-reference))))
+            ((or :concept :node-reference)
+             (let ((node-id (plist-get target :node-id)))
+               (list
+                (cons "Open node in other window"
+                      (apply-partially #'supertag--assist-call
+                                       'supertag-services-ui 'supertag-goto-node node-id t)))))
+            (:table-cell
+             (unless (eq (plist-get target :column) :title)
+               (let ((node-id (plist-get target :node-id)))
+                 (list
+                  (cons "Open source node"
+                        (apply-partially #'supertag--assist-call
+                                         'supertag-services-ui 'supertag-goto-node node-id)))))))))
+    (append (list default-action)
+            specific-actions
+            (list (cons "All Org-Supertag commands..." #'supertag--open-main-menu)))))
+
+;;;###autoload
+(defun supertag-assist ()
+  "Offer actions for the semantic object at point.
+When point has no semantic target, open the complete `supertag-menu'."
+  (interactive)
+  (if-let* ((target (supertag--target-at-point)))
+      (let* ((actions (supertag--assist-actions target))
+             (choice (completing-read
+                      (format "Action for %s: " (supertag--target-label target))
+                      actions nil t nil nil (caar actions)))
+             (action (cdr (assoc choice actions))))
+        (funcall action))
+    (supertag--open-main-menu)))
+
 ;;;###autoload
 (defun supertag-smart-key (&optional assist)
   "Activate the semantic object at point.
-With prefix argument ASSIST, open the existing `supertag-menu' instead."
+With prefix argument ASSIST, offer actions relevant to that object."
   (interactive "P")
   (if assist
-      (progn
-        (unless (fboundp 'supertag-menu)
-          (require 'supertag-menu))
-        (call-interactively #'supertag-menu))
+      (supertag-assist)
     (if-let* ((target (supertag--target-at-point)))
         (supertag--activate-target target)
       (user-error "No Org-Supertag target at point"))))

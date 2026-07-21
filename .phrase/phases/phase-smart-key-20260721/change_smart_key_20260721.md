@@ -1,6 +1,21 @@
 # change_smart_key_20260721
 
 - 2026-07-21 Add/Modify
+  - Files: `supertag-smart-key.el`, `supertag-ui-commands.el`, `supertag-menu.el`, `test/test-smart-key.el`, `README.md`, `README_CN.md`, phase docs
+  - Functions: `supertag-assist`, `supertag--assist-actions`, `supertag-smart-key`, `supertag-rename-tag`, `supertag-delete-tag-everywhere`
+  - Changes:
+    - 前缀调用与独立 `supertag-assist` 命令现在按 target 生成小型 completion 动作列表；默认动作排第一，并保留完整 `supertag-menu` 出口。
+    - inline tag 可直接打开 schema、预选当前 tag 进行重命名或删除；heading、node reference、field value 与 Table cell 只显示已有且可安全复用的相关动作。
+    - 无 target 时继续回落到完整 `supertag-menu`；全局菜单内容和按键不变。
+    - `supertag-rename-tag` 与 `supertag-delete-tag-everywhere` 接受可选 tag 参数，避免 Assist 再次询问当前对象。
+  - Risk: 对象动作表是显式 first-match 结果；新增 target kind 时必须提供明确默认标签，破坏性动作仍须由原命令确认。
+  - Verification:
+    - `./test/run-tests.sh smart-key`: 8/8 passed
+    - `./test/run-tests.sh all`: 278/278 passed
+    - changed modules byte compile、checkdoc、主包隔离 batch load、`git diff --check` 通过
+  - Related: `task002`
+
+- 2026-07-21 Add/Modify
   - Files: `supertag-smart-key.el`, `supertag-view-helper.el`, `org-supertag.el`, `test/test-smart-key.el`, `test/run-tests.sh`, `README.md`, `README_CN.md`
   - Functions: `supertag-smart-key`, `supertag--target-at-point`, `supertag--activate-target`, `supertag-view-helper-get-tag-at-point`
   - Changes:

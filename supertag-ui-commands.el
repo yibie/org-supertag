@@ -791,11 +791,13 @@ Can be used both at headings and within node content areas."
 
 ;;; --- Enhanced Tag Management Commands ---
 
-(defun supertag-rename-tag ()
-  "Interactively rename a tag across all files."
+(defun supertag-rename-tag (&optional old-id)
+  "Interactively rename OLD-ID across all files.
+When OLD-ID is nil, prompt for the tag to rename."
   (interactive)
-  (let* ((all-tags (mapcar #'car (supertag-query :tags)))
-         (old-id (completing-read "Tag to rename: " all-tags nil t))
+  (let* ((old-id (or old-id
+                     (completing-read "Tag to rename: "
+                                      (mapcar #'car (supertag-query :tags)) nil t)))
          (new-id (when (and old-id (not (string-empty-p old-id)))
                    (read-string (format "New name for '%s': " old-id)))))
     (when (and old-id (not (string-empty-p old-id))
@@ -804,12 +806,14 @@ Can be used both at headings and within node content areas."
         ;; Call the single, authoritative backend function
         (supertag-tag-rename old-id new-id)))))
 
-(defun supertag-delete-tag-everywhere ()
-  "Interactively delete a tag definition and all its instances.
+(defun supertag-delete-tag-everywhere (&optional tag-name)
+  "Interactively delete TAG-NAME and all its instances.
+When TAG-NAME is nil, prompt for the tag to delete.
 WARNING: This removes the tag from the database and from all org files."
   (interactive)
-  (let* ((all-tags (mapcar #'car (supertag-query :tags)))
-         (tag-name (completing-read "Delete tag permanently: " all-tags nil t)))
+  (let ((tag-name (or tag-name
+                      (completing-read "Delete tag permanently: "
+                                       (mapcar #'car (supertag-query :tags)) nil t))))
     (when (and (not (string-empty-p tag-name))
                (yes-or-no-p (format "DELETE tag '%s' and ALL its uses? This is irreversible." tag-name)))
       ;; Call the centralized ops function to perform the deletion.

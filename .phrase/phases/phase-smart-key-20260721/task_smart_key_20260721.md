@@ -4,3 +4,8 @@
   - 产出：`supertag-smart-key.el`、共享 inline tag point 识别修正、主包 wiring、focused ERT、phase change 记录
   - 验证方式：focused ERT、`./test/run-tests.sh all`、主包 batch load、byte compile、`git diff --check`
   - 影响范围：Org buffer 与 org-supertag View 的显式命令调用；不设置默认按键、不改 Store
+
+- task002 [x] 实现对象级 Assist
+  - 产出：根据当前 target 生成相关动作列表；无 target 时回落到 `supertag-menu`
+  - 验证方式：focused ERT 锁定对象菜单差异、动作参数与全局菜单回落；全量 ERT、byte compile、`git diff --check`
+  - 影响范围：`supertag-smart-key` 的前缀调用；`supertag-menu` 保持完整且不改变

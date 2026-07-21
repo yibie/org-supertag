@@ -205,7 +205,8 @@ rating   →  数字（1–5）
 | 关联节点 | `M-x supertag-add-reference` | 任意两节点间建立双向链接 |
 | 将选中文本提升为概念 | `M-x supertag-promote-concept` | 创建/复用概念节点，从当前节点建立 reference，原文保持普通文本 |
 | 高亮概念提及 | `M-x supertag-concept-link-mode` | 将概念 title/alias 的提及显示为琥珀色语义高亮，不落库为链接 |
-| 操作光标下的对象 | `M-x supertag-smart-key` | 打开或编辑当前 tag、node、field、link、button 或 table cell |
+| 操作光标下的对象 | `M-x supertag-smart-key` | 执行当前 tag、node、field、link、button 或 table cell 的默认动作 |
+| 选择光标对象的相关动作 | `M-x supertag-assist` | 只显示对象相关动作，并保留完整菜单出口 |
 | 全量重建数据库 | `M-x supertag-sync-full-rescan` | 安全——仅重新读取 Org 文件 |
 
 除了单条命令，Org-Supertag 还提供一套小巧的 S-expression 查询语言，可以组合标签、字段、日期和全文搜索，例如
@@ -232,9 +233,10 @@ babel 代码块，用 `M-x supertag-query-save` 保存以便复用，或者用 `
 ### 语义 Smart Key
 
 把光标放在 inline tag、node、field、concept mention、Org link、Emacs button 或 table cell
-上，执行 `M-x supertag-smart-key` 即可触发默认动作。以前缀参数调用
-（`C-u M-x supertag-smart-key`）会打开 `supertag-menu`。该命令不设置默认按键，因此不会覆盖
-Org 与各 View 的既有局部键。
+上，执行 `M-x supertag-smart-key` 即可触发默认动作。执行 `M-x supertag-assist`，或以前缀参数
+调用 `C-u M-x supertag-smart-key`，只会显示与当前对象相关的动作；其中始终保留完整
+`supertag-menu` 的入口，光标下没有语义对象时也会直接回落到该菜单。两个命令都不设置默认按键，
+因此不会覆盖 Org 与各 View 的既有局部键。
 
 ---
 

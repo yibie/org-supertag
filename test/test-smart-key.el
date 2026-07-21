@@ -189,8 +189,39 @@
           (supertag-smart-key)
           (should (eq opened :link)))))))
 
-(ert-deftest supertag-smart-key-prefix-opens-assist-menu ()
-  "A prefix argument delegates to the existing discoverable menu."
+(ert-deftest supertag-smart-key-prefix-offers-target-actions ()
+  "A prefix argument offers actions for the target instead of every command."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Paper #paper\n")
+    (search-backward "paper")
+    (let (prompt choices renamed)
+      (let ((completing-read-function
+             (lambda (actual-prompt collection &rest _)
+               (setq prompt actual-prompt
+                     choices (mapcar #'car collection))
+               "Rename tag...")))
+        (cl-letf (((symbol-function 'supertag-rename-tag)
+                   (lambda (tag-id) (setq renamed tag-id))))
+          (supertag-smart-key '(4))
+          (should (string-match-p "#paper" prompt))
+          (should (equal renamed "paper"))
+          (should (member "Open tagged nodes (default)" choices))
+          (should (member "Rename tag..." choices))
+          (should (member "Delete tag everywhere..." choices))
+          (should (member "All Org-Supertag commands..." choices))))))
+  (let ((tag-actions (mapcar #'car
+                             (supertag--assist-actions
+                              '(:kind :tag :tag-id "paper"))))
+        (node-actions (mapcar #'car
+                              (supertag--assist-actions
+                               '(:kind :node :node-id "node-id")))))
+    (should-not (equal tag-actions node-actions))
+    (should (member "Add tag..." node-actions))
+    (should-not (member "Add tag..." tag-actions))))
+
+(ert-deftest supertag-smart-key-prefix-falls-back-to-main-menu ()
+  "A prefix argument without a target opens the complete global menu."
   (with-temp-buffer
     (let (opened)
       (cl-letf (((symbol-function 'supertag-menu)

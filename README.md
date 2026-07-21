@@ -206,7 +206,8 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 | Link related nodes | `M-x supertag-add-reference` | Bidirectional link between any two nodes |
 | Promote selected text to a concept | `M-x supertag-promote-concept` | Creates/reuses a concept node, references it from the current node, and keeps the text plain |
 | Highlight concept mentions | `M-x supertag-concept-link-mode` | Shows concept title/alias mentions as amber semantic highlights, not stored links |
-| Act on the object at point | `M-x supertag-smart-key` | Opens or edits the current tag, node, field, link, button, or table cell |
+| Act on the object at point | `M-x supertag-smart-key` | Runs the default action for the current tag, node, field, link, button, or table cell |
+| Choose actions for the object at point | `M-x supertag-assist` | Shows only relevant actions, with the complete menu as a fallback |
 | Full database rebuild | `M-x supertag-sync-full-rescan` | Safe — just re-reads your Org files |
 
 Beyond single-command lookups, Org-Supertag has a small S-expression query
@@ -235,9 +236,11 @@ After changing concept titles or aliases outside SuperTag, run `M-x supertag-con
 ### Semantic Smart Key
 
 Run `M-x supertag-smart-key` on an inline tag, node, field, concept mention,
-Org link, Emacs button, or table cell to perform its default action. With a
-prefix argument (`C-u M-x supertag-smart-key`), it opens `supertag-menu`.
-The command has no default keybinding, so existing Org and View keys are unchanged.
+Org link, Emacs button, or table cell to perform its default action. Run
+`M-x supertag-assist`, or use `C-u M-x supertag-smart-key`, to choose from
+actions relevant to that object. The complete `supertag-menu` remains available
+from the Assist list and is used directly when point has no semantic target.
+Neither command has a default keybinding, so existing Org and View keys are unchanged.
 
 ---
 
