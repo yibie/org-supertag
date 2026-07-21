@@ -821,16 +821,18 @@ TAG-NAME is the tag name to remove."
 (defun supertag-view-helper-get-tag-at-point ()
   "Get the inline supertag name at point.
 Returns the tag name (without #) if found, nil otherwise."
-  (when (eq major-mode 'org-mode)
+  (when (derived-mode-p 'org-mode)
     (save-excursion
-      (let* ((tag-re (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
-             (start (point)))
-        (when (re-search-backward tag-re nil t)
-          ;; Check if the point is within the found match
-          (when (and (<= (match-beginning 0) start)
-                     (> (match-end 0) start))
-            ;; Extract the tag name, removing the leading '#'
-            (substring (match-string 0) 1)))))))
+      (let ((tag-re (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
+            (origin (point))
+            (line-end (line-end-position)))
+        (goto-char (line-beginning-position))
+        (catch 'tag
+          (while (re-search-forward tag-re line-end t)
+            (when (and (<= (match-beginning 0) origin)
+                       (< origin (match-end 0))
+                       (supertag-view-helper--valid-inline-tag-match-p))
+              (throw 'tag (substring (match-string-no-properties 0) 1)))))))))
 
 (defun supertag-view-helper-rename-tag-text-in-node (old-tag-name new-tag-name)
   "Rename all occurrences of #OLD-TAG-NAME to #NEW-TAG-NAME within the current node's subtree.

@@ -205,6 +205,7 @@ rating   →  数字（1–5）
 | 关联节点 | `M-x supertag-add-reference` | 任意两节点间建立双向链接 |
 | 将选中文本提升为概念 | `M-x supertag-promote-concept` | 创建/复用概念节点，从当前节点建立 reference，原文保持普通文本 |
 | 高亮概念提及 | `M-x supertag-concept-link-mode` | 将概念 title/alias 的提及显示为琥珀色语义高亮，不落库为链接 |
+| 操作光标下的对象 | `M-x supertag-smart-key` | 打开或编辑当前 tag、node、field、link、button 或 table cell |
 | 全量重建数据库 | `M-x supertag-sync-full-rescan` | 安全——仅重新读取 Org 文件 |
 
 除了单条命令，Org-Supertag 还提供一套小巧的 S-expression 查询语言，可以组合标签、字段、日期和全文搜索，例如
@@ -227,6 +228,13 @@ babel 代码块，用 `M-x supertag-query-save` 保存以便复用，或者用 `
 - 多个 concept 共用 title 或 alias 时，该词存在歧义。SuperTag 不会根据 hash table 顺序任意选择目标；文本保持普通显示，promote 会明确报告冲突。
 
 如果在 SuperTag 之外修改了 concept title 或 alias，请在已启用的 buffer 中执行 `M-x supertag-concept-refresh`。
+
+### 语义 Smart Key
+
+把光标放在 inline tag、node、field、concept mention、Org link、Emacs button 或 table cell
+上，执行 `M-x supertag-smart-key` 即可触发默认动作。以前缀参数调用
+（`C-u M-x supertag-smart-key`）会打开 `supertag-menu`。该命令不设置默认按键，因此不会覆盖
+Org 与各 View 的既有局部键。
 
 ---
 

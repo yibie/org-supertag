@@ -466,6 +466,7 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-view-node)
 (require 'supertag-view-table)
 (require 'supertag-view-kanban)
+(require 'supertag-smart-key)
 
 ;; --- RAG ---
 ;; (archived: supertag-rag, supertag-ui-chat — moved to archive/)
