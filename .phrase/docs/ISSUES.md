@@ -16,4 +16,4 @@
 - issue014 [ ] snapshot guard 延迟删除在重启或 worker 异常后失去重试（实现完成，待用户验收；phase-sync-integrity-20251226/issue_sync_integrity_20260714_deferred_retry.md）
 - issue015 [ ] file-node 验证忽略持久身份并保留失效节点（phase-sync-integrity-20251226/issue_sync_integrity_20260714_file_node_validation.md）
 - issue016 [ ] embed 跨 buffer 写入使 Org element cache 失效（phase-sync-improve-20251216/issue_sync_improve_20260722_org_element_cache.md）
-- issue017 [ ] tag merge 拒绝无 `#+TITLE` 的合法 file node（实现与回归测试完成，待用户重试确认；phase-tag-merge-20260722/issue_tag_merge_untitled_file_node_20260722.md）
+- issue017 [x] tag merge 拒绝无 `#+TITLE` 的合法 file node（已由用户在真实 vault 验证；phase-tag-merge-20260722/issue_tag_merge_untitled_file_node_20260722.md）

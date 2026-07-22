@@ -34,5 +34,5 @@ Allow `:title nil` only when `:level` is `0`. Heading nodes remain subject to th
 ## Tracking
 
 - Task: `task005`
-- User confirmation: pending Schema View retry
-- Resolved At/By/Commit: pending user confirmation and commit
+- User confirmation: passed in the user's live vault
+- Resolved At/By/Commit: 2026-07-22 / user local verification / `40b15af`
