@@ -1,6 +1,16 @@
 # change_smart_key_20260721
 
 - 2026-07-22 Fix
+  - Files: `supertag-ui-commands.el`, `test/test-smart-key.el`, phase docs
+  - Function: `supertag-back-to-heading`
+  - Changes:
+    - Node demotion now removes the Org `ID` after deleting the Store node.
+    - Org's native property API removes an ID-only drawer and preserves unrelated properties.
+    - Corrected the confirmation prompt typo.
+  - Verification: focused 11/11; full suite 295/295; batch load, check-parens, byte compile and `git diff --check` passed.
+  - Related: `issue019`, `task004`
+
+- 2026-07-22 Fix
   - Files: `supertag-view-node.el`, `supertag-smart-key.el`, `test/test-smart-key.el`, phase docs
   - Functions: `supertag-view-node--current-entity-id`, `supertag-view-node`, `supertag--activate-target`
   - Changes:

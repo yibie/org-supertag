@@ -282,17 +282,18 @@ Jumps to the selected node in another window."
     (user-error "Failed to re-sync node at point.")))
 
 (defun supertag-back-to-heading ()
-   "Remove the node at point from the supertag system.
- This removes the node and all its relations from the database,
- but leaves the Org heading and its content intact in the file,
- effectively converting it back to a regular heading."
-   (interactive)
-   (let ((node-id (org-id-get)))
-     (unless node-id
-       (user-error "Current heading does not have an ID, it is not a node."))
-     (when (yes-or-no-p "Really remove this node from the d2atabase? (The heading will be preserved)")
-       (supertag-node-delete node-id)
-       (message "Node %s removed from database. It is now a regular Org heading." node-id))))
+  "Remove the node at point from the supertag system.
+This removes the node and all its relations from the database,
+but leaves the Org heading and its content intact in the file,
+effectively converting it back to a regular heading."
+  (interactive)
+  (let ((node-id (org-id-get)))
+    (unless node-id
+      (user-error "Current heading does not have an ID, it is not a node."))
+    (when (yes-or-no-p "Really remove this node from the database? (The heading will be preserved)")
+      (supertag-node-delete node-id)
+      (org-entry-delete (point) "ID")
+      (message "Node %s removed from database. It is now a regular Org heading." node-id))))
 
 (defun supertag-move-node (&optional beg end)
   "Interactively move node(s) to another file.

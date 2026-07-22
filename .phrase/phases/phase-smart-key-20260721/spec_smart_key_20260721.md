@@ -30,6 +30,7 @@
 3. 用户在 Node View 字段值或 Table cell 上执行同一命令，沿用既有编辑动作；Table 标题列打开源 node。
 4. 用户在已有 ID 的 Org heading 上执行同一命令，打开既有 Node View；无 ID 时收到明确提示，原文不变。
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
+6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
 
 ## Edge Cases
 
@@ -37,6 +38,7 @@
 - Org link 必须先于 inline tag，避免 URL fragment 被解释为 tag。
 - inline tag 必须排除 source block、表格、注释、Org priority 与 URL fragment，与现有 font-lock 规则一致。
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
+- Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
 
 ## Acceptance Criteria
@@ -45,4 +47,5 @@
 - `C-u M-x supertag-smart-key` 显示对象级动作；不同 target 的候选必须不同，并保留打开完整 `supertag-menu` 的出口。
 - 没有默认全局/局部绑定，没有 Hyperbole 或新依赖。
 - 非正文 `#...` 不打开 tag view。
+- `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - focused ERT 与仓库稳定测试套件通过。

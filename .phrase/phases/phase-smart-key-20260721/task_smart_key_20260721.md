@@ -14,3 +14,8 @@
   - 产出：Node View 与 Smart Key Node Action 只读取已有 ID；无 ID 时提示且不修改 Org buffer
   - 验证方式：focused 红/绿回归、全量 ERT、byte compile、`git diff --check`
   - 影响范围：仅 View 激活；显式创建、同步和 tag 编辑命令保持原有写入行为
+
+- task004 [x] 修复 Node 退化后仍保留 Org ID
+  - 产出：`supertag-back-to-heading` 删除 `ID`；仅含 ID 时由 Org 清理空属性抽屉，其他属性保持不变
+  - 验证方式：focused 红/绿回归、全量 ERT、byte compile、`git diff --check`
+  - 影响范围：仅显式 `supertag-back-to-heading` 命令
