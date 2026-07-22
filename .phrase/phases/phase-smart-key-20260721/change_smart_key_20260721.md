@@ -1,5 +1,15 @@
 # change_smart_key_20260721
 
+- 2026-07-22 Fix
+  - Files: `supertag-view-node.el`, `supertag-smart-key.el`, `test/test-smart-key.el`, phase docs
+  - Functions: `supertag-view-node--current-entity-id`, `supertag-view-node`, `supertag--activate-target`
+  - Changes:
+    - Node View and its follow logic now resolve only existing Org IDs.
+    - Smart Key reports an untracked heading instead of calling `org-id-get-create`.
+    - Explicit node creation/sync commands retain their existing mutating helpers.
+  - Verification: focused Smart Key 9/9; full suite 293/293.
+  - Related: `issue018`, `task003`
+
 - 2026-07-21 Add/Modify
   - Files: `supertag-smart-key.el`, `supertag-ui-commands.el`, `supertag-menu.el`, `test/test-smart-key.el`, `README.md`, `README_CN.md`, phase docs
   - Functions: `supertag-assist`, `supertag--assist-actions`, `supertag-smart-key`, `supertag-rename-tag`, `supertag-delete-tag-everywhere`

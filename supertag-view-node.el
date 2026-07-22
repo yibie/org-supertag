@@ -60,11 +60,9 @@ if your Emacs accepts fractional heights for side windows."
 Only query Org-specific helpers inside Org buffers to avoid errors like
 Point must be at an Org heading. when invoked from other modes."
   (cond
-   ;; In org-mode, try heading property first, then UI helper (both safely)
+   ;; Node View is read-only with respect to Org identity.
    ((derived-mode-p 'org-mode)
-    (or (ignore-errors (org-entry-get (point) "ID"))
-        (when (fboundp 'supertag-ui--get-node-at-point)
-          (ignore-errors (supertag-ui--get-node-at-point)))))
+    (ignore-errors (org-entry-get (point) "ID")))
    ;; In table view mode, extract cell coords
    ((derived-mode-p 'supertag-view-table-mode)
     (when (fboundp 'supertag-view-table--get-cell-coords)
@@ -815,9 +813,7 @@ Falls back to beginning of buffer when no field is found."
 (defun supertag-view-node ()
   "Toggle the Org-Supertag node view as a side window that follows context."
   (interactive)
-  (let ((node-id (or (and (fboundp 'supertag-ui--get-node-at-point)
-                          (supertag-ui--get-node-at-point))
-                     (supertag-view-node--current-entity-id))))
+  (let ((node-id (supertag-view-node--current-entity-id)))
     (if supertag-view-node--enabled
         (supertag-view-node--hide-side)
       (if node-id

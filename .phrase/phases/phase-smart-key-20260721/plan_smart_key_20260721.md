@@ -7,10 +7,11 @@
 3. 接入主包与稳定测试入口，运行 focused/full batch tests 和静态检查。
 4. 回写 task、change 与全局 CHANGE 索引。
 5. 将前缀调用从全局菜单占位升级为对象级 Assist；保留无 target 时的全局菜单回落。
+6. 保持 Node View 身份解析只读；无 ID heading 不进入任何隐式创建路径。
 
 ## Scope
 
-- 代码：`supertag-smart-key.el`、`supertag-view-helper.el`、`org-supertag.el`。
+- 代码：`supertag-smart-key.el`、`supertag-view-node.el`、`supertag-view-helper.el`、`org-supertag.el`。
 - 测试：`test/test-smart-key.el`、`test/run-tests.sh`。
 - 文档：本 phase 文档与 `.phrase/docs/CHANGE.md`。
 

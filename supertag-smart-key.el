@@ -147,10 +147,11 @@ This recognizer is read-only; it does not create Org IDs or mutate the store."
     (:button (button-activate (plist-get target :button)))
     (:org-link (org-open-at-point))
     (:node
+     (unless (plist-get target :node-id)
+       (user-error "Heading has no ID; Node View does not create IDs"))
      (unless (fboundp 'supertag-view-node--show-side)
        (require 'supertag-view-node))
-     (supertag-view-node--show-side
-      (or (plist-get target :node-id) (org-id-get-create)))
+     (supertag-view-node--show-side (plist-get target :node-id))
      (supertag-view-node--focus-view))
     (:command (call-interactively (plist-get target :command)))
     (_ (user-error "No default action for target: %S" target))))

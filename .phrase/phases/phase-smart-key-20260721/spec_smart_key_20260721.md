@@ -28,7 +28,7 @@
 1. 用户把光标放在 inline `#paper` 上并执行 `M-x supertag-smart-key`，打开该 tag 的 Table View。
 2. 用户在 concept mention、node reference、Org link 或原生 Button 上执行同一命令，沿用既有跳转/激活动作。
 3. 用户在 Node View 字段值或 Table cell 上执行同一命令，沿用既有编辑动作；Table 标题列打开源 node。
-4. 用户在 Org heading 上执行同一命令，打开既有 Node View。
+4. 用户在已有 ID 的 Org heading 上执行同一命令，打开既有 Node View；无 ID 时收到明确提示，原文不变。
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
 
 ## Edge Cases
@@ -36,7 +36,7 @@
 - `supertag-context` 可能是布尔属性加平铺字段，也可能直接是 plist；两者必须归一化为同一临时 target。
 - Org link 必须先于 inline tag，避免 URL fragment 被解释为 tag。
 - inline tag 必须排除 source block、表格、注释、Org priority 与 URL fragment，与现有 font-lock 规则一致。
-- recognizer 读取无 ID heading 时不得调用 `org-id-get-create`；创建行为只能发生在既有激活动作中。
+- recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
 
 ## Acceptance Criteria

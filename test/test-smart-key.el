@@ -10,6 +10,7 @@
   (add-to-list 'load-path (expand-file-name ".." (file-name-directory load-file-name))))
 
 (require 'supertag-smart-key)
+(require 'supertag-view-node)
 
 (ert-deftest supertag-smart-key-prefers-supertag-context ()
   "A specific field context wins over broader properties at point."
@@ -119,25 +120,39 @@
   "Inline tags open their table; an Org heading opens its node view."
   (with-temp-buffer
     (org-mode)
-    (insert "* Paper #research\n")
+    (insert "* Paper #research\n:PROPERTIES:\n:ID: existing-id\n:END:\n")
     (let (table node-view)
       (cl-letf (((symbol-function 'supertag-view-table)
                  (lambda (source &rest _) (setq table source)))
                 ((symbol-function 'supertag-view-node--show-side)
                  (lambda (node-id) (setq node-view node-id)))
-                ((symbol-function 'supertag-view-node--focus-view) #'ignore)
-                ((symbol-function 'org-id-get-create) (lambda () "created-id")))
+                ((symbol-function 'supertag-view-node--focus-view) #'ignore))
         (search-backward "research")
         (supertag-smart-key)
         (should (equal table '(:type :tag :value "research")))
         (beginning-of-line)
         (supertag-smart-key)
-        (should (equal node-view "created-id"))
+        (should (equal node-view "existing-id"))
         (setq node-view nil table nil)
         (end-of-line)
         (supertag-smart-key)
-        (should (equal node-view "created-id"))
+        (should (equal node-view "existing-id"))
         (should-not table)))))
+
+(ert-deftest supertag-node-view-does-not-create-id ()
+  "Opening Node View on an untracked heading leaves Org text unchanged."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Untracked heading\nBody\n")
+    (goto-char (point-min))
+    (let ((before (buffer-string))
+          (supertag-view-node--enabled nil))
+      (cl-letf (((symbol-function 'supertag-view-node--show-side) #'ignore)
+                ((symbol-function 'supertag-view-node--focus-view) #'ignore))
+        (should-error (supertag-view-node) :type 'user-error)
+        (should-error (supertag-smart-key) :type 'user-error))
+      (should (equal (buffer-string) before))
+      (should-not (org-entry-get nil "ID")))))
 
 (ert-deftest supertag-smart-key-does-not-treat-non-prose-hash-as-tag ()
   "Source blocks and Org priority markers are not implicit tag buttons."
@@ -148,17 +163,16 @@
     (should-error (supertag-smart-key) :type 'user-error))
   (with-temp-buffer
     (org-mode)
-    (insert "* [#A] Priority\n")
+    (insert "* [#A] Priority\n:PROPERTIES:\n:ID: existing-id\n:END:\n")
     (search-backward "#A")
     (let (node-view table)
       (cl-letf (((symbol-function 'supertag-view-node--show-side)
                  (lambda (node-id) (setq node-view node-id)))
                 ((symbol-function 'supertag-view-node--focus-view) #'ignore)
-                ((symbol-function 'org-id-get-create) (lambda () "created-id"))
                 ((symbol-function 'supertag-view-table)
                  (lambda (&rest _) (setq table t))))
         (supertag-smart-key)
-        (should (equal node-view "created-id"))
+        (should (equal node-view "existing-id"))
         (should-not table)))))
 
 (ert-deftest supertag-smart-key-prefers-org-link-over-url-fragment ()

@@ -17,3 +17,4 @@
 - issue015 [ ] file-node 验证忽略持久身份并保留失效节点（phase-sync-integrity-20251226/issue_sync_integrity_20260714_file_node_validation.md）
 - issue016 [ ] embed 跨 buffer 写入使 Org element cache 失效（phase-sync-improve-20251216/issue_sync_improve_20260722_org_element_cache.md）
 - issue017 [x] tag merge 拒绝无 `#+TITLE` 的合法 file node（已由用户在真实 vault 验证；phase-tag-merge-20260722/issue_tag_merge_untitled_file_node_20260722.md）
+- issue018 [ ] Node View 为无 ID heading 自动写入 `:ID:`（实现与回归测试完成，待用户验证；phase-smart-key-20260721/issue_node_view_creates_id_20260722.md）
