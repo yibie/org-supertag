@@ -104,6 +104,36 @@ the old mtime until destructive cleanup is allowed."
             (should (equal (list file) (supertag-get-modified-files)))))
       (ignore-errors (delete-file file)))))
 
+(ert-deftest supertag-sync-full-rescan-parses-unchanged-files ()
+  "A full rescan reparses files even when their content hash is unchanged."
+  (let* ((file (make-temp-file "supertag-full-rescan-" nil ".org" "* Note\n"))
+         (state-table (make-hash-table :test 'equal))
+         (supertag-sync--state (list :sync-state state-table))
+         (supertag-sync--deferred-files (make-hash-table :test 'equal))
+         (supertag-sync--is-full-rescan-p t)
+         (parsed nil))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (insert-file-contents file)
+            (puthash file
+                     (list :content-hash (secure-hash 'sha1 (current-buffer)))
+                     state-table))
+          (cl-letf (((symbol-function 'supertag-sync--allow-destructive-p)
+                     (lambda () t))
+                    ((symbol-function 'supertag-sync--parse-file-header)
+                     (lambda () nil))
+                    ((symbol-function 'supertag--parse-org-nodes-from-current-buffer)
+                     (lambda (_file) (setq parsed t) nil))
+                    ((symbol-function 'supertag-sync--upsert-file-node)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'supertag-find-nodes-by-file)
+                     (lambda (_file) nil)))
+            (supertag-sync--process-single-file
+             file (list :nodes-created 0 :nodes-updated 0 :nodes-deleted 0)))
+          (should parsed))
+      (ignore-errors (delete-file file)))))
+
 (ert-deftest supertag-sync-deferred-file-requeues-after-worker-error ()
   "A failed worker does not leave a deferred file permanently queued."
   (let* ((file (make-temp-file "supertag-deferred-worker-" nil ".org" "* Keep\n"))

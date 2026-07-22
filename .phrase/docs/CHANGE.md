@@ -32,3 +32,4 @@
 - 2026-07-22: phase-tag-merge-20260722/change_tag_merge_20260722.md  # Untitled file-node merge compatibility
 - 2026-07-22: phase-smart-key-20260721/change_smart_key_20260721.md  # Node View no longer creates Org IDs
 - 2026-07-22: phase-smart-key-20260721/change_smart_key_20260721.md  # Node demotion removes Org ID and empty property drawer
+- 2026-07-22: phase-sync-improve-20251216/change_sync_improve_20251216.md  # TODO 标题解析与全量重扫修复

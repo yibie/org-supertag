@@ -214,6 +214,19 @@
       (should (string= "My Title" (plist-get result :title)))
       (should (string= "My Title" (plist-get result :raw-value))))))
 
+(ert-deftest extractor-current-buffer-parser-recognizes-custom-todo ()
+  "The shared parser initializes Org before reading custom TODO keywords."
+  (let ((org-todo-keywords
+         '((sequence "TODO" "DOING" "|" "DONE"))))
+    (with-temp-buffer
+      (insert "* DOING \u3010\u6210\u672c\u660e\u7ec6\u8868\u3011\u5bfc\u51fa\u540e\u8868\u683c\u4e0e\u8f93\u5165\u5185\u5bb9\u4e0d\u4e00\u81f4\n"
+              ":PROPERTIES:\n:ID: node-1\n:END:\n")
+      (let ((node (car (supertag--parse-org-nodes-from-current-buffer
+                        "/tmp/custom-todo.org" t))))
+        (should (equal "DOING" (plist-get node :todo)))
+        (should (equal "\u3010\u6210\u672c\u660e\u7ec6\u8868\u3011\u5bfc\u51fa\u540e\u8868\u683c\u4e0e\u8f93\u5165\u5185\u5bb9\u4e0d\u4e00\u81f4"
+                       (plist-get node :title)))))))
+
 (ert-deftest extractor-tags ()
   "Tags extractor produces :tags combining org tags and inline #tags."
   (extractor-test--with-headline "* Tagged :orgtag:"

@@ -997,7 +997,8 @@ COUNTERS is a plist for tracking :nodes-created, :nodes-updated, and :nodes-dele
          (nodes-from-file nil)
          (allow-destructive (supertag-sync--allow-destructive-p))
          (deferred-entry (gethash file supertag-sync--deferred-files))
-         (force-parse (and allow-destructive deferred-entry))
+         (force-parse (or supertag-sync--is-full-rescan-p
+                          (and allow-destructive deferred-entry)))
          (deferred-deletions nil))
 
     ;; 1. Smart Detection / Reading
@@ -1931,6 +1932,9 @@ FILE is used for setting the :file property on nodes."
         (org-mode-hook nil)
         (org-inhibit-startup t)
         (org-agenda-inhibit-startup t))
+    (unless (derived-mode-p 'org-mode)
+      (delay-mode-hooks (org-mode)))
+    (setq-local org-element-use-cache nil)
     ;; Ensure tab-width is 8 as required by org-current-text-column
     (setq-local tab-width 8)
     ;; Pre-process to remove content of embed blocks before parsing
@@ -1954,17 +1958,6 @@ MIGRATION-MODE when t, only processes nodes with existing IDs."
     (error "File does not exist: %s" file))
   (with-temp-buffer
     (insert-file-contents file)
-    ;; Enter org-mode so that org-element correctly recognizes TODO keywords,
-    ;; priority cookies, and other heading metadata in :raw-value extraction.
-    ;; Without this, :raw-value includes "TODO My Title" instead of "My Title".
-    (let ((org-mode-hook nil)
-          (org-inhibit-startup t)
-          (org-agenda-inhibit-startup t)
-          (inhibit-modification-hooks t))
-      (delay-mode-hooks (org-mode))
-      ;; Disable org-element cache in temp buffer: cache is known to
-      ;; trigger freezes and spurious errors in transient buffers.
-      (setq-local org-element-use-cache nil))
     (supertag--parse-org-nodes-from-current-buffer file migration-mode)))
 
 ;;;------------------------------------------------------------------

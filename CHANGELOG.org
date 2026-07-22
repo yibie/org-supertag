@@ -27,6 +27,10 @@
   user-facing upgrade/downgrade notes.
 
 ** Bug fixes
+- Fixed background sync storing custom Org TODO keywords such as =DOING= in
+  node titles. The shared current-buffer parser now initializes Org before
+  parsing, and =supertag-sync-full-rescan= reparses unchanged files so existing
+  bad =:title=, =:todo=, and =:olp= values can be rebuilt.
 - Fixed recurring =org-element--cache= parser warnings after embed sync. The
   embed writer now disables stale-cache reads while replacing node content,
   resets the target buffer's cache even when the write fails, and no longer
