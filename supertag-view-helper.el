@@ -909,15 +909,16 @@ Returns the total number of instances renamed."
   (save-excursion
     (goto-char (point-min))
     (let ((renamed-count 0)
-          (regex (concat "#" (regexp-quote old-tag-name) "\\b"))) ; Use word boundary
+          (regex "#\\([^[:space:]#]+\\)"))
       (while (re-search-forward regex nil t)
-        (unless (or (save-excursion
-                      (goto-char (match-beginning 0))
-                      (org-in-src-block-p))
-                    (save-excursion
-                      (goto-char (match-beginning 0))
-                      (beginning-of-line)
-                      (looking-at-p "^[ \t]*#\\+")))
+        (when (and (string= (match-string-no-properties 1) old-tag-name)
+                   (not (or (save-excursion
+                              (goto-char (match-beginning 0))
+                              (org-in-src-block-p))
+                            (save-excursion
+                              (goto-char (match-beginning 0))
+                              (beginning-of-line)
+                              (looking-at-p "^[ \t]*#\\+")))))
           (replace-match (concat "#" new-tag-name) t t)
           (setq renamed-count (1+ renamed-count))))
       renamed-count)))
@@ -934,16 +935,18 @@ Returns the total number of instances renamed."
         (with-current-buffer (find-file-noselect file)
           (save-excursion
             (goto-char (point-min))
-            (let ((renamed-count 0))
-              (while (re-search-forward (concat "#" (regexp-quote old-tag-name)) nil t)
+            (let ((renamed-count 0)
+                  (regex "#\\([^[:space:]#]+\\)"))
+              (while (re-search-forward regex nil t)
                 ;; Only rename tags that are not in comments or code blocks
-                (unless (or (save-excursion
-                              (goto-char (match-beginning 0))
-                              (org-in-src-block-p))
-                           (save-excursion
-                             (goto-char (match-beginning 0))
-                             (beginning-of-line)
-                             (looking-at-p "^[ \t]*#\+")))
+                (when (and (string= (match-string-no-properties 1) old-tag-name)
+                           (not (or (save-excursion
+                                      (goto-char (match-beginning 0))
+                                      (org-in-src-block-p))
+                                    (save-excursion
+                                      (goto-char (match-beginning 0))
+                                      (beginning-of-line)
+                                      (looking-at-p "^[ \t]*#\+")))))
                   (replace-match (concat "#" new-tag-name))
                   (setq renamed-count (1+ renamed-count))))
               (when (> renamed-count 0)

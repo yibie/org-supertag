@@ -201,6 +201,7 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 | Edit a node's fields | `M-x supertag-view-node` | Form view with completion, pickers, and validation |
 | Board view | `M-x supertag-view-kanban` | Drag-and-drop between columns |
 | Define tag fields | `M-x supertag-view-schema` | Add/remove fields, set types, configure inheritance |
+| Merge duplicate tags | Schema View: mark tags with `m m`, then press `m M` | Preview and merge into a new/existing tag; updates fields, nodes, references, and Org files atomically |
 | Capture new node | `M-x supertag-capture` | Quick entry with template, adds to your Org file |
 | Search | `M-x supertag-search` | Structured query. Save results to file |
 | Link related nodes | `M-x supertag-add-reference` | Bidirectional link between any two nodes |

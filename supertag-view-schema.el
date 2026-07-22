@@ -12,6 +12,7 @@
 (require 'supertag-core-schema)
 (require 'supertag-view-helper)
 (require 'supertag-ops-tag)
+(require 'supertag-ops-tag-merge)
 (require 'supertag-ops-schema)
 (require 'supertag-ops-global-field)
 (require 'supertag-view-api)
@@ -324,6 +325,7 @@ This function handles both legacy and global field modes."
       (define-key mark-map "u" #'supertag-schema--unmark-item)            ; m u: Unmark
       (define-key mark-map "U" #'supertag-schema--unmark-all)             ; m U: Unmark All
       (define-key mark-map "e" #'supertag-schema--batch-extends-marked-tags) ; m e: Extend Marked
+      (define-key mark-map "M" #'supertag-schema-merge-marked-tags)       ; m M: Merge Marked
       (define-key map "m" mark-map))
 
     ;; ========== Virtual Column Commands (v prefix) ==========
@@ -732,6 +734,187 @@ Tries three strategies in order:
             (supertag-schema-refresh)
             (message "Batch extends complete.")))))))
 
+(defun supertag-schema--merge-read-target ()
+  "Read a merge destination."
+  (let* ((create-label "[Create new tag]")
+         (all-tags (sort (mapcar #'car (supertag-query :tags)) #'string<))
+         (choice (completing-read "Merge destination: "
+                                  (cons create-label all-tags) nil t)))
+    (if (string= choice create-label)
+        (let ((name (supertag-sanitize-tag-name
+                     (read-string "New destination tag: "))))
+          (when (or (string-empty-p name) (supertag-tag-get name))
+            (user-error "New destination must be a non-existing tag"))
+          name)
+      choice)))
+
+(defun supertag-schema--merge-read-fields (source-ids)
+  "Read source field keys to retain from SOURCE-IDS.
+Submitting an empty selection retains every available source field."
+  (let* ((groups (supertag-tag-merge--field-groups source-ids))
+         (choices
+          (mapcar
+           (lambda (group)
+             (let* ((key (car group))
+                    (entries (cdr group))
+                    (sources (mapcar (lambda (entry) (plist-get entry :tag-id)) entries))
+                    (types (supertag-tag-merge--unique
+                            (mapcar (lambda (entry)
+                                      (plist-get (plist-get entry :definition) :type))
+                                    entries)))
+                    (label (format "%s  [%s; %s]"
+                                   key
+                                   (mapconcat #'identity sources ", ")
+                                   (mapconcat (lambda (type) (format "%s" type)) types ", "))))
+               (cons label key)))
+           groups))
+         (selected-labels
+          (if choices
+              (completing-read-multiple
+               "Source fields to retain (empty = all): "
+               (mapcar #'car choices) nil t)
+            nil)))
+    (if selected-labels
+        (mapcar (lambda (label) (cdr (assoc label choices))) selected-labels)
+      :all)))
+
+(defun supertag-schema--merge-resolve-definitions (conflicts)
+  "Read source choices for field-definition CONFLICTS."
+  (let (choices)
+    (dolist (conflict conflicts (nreverse choices))
+      (when (eq (plist-get conflict :kind) :field-definition)
+        (let* ((field (plist-get conflict :field))
+               (candidates (plist-get conflict :candidates))
+               (labels
+                (mapcar
+                 (lambda (entry)
+                   (let ((definition (plist-get entry :definition)))
+                     (cons (format "%s — %s %S"
+                                   (plist-get entry :tag-id)
+                                   (plist-get definition :type)
+                                   (plist-get definition :options))
+                           (plist-get entry :tag-id))))
+                 candidates))
+               (selected (completing-read
+                          (format "Definition to keep for '%s': " field)
+                          (mapcar #'car labels) nil t)))
+          (push (cons field (cdr (assoc selected labels))) choices))))))
+
+(defun supertag-schema--merge-value-label (candidate)
+  "Return a completion label for value CANDIDATE."
+  (format "%s — %S" (plist-get candidate :tag-id) (plist-get candidate :value)))
+
+(defun supertag-schema--merge-multi-values (candidates)
+  "Read one or more atomic values from CANDIDATES."
+  (let ((values
+         (supertag-tag-merge--unique
+          (apply #'append
+                 (mapcar (lambda (candidate)
+                           (let ((value (plist-get candidate :value)))
+                             (if (listp value) (copy-sequence value) (list value))))
+                         candidates)))))
+    (let* ((labels (mapcar (lambda (value) (cons (format "%S" value) value)) values))
+           (selected (completing-read-multiple
+                      "Values to keep (one or more): " (mapcar #'car labels) nil t)))
+      (unless selected
+        (user-error "Select at least one value"))
+      (list :merge-values
+            (mapcar (lambda (label) (cdr (assoc label labels))) selected)))))
+
+(defun supertag-schema--merge-resolve-values (conflicts)
+  "Read per-node resolutions for field-value CONFLICTS."
+  (let (resolutions)
+    (dolist (conflict conflicts (nreverse resolutions))
+      (when (eq (plist-get conflict :kind) :field-value)
+        (let* ((node-id (plist-get conflict :node-id))
+               (field (plist-get conflict :field))
+               (definition (plist-get conflict :definition))
+               (candidates (plist-get conflict :candidates))
+               (multi-p (memq (plist-get definition :type)
+                              supertag-tag-merge--multi-value-types))
+               (value
+                (if multi-p
+                    (supertag-schema--merge-multi-values candidates)
+                  (let* ((labels (mapcar (lambda (candidate)
+                                           (cons (supertag-schema--merge-value-label candidate)
+                                                 (plist-get candidate :value)))
+                                         candidates))
+                         (selected (completing-read
+                                    (format "Value for %s/%s: " node-id field)
+                                    (mapcar #'car labels) nil t)))
+                    (cdr (assoc selected labels))))))
+          (push (cons (list node-id field) value) resolutions))))))
+
+(defun supertag-schema--merge-show-preview (plan)
+  "Display a human-readable merge PLAN."
+  (with-help-window "*Supertag Tag Merge Preview*"
+    (princ "Supertag Tag Merge Preview\n===========================\n\n")
+    (princ (format "Source tags: %s\n"
+                   (mapconcat #'identity (plist-get plan :source-ids) ", ")))
+    (princ (format "Destination: %s%s\n"
+                   (plist-get plan :target-id)
+                   (if (plist-get plan :target-exists-p) " (existing)" " (new)")))
+    (princ (format "Fields imported: %s\n"
+                   (if (plist-get plan :selected-fields)
+                       (mapconcat #'identity (plist-get plan :selected-fields) ", ")
+                     "none")))
+    (princ (format "Nodes affected: %d\n" (length (plist-get plan :nodes))))
+    (princ (format "Files affected: %d\n" (length (plist-get plan :files))))
+    (princ (format "Field values written: %d\n"
+                   (length (plist-get plan :value-writes))))
+    (when-let* ((warnings (plist-get plan :warnings)))
+      (princ (format "\nWarnings (%d):\n" (length warnings)))
+      (dolist (warning warnings) (princ (format "  - %S\n" warning))))
+    (when-let* ((conflicts (plist-get plan :conflicts)))
+      (princ (format "\nBlocking conflicts (%d):\n" (length conflicts)))
+      (dolist (conflict conflicts) (princ (format "  - %S\n" conflict))))))
+
+(defun supertag-schema-merge-marked-tags ()
+  "Merge marked Schema View tags into one new or existing tag."
+  (interactive)
+  (let* ((participants
+          (supertag-tag-merge--unique
+           (mapcar (lambda (context) (plist-get context :tag-id))
+                   (cl-remove-if-not
+                    (lambda (context) (eq (plist-get context :type) :tag))
+                    supertag-schema--marked-items)))))
+    (unless (>= (length participants) 2)
+      (user-error "Mark at least two tags before merging"))
+    (let* ((target (supertag-schema--merge-read-target))
+           (sources (if (member target participants)
+                        (remove target participants)
+                      participants))
+           (selected-fields (supertag-schema--merge-read-fields sources))
+           (plan (supertag-tag-merge-plan participants target
+                                           :selected-fields selected-fields))
+           (field-sources
+            (supertag-schema--merge-resolve-definitions (plist-get plan :conflicts))))
+      (when field-sources
+        (setq plan (supertag-tag-merge-plan participants target
+                                             :selected-fields selected-fields
+                                             :field-sources field-sources)))
+      (let ((resolutions
+             (supertag-schema--merge-resolve-values (plist-get plan :conflicts))))
+        (when resolutions
+          (setq plan (supertag-tag-merge-plan participants target
+                                               :selected-fields selected-fields
+                                               :field-sources field-sources
+                                               :resolutions resolutions))))
+      (supertag-schema--merge-show-preview plan)
+      (when (plist-get plan :conflicts)
+        (user-error "Merge blocked by %d unresolved conflict(s); see preview"
+                    (length (plist-get plan :conflicts))))
+      (when (yes-or-no-p (format "Permanently merge %d tag(s) into '%s'? "
+                                 (length (plist-get plan :source-ids)) target))
+        (let ((result (supertag-tag-merge-execute plan)))
+          (setq supertag-schema--marked-items nil)
+          (supertag-schema-refresh)
+          (message "Merged %d tag(s) into '%s'; %d node(s), %d file edit(s)."
+                   (length (plist-get result :source-ids))
+                   (plist-get result :target-id)
+                   (plist-get result :node-count)
+                   (plist-get result :file-change-count)))))))
+
 (cl-defun supertag-schema--cleanup-inherited-field-associations (tag-id)
   "Remove field associations from TAG-ID that are inherited from parent tags.
 This cleans up redundant associations where a field is defined on both
@@ -856,6 +1039,7 @@ a parent tag and a child tag."
     (princ "  m u     Unmark item at point\n")
     (princ "  m U     Unmark all items\n")
     (princ "  m e     Extend all marked tags\n")
+    (princ "  m M     Merge marked tags\n")
     (princ "  m       Mark (legacy shortcut)\n")
     (princ "  u       Unmark (legacy shortcut)\n")
     (princ "  U       Unmark all (legacy shortcut)\n")

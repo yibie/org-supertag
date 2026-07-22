@@ -200,6 +200,7 @@ rating   →  数字（1–5）
 | 编辑单个节点的字段 | `M-x supertag-view-node` | 表单视图，带自动补全、选择器和校验 |
 | 看板视图 | `M-x supertag-view-kanban` | 拖拽式看板，列之间移动 |
 | 定义标签字段 | `M-x supertag-view-schema` | 增删字段、设置类型、配置继承关系 |
+| 合并重复标签 | Schema View 中用 `m m` 标记，再按 `m M` | 预览后合并到新/已有 tag；原子更新字段、节点、引用和 Org 文件 |
 | 快速捕获新节点 | `M-x supertag-capture` | 模板化快速录入，自动写入 Org 文件 |
 | 搜索 | `M-x supertag-search` | 结构化查询，结果可导出到文件 |
 | 关联节点 | `M-x supertag-add-reference` | 任意两节点间建立双向链接 |

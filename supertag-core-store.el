@@ -366,6 +366,20 @@ do not already exist."
             (remhash field-name tag-table)
             old))))))
 
+(defun supertag-store-remove-legacy-tag-fields (node-id tag-id)
+  "Remove the complete legacy field table for NODE-ID and TAG-ID.
+Returns the removed table, or nil when absent.  The table-level write is
+recorded by the active transaction so a failed migration restores it."
+  (let* ((fields-root (supertag-store-get-collection :fields))
+         (node-table (gethash node-id fields-root))
+         (tag-table (and (hash-table-p node-table)
+                         (gethash tag-id node-table))))
+    (when tag-table
+      (supertag--transaction-record-old-value
+       (list :fields node-id tag-id) t tag-table)
+      (remhash tag-id node-table)
+      tag-table)))
+
 ;; Direct storage is now the default and only mode for optimal performance
 ;; This hybrid architecture combines old system performance with new system features
 
