@@ -6,6 +6,7 @@
 2. Add one transactional executor using existing Store/Ops seams and existing Org tag rewriting.
 3. Add the smallest Schema View adapter on the existing marked-items mechanism.
 4. Lock legacy/global field behavior and rollback with ERT tests; update help and change records.
+5. Keep the shared node validator aligned with the file-node contract so untitled level-0 nodes remain editable.
 
 ## Constraints
 

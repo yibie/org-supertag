@@ -28,7 +28,8 @@
 Implements immediate error reporting as preferred by the user."
   (unless (plist-get data :id)
     (error "Node missing required :id field: %S" data))
-  (unless (plist-get data :title)
+  (unless (or (plist-get data :title)
+              (eq (plist-get data :level) 0))
     (error "Node missing required :title field: %S" data))
   ;; Validate time format compliance (Emacs native format)
   (when-let ((created-at (plist-get data :created-at)))

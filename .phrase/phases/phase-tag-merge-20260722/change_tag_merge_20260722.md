@@ -1,5 +1,14 @@
 # Changes — Tag Merge
 
+## 2026-07-22 — Fix
+
+- Files: `supertag-ops-node.el`, `test/tag-merge-test.el`
+- Function: `supertag--validate-node-data`
+- Change: permit `:title nil` only for valid level-0 file nodes, matching the established file-node contract. Merge no longer asks users to repair or invent titles before changing tags.
+- Regression: `tag-merge-allows-untitled-file-node` reproduces the production failure through the real merge transaction.
+- Verification: focused 14/14; full suite 292/292.
+- Related: `issue017`, `task005`
+
 ## 2026-07-22 — Add/Modify
 
 - Files: `supertag-ops-tag-merge.el`, `supertag-core-store.el`, `supertag-view-helper.el`, `test/tag-merge-test.el`

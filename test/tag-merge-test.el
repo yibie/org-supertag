@@ -119,6 +119,26 @@
       (should (eq (plist-get (car (plist-get plan :conflicts)) :kind)
                   :inheritance-cycle)))))
 
+(ert-deftest tag-merge-allows-untitled-file-node ()
+  "File nodes without #+TITLE remain valid merge participants."
+  (tag-merge-test--with-store
+    (let ((file (tag-merge-test--write-org tmp "node.org" "* Node #project\n")))
+      (tag-merge-test--create-tag "project" nil)
+      (tag-merge-test--create-tag "prj" nil)
+      (tag-merge-test--create-node "file-node" file '("project"))
+      (let ((node (copy-sequence (supertag-node-get "file-node"))))
+        (setq node (plist-put node :level 0))
+        (supertag-store-put-entity :nodes "file-node" (plist-put node :title nil)))
+      (supertag-tag-merge-execute
+       (supertag-tag-merge-plan '("project" "prj") "prj"
+                                :selected-fields nil))
+      (should-not (supertag-tag-get "project"))
+      (should (equal (plist-get (supertag-node-get "file-node") :tags) '("prj")))
+      (should-not (plist-get (supertag-node-get "file-node") :title))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (search-forward "#prj" nil t))))))
+
 (ert-deftest tag-merge-legacy-to-new-target-migrates-store-files-and-references ()
   (tag-merge-test--with-store
     (let* ((file (tag-merge-test--write-org

@@ -29,3 +29,4 @@
 - 2026-07-21: phase-smart-key-20260721/change_smart_key_20260721.md  # Semantic Smart Key without Hyperbole dependency
 - 2026-07-22: phase-tag-merge-20260722/change_tag_merge_20260722.md  # Transactional Schema View tag merge
 - 2026-07-22: phase-sync-improve-20251216/change_sync_improve_20251216.md  # embed 跨 buffer 写入保持 Org element cache 一致
+- 2026-07-22: phase-tag-merge-20260722/change_tag_merge_20260722.md  # Untitled file-node merge compatibility

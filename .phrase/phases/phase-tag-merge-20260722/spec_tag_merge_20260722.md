@@ -38,6 +38,7 @@ Add a destructive-but-recoverable Schema View operation that consolidates two or
 - Relations collapse to duplicates after endpoint replacement.
 - An affected Org buffer has unsaved edits.
 - A file disappears or becomes unwritable between preview and execution.
+- A valid level-0 file node has no `#+TITLE`; merge preserves `:title nil` and updates its tags normally.
 
 ## Acceptance criteria
 
