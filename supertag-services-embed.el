@@ -28,56 +28,57 @@ Uses find-file-noselect with minimal side effects."
   (when-let* ((node-data (supertag-node-get source-id))
               (file-path (plist-get node-data :file)))
     (when (file-exists-p file-path)
-      ;; Use find-file-noselect but suppress hooks that might interfere
-      (let* ((inhibit-modification-hooks t)
-             (target-buffer (let ((find-file-hook nil)        ; Disable file hooks
-                                  (after-find-file nil))       ; Disable after-find-file
-                              (find-file-noselect file-path))))
+      (let ((target-buffer (let ((find-file-hook nil)        ; Disable file hooks
+                                 (after-find-file nil))       ; Disable after-find-file
+                             (find-file-noselect file-path))))
         (with-current-buffer target-buffer
           (when (eq major-mode 'org-mode)
             (save-excursion
               (goto-char (point-min))
               (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote source-id)) nil t)
-              ;; Find the end of the properties drawer
-              (let ((props-end (save-excursion
-                                 (when (re-search-forward "^[ \t]*:END:[ \t]*$" nil t)
-                                   (forward-line 1)
-                                   (point)))))
-                (when props-end
-                  ;; Find the end of this node's content (before next heading or end of buffer)
-                  (org-back-to-heading t)
-                  (when (fboundp 'org-element-at-point)
-                    (let* ((element (org-element-at-point))
-                           (node-end (org-element-property :end element))
-                           (new-content (plist-get node-data :content)))
-                      ;; Delete old content (from end of properties to end of node)
-                      (delete-region props-end node-end)
-                      ;; Insert new content
-                      (goto-char props-end)
-                      (when (and new-content (not (string-empty-p new-content)))
-                        (insert new-content)
-                        (unless (string-suffix-p "\n" new-content)
-                          (insert "\n")))
-                      (save-buffer)))))))))))))
+                ;; Find the end of the properties drawer
+                (let ((props-end (save-excursion
+                                   (when (re-search-forward "^[ \t]*:END:[ \t]*$" nil t)
+                                     (forward-line 1)
+                                     (point)))))
+                  (when props-end
+                    ;; Find the end of this node's content (before next heading or end of buffer)
+                    (org-back-to-heading t)
+                    (when (fboundp 'org-element-at-point)
+                      (let* ((element (org-element-with-disabled-cache
+                                        (org-element-at-point)))
+                             (node-end (org-element-property :end element))
+                             (new-content (plist-get node-data :content)))
+                        ;; Preserve the existing hook suppression for org-indent,
+                        ;; but never let it escape into save hooks or stale Org's cache.
+                        (unwind-protect
+                            (let ((inhibit-modification-hooks t))
+                              (delete-region props-end node-end)
+                              (goto-char props-end)
+                              (when (and new-content (not (string-empty-p new-content)))
+                                (insert new-content)
+                                (unless (string-suffix-p "\n" new-content)
+                                  (insert "\n"))))
+                          (org-element-cache-reset))
+                        (save-buffer)))))))))))))
 
 (defun supertag-embed-sync-modified-blocks ()
   "Sync all modified embed blocks in current buffer back to their sources.
 This function is designed to minimize interference with other packages."
-  (let ((inhibit-modification-hooks t))  ; Prevent other hooks from firing
-    (save-excursion
-      (goto-char (point-min))
-      (let ((synced-count 0))
-        (while (re-search-forward "^#\\+begin_embed:\\s-+\\([a-zA-Z0-9-]+\\)" nil t)
-          (let* ((source-id (match-string 1))
-                 (inner-region (supertag-ui-embed-get-inner-block-region source-id))
-                 (current-content (and inner-region
-                                       (buffer-substring-no-properties
-                                        (car inner-region) (cdr inner-region)))))
-            (when current-content
-              (supertag-services-embed--update-node-in-db source-id current-content)
-              (supertag-services-embed--render-node-to-file source-id)
-              (setq synced-count (1+ synced-count)))))
-        synced-count))))
+  (save-excursion
+    (goto-char (point-min))
+    (let ((synced-count 0))
+      (while (re-search-forward "^#\\+begin_embed:\\s-+\\([a-zA-Z0-9-]+\\)" nil t)
+        (let* ((source-id (match-string 1))
+               (inner-region (supertag-ui-embed-get-inner-block-region source-id))
+               (current-content (and inner-region
+                                     (buffer-substring-no-properties
+                                      (car inner-region) (cdr inner-region)))))
+          (when current-content
+            (supertag-services-embed--update-node-in-db source-id current-content)
+            (supertag-services-embed--render-node-to-file source-id)
+            (setq synced-count (1+ synced-count)))))
+      synced-count)))
 
 ;;; --- Refresh Logic (Remains largely the same) ---
 

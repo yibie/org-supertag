@@ -15,3 +15,4 @@
 - issue013 [x] Git 原生同步 P0 边界仍可能静默丢失或越界提交（phase-git-sync-20260713/ISSUE.md）
 - issue014 [ ] snapshot guard 延迟删除在重启或 worker 异常后失去重试（实现完成，待用户验收；phase-sync-integrity-20251226/issue_sync_integrity_20260714_deferred_retry.md）
 - issue015 [ ] file-node 验证忽略持久身份并保留失效节点（phase-sync-integrity-20251226/issue_sync_integrity_20260714_file_node_validation.md）
+- issue016 [ ] embed 跨 buffer 写入使 Org element cache 失效（phase-sync-improve-20251216/issue_sync_improve_20260722_org_element_cache.md）

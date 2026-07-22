@@ -27,6 +27,11 @@
   user-facing upgrade/downgrade notes.
 
 ** Bug fixes
+- Fixed recurring =org-element--cache= parser warnings after embed sync. The
+  embed writer now disables stale-cache reads while replacing node content,
+  resets the target buffer's cache even when the write fails, and no longer
+  leaks suppressed modification hooks into global save callbacks or other
+  open Org buffers.
 - Fixed =supertag-sync-validate-nodes= mass-orphaning legacy file nodes that
   predate persisted identity metadata. Current file nodes are validated by
   their own link type: Org-ID nodes match the top-level =:ID:= and Denote

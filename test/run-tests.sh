@@ -11,6 +11,7 @@
 #   ./test/run-tests.sh query        # Run only query-block tests
 #   ./test/run-tests.sh smart-key    # Run only semantic activation tests
 #   ./test/run-tests.sh tag-merge    # Run only destructive tag merge tests
+#   ./test/run-tests.sh embed        # Run only embed/cache regression tests
 
 set -euo pipefail
 
@@ -48,6 +49,7 @@ TEST_FILES=(
     "test/sync-worker-regression-test.el"
     "test/tag-merge-test.el"
     "test/test-smart-key.el"
+    "test/embed-cache-test.el"
 )
 
 # Allow filtering by keyword
@@ -73,8 +75,9 @@ if [ $# -gt 0 ]; then
             cl-block|sync-worker) FILTER="$FILTER test/sync-worker-regression-test.el" ;;
             smart-key) FILTER="$FILTER test/test-smart-key.el" ;;
             tag-merge) FILTER="$FILTER test/tag-merge-test.el" ;;
+            embed)     FILTER="$FILTER test/embed-cache-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge embed all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)
