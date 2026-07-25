@@ -24,3 +24,8 @@
   - 产出：共享 validator 使用 Org 原生 link 语法排除 link target，删除只识别 `://` 的窄 URL 特判
   - 验证方式：`test/test-inline-tag-filter.el` 红/绿回归、focused/full ERT、byte compile、`git diff --check`
   - 影响范围：face/SVG font-lock 与 point tag 识别；正文 inline tag 行为保持不变
+
+- task006 [x] 建立并实现 inline tag 渲染边界矩阵
+  - 产出：以空白 token 边界和 Org 正文 context 替代 source/table/comment/link 等逐项特判
+  - 验证方式：12 组正反边界红/绿自检、实际 font-lock property 检查、focused/full ERT、静态检查
+  - 影响范围：face/SVG font-lock 与 point tag 识别；同步提取和 tag 名存储格式不变

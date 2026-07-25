@@ -47,75 +47,20 @@ This should be a plist of face attributes."
   :type 'boolean
   :group 'supertag-view-style)
 
-;;;----------------------------------------------------------------------
-;;; Context Detection Functions
-;;;----------------------------------------------------------------------
-
-(defun supertag-view-helper--in-src-block-p (&optional pos)
-  "Check if point (or POS) is inside a source block.
-This is a safe wrapper around org-in-src-block-p."
-  (let ((check-pos (or pos (point))))
-    (save-excursion
-      (goto-char check-pos)
-      (cond
-       ;; Use org-in-src-block-p if available
-       ((fboundp 'org-in-src-block-p)
-        (org-in-src-block-p))
-       ;; Fallback implementation - only if in org-mode and org-element-at-point is available
-       (t
-        (when (and (eq major-mode 'org-mode)
-                   (fboundp 'org-element-at-point))
-          (let ((element (org-element-at-point)))
-            (memq (org-element-type element) '(src-block example-block)))))))))
-
-(defun supertag-view-helper--at-table-p (&optional pos)
-  "Check if point (or POS) is at a table.
-This is a safe wrapper around org-at-table-p."
-  (let ((check-pos (or pos (point))))
-    (save-excursion
-      (goto-char check-pos)
-      (cond
-       ;; Use org-at-table-p if available
-       ((fboundp 'org-at-table-p)
-        (org-at-table-p))
-       ;; Fallback implementation - only if in org-mode and org-element-at-point is available
-       (t
-        (when (and (eq major-mode 'org-mode)
-                   (fboundp 'org-element-at-point))
-          (let ((element (org-element-at-point)))
-            (eq (org-element-type element) 'table))))))))
-
-(defun supertag-view-helper--at-commented-p (&optional pos)
-  "Check if point (or POS) is at a commented line.
-This is a safe wrapper around org-at-commented-p."
-  (let ((check-pos (or pos (point))))
-    (save-excursion
-      (goto-char check-pos)
-      (cond
-       ;; Use org-at-commented-p if available
-       ((fboundp 'org-at-commented-p)
-        (org-at-commented-p))
-       ;; Fallback implementation
-       (t
-        (beginning-of-line)
-        (looking-at-p "^[ \t]*#\\+"))))))
-
-(defun supertag-view-helper--org-priority-match-p ()
-  "Return non-nil if the current # match is an Org priority marker."
-  (and (eq (char-before (match-beginning 0)) ?\[)
-       (string-match-p "\\`#[A-Z]\\]" (match-string 0))))
-
 (defun supertag-view-helper--valid-inline-tag-match-p ()
-  "Return non-nil if the current font-lock match is a renderable inline tag."
-  (not (or (supertag-view-helper--in-src-block-p)
-           (supertag-view-helper--at-table-p)
-           (supertag-view-helper--at-commented-p)
-           (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)
-           (supertag-view-helper--org-priority-match-p)
-           (save-match-data
-             (save-excursion
-               (goto-char (match-beginning 0))
-               (org-in-regexp org-link-any-re 1))))))
+  "Return non-nil when the current match is an Org prose tag token.
+The token must start at a whitespace boundary and must not belong to a
+drawer, a commented subtree, or another inline Org object."
+  (save-match-data
+    (save-excursion
+      (goto-char (match-beginning 0))
+      (let* ((context (org-element-context))
+             (heading (org-element-lineage context 'headline t)))
+        (and (or (bolp) (eq (char-syntax (char-before)) ?\s))
+             (memq (org-element-type context) '(headline paragraph))
+             (not (org-element-lineage context '(drawer property-drawer) t))
+             (not (and heading
+                       (org-element-property :commentedp heading))))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API

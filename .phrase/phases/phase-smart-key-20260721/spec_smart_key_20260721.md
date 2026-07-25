@@ -36,7 +36,10 @@
 
 - `supertag-context` 可能是布尔属性加平铺字段，也可能直接是 plist；两者必须归一化为同一临时 target。
 - Org link 必须先于 inline tag；其 target 内的 `#fragment` 不得被解释或渲染为 tag。
-- inline tag 必须排除 source block、表格、注释、Org priority 与 Org link，与现有 font-lock 规则一致。
+- 可渲染 inline tag 的 `#` 必须位于行首或空白之后；`word#fragment`、HTML entity 与转义 hash 不是 tag。
+- 可渲染 inline tag 只存在于 Org headline 或正文 paragraph；inline code/verbatim/link/macro/target、table、
+  fixed-width、drawer、property、COMMENT subtree、source/example/verse block 均不参与渲染和 point 识别。
+- `#` 后仍以空白或下一个 `#` 为 token 边界，保留中文、emoji、层级 `/`、`C++` 与标点型 tag 名。
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
@@ -48,5 +51,6 @@
 - 没有默认全局/局部绑定，没有 Hyperbole 或新依赖。
 - 非正文 `#...` 不打开 tag view。
 - Org link target 内的 `#fragment` 不显示 inline tag face 或 SVG pill。
+- 边界矩阵同时覆盖合法正文 token 与 Org 非正文对象，face/SVG/point 三条路径共享同一结论。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - focused ERT 与仓库稳定测试套件通过。

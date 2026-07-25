@@ -1,5 +1,24 @@
 # change_smart_key_20260721
 
+- 2026-07-25 Harden
+  - Files: `supertag-view-helper.el`, `test/test-inline-tag-filter.el`, phase docs
+  - Function: `supertag-view-helper--valid-inline-tag-match-p`
+  - Changes:
+    - Replaced four context helpers and accumulated priority/link/face exceptions with one rule: a renderable tag is a whitespace-delimited token in an Org headline or prose paragraph.
+    - Drawer/property content, COMMENT subtrees, links, inline code/verbatim, macro/target objects, tables, fixed-width text and source/example/verse blocks are excluded by Org structure.
+    - Embedded hashes such as `word#fragment`, `&#169;` and `\#escaped` are rejected at the token boundary.
+    - Unicode, emoji, hierarchy `/`, `C++` and punctuation-bearing tag names remain valid.
+    - Expanded the focused self-check to a 12-case positive/negative boundary matrix.
+  - Simplification: core context logic changed from 67 lines of special cases to one 10-line predicate.
+  - Verification:
+    - Expanded 12-case boundary self-check passed after reproducing the embedded-hash failure.
+    - Actual font-lock properties: prose `#real` receives `supertag-inline-face`; inline code and embedded fragments receive neither face nor display.
+    - Focused Smart Key ERT: 11/11 passed.
+    - Full stable ERT suite: 297/297 passed.
+    - Batch load, check-parens, byte compilation and `git diff --check` passed; byte compilation retains pre-existing warnings only.
+    - 1000-line mixed-content font-lock smoke test: 0.177 seconds.
+  - Related: `issue021`, `task006`
+
 - 2026-07-25 Fix
   - Files: `supertag-view-helper.el`, `test/test-inline-tag-filter.el`, phase docs
   - Function: `supertag-view-helper--valid-inline-tag-match-p`

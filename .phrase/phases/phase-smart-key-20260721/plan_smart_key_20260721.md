@@ -10,6 +10,7 @@
 6. 保持 Node View 身份解析只读；无 ID heading 不进入任何隐式创建路径。
 7. 修复显式 Node 退化：Store 删除成功后移除 Org ID，并保留其他 Org 属性。
 8. 收紧共享 inline tag validator：Org link target 中的 `#fragment` 不参与 face/SVG 渲染或 point 识别。
+9. 用“空白分隔的正文 token”统一渲染边界，覆盖 inline object、drawer、COMMENT subtree、block 与嵌入式 hash。
 
 ## Scope
 
@@ -22,6 +23,7 @@
 - P0: recognizer 无持久化副作用，不覆盖既有按键。
 - P0: 具体语义属性优先，Org link 不被 inline tag 遮蔽。
 - P0: Org link target 的 `#fragment` 不获得 inline tag 的 face 或 SVG `display` 属性。
+- P0: 只渲染行首/空白后的正文 `#token`；tag 名仍允许中文、emoji、`/` 与非空白标点。
 - P1: 复用既有命令，不复制 Ops 或 View 实现。
 - P2: 插件注册、上下文 Assist 与 Hyperbole Adapter 留到真实调用方出现后再做。
 - P2: Hyperbole Adapter 与第三方动作注册继续后置；对象级 Assist 只复用已有命令。
