@@ -9,7 +9,8 @@
     - Uploads `test-results.txt` only after failure instead of on every successful matrix job.
   - Verification:
     - Local YAML parse and `git diff --check` passed.
-    - Emacs 29.1/29.4 CI: pending pushed-run result.
+    - Emacs 29.1/29.4 CI passed in run 30166407299.
+    - Successful jobs skipped artifact upload as intended.
   - Related: `task010`
 
 - 2026-07-26 Align
