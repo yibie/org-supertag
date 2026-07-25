@@ -34,3 +34,4 @@
 - 2026-07-22: phase-smart-key-20260721/change_smart_key_20260721.md  # Node demotion removes Org ID and empty property drawer
 - 2026-07-22: phase-sync-improve-20251216/change_sync_improve_20251216.md  # TODO 标题解析与全量重扫修复
 - 2026-07-25: phase-smart-key-20260721/change_smart_key_20260721.md  # SVG tags are limited to whitespace-delimited Org prose tokens
+- 2026-07-26: phase-smart-key-20260721/change_smart_key_20260721.md  # Restore Org 9.6 lineage API compatibility

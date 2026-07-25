@@ -55,7 +55,7 @@ drawer, a commented subtree, or another inline Org object."
     (save-excursion
       (goto-char (match-beginning 0))
       (let* ((context (org-element-context))
-             (heading (org-element-lineage context 'headline t)))
+             (heading (org-element-lineage context '(headline) t)))
         (and (or (bolp) (eq (char-syntax (char-before)) ?\s))
              (memq (org-element-type context) '(headline paragraph))
              (not (org-element-lineage context '(drawer property-drawer) t))

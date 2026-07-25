@@ -47,9 +47,13 @@ were removed instead of extending the special-case list.
 - Batch load, check-parens, byte compilation and `git diff --check` passed.
 - Actual font-lock property checks distinguish prose tags from inline code and embedded fragments.
 - A 1000-line mixed-content font-lock smoke test completed in 0.177 seconds.
+- GitHub Actions exposed an Emacs 29 compatibility regression: Org 9.6
+  requires the lineage type argument to be a list. Passing `'(headline)`
+  instead of `'headline` preserves the same predicate on Emacs 29 and 31.
+- Post-fix Emacs 29.1/29.4 CI: pending pushed-run result.
 
 ## Tracking
 
-- Task: `task005`
+- Tasks: `task005`, `task006`, `task007`
 - User confirmation: pending live-buffer verification
 - Resolved At/By/Commit: pending

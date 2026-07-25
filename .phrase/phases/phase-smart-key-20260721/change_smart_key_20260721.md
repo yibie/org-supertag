@@ -1,5 +1,18 @@
 # change_smart_key_20260721
 
+- 2026-07-26 Fix
+  - Files: `supertag-view-helper.el`, phase docs
+  - Function: `supertag-view-helper--valid-inline-tag-match-p`
+  - Changes:
+    - Passed headline types to `org-element-lineage` as a list, matching the Org 9.6 API bundled with the declared Emacs 29.1 floor.
+    - Preserved the established rendering and point-recognition boundary without adding a version branch.
+  - Verification:
+    - Reproduced CI failure on Emacs 29.1 and 29.4: three Smart Key tests raised `(wrong-type-argument listp headline)`.
+    - Local focused Smart Key ERT: 11/11 passed.
+    - Focused 12-case inline-tag boundary self-check passed.
+    - Emacs 29.1/29.4 CI: pending pushed-run result.
+  - Related: `issue021`, `task007`
+
 - 2026-07-25 Harden
   - Files: `supertag-view-helper.el`, `test/test-inline-tag-filter.el`, phase docs
   - Function: `supertag-view-helper--valid-inline-tag-match-p`

@@ -29,3 +29,8 @@
   - 产出：以空白 token 边界和 Org 正文 context 替代 source/table/comment/link 等逐项特判
   - 验证方式：12 组正反边界红/绿自检、实际 font-lock property 检查、focused/full ERT、静态检查
   - 影响范围：face/SVG font-lock 与 point tag 识别；同步提取和 tag 名存储格式不变
+
+- task007 [x] 恢复 inline tag validator 的 Emacs 29 兼容性
+  - 产出：按 Org 9.6 API 约定以类型列表调用 `org-element-lineage`
+  - 验证方式：focused Smart Key ERT、12 组边界自检、Emacs 29.1/29.4 CI
+  - 影响范围：仅修复最低支持版本上的参数类型错误，不改变 tag 边界
