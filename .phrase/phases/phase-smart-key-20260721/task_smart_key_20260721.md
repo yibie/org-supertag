@@ -19,3 +19,8 @@
   - 产出：`supertag-back-to-heading` 删除 `ID`；仅含 ID 时由 Org 清理空属性抽屉，其他属性保持不变
   - 验证方式：focused 红/绿回归、全量 ERT、byte compile、`git diff --check`
   - 影响范围：仅显式 `supertag-back-to-heading` 命令
+
+- task005 [x] 阻止 Org link fragment 被渲染为 inline tag
+  - 产出：共享 validator 使用 Org 原生 link 语法排除 link target，删除只识别 `://` 的窄 URL 特判
+  - 验证方式：`test/test-inline-tag-filter.el` 红/绿回归、focused/full ERT、byte compile、`git diff --check`
+  - 影响范围：face/SVG font-lock 与 point tag 识别；正文 inline tag 行为保持不变

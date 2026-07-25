@@ -35,8 +35,8 @@
 ## Edge Cases
 
 - `supertag-context` 可能是布尔属性加平铺字段，也可能直接是 plist；两者必须归一化为同一临时 target。
-- Org link 必须先于 inline tag，避免 URL fragment 被解释为 tag。
-- inline tag 必须排除 source block、表格、注释、Org priority 与 URL fragment，与现有 font-lock 规则一致。
+- Org link 必须先于 inline tag；其 target 内的 `#fragment` 不得被解释或渲染为 tag。
+- inline tag 必须排除 source block、表格、注释、Org priority 与 Org link，与现有 font-lock 规则一致。
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
@@ -47,5 +47,6 @@
 - `C-u M-x supertag-smart-key` 显示对象级动作；不同 target 的候选必须不同，并保留打开完整 `supertag-menu` 的出口。
 - 没有默认全局/局部绑定，没有 Hyperbole 或新依赖。
 - 非正文 `#...` 不打开 tag view。
+- Org link target 内的 `#fragment` 不显示 inline tag face 或 SVG pill。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - focused ERT 与仓库稳定测试套件通过。

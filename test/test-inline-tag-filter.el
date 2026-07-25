@@ -24,6 +24,11 @@
                   '("#real")))
 (cl-assert (equal (test-inline-tag-filter--matches "https://x.com/sss#xxxxx #ok")
                   '("#ok")))
+(cl-assert
+ (equal
+  (test-inline-tag-filter--matches
+   "[[file:Copyright.xhtml#Copyright.xhtml][→ Copyright.xhtml]] #ok")
+  '("#ok")))
 
-(message "OK inline tag filter skips Org priorities and URL fragments.")
+(message "OK inline tag filter skips Org priorities and link targets.")
 (kill-emacs 0)

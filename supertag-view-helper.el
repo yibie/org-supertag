@@ -105,14 +105,6 @@ This is a safe wrapper around org-at-commented-p."
   (and (eq (char-before (match-beginning 0)) ?\[)
        (string-match-p "\\`#[A-Z]\\]" (match-string 0))))
 
-(defun supertag-view-helper--url-fragment-match-p ()
-  "Return non-nil if the current # match sits inside a URL fragment."
-  (save-excursion
-    (goto-char (match-beginning 0))
-    (let ((end (match-end 0)))
-      (skip-chars-backward "^ \t\n<>\"'()[]{}")
-      (and (search-forward "://" end t) t))))
-
 (defun supertag-view-helper--valid-inline-tag-match-p ()
   "Return non-nil if the current font-lock match is a renderable inline tag."
   (not (or (supertag-view-helper--in-src-block-p)
@@ -120,7 +112,10 @@ This is a safe wrapper around org-at-commented-p."
            (supertag-view-helper--at-commented-p)
            (eq (get-text-property (match-beginning 0) 'face) 'org-verbatim)
            (supertag-view-helper--org-priority-match-p)
-           (supertag-view-helper--url-fragment-match-p))))
+           (save-match-data
+             (save-excursion
+               (goto-char (match-beginning 0))
+               (org-in-regexp org-link-any-re 1))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API

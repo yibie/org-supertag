@@ -1,5 +1,19 @@
 # change_smart_key_20260721
 
+- 2026-07-25 Fix
+  - Files: `supertag-view-helper.el`, `test/test-inline-tag-filter.el`, phase docs
+  - Function: `supertag-view-helper--valid-inline-tag-match-p`
+  - Changes:
+    - Inline tag validation now uses Org's native link recognition, so `#fragment` text inside bracket and plain links never receives tag face/SVG display properties.
+    - Removed the narrower `://` scan; face rendering, SVG rendering and point lookup continue to share one validator.
+  - Risk: intentionally treats an inline `#tag` written inside an Org link description as part of the link, not as a second interactive object.
+  - Verification:
+    - Bracket-link self-check: passed after reproducing the pre-fix assertion failure.
+    - Focused Smart Key ERT: 11/11 passed.
+    - Full stable ERT suite: 297/297 passed.
+    - Batch load, check-parens, byte compilation and `git diff --check` passed; byte compilation retains pre-existing warnings only.
+  - Related: `issue021`, `task005`
+
 - 2026-07-22 Fix
   - Files: `supertag-ui-commands.el`, `test/test-smart-key.el`, phase docs
   - Function: `supertag-back-to-heading`
