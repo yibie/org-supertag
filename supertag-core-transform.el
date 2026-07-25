@@ -233,15 +233,20 @@ MATCHES is the list to collect matching paths."
              (supertag--traverse-store-matches
               value rest-pattern (cons key current-path) matches))))))))
 
+(defconst supertag-inline-tag-regexp
+  "\\(?:\\`\\|\\([[:space:]]\\)\\)#\\([^[:space:]#]+\\)"
+  "Regexp for an inline tag at string start or after whitespace.
+Group 1 is the optional whitespace boundary; group 2 is the tag name.")
+
 (defun supertag-transform-extract-inline-tags (content-string)
-  "Extract all #tags from a CONTENT-STRING using a regex."
+  "Extract whitespace-delimited #tags from CONTENT-STRING."
   (let ((tags '()))
     (when content-string
       (with-temp-buffer
         (insert content-string)
         (goto-char (point-min))
-        (while (re-search-forward "#\\([^[:space:]#]+\\)" nil t)
-          (push (match-string 1) tags))))
+        (while (re-search-forward supertag-inline-tag-regexp nil t)
+          (push (match-string 2) tags))))
     (nreverse tags)))
 
 (provide 'supertag-core-transform)

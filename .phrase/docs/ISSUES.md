@@ -20,4 +20,5 @@
 - issue018 [ ] Node View 为无 ID heading 自动写入 `:ID:`（实现与回归测试完成，待用户验证；phase-smart-key-20260721/issue_node_view_creates_id_20260722.md）
 - issue019 [ ] `supertag-back-to-heading` 删除 Store node 后仍保留 Org `:ID:`（phase-smart-key-20260721/issue_back_to_heading_keeps_id_20260722.md）
 - issue020 [x] 后台同步把 Org TODO 关键字误存入 node title（已由用户在真实 vault 验证；phase-sync-improve-20251216/issue_sync_improve_20260722_todo_title.md）
-- issue021 [ ] Org 非正文对象与嵌入式 hash 被误渲染为 SVG tag（边界矩阵实现完成，待用户验证；phase-smart-key-20260721/issue_svg_tag_renders_link_fragment_20260725.md）
+- issue021 [ ] Org 非正文对象与嵌入式 hash 被误渲染/同步为 tag（渲染与同步边界已对齐，待用户验证；phase-smart-key-20260721/issue_svg_tag_renders_link_fragment_20260725.md）
+- issue022 [ ] 原生 `:tag:` 在增量同步与 node-tag 关系清理间缺少一致策略（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）

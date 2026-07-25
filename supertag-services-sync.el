@@ -1479,43 +1479,76 @@ Returns a plist of keyword-value pairs, excluding org-internal properties."
               (push (or denote-id path) refs))))))
     (nreverse refs)))
 
-(defun supertag--extract-inline-tags-from-string (content-string)
-  "Extract all tags from a CONTENT-STRING using a regex."
-  (let ((tags '()))
-    (when content-string
-      (with-temp-buffer
-        (insert content-string)
-        (goto-char (point-min))
-        (while (re-search-forward "#\\([^[:space:]#]+\\)" nil t)
-          (push (match-string 1) tags))))
-    (nreverse tags)))
+(defun supertag--inline-tag-prose-parts-text (parts)
+  "Return tag-searchable text from direct Org prose PARTS.
+Inline Org objects become a non-whitespace sentinel while their trailing
+spaces are retained, so tags inside or attached to those objects cannot leak
+into extraction."
+  (mapconcat
+   (lambda (part)
+     (if (stringp part)
+         (substring-no-properties part)
+       (concat "x"
+               (make-string (or (org-element-property :post-blank part) 0)
+                            ?\s))))
+   parts ""))
 
-(defun supertag--strip-inline-tags (title)
-  "Remove inline #tags from TITLE while preserving surrounding text.
-Collapses extra spaces produced by tag removal and trims leading/trailing
-whitespace."
-  (when title
-    (let* ((without-tags (replace-regexp-in-string
-                          "#[^[:space:]#]+\\(?:[ \t]+\\)?"
-                          "" title))
-           (collapsed (replace-regexp-in-string "[ \t]+" " " without-tags)))
-      (string-trim collapsed))))
+(defun supertag--strip-inline-tags-from-text (text leading-boundary-p)
+  "Remove inline tag tokens from TEXT.
+LEADING-BOUNDARY-P means a leading hash is at a valid prose boundary."
+  (let* ((protected (if leading-boundary-p text (concat "x" text)))
+         (stripped (replace-regexp-in-string
+                    (concat supertag-inline-tag-regexp "[ \t]*")
+                    "\\1" protected)))
+    (if leading-boundary-p stripped (substring stripped 1))))
 
-  (defun supertag--extract-inline-tags (elements)
-  "Extract all tags from org ELEMENTS.
-ELEMENTS can be a list of org elements or a single element.
-If ELEMENTS is a string, extract tags directly from it."
-  (let ((tags '()))
-    (cond
-     ((stringp elements)
-      (setq tags (supertag--extract-inline-tags-from-string elements)))
-     (elements
-      (org-element-map elements '(paragraph plain-text)
-        (lambda (element)
-          (let ((content (org-element-property :value element)))
-            (when content
-              (setq tags (append tags (supertag--extract-inline-tags-from-string content)))))))))
-      (cl-delete-duplicates tags :test #'equal)))
+(defun supertag--strip-inline-tags (headline)
+  "Return HEADLINE's title without direct-prose inline tags.
+Org links, code and other inline objects are preserved verbatim."
+  (let ((raw-title (org-element-property :raw-value headline))
+        (parts (org-element-property :title headline)))
+    (when raw-title
+      (let ((without-tags
+             (if (not (listp parts))
+                 (supertag--strip-inline-tags-from-text raw-title t)
+               (let ((leading-boundary-p t)
+                     chunks)
+                 (dolist (part parts)
+                   (let ((rendered
+                          (if (stringp part)
+                              (supertag--strip-inline-tags-from-text
+                               (substring-no-properties part)
+                               leading-boundary-p)
+                            (substring-no-properties
+                             (org-element-interpret-data part)))))
+                     (push rendered chunks)
+                     (setq leading-boundary-p
+                           (string-match-p "[[:space:]]\\'" rendered))))
+                 (apply #'concat (nreverse chunks))))))
+        (string-trim
+         (replace-regexp-in-string "[ \t]+" " " without-tags))))))
+
+(defun supertag--extract-inline-tags (headline)
+  "Extract inline tags from HEADLINE's own direct Org prose."
+  (unless (org-element-property :commentedp headline)
+    (let ((tags
+           (supertag-transform-extract-inline-tags
+            (supertag--inline-tag-prose-parts-text
+             (let ((title (org-element-property :title headline)))
+               (if (listp title) title (list title))))))
+          (section (car (org-element-contents headline))))
+      (when (eq (org-element-type section) 'section)
+        (org-element-map section 'paragraph
+          (lambda (paragraph)
+            (unless (org-element-lineage
+                     paragraph '(drawer property-drawer) t)
+              (setq tags
+                    (append
+                     tags
+                     (supertag-transform-extract-inline-tags
+                      (supertag--inline-tag-prose-parts-text
+                       (org-element-contents paragraph)))))))))
+      (cl-delete-duplicates tags :test #'equal))))
 
   (defun supertag--extract-org-headline-tags (headline)
     "Extract org native tags (:tag:) from HEADLINE element.
@@ -1692,19 +1725,7 @@ The titles remove inline #tags as well as TODO keywords and org :tags:."
     ;; Traverse up the hierarchy collecting titles
     (while current
       (when (eq (org-element-type current) 'headline)
-        (let* ((raw-title (org-element-property :raw-value current))
-               (todo-keyword (org-element-property :todo-keyword current))
-               ;; Clean title: remove TODO keyword, org :tags:, and inline #tags
-               (cleaned-title
-                (when raw-title
-                  (let ((title raw-title))
-                    (when todo-keyword
-                      (setq title (replace-regexp-in-string
-                                   (concat "^" (regexp-quote todo-keyword) "\\s-+")
-                                   "" title)))
-                    ;; Remove org native :tags: at the end
-                    (setq title (replace-regexp-in-string "[ \t]+:[[:alnum:]_@#%:]+:[ \t]*$" "" title))
-                    (supertag--strip-inline-tags title)))))
+        (let ((cleaned-title (supertag--strip-inline-tags current)))
           (when cleaned-title (push cleaned-title path))))
       ;; Move to parent element
       (setq current (org-element-property :parent current))
@@ -1805,17 +1826,7 @@ Returns: :level, :todo, :priority, :scheduled, :deadline,
 Returns: :title (cleaned, user-visible title),
 :raw-value (same cleaned title, used for hashing)."
   (let* ((original-raw-title (org-element-property :raw-value headline))
-         (todo-keyword (org-element-property :todo-keyword headline))
-         (cleaned-title
-          (when original-raw-title
-            (let ((title original-raw-title))
-              (when todo-keyword
-                (setq title (replace-regexp-in-string
-                             (concat "^" (regexp-quote todo-keyword) "\\s-+")
-                             "" title)))
-              (setq title (replace-regexp-in-string ":[[:alnum:]_@#%]+:" "" title))
-              (setq title (supertag--strip-inline-tags title))
-              (string-trim title))))
+         (cleaned-title (supertag--strip-inline-tags headline))
          (final-title (if (or (null cleaned-title) (string-empty-p cleaned-title))
                           original-raw-title
                         cleaned-title)))
@@ -1832,15 +1843,12 @@ Returns: :olp (list of ancestor titles from root to current)."
 Reads inline #tags from title and content, optionally reads native
 org :tags: during full rescan.
 Returns: :tags (list of sanitized tag strings)."
-  (let* ((original-raw-title (org-element-property :raw-value headline))
-         (headline-tags (supertag--extract-inline-tags original-raw-title))
-         (content-tags (supertag--extract-inline-tags (org-element-contents headline)))
+  (let* ((inline-tags (supertag--extract-inline-tags headline))
          (org-native-tags (if (plist-get ctx :full-rescan-p)
                               (or (supertag--extract-org-headline-tags headline) '())
                             '()))
          (all-tags (supertag--merge-and-sanitize-tags
-                    (cl-union headline-tags content-tags :test #'equal)
-                    org-native-tags)))
+                    inline-tags org-native-tags)))
     (list :tags all-tags)))
 
 (defun supertag-extractor--properties (headline _file _ctx)

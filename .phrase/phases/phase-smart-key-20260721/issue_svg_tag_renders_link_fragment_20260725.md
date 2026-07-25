@@ -30,13 +30,19 @@ in words or HTML entities.
 - Accept: `#token` at line start or after whitespace, inside an Org headline or prose paragraph.
 - Preserve: Unicode, emoji, hierarchy `/`, `C++` and non-whitespace punctuation in tag names.
 - Reject: embedded/escaped hashes and every competing Org object or metadata context.
-- Keep unchanged: sync extraction and persisted tag-name format; this issue only governs visual/point interpretation.
+- Keep unchanged: persisted tag-name format and Store schema.
+- Align next: sync extraction accepts the same prose tokens and excludes the same Org objects.
 
 ## Fix
 
 The shared validator now checks one token boundary and one Org element
 context. Four context helpers plus accumulated priority/link/face exceptions
 were removed instead of extending the special-case list.
+
+Sync now applies the same token boundary to direct text in the current
+headline title and its own paragraph elements. Non-text Org objects are masked
+as boundaries instead of enumerated with regular-expression exceptions, and
+child headlines are outside the scanned section.
 
 ## Verification
 
@@ -50,10 +56,15 @@ were removed instead of extending the special-case list.
 - GitHub Actions exposed an Emacs 29 compatibility regression: Org 9.6
   requires the lineage type argument to be a list. Passing `'(headline)`
   instead of `'headline` preserves the same predicate on Emacs 29 and 31.
-- Post-fix Emacs 29.1/29.4 CI: pending pushed-run result.
+- Post-fix Emacs 29.1/29.4 CI passed in run 30165131179.
+- Sync boundary ERT covers title/body prose, links, code, URL/entity/escaped
+  hashes, drawers, tables, fixed-width text, source/example/verse blocks,
+  COMMENT subtrees and child headlines.
+- Full stable ERT after sync alignment: 300/300 passed; main package load,
+  check-parens, byte compilation and `git diff --check` passed.
 
 ## Tracking
 
-- Tasks: `task005`, `task006`, `task007`
+- Tasks: `task005`, `task006`, `task007`, `task008`
 - User confirmation: pending live-buffer verification
 - Resolved At/By/Commit: pending

@@ -234,6 +234,53 @@
       (should (plist-get result :tags))
       (should (member "orgtag" (plist-get result :tags))))))
 
+(ert-deftest extractor-inline-tags-respect-org-prose-boundaries ()
+  "Inline tags come from this node's direct Org prose, not nested objects."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* [[file:Copyright.xhtml#Copyright.xhtml][Label #linked]] #title word#embedded ~#code~ :native:\n"
+     ":PROPERTIES:\n:HASH: #drawer\n:END:\n"
+     "Body #body [[id:node][Description #inside]] word#fragment ~#verbatim~\n"
+     "https://x/y#url &#169; \\#escaped {{{hash(#macro)}}} <<#target>>\n"
+     "- item #list\n"
+     "#+begin_quote\nquoted #quote\n#+end_quote\n"
+     "| #table |\n: fixed #fixed\n"
+     "#+begin_src text\n#source\n#+end_src\n"
+     "#+begin_example\n#example\n#+end_example\n"
+     "#+begin_verse\n#verse\n#+end_verse\n"
+     "** Child #child\nChild body #child-body\n")
+    (let* ((headline (car (org-element-contents (org-element-parse-buffer))))
+           (tags (plist-get
+                  (supertag-extractor--tags
+                   headline "/tmp/f" '(:full-rescan-p t))
+                  :tags))
+           (title (plist-get
+                   (supertag-extractor--title headline "/tmp/f" nil)
+                   :title)))
+      (should (equal (sort tags #'string<)
+                     '("body" "list" "native" "quote" "title")))
+      (should
+       (equal title
+              "[[file:Copyright.xhtml#Copyright.xhtml][Label #linked]] word#embedded ~#code~")))))
+
+(ert-deftest extractor-inline-tags-ignore-commented-subtrees ()
+  "COMMENT subtree prose does not create stored inline tags."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* COMMENT Hidden #heading\nBody #body\n")
+    (let* ((headline (car (org-element-contents (org-element-parse-buffer))))
+           (result (supertag-extractor--tags headline "/tmp/f" nil)))
+      (should-not (plist-get result :tags)))))
+
+(ert-deftest extractor-inline-tag-string-boundaries-match-rendering ()
+  "String extraction requires line start or whitespace before a hash."
+  (should
+   (equal
+    (supertag-transform-extract-inline-tags
+     "#root plain #tag　#全角\n#next word#embedded https://x/y#fragment &#169; \\#escaped")
+    '("root" "tag" "全角" "next"))))
+
 (ert-deftest extractor-content ()
   "Content extractor produces :content non-nil."
   (extractor-test--with-headline "* With Content"

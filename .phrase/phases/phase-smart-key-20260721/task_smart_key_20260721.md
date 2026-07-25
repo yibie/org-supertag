@@ -34,3 +34,13 @@
   - 产出：按 Org 9.6 API 约定以类型列表调用 `org-element-lineage`
   - 验证方式：focused Smart Key ERT、12 组边界自检、Emacs 29.1/29.4 CI
   - 影响范围：仅修复最低支持版本上的参数类型错误，不改变 tag 边界
+
+- task008 [x] 将同步提取对齐 inline tag 正文边界
+  - 产出：复用单一 token 正则，只从当前 headline 标题与自身 paragraph 的直接文本提取
+  - 验证方式：字符串边界、Org 结构矩阵、标题清洗与 COMMENT subtree ERT；全量 ERT、Emacs 29 CI
+  - 影响范围：下一次同步会修正 node `:tags`；Store schema、tag 名格式及历史 tag 定义保持不变
+
+- task009 [ ] 明确原生 `:tag:` 的增量同步与 node-tag 关系清理策略
+  - 产出：按 `supertag-sync-legacy-tags-policy` 定义增量/全量一致的读取与关系回收规则
+  - 验证方式：read-only、lazy-convert、preserve、ignore 四种策略的增量/全量矩阵
+  - 影响范围：延期处理；task008 不执行破坏性历史关系清理

@@ -14,6 +14,7 @@
 - 复用 concept/node/reference 属性、Emacs button、Org link、inline `#tag`、Table cell 与 Org heading 的既有动作。
 - recognizer 只返回临时数据，不创建 ID、不写 Store、不执行动作。
 - 不设置默认按键，避免覆盖 Org 与各 View 的既有局部行为。
+- 同步提取与渲染/point 识别共享“行首或空白后的 Org 正文 token”边界。
 
 ### Non-goals
 
@@ -21,6 +22,7 @@
 - 不开放第三方 target/action 注册 Interface。
 - 不把交互 action 与 Automation action 合并。
 - 不改变 Store、Tag schema 或旧 Behavior 数据模型。
+- 不自动删除历史 tag 定义或 node-tag 关系；原生 `:tag:` 的增量清理策略另行处理。
 - 不实现动态 Transient、动作注册表或独立菜单框架；Assist 使用 Emacs 原生 completion UI。
 
 ## User Flows
@@ -40,6 +42,8 @@
 - 可渲染 inline tag 只存在于 Org headline 或正文 paragraph；inline code/verbatim/link/macro/target、table、
   fixed-width、drawer、property、COMMENT subtree、source/example/verse block 均不参与渲染和 point 识别。
 - `#` 后仍以空白或下一个 `#` 为 token 边界，保留中文、emoji、层级 `/`、`C++` 与标点型 tag 名。
+- 同步只读取当前 headline 标题和自身 section 的直接 paragraph 文本；子 headline、Org inline object、
+  drawer、block 与 COMMENT subtree 不贡献 inline tag。
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
@@ -52,5 +56,6 @@
 - 非正文 `#...` 不打开 tag view。
 - Org link target 内的 `#fragment` 不显示 inline tag face 或 SVG pill。
 - 边界矩阵同时覆盖合法正文 token 与 Org 非正文对象，face/SVG/point 三条路径共享同一结论。
+- 同步后的 node `:tags` 与同一文本的渲染/point 结论一致；不需要 Store schema 迁移。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - focused ERT 与仓库稳定测试套件通过。

@@ -1,5 +1,28 @@
 # change_smart_key_20260721
 
+- 2026-07-26 Align
+  - Files: `supertag-core-transform.el`, `supertag-services-sync.el`, `test/extractor-test.el`, phase docs
+  - Functions: `supertag-transform-extract-inline-tags`, `supertag--extract-inline-tags`,
+    `supertag--strip-inline-tags`, `supertag-extractor--tags`
+  - Changes:
+    - String extraction now requires the same line-start/whitespace token boundary as rendering.
+    - Sync reads direct prose from the current headline title and its own section paragraphs; Org inline objects,
+      drawers, blocks, COMMENT subtrees and child headlines do not contribute tags.
+    - Title cleanup removes only the accepted prose tokens and preserves link fragments, embedded hashes and code.
+    - Removed the duplicate sync string extractor and reused the core transform helper.
+  - Compatibility:
+    - No Store schema or persisted tag-name migration is required.
+    - A subsequent sync updates each node's `:tags`; historical tag definitions and relations are retained
+      intentionally because incremental native `:tag:` reconciliation is outside this task.
+  - Verification:
+    - Three new boundary/structure extraction tests failed before the change and pass afterward.
+    - Focused extractor ERT: 19/19 passed.
+    - Full stable ERT: 300/300 passed.
+    - Main package load, check-parens, byte compilation and `git diff --check` passed;
+      byte compilation retains pre-existing warnings only.
+    - Emacs 29.1/29.4 CI: pending pushed-run result.
+  - Related: `issue021`, `task008`
+
 - 2026-07-26 Fix
   - Files: `supertag-view-helper.el`, phase docs
   - Function: `supertag-view-helper--valid-inline-tag-match-p`
@@ -10,7 +33,7 @@
     - Reproduced CI failure on Emacs 29.1 and 29.4: three Smart Key tests raised `(wrong-type-argument listp headline)`.
     - Local focused Smart Key ERT: 11/11 passed.
     - Focused 12-case inline-tag boundary self-check passed.
-    - Emacs 29.1/29.4 CI: pending pushed-run result.
+    - Emacs 29.1/29.4 CI: passed in run 30165131179.
   - Related: `issue021`, `task007`
 
 - 2026-07-25 Harden
