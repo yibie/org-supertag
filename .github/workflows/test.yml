@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches:
-      - '**'
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - '.phrase/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '.phrase/**'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,7 +48,7 @@ jobs:
         run: ./test/run-tests.sh all
 
       - name: Upload test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-emacs-${{ matrix.emacs_version }}

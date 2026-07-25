@@ -12,12 +12,14 @@
 8. 收紧共享 inline tag validator：Org link target 中的 `#fragment` 不参与 face/SVG 渲染或 point 识别。
 9. 用“空白分隔的正文 token”统一渲染边界，覆盖 inline object、drawer、COMMENT subtree、block 与嵌入式 hash。
 10. 将同步提取对齐同一边界，并限制到当前 headline 的标题和自身正文 section。
+11. 保留最低/稳定 Emacs 矩阵，但将 CI 限制到 main、PR 的非文档变更及手动触发。
 
 ## Scope
 
 - 代码：`supertag-smart-key.el`、`supertag-view-node.el`、`supertag-view-helper.el`、
   `supertag-ui-commands.el`、`supertag-core-transform.el`、`supertag-services-sync.el`、`org-supertag.el`。
 - 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/run-tests.sh`。
+- CI：`.github/workflows/test.yml`。
 - 文档：本 phase 文档与 `.phrase/docs/CHANGE.md`。
 
 ## Priorities

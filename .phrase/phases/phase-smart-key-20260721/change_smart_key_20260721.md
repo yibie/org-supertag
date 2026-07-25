@@ -1,5 +1,17 @@
 # change_smart_key_20260721
 
+- 2026-07-26 Optimize
+  - Files: `.github/workflows/test.yml`, phase docs
+  - Changes:
+    - Restricted push-triggered CI to `main`; pull requests keep the compatibility gate.
+    - Ignored Markdown-only and `.phrase/**`-only changes for push and pull-request triggers.
+    - Added `workflow_dispatch` for manual compatibility runs.
+    - Uploads `test-results.txt` only after failure instead of on every successful matrix job.
+  - Verification:
+    - Local YAML parse and `git diff --check` passed.
+    - Emacs 29.1/29.4 CI: pending pushed-run result.
+  - Related: `task010`
+
 - 2026-07-26 Align
   - Files: `supertag-core-transform.el`, `supertag-services-sync.el`, `test/extractor-test.el`, phase docs
   - Functions: `supertag-transform-extract-inline-tags`, `supertag--extract-inline-tags`,

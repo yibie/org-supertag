@@ -44,3 +44,8 @@
   - 产出：按 `supertag-sync-legacy-tags-policy` 定义增量/全量一致的读取与关系回收规则
   - 验证方式：read-only、lazy-convert、preserve、ignore 四种策略的增量/全量矩阵
   - 影响范围：延期处理；task008 不执行破坏性历史关系清理
+
+- task010 [x] 降低 GitHub Actions 的无效运行次数
+  - 产出：仅在 main/PR 非文档变更或手动触发时运行；测试结果只在失败时上传
+  - 验证方式：YAML 解析、`git diff --check`、推送后的 Emacs 29.1/29.4 矩阵
+  - 影响范围：不改变测试内容；其他分支 push 与纯 Markdown/`.phrase` 变更不再自动运行
