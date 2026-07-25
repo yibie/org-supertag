@@ -20,7 +20,7 @@
     - Full stable ERT: 300/300 passed.
     - Main package load, check-parens, byte compilation and `git diff --check` passed;
       byte compilation retains pre-existing warnings only.
-    - Emacs 29.1/29.4 CI: pending pushed-run result.
+    - Emacs 29.1/29.4 CI: passed in run 30165705638.
   - Related: `issue021`, `task008`
 
 - 2026-07-26 Fix

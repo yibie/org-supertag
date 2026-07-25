@@ -62,6 +62,7 @@ child headlines are outside the scanned section.
   COMMENT subtrees and child headlines.
 - Full stable ERT after sync alignment: 300/300 passed; main package load,
   check-parens, byte compilation and `git diff --check` passed.
+- Sync-alignment Emacs 29.1/29.4 CI passed in run 30165705638.
 
 ## Tracking
 
