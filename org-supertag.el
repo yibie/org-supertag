@@ -477,6 +477,16 @@ active vault when `supertag-sync-auto-start` is non-nil."
 ;; --- Compat ---
 (require 'supertag-compat)
 
+;; --- Git sync (optional) ---
+;; Keep the documented M-x commands discoverable even when Org-Supertag is
+;; loaded directly from source and no package-generated autoload file exists.
+(autoload 'supertag-git-setup "supertag-git"
+  "Configure Git sync for the current Org-Supertag vault." t)
+(autoload 'supertag-git-clone "supertag-git"
+  "Clone and configure an Org-Supertag Git vault." t)
+(autoload 'supertag-git-sync-mode "supertag-git"
+  "Toggle automatic Git synchronization for the current vault." t)
+
 ;; --- Graph UI (optional) ---
 ;; Requires `websocket' and `simple-httpd' packages.
 ;; Not loaded by default; use M-x supertag-graph-ui-mode to activate.

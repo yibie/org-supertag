@@ -8,3 +8,7 @@
 - task002 [x] 修复快照恢复的降级迁移、恢复点、锁与旧格式摘要安全缺陷，并把恢复
   回归接入默认 CI；验证：restore 13/13、persist 31/31、all 313/313 与 batch
   byte-compile（仅既有 core warning）。关联：issue023、PLAN.md「恢复安全复审补充」。
+
+- task003 [x] 让直接加载源码的安装也能从 `M-x` 发现 Git setup/clone/sync-mode
+  三个公开命令；验证：隔离 `emacs -Q` 命令发现回归、Git 36/36、all 314/314
+  与 batch byte-compile。关联：issue024、PLAN.md「S4 用户旅程」。

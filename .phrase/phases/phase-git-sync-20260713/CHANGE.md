@@ -1,5 +1,20 @@
 # Git 原生同步变更记录
 
+## 2026-07-27 — task003 / issue024
+
+- Modify `org-supertag.el`：为文档公开的 `supertag-git-setup`、
+  `supertag-git-clone`、`supertag-git-sync-mode` 注册 runtime autoload；直接
+  `require` 源码时也可从 `M-x` 发现命令，同时保持 Git 模块按需加载。
+- Modify `test/git-sync-mode-test.el`：使用隔离 `emacs -Q` 加载入口文件，验证三个
+  命令均为可交互 autoload，且 `supertag-git` 未被提前加载。
+
+行为：源码 checkout、未生成 package autoload 的本地安装不再丢失 Git 同步入口。
+风险：已运行的 Emacs 需要重新加载 `org-supertag`；当前会话可先
+`M-: (require 'supertag-git)`。
+
+验证：Git 子套件 36/36、默认全量 314/314；batch byte-compile 通过，仅有既有
+warning；`git diff --check` 通过。
+
 ## 2026-07-27 — task002 / issue023
 
 - Modify `supertag-core-persistence.el`：恢复覆盖前取得数据库锁并创建唯一

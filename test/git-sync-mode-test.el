@@ -107,6 +107,37 @@ found on `exec-path'."
        (ert-skip "git executable not found on exec-path"))
      ,@body))
 
+(ert-deftest supertag-git-sync-test-entrypoint-registers-public-commands ()
+  "Loading `org-supertag' directly must expose the documented Git M-x commands."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (form
+          (concat
+           "(progn "
+           "(setq after-init-time nil) "
+           "(require 'org-supertag) "
+           "(let ((commands '(supertag-git-setup supertag-git-clone "
+           "supertag-git-sync-mode))) "
+           "(unless (and (not (featurep 'supertag-git)) "
+           "(not (memq nil "
+           "(mapcar (lambda (command) "
+           "(and (commandp command) "
+           "(autoloadp (symbol-function command)))) commands)))) "
+           "(princ (format \"Git command discovery failed: %S\" "
+           "(mapcar (lambda (command) "
+           "(list command (commandp command) (symbol-function command))) "
+           "commands))) "
+           "(kill-emacs 2))))"))
+         status output)
+    (with-temp-buffer
+      (setq status
+            (call-process emacs nil t nil
+                          "-Q" "--batch" "-L" supertag-git-sync-test--repo-dir
+                          "--eval" "(package-initialize)"
+                          "--eval" form)
+            output (buffer-string)))
+    (ert-info ((format "Child Emacs output: %s" output))
+      (should (equal status 0)))))
+
 (defun supertag-git-sync-test--git (dir &rest args)
   "Run `git -C DIR ARGS...'. Returns (EXIT-CODE . OUTPUT)."
   (with-temp-buffer

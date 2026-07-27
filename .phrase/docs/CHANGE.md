@@ -35,4 +35,4 @@
 - 2026-07-22: phase-sync-improve-20251216/change_sync_improve_20251216.md  # TODO 标题解析与全量重扫修复
 - 2026-07-25: phase-smart-key-20260721/change_smart_key_20260721.md  # SVG tags are limited to whitespace-delimited Org prose tokens
 - 2026-07-26: phase-smart-key-20260721/change_smart_key_20260721.md  # Org compatibility, inline-tag boundary alignment, and leaner CI triggers
-- 2026-07-27: phase-git-sync-20260713/CHANGE.md  # Snapshot restore downgrade, locking, recovery-point, and CI hardening
+- 2026-07-27: phase-git-sync-20260713/CHANGE.md  # Git command discovery + snapshot restore safety and CI hardening

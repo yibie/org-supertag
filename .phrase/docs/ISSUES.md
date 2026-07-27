@@ -23,3 +23,4 @@
 - issue021 [ ] Org 非正文对象与嵌入式 hash 被误渲染/同步为 tag（渲染与同步边界已对齐，待用户验证；phase-smart-key-20260721/issue_svg_tag_renders_link_fragment_20260725.md）
 - issue022 [ ] 原生 `:tag:` 在增量同步与 node-tag 关系清理间缺少一致策略（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）
 - issue023 [x] 快照恢复会破坏降级文件并绕过数据安全保护（自动化验证完成；用户确认人工演练属于 Git 同步；phase-git-sync-20260713/issue_restore_safety_20260727.md）
+- issue024 [ ] 直接加载源码时 `M-x` 找不到 Git 同步公开命令（修复与自动化验证完成，待用户实机确认；phase-git-sync-20260713/issue_git_command_discovery_20260727.md）
