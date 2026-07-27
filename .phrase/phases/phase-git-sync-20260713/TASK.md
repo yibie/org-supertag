@@ -12,3 +12,7 @@
 - task003 [x] 让直接加载源码的安装也能从 `M-x` 发现 Git setup/clone/sync-mode
   三个公开命令；验证：隔离 `emacs -Q` 命令发现回归、Git 36/36、all 314/314
   与 batch byte-compile。关联：issue024、PLAN.md「S4 用户旅程」。
+
+- task004 [x] 补齐 README 公开的 `supertag-doctor` runtime autoload，并让隔离
+  命令发现测试强制加载新源码而非陈旧 `.elc`；验证：Git 36/36、all 314/314、
+  无 `.elc` Git 36/36 与临时目录 byte-compile。关联：issue025。

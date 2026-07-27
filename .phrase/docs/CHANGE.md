@@ -36,3 +36,4 @@
 - 2026-07-25: phase-smart-key-20260721/change_smart_key_20260721.md  # SVG tags are limited to whitespace-delimited Org prose tokens
 - 2026-07-26: phase-smart-key-20260721/change_smart_key_20260721.md  # Org compatibility, inline-tag boundary alignment, and leaner CI triggers
 - 2026-07-27: phase-git-sync-20260713/CHANGE.md  # Git command discovery + snapshot restore safety and CI hardening
+- 2026-07-28: phase-git-sync-20260713/CHANGE.md  # Doctor command discovery and stale byte-code-proof regression

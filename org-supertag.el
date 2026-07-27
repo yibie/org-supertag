@@ -477,6 +477,10 @@ active vault when `supertag-sync-auto-start` is non-nil."
 ;; --- Compat ---
 (require 'supertag-compat)
 
+;; --- Diagnostics (optional) ---
+(autoload 'supertag-doctor "supertag-doctor"
+  "Run Org-Supertag health checks and guided repairs." t)
+
 ;; --- Git sync (optional) ---
 ;; Keep the documented M-x commands discoverable even when Org-Supertag is
 ;; loaded directly from source and no package-generated autoload file exists.

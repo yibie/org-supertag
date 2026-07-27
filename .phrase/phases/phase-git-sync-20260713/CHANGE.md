@@ -1,5 +1,21 @@
 # Git 原生同步变更记录
 
+## 2026-07-28 — task004 / issue025
+
+- Modify `org-supertag.el`：为 README 公开的 `supertag-doctor` 注册 runtime
+  autoload，直接加载源码时无需 package-generated autoload 也能从 `M-x` 发现。
+- Modify `test/git-sync-mode-test.el`：隔离命令发现回归增加 Doctor，并设置
+  `load-prefer-newer`，防止仓库内陈旧 `.elc` 掩盖最新源码。
+- Delete local generated artifacts：按用户要求删除仓库内 6 个未跟踪 `*.elc`；
+  复查仓库内数量为 0，删除物均可由源码重新编译。
+
+行为：Doctor 与 Git setup/clone/sync-mode 现在共享同一套显式延迟加载入口；源码
+checkout 不再因缺少生成的 autoload 文件而丢失健康检查命令。风险：已经运行的
+Emacs 仍需 `(require 'supertag-doctor)` 或重启后加载新入口。
+
+验证：Git 36/36、默认全量 314/314；删除全部本地 `.elc` 后 Git 再次 36/36；
+临时目录 batch byte-compile 与 `git diff --check` 通过。
+
 ## 2026-07-27 — task003 / issue024
 
 - Modify `org-supertag.el`：为文档公开的 `supertag-git-setup`、

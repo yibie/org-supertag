@@ -108,21 +108,22 @@ found on `exec-path'."
      ,@body))
 
 (ert-deftest supertag-git-sync-test-entrypoint-registers-public-commands ()
-  "Loading `org-supertag' directly must expose the documented Git M-x commands."
+  "Loading `org-supertag' directly must expose documented optional commands."
   (let* ((emacs (expand-file-name invocation-name invocation-directory))
          (form
           (concat
            "(progn "
-           "(setq after-init-time nil) "
+           "(setq after-init-time nil load-prefer-newer t) "
            "(require 'org-supertag) "
            "(let ((commands '(supertag-git-setup supertag-git-clone "
-           "supertag-git-sync-mode))) "
+           "supertag-git-sync-mode supertag-doctor))) "
            "(unless (and (not (featurep 'supertag-git)) "
+           "(not (featurep 'supertag-doctor)) "
            "(not (memq nil "
            "(mapcar (lambda (command) "
            "(and (commandp command) "
            "(autoloadp (symbol-function command)))) commands)))) "
-           "(princ (format \"Git command discovery failed: %S\" "
+           "(princ (format \"Public command discovery failed: %S\" "
            "(mapcar (lambda (command) "
            "(list command (commandp command) (symbol-function command))) "
            "commands))) "
