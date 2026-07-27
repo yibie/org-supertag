@@ -7,6 +7,7 @@
 #   ./test/run-tests.sh node         # Run only node-ops tests
 #   ./test/run-tests.sh view         # Run only view-framework tests
 #   ./test/run-tests.sh persist      # Run only persistence tests
+#   ./test/run-tests.sh restore      # Run only snapshot restore tests
 #   ./test/run-tests.sh field-ref    # Run only node-reference field tests
 #   ./test/run-tests.sh query        # Run only query-block tests
 #   ./test/run-tests.sh smart-key    # Run only semantic activation tests
@@ -38,6 +39,7 @@ TEST_FILES=(
     "test/virtual-column-test.el"
     "test/test-field-node-reference.el"
     "test/persistence-hardening-test.el"
+    "test/supertag-restore-test.el"
     "test/canonical-serialization-test.el"
     "test/query-block-test.el"
     "test/query-library-test.el"
@@ -65,7 +67,8 @@ if [ $# -gt 0 ]; then
             reference) FILTER="$FILTER test/reference-test.el" ;;
             vc|virtual) FILTER="$FILTER test/virtual-column-test.el" ;;
             field-ref) FILTER="$FILTER test/test-field-node-reference.el" ;;
-            persist)   FILTER="$FILTER test/supertag-persistence-test.el test/persistence-hardening-test.el" ;;
+            persist)   FILTER="$FILTER test/supertag-persistence-test.el test/persistence-hardening-test.el test/supertag-restore-test.el" ;;
+            restore)   FILTER="$FILTER test/supertag-restore-test.el" ;;
             canon)     FILTER="$FILTER test/canonical-serialization-test.el" ;;
             query)     FILTER="$FILTER test/query-block-test.el test/query-library-test.el" ;;
             tx)        FILTER="$FILTER test/transaction-test.el" ;;
@@ -77,7 +80,7 @@ if [ $# -gt 0 ]; then
             tag-merge) FILTER="$FILTER test/tag-merge-test.el" ;;
             embed)     FILTER="$FILTER test/embed-cache-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge embed all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist restore canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge embed all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

@@ -1592,20 +1592,31 @@ reported loudly rather than re-signaled: the loaded store is left in place
                                     (abbreviate-file-name snapshot-file))
                           " No pre-migration snapshot was created."))))))))))
 
-(defun supertag-load-store (&optional file)
+(defun supertag-load-store (&optional file preserve-lock)
   "Load data into supertag--store from a file.
 This function loads and coerces the persisted store data, but does not
 run version migrations. For migrations/normalization, use the command
 `supertag-db-migrate-and-normalize` after loading.
-FILE is the optional file path. Defaults to supertag-db-file."
+FILE is the optional file path. Defaults to supertag-db-file.
+When PRESERVE-LOCK is non-nil, load only FILE while retaining the advisory
+lock already held for it; this is reserved for the restore critical section."
   (interactive)
-  (let* ((candidates (supertag--persistence--db-file-candidates file))
+  (let* ((locked-file (or file supertag-db-file))
+         (candidates (if preserve-lock
+                         (list (supertag--persistence--normalize-path locked-file))
+                       (supertag--persistence--db-file-candidates file)))
          (file-to-load nil)
          (load-status nil)
          (failures '()))
+    (when (and preserve-lock
+               supertag-db-lock
+               (or (not (equal supertag--db-locked-file locked-file))
+                   (not (eq t (file-locked-p locked-file)))))
+      (user-error "Cannot preserve a database lock not held by this Emacs"))
     ;; Release any lock held for a previously loaded DB file (e.g. when
     ;; switching vaults) before possibly loading a different one below.
-    (supertag--db-release-lock)
+    (unless preserve-lock
+      (supertag--db-release-lock))
     ;; Ensure directory exists before loading (best-effort; does not depend on DB presence).
     (ignore-errors (supertag-persistence-ensure-data-directory))
 
@@ -1657,7 +1668,8 @@ FILE is the optional file path. Defaults to supertag-db-file."
                      (if show-manual-hint
                          " For migrations, run M-x supertag-db-migrate-and-normalize."
                        "")))
-          (supertag--db-acquire-lock)
+          (unless preserve-lock
+            (supertag--db-acquire-lock))
           (supertag--presence-check-and-claim)
           (supertag--maybe-auto-migrate)
           ;; See `supertag-persistence-after-load-hook''s docstring: this is
@@ -2097,6 +2109,176 @@ Returns t if all references are valid, otherwise returns nil."
       (message "Tag reference validation failed with %d errors" error-count))
 
     valid-p))
+
+;;; --- Interactive Snapshot Restore ---
+;;
+;; `supertag-restore' turns the backup story that already exists (daily
+;; backups from `supertag-create-daily-backup', the never-cleaned migration
+;; snapshots, and the unique `supertag-db-prerestore-*' recovery points)
+;; into something a user can act on without quitting Emacs and copying files
+;; by hand. All four kinds live in `supertag-db-backup-directory', so
+;; enumeration is a single directory scan.
+
+(defun supertag--restore-snapshot-kind (filename)
+  "Classify snapshot FILENAME (a nondirectory name) as a restore source.
+Returns `prerestore', `premigrate', `preformat6', `daily', or nil when
+FILENAME does not match a supported snapshot naming convention."
+  (cond
+   ((string-prefix-p "supertag-db-prerestore-" filename) 'prerestore)
+   ((string-prefix-p "supertag-db-premigrate-" filename) 'premigrate)
+   ((string-prefix-p "supertag-db-preformat6-" filename) 'preformat6)
+   ((string-match-p "\\`supertag-db-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\.el\\'" filename) 'daily)))
+
+(defun supertag--restore-snapshot-kind-label (kind)
+  "Human-readable label for restore snapshot KIND."
+  (pcase kind
+    ('daily "daily")
+    ('prerestore "pre-restore")
+    ('premigrate "pre-migration")
+    ('preformat6 "pre-format6")
+    (_ (symbol-name kind))))
+
+(defun supertag--restore-snapshot-list (&optional dir)
+  "Return every restorable snapshot under DIR, newest first.
+DIR defaults to `supertag-db-backup-directory'. Each entry is a plist
+\(:file FILE :kind KIND :mtime MTIME :size SIZE)."
+  (let ((dir (or dir supertag-db-backup-directory)))
+    (when (file-directory-p dir)
+      (let ((entries
+             (delq nil
+                   (mapcar
+                    (lambda (file)
+                      (let ((kind (supertag--restore-snapshot-kind (file-name-nondirectory file)))
+                            (attrs (file-attributes file)))
+                        (when kind
+                          (list :file file :kind kind
+                                :mtime (nth 5 attrs) :size (nth 7 attrs)))))
+                    (directory-files dir t "\\`supertag-db-.*\\.el\\'")))))
+        (sort entries (lambda (a b)
+                        (time-less-p (plist-get b :mtime) (plist-get a :mtime))))))))
+
+(defun supertag--restore-snapshot-summary (file)
+  "Return a plist (:nodes N :tags N :version V) describing snapshot FILE.
+Reads FILE the same way `supertag-load-store' reads a candidate
+\(`supertag--persistence--try-read-store', so both the canonical and legacy
+on-disk formats are understood) without touching the live in-memory store."
+  (let* ((data (supertag--persistence--try-read-store file))
+         (store (supertag--persistence--canonicalize-store-root
+                 (supertag--coerce-store-table data))))
+    (list :nodes (let ((tbl (gethash :nodes store)))
+                   (if (hash-table-p tbl) (hash-table-count tbl) 0))
+          :tags (let ((tbl (gethash :tags store)))
+                  (if (hash-table-p tbl) (hash-table-count tbl) 0))
+          :version (supertag--get-data-version store))))
+
+(defun supertag--restore-snapshot-describe (snapshot)
+  "Return a `completing-read' label for SNAPSHOT (a plist from
+`supertag--restore-snapshot-list').
+Reads SNAPSHOT's file to report its node count; a snapshot that fails to
+parse is still listed, with its node count shown as \"?\" rather than
+dropped from the picker, since a stale/corrupt entry is still a legitimate
+restore target for the doctor-style recovery this command exists for."
+  (let* ((file (plist-get snapshot :file))
+         (kind (plist-get snapshot :kind))
+         (nodes (condition-case nil
+                    (plist-get (supertag--restore-snapshot-summary file) :nodes)
+                  (error "?"))))
+    (format "%s  [%-13s]  %8s  %5s nodes  %s"
+            (format-time-string "%Y-%m-%d %H:%M:%S" (plist-get snapshot :mtime))
+            (supertag--restore-snapshot-kind-label kind)
+            (file-size-human-readable (plist-get snapshot :size))
+            nodes
+            (file-name-nondirectory file))))
+
+(defun supertag--restore-create-recovery-snapshot ()
+  "Save the current state to a unique pre-restore snapshot.
+Unsaved in-memory changes are serialized; otherwise the live database file
+is copied byte-for-byte. Returns the snapshot path, or signals before the
+live database is touched."
+  (supertag-persistence-ensure-data-directory)
+  (let* ((prefix (expand-file-name
+                  (format "supertag-db-prerestore-%s-"
+                          (format-time-string "%Y%m%d-%H%M%S"))
+                  supertag-db-backup-directory))
+         (snapshot (make-temp-file prefix nil ".el"))
+         (success nil))
+    ;; Reserve a collision-free name without making the atomic writer treat
+    ;; the newly-created empty file as a legacy database.
+    (delete-file snapshot)
+    (unwind-protect
+        (progn
+          (if (or (supertag-dirty-p)
+                  (not (file-exists-p supertag-db-file)))
+              (supertag--persistence-write-store-atomically snapshot)
+            (copy-file supertag-db-file snapshot nil t))
+          (setq success t)
+          snapshot)
+      (unless success
+        (ignore-errors (delete-file snapshot))))))
+
+;;;###autoload
+(defun supertag-restore ()
+  "Interactively restore the Org-Supertag database from a snapshot.
+Offers every daily, pre-restore, pre-migration, and pre-format6 snapshot in
+`supertag-db-backup-directory' (see `supertag--restore-snapshot-list'), newest
+first, via `completing-read'. Shows a preview comparing the chosen snapshot
+against the live store, asks for explicit confirmation naming the snapshot,
+then takes the database lock and creates a unique
+`supertag-db-prerestore-*' recovery point before replacing
+`supertag-db-file'. Daily snapshots reload normally. Pre-migration and
+pre-format6 snapshots reload with auto-migration disabled so they remain
+readable by pre-6.0 builds; quit Emacs immediately after restoring one for
+downgrade."
+  (interactive)
+  (let ((snapshots (supertag--restore-snapshot-list)))
+    (unless snapshots
+      (user-error "No snapshots found in %s"
+                  (abbreviate-file-name supertag-db-backup-directory)))
+    (let* ((labels (mapcar #'supertag--restore-snapshot-describe snapshots))
+           (choice (completing-read "Restore Org-Supertag database from snapshot: "
+                                    labels nil t))
+           (snapshot (nth (cl-position choice labels :test #'string=) snapshots))
+           (file (plist-get snapshot :file))
+           (summary (supertag--restore-snapshot-summary file))
+           (current-nodes (supertag--count-nodes))
+           (current-tags (hash-table-count (supertag-store-get-collection :tags))))
+      (with-output-to-temp-buffer "*Supertag Restore Preview*"
+        (princ (format "Snapshot to restore: %s\n\n" file))
+        (princ (format "  format version : %s\n" (plist-get summary :version)))
+        (princ (format "  nodes          : %d\n" (plist-get summary :nodes)))
+        (princ (format "  tags           : %d\n\n" (plist-get summary :tags)))
+        (princ (format "Current live store:\n\n"))
+        (princ (format "  format version : %s\n" supertag-data-version))
+        (princ (format "  nodes          : %d\n" current-nodes))
+        (princ (format "  tags           : %d\n" current-tags)))
+      (if (not (yes-or-no-p
+                (format "Restore %s -- this REPLACES the current database (%d nodes) with the snapshot's %d nodes? "
+                        (file-name-nondirectory file) current-nodes (plist-get summary :nodes))))
+          (message "Restore cancelled.")
+        (supertag-persistence-ensure-data-directory)
+        (supertag--db-acquire-lock)
+        (when (and supertag-db-lock
+                   (or supertag--db-lock-conflict
+                       (not (eq t (file-locked-p supertag-db-file)))
+                       (not (equal supertag--db-locked-file supertag-db-file))))
+          (user-error "Cannot restore while the database lock is unavailable%s"
+                      (if supertag--db-lock-conflict
+                          (format " (%s)" supertag--db-lock-conflict)
+                        "")))
+        (let* ((kind (plist-get snapshot :kind))
+               (downgrade-p (memq kind '(premigrate preformat6)))
+               (recovery-file (supertag--restore-create-recovery-snapshot)))
+          (copy-file file supertag-db-file t)
+          (let ((supertag-db-auto-migrate
+                 (and supertag-db-auto-migrate (not downgrade-p))))
+            (supertag-load-store supertag-db-file t))
+          (message "Restored Org-Supertag database from %s (%d nodes). Recovery point: %s.%s"
+                   (file-name-nondirectory file)
+                   (supertag--count-nodes)
+                   (abbreviate-file-name recovery-file)
+                   (if downgrade-p
+                       " Quit Emacs now and reopen with the older build"
+                     "")))))))
 
 (provide 'supertag-core-persistence)
 

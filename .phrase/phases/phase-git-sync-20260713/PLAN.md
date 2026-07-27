@@ -312,6 +312,18 @@ merge driver，自动化循环只是便利层。
   消失——这对多数用户是想要的隔离。若未来出现真实的跨 vault 引用需求，形态
   应是显式的 `vault:node-id` 二级寻址，不回退到合并库。
 
+## 恢复安全复审补充（2026-07-27）
+
+`M-x supertag-restore` 属于 S2 格式升级的降级与灾难恢复边界，必须满足：
+
+1. premigrate/preformat6 恢复在本次 reload 中禁用自动迁移，磁盘文件保持旧格式；
+2. 覆盖前可靠取得既有数据库 advisory lock，并持有到 reload 完成，冲突时不写文件；
+3. 每次恢复先创建唯一 pre-restore 快照，dirty Store 序列化内存实际状态；
+4. 快照摘要走与 loader 一致的 root coercion/canonicalization；
+5. 破坏性恢复回归进入默认 `run-tests.sh all`。
+
+回滚：从恢复选择器选取本次操作生成的 `supertag-db-prerestore-*`。
+
 ---
 
 ## 风险清单
