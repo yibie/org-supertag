@@ -15,6 +15,9 @@
 验证：Git 子套件 36/36、默认全量 314/314；batch byte-compile 通过，仅有既有
 warning；`git diff --check` 通过。
 
+实机确认：2026-07-28，用户重新执行 `supertag-git-setup`，向重新创建的空远端
+完成首次 push；issue024 关闭。
+
 ## 2026-07-27 — task002 / issue023
 
 - Modify `supertag-core-persistence.el`：恢复覆盖前取得数据库锁并创建唯一

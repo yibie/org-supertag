@@ -1,4 +1,4 @@
-# issue024 [ ] 直接加载源码时 M-x 找不到 Git 同步公开命令
+# issue024 [x] 直接加载源码时 M-x 找不到 Git 同步公开命令
 
 ## Environment
 
@@ -34,7 +34,8 @@ README 公开的 setup、clone、sync-mode 命令在直接加载源码和标准 
 
 关联任务：task003。
 
-- User Confirmation: Pending
-- Resolved At: Pending
-- Resolved By: Pending
-- Resolved Commit: Pending
+- User Confirmation: 2026-07-28，用户在真实笔记仓库中重新执行 setup，并确认首次
+  push 成功。
+- Resolved At: 2026-07-28
+- Resolved By: runtime autoload 修复与真实 Git setup/push 演练
+- Resolved Commit: `6fefbad`
