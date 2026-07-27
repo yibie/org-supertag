@@ -44,4 +44,12 @@
 ## Tracking
 
 - Task: `task002`
-- Status: implementation complete; pending user validation in a real Emacs session
+- Status: resolved
+- Resolved At: 2026-07-27
+- Resolved By: Codex
+- Resolved Commit: `09d54f4`
+
+## User Confirmation
+
+用户确认当前需要人工演练的是 Git 同步功能，不是快照恢复。issue023 以破坏性路径
+回归、全量 CI 和独立代码复审作为完成证据，不再保留额外人工验收门槛。

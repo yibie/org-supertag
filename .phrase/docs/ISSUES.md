@@ -22,4 +22,4 @@
 - issue020 [x] 后台同步把 Org TODO 关键字误存入 node title（已由用户在真实 vault 验证；phase-sync-improve-20251216/issue_sync_improve_20260722_todo_title.md）
 - issue021 [ ] Org 非正文对象与嵌入式 hash 被误渲染/同步为 tag（渲染与同步边界已对齐，待用户验证；phase-smart-key-20260721/issue_svg_tag_renders_link_fragment_20260725.md）
 - issue022 [ ] 原生 `:tag:` 在增量同步与 node-tag 关系清理间缺少一致策略（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）
-- issue023 [ ] 快照恢复会破坏降级文件并绕过数据安全保护（实现与回归完成，待真实 Emacs 验证；phase-git-sync-20260713/issue_restore_safety_20260727.md）
+- issue023 [x] 快照恢复会破坏降级文件并绕过数据安全保护（自动化验证完成；用户确认人工演练属于 Git 同步；phase-git-sync-20260713/issue_restore_safety_20260727.md）
