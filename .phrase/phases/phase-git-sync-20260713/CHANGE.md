@@ -16,6 +16,10 @@ Emacs 仍需 `(require 'supertag-doctor)` 或重启后加载新入口。
 验证：Git 36/36、默认全量 314/314；删除全部本地 `.elc` 后 Git 再次 36/36；
 临时目录 batch byte-compile 与 `git diff --check` 通过。
 
+实机确认：2026-07-28，用户在真实笔记 vault 中运行 Doctor；Git Sync 第 8 节
+显示仓库/DB/driver/attributes/tracking/remote 全部正常，sync mode ON、pending
+push 0、Text Conflicts none；issue025 关闭。
+
 ## 2026-07-27 — task003 / issue024
 
 - Modify `org-supertag.el`：为文档公开的 `supertag-git-setup`、

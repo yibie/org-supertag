@@ -1,4 +1,4 @@
-# issue025 [ ] 直接加载源码时 M-x 找不到 supertag-doctor
+# issue025 [x] 直接加载源码时 M-x 找不到 supertag-doctor
 
 ## Environment
 
@@ -33,7 +33,9 @@
 
 关联任务：task004。
 
-- User Confirmation: Pending
-- Resolved At: Pending
-- Resolved By: Pending
-- Resolved Commit: Pending
+- User Confirmation: 2026-07-28，用户在真实笔记 vault 中运行 Doctor，确认 Git
+  仓库、DB 路径、merge driver、attributes、tracked remote、sync mode、pending
+  push 与 text conflicts 全部正常。
+- Resolved At: 2026-07-28
+- Resolved By: runtime autoload 修复与真实 Doctor/Git Sync 健康检查
+- Resolved Commit: `9114288`

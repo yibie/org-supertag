@@ -24,4 +24,4 @@
 - issue022 [ ] 原生 `:tag:` 在增量同步与 node-tag 关系清理间缺少一致策略（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）
 - issue023 [x] 快照恢复会破坏降级文件并绕过数据安全保护（自动化验证完成；用户确认人工演练属于 Git 同步；phase-git-sync-20260713/issue_restore_safety_20260727.md）
 - issue024 [x] 直接加载源码时 `M-x` 找不到 Git 同步公开命令（用户已实机确认 setup 与首次推送成功；phase-git-sync-20260713/issue_git_command_discovery_20260727.md）
-- issue025 [ ] 直接加载源码时 `M-x` 找不到 `supertag-doctor`（修复与自动化验证完成，待用户实机确认；phase-git-sync-20260713/issue_doctor_command_discovery_20260728.md）
+- issue025 [x] 直接加载源码时 `M-x` 找不到 `supertag-doctor`（用户已实机确认 Doctor 与 Git Sync 健康检查正常；phase-git-sync-20260713/issue_doctor_command_discovery_20260728.md）
