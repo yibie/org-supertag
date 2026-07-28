@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'supertag-core-transform)
 (require 'supertag-view-api)
 
 ;; Forward declare functions to avoid circular dependencies
@@ -51,16 +52,19 @@ This should be a plist of face attributes."
   "Return non-nil when the current match is an Org prose tag token.
 The token must start at a whitespace boundary and must not belong to a
 drawer, a commented subtree, or another inline Org object."
-  (save-match-data
-    (save-excursion
-      (goto-char (match-beginning 0))
-      (let* ((context (org-element-context))
-             (heading (org-element-lineage context '(headline) t)))
-        (and (or (bolp) (eq (char-syntax (char-before)) ?\s))
-             (memq (org-element-type context) '(headline paragraph))
-             (not (org-element-lineage context '(drawer property-drawer) t))
-             (not (and heading
-                       (org-element-property :commentedp heading))))))))
+  (let ((match-start (match-beginning 0))
+        (tag-name (substring-no-properties (match-string 0) 1)))
+    (save-match-data
+      (save-excursion
+        (goto-char match-start)
+        (let* ((context (org-element-context))
+               (heading (org-element-lineage context '(headline) t)))
+          (and (or (bolp) (eq (char-syntax (char-before)) ?\s))
+               (supertag-transform-inline-tag-name-p tag-name)
+               (memq (org-element-type context) '(headline paragraph))
+               (not (org-element-lineage context '(drawer property-drawer) t))
+               (not (and heading
+                         (org-element-property :commentedp heading)))))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API

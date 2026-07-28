@@ -1,5 +1,26 @@
 # change_smart_key_20260721
 
+- 2026-07-28 Fix
+  - Files: `supertag-core-transform.el`, `supertag-view-helper.el`, `supertag-ui-completion.el`,
+    `supertag-view-svg-tag.el`, `test/test-inline-tag-filter.el`, phase docs
+  - Functions: `supertag-transform-inline-tag-name-p`,
+    `supertag-transform-extract-inline-tags`, `supertag-view-helper--valid-inline-tag-match-p`,
+    `supertag-completion--get-all-tags`, `supertag-svg-tag--get-cached`
+  - Changes:
+    - Added one shared tag-name rule that treats Emacs Lisp `#'function` as syntax rather than an inline tag.
+    - Applied the rule to rendering, sync extraction and completion, so historical function-quote artifacts
+      are hidden without deleting Store data.
+    - Reduced the default SVG font scale from `0.78` to `0.68` and included the scale in the image cache key.
+  - Compatibility:
+    - Existing Unicode, emoji, hierarchy, `C++` and punctuation-bearing tags remain accepted.
+    - A deliberately apostrophe-prefixed tag is now hidden because it conflicts with Emacs Lisp function-quote syntax.
+  - Verification:
+    - Focused red/green self-check reproduces and rejects the three reported `#'zettel-*` artifacts.
+    - Focused extractor/Smart Key ERT: 30/30 passed; full stable ERT: 314/314 passed.
+    - Main package batch load, changed-file `check-parens`, byte compilation and `git diff --check` passed.
+    - Generated 16px-before/14px-after SVG comparison received a 93/100 visual verdict.
+  - Related: `issue026`, `task011`
+
 - 2026-07-26 Optimize
   - Files: `.github/workflows/test.yml`, phase docs
   - Changes:

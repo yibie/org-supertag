@@ -51,7 +51,7 @@ Set to 0 to draw no border."
   :type 'number
   :group 'supertag-view-svg-tag)
 
-(defcustom supertag-svg-tag-font-scale 0.78
+(defcustom supertag-svg-tag-font-scale 0.68
   "Font size scale factor relative to the frame character height."
   :type 'number
   :group 'supertag-view-svg-tag)
@@ -130,7 +130,7 @@ When nil, only the tag name is shown."
 ;;;----------------------------------------------------------------------
 
 (defvar supertag-svg-tag--cache (make-hash-table :test 'equal)
-  "Cache of SVG images keyed by (display-text char-height style background-mode alpha).")
+  "Cache of SVG images keyed by their visual inputs.")
 
 (defun supertag-svg-tag--char-width ()
   "Return a usable character width in pixels."
@@ -200,6 +200,7 @@ Returns an Emacs image object suitable for the `display' text property."
                            tag-name)))
          (key (list display-text
                     (supertag-svg-tag--char-height)
+                    supertag-svg-tag-font-scale
                     supertag-svg-tag-style
                     (frame-parameter nil 'background-mode)
                     supertag-svg-tag-color-alpha)))

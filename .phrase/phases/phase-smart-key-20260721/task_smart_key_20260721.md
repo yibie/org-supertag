@@ -49,3 +49,8 @@
   - 产出：仅在 main/PR 非文档变更或手动触发时运行；测试结果只在失败时上传
   - 验证方式：YAML 解析、`git diff --check`、推送后的 Emacs 29.1/29.4 矩阵
   - 影响范围：不改变测试内容；其他分支 push 与纯 Markdown/`.phrase` 变更不再自动运行
+
+- task011 [x] 排除函数引用伪标签并缩小 SVG tag 字体
+  - 产出：共享 tag-name 判定、completion 历史污染过滤、SVG 默认字号与缓存键修正
+  - 验证方式：真实污染 fixture 红/绿自检、focused/full ERT、SVG 生成图视觉判定、byte compile、`git diff --check`
+  - 影响范围：`#'function` 不再作为标签；不删除 Store 数据；SVG badge 外框尺寸不变

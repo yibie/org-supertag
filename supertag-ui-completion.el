@@ -36,6 +36,7 @@
 ;; These MUST be loaded for completion to work correctly
 (require 'supertag-core-store)
 (require 'supertag-core-scan)
+(require 'supertag-core-transform)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-node)
 (require 'supertag-services-query)
@@ -69,7 +70,8 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
             ;; Primary method: get all tag IDs from :tags collection
             (progn
               (maphash (lambda (tag-id _tag-data)
-                         (push tag-id all-tags))
+                         (when (supertag-transform-inline-tag-name-p tag-id)
+                           (push tag-id all-tags)))
                        tags-ht)
               (nreverse all-tags))
           ;; Fallback: scan nodes to collect unique tags
@@ -80,7 +82,8 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
                          (when-let ((tags (plist-get node-data :tags)))
                            (setq all-tags (append tags all-tags))))
                        nodes-ht))
-            (delete-dups all-tags))))
+            (cl-remove-if-not #'supertag-transform-inline-tag-name-p
+                              (delete-dups all-tags)))))
     (error
      (message "supertag-completion: Failed to get tags: %S" err)
      '())))

@@ -238,6 +238,14 @@ MATCHES is the list to collect matching paths."
   "Regexp for an inline tag at string start or after whitespace.
 Group 1 is the optional whitespace boundary; group 2 is the tag name.")
 
+(defun supertag-transform-inline-tag-name-p (name)
+  "Return non-nil when NAME can be an inline tag.
+An apostrophe immediately after # is Emacs Lisp function-quote syntax,
+not a tag."
+  (and (stringp name)
+       (not (string-empty-p name))
+       (not (eq (aref name 0) ?'))))
+
 (defun supertag-transform-extract-inline-tags (content-string)
   "Extract whitespace-delimited #tags from CONTENT-STRING."
   (let ((tags '()))
@@ -246,7 +254,9 @@ Group 1 is the optional whitespace boundary; group 2 is the tag name.")
         (insert content-string)
         (goto-char (point-min))
         (while (re-search-forward supertag-inline-tag-regexp nil t)
-          (push (match-string 2) tags))))
+          (let ((tag (match-string 2)))
+            (when (supertag-transform-inline-tag-name-p tag)
+              (push tag tags))))))
     (nreverse tags)))
 
 (provide 'supertag-core-transform)

@@ -15,6 +15,8 @@
 - recognizer 只返回临时数据，不创建 ID、不写 Store、不执行动作。
 - 不设置默认按键，避免覆盖 Org 与各 View 的既有局部行为。
 - 同步提取与渲染/point 识别共享“行首或空白后的 Org 正文 token”边界。
+- Emacs Lisp `#'function` 引用不进入渲染、同步提取或 tag completion。
+- SVG tag 字体低于正文行高，保持 badge 尺寸与标签可读性。
 
 ### Non-goals
 
@@ -33,6 +35,7 @@
 4. 用户在已有 ID 的 Org heading 上执行同一命令，打开既有 Node View；无 ID 时收到明确提示，原文不变。
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
 6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
+7. 用户输入 `#` 触发 tag completion；历史 Store 中由 `#'function` 误提取的条目不再显示，合法标签仍可选。
 
 ## Edge Cases
 
@@ -44,6 +47,7 @@
 - `#` 后仍以空白或下一个 `#` 为 token 边界，保留中文、emoji、层级 `/`、`C++` 与标点型 tag 名。
 - 同步只读取当前 headline 标题和自身 section 的直接 paragraph 文本；子 headline、Org inline object、
   drawer、block 与 COMMENT subtree 不贡献 inline tag。
+- `#'name` 是 Emacs Lisp function quote，不是标签；即使旧 Store 中已有对应 tag entity，也不得出现在 completion。
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
@@ -57,5 +61,7 @@
 - Org link target 内的 `#fragment` 不显示 inline tag face 或 SVG pill。
 - 边界矩阵同时覆盖合法正文 token 与 Org 非正文对象，face/SVG/point 三条路径共享同一结论。
 - 同步后的 node `:tags` 与同一文本的渲染/point 结论一致；不需要 Store schema 迁移。
+- `#'function` 在渲染、同步提取和 completion 三条路径上结论一致；不自动删除历史 Store 数据。
+- 20px frame character height 下，默认 SVG tag 字号为 14px；修改字号比例后不得命中旧尺寸缓存。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - focused ERT 与仓库稳定测试套件通过。
