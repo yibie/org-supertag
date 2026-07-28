@@ -54,3 +54,8 @@
   - 产出：共享 tag-name 判定、completion 历史污染过滤、SVG 默认字号与缓存键修正
   - 验证方式：真实污染 fixture 红/绿自检、focused/full ERT、SVG 生成图视觉判定、byte compile、`git diff --check`
   - 影响范围：`#'function` 不再作为标签；不删除 Store 数据；SVG badge 外框尺寸不变
+
+- task012 [x] 为完整路径 Tag ID 增加显式后代查询
+  - 产出：共享路径段边界判断、scan query/View Data API 可选后代查询、真实 Tag 后代枚举
+  - 验证方式：focused ERT 锁定完整路径保留、精确查询兼容、段边界与多级后代；10k-node 基准、全量 ERT、byte compile、`git diff --check`
+  - 影响范围：默认查询行为不变；不新增 Store 字段、父 Tag entity 或 `:extends` 关系

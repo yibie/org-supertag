@@ -30,6 +30,7 @@
 
 QUERY-SPEC is a plist describing the dataset, for example:
 - (:type :tag :value \"foo\")
+- (:type :tag :value \"foo\" :include-descendants t)
 - (:type :nodes)
 - (:type :tags)
 - (:type :automations)
@@ -41,7 +42,9 @@ This function is UI-agnostic and read-only."
        (let ((tag (plist-get query-spec :value)))
          (unless (and tag (stringp tag) (not (string-empty-p tag)))
            (error "Query :tag requires a non-empty :value string"))
-         (supertag-index-get-nodes-by-tag tag)))
+         (supertag-index-get-nodes-by-tag
+          tag
+          (plist-get query-spec :include-descendants))))
       ((or :nodes :tags :relations :embeds
            ;; Some query specs use singular names in UI layers; accept them here.
            :automation :automations
@@ -136,9 +139,10 @@ Entities that do not exist are skipped."
          tags)
         nil))))
 
-(defun supertag-view-api-nodes-by-tag (tag-name)
-  "Return node IDs that have TAG-NAME."
-  (supertag-index-get-nodes-by-tag tag-name))
+(defun supertag-view-api-nodes-by-tag (tag-name &optional include-descendants)
+  "Return node IDs that have TAG-NAME.
+When INCLUDE-DESCENDANTS is non-nil, include slash-delimited descendants."
+  (supertag-index-get-nodes-by-tag tag-name include-descendants))
 
 ;; --- Field Access (UI-agnostic) ---
 

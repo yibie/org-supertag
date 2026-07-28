@@ -8,20 +8,59 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'supertag-core-store)
 (require 'supertag-ops-node)
 
 
 ;;; --- Scan-based Query Functions ---
 
-(defun supertag-index-get-nodes-by-tag (tag-name)
+(defun supertag--tag-path-descendant-p (candidate prefix)
+  "Return non-nil when CANDIDATE is below slash-terminated PREFIX."
+  (and (stringp candidate)
+       prefix
+       (> (length candidate) (length prefix))
+       (string-prefix-p prefix candidate)))
+
+(defun supertag--node-tags-match-p (tags tag-name descendant-prefix)
+  "Return non-nil when TAGS match TAG-NAME or DESCENDANT-PREFIX."
+  (or (member tag-name tags)
+      (and descendant-prefix
+           (cl-some (lambda (tag)
+                      (supertag--tag-path-descendant-p tag descendant-prefix))
+                    tags))))
+
+(defun supertag-find-tag-descendants (tag-name)
+  "Return stored tag IDs below TAG-NAME's slash path."
+  (let ((prefix (and (stringp tag-name)
+                     (> (length tag-name) 0)
+                     (concat tag-name "/")))
+        (tags-ht (supertag-store-get-collection :tags))
+        results)
+    (when (hash-table-p tags-ht)
+      (maphash
+       (lambda (tag-id _tag-data)
+         (when (supertag--tag-path-descendant-p tag-id prefix)
+           (push tag-id results)))
+       tags-ht))
+    (nreverse results)))
+
+(defun supertag-index-get-nodes-by-tag (tag-name &optional include-descendants)
   "Find all nodes with TAG-NAME by scanning the store.
-This is an O(N) operation."
-  (let ((nodes-ht (supertag-store-get-collection :nodes))
+This is an O(N) operation.  When INCLUDE-DESCENDANTS is non-nil,
+also match slash-delimited descendants of TAG-NAME."
+  (let ((descendant-prefix (and include-descendants
+                                (stringp tag-name)
+                                (> (length tag-name) 0)
+                                (concat tag-name "/")))
+        (nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
-                 (when (member tag-name (plist-get node-data :tags))
+                 (when (supertag--node-tags-match-p
+                        (plist-get node-data :tags)
+                        tag-name
+                        descendant-prefix)
                    (push node-id results)))
                nodes-ht))
     (nreverse results)))
@@ -60,16 +99,26 @@ DATE-FIELD can be :created-at or :modified-at (default :created-at)."
                nodes-ht))
     (nreverse matching-nodes)))
 
-(defun supertag-find-nodes-by-tag (tag-name)
+(defun supertag-find-nodes-by-tag (tag-name &optional include-descendants)
   "Find all nodes with TAG-NAME by scanning the store.
 This is an O(N) operation.
 TAG-NAME is the name of the tag to search for.
+When INCLUDE-DESCENDANTS is non-nil, slash-delimited descendants
+of TAG-NAME also match.
 Returns a list of (node-id . node-data) pairs."
-  (let ((nodes-ht (supertag-store-get-collection :nodes))
+  (let ((descendant-prefix (and include-descendants
+                                (stringp tag-name)
+                                (> (length tag-name) 0)
+                                (concat tag-name "/")))
+        (nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
-                 (when (and node-data (member tag-name (plist-get node-data :tags)))
+                 (when (and node-data
+                            (supertag--node-tags-match-p
+                             (plist-get node-data :tags)
+                             tag-name
+                             descendant-prefix))
                    (push (cons node-id node-data) results)))
                nodes-ht))
     (nreverse results)))

@@ -1,5 +1,22 @@
 # change_smart_key_20260721
 
+- 2026-07-29 Add
+  - Files: `supertag-core-scan.el`, `supertag-view-api.el`, `test/tag-path-test.el`,
+    `test/run-tests.sh`, nested-tag decision/issue docs, phase docs
+  - Functions: `supertag-find-tag-descendants`, `supertag-index-get-nodes-by-tag`,
+    `supertag-find-nodes-by-tag`, `supertag-view-api-list-entity-ids`,
+    `supertag-view-api-nodes-by-tag`
+  - Changes:
+    - Preserved complete path strings such as `emacs/package` as canonical Tag IDs.
+    - Added opt-in descendant matching with `/` segment boundaries while keeping exact queries unchanged.
+    - Kept namespace containment separate from explicit `:extends` schema inheritance.
+  - Simplification:
+    - Rejected leaf-only storage, `:raw-tag-paths`, parent entity writes and a prefix index.
+  - Verification:
+    - Focused red/green ERT: 4/4 passed; full stable ERT: 319/319 passed.
+    - 10k-node benchmark: about 2.65ms/exact query and 24.86ms/descendant query.
+  - Related: `issue009`, `task012`
+
 - 2026-07-28 Fix
   - Files: `supertag-core-transform.el`, `supertag-view-helper.el`, `supertag-ui-completion.el`,
     `supertag-view-svg-tag.el`, `test/test-inline-tag-filter.el`, phase docs

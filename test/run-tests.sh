@@ -50,6 +50,7 @@ TEST_FILES=(
     "test/conflicts-test.el"
     "test/sync-worker-regression-test.el"
     "test/tag-merge-test.el"
+    "test/tag-path-test.el"
     "test/test-smart-key.el"
     "test/embed-cache-test.el"
 )
@@ -78,9 +79,10 @@ if [ $# -gt 0 ]; then
             cl-block|sync-worker) FILTER="$FILTER test/sync-worker-regression-test.el" ;;
             smart-key) FILTER="$FILTER test/test-smart-key.el" ;;
             tag-merge) FILTER="$FILTER test/tag-merge-test.el" ;;
+            tag-path)  FILTER="$FILTER test/tag-path-test.el" ;;
             embed)     FILTER="$FILTER test/embed-cache-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist restore canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge embed all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view formula aggregate reference vc field-ref persist restore canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge tag-path embed all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)
