@@ -1,5 +1,19 @@
 # Git 原生同步变更记录
 
+## 2026-07-28 — task005 / issue027
+
+- Modify `supertag-git.el`：移除 vault 目录之后紧邻的句号，启用提示从视觉上
+  歧义的 `/notes/.` 变为实际路径 `/notes/`；内部 repo root 和目录比较不变。
+- Modify local Nova config（仓库外）：在原有 Org-Supertag idle-load 块中调用
+  `(supertag-git-sync-mode 1)`，以后每次启动加载插件时自动开启，而不是切换状态。
+
+行为：提示现在精确反映内部路径；用户无需每次启动手动执行模式命令。风险：自动
+同步仍依赖 setup 已完成、远端可用与本 clone 的 merge driver 配置，失败会沿用
+既有模式提示与重试路径。
+
+验证：Git 36/36、默认全量 314/314、Nova 配置 `check-parens`、
+`git diff --check`；仓库内 `*.elc` 数量为 0。
+
 ## 2026-07-28 — task004 / issue025
 
 - Modify `org-supertag.el`：为 README 公开的 `supertag-doctor` 注册 runtime

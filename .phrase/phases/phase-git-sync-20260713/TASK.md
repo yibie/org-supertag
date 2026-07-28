@@ -16,3 +16,7 @@
 - task004 [x] 补齐 README 公开的 `supertag-doctor` runtime autoload，并让隔离
   命令发现测试强制加载新源码而非陈旧 `.elc`；验证：Git 36/36、all 314/314、
   无 `.elc` Git 36/36 与临时目录 byte-compile。关联：issue025。
+
+- task005 [x] 消除 Git sync 启用提示中目录尾斜杠与句号拼成 `/.` 的歧义，并在
+  Nova 的既有 idle-load 块中显式启用 `supertag-git-sync-mode`；验证：Git
+  36/36、all 314/314、配置 `check-parens`。关联：issue027；提交：`051d985`。
