@@ -360,3 +360,21 @@ S0–S4 初版完成后的反例审查发现，完成标准还需同时覆盖以
 对应记录：`issue013` / `task001`。P0 修复落在 `20cb4b5`、`849206a`；最终
 `./test/run-tests.sh all` 为 245/245，三项真实 Git release-gate 场景见
 `ACCEPTANCE.md`，结论均为 PASS。
+
+## 退出前同步保护补充（2026-07-28）
+
+当前自动同步把文件保存后的 commit 延迟 30 秒，并通过异步进程 push。正常退出只
+保存数据库，不等待 debounce 或 Git 进程，因此保存内容可能停留在 working tree；
+已提交但未推送的内容虽会在下次启动补推，未提交内容却要等下一次保存事件。
+
+本阶段补两个最小入口：
+
+1. `supertag-git-sync-now`：保存 Store，取消 pending debounce；有受管文件改动时
+   立即 commit/push，否则执行一次 fetch/merge/push。
+2. 在 mode 启用期间注册 `kill-emacs-query-functions`：正常退出前检查 Store dirty、
+   pending timer/in-flight、受管文件 working tree 与本地 upstream ahead/behind。
+   未完成时让用户选择立即同步并取消本次退出，或明确保留本地状态退出。
+
+边界：不在 `kill-emacs-hook` 中阻塞等待网络；低层 `kill-emacs` 本来就不执行
+`kill-emacs-query-functions`，仍属于强制退出路径。网络失败不丢数据，本地
+working tree/commit 保持可恢复。

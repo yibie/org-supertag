@@ -1,5 +1,29 @@
 # Git 原生同步变更记录
 
+## 2026-07-28 — task006 / issue028
+
+- Add `supertag-git-sync-now`：保存 Store、取消 pending debounce，并复用既有
+  guarded commit/push 或 fetch/merge/push 链立即同步；主入口注册 runtime
+  autoload，源码安装可直接从 `M-x` 发现。
+- Modify `supertag-git-sync-mode` lifecycle：启用时注册
+  `kill-emacs-query-functions`，关闭时对称移除。正常退出会检查 Store dirty、
+  pending timer/in-flight、受管 working tree 和本地 upstream ahead/behind。
+- Modify `README.md`, `README_CN.md`：说明立即同步、退出选择与低层
+  `kill-emacs` 的明确边界；仅提交本任务新增段落，保留文件中既有未提交改动。
+- Modify `test/git-sync-mode-test.el`：真实临时 remote 覆盖立即 commit/push、
+  clean exit、同步后取消本次退出、明确 local-only 退出、dirty Store/in-flight
+  强制取消，以及 mode hook 清理。
+
+行为：`C-x C-c` 不再悄悄跑赢 30 秒 debounce 或正在执行的 Git 链。若内容已安全
+留在 working tree/local commit，用户仍可明确选择离线退出；Store 尚未落盘或 Git
+进程仍运行时则拒绝普通退出，避免数据丢失或中断仓库操作。风险：Emacs 的低层
+`kill-emacs` 按平台契约绕过 query；退出检查只比较最近 fetch 的 upstream，选择
+立即同步后才通过现有网络链刷新远端。
+
+验证：先确认新增回归在缺少实现时失败；实现后 Git 37/37、默认全量 315/315；
+临时目录 batch byte-compile 成功（仅既有 warning），`git diff --check` 通过，
+仓库内 `*.elc` 数量为 0。
+
 ## 2026-07-28 — task005 / issue027
 
 - Modify `supertag-git.el`：移除 vault 目录之后紧邻的句号，启用提示从视觉上

@@ -1,0 +1,36 @@
+# issue028 [ ] Emacs 正常退出缺少 Git 同步保护
+
+## Environment
+
+- `supertag-git-sync-mode` 已启用
+- commit debounce 默认 30 秒，Git 子进程异步运行
+- 正常退出通过 `save-buffers-kill-emacs` 执行退出查询与 kill hooks
+
+## Repro / Actual
+
+保存受管 Org/数据库文件后，在 debounce 到期或异步 push 完成前退出。退出 hook
+会保存 Store，但不会 flush Git mode 的 timer，也不会等待/查询 Git 状态。已提交
+commit 可在下次启动补推；尚在 working tree 的改动不会由 mode-enable 的 ahead
+检查提交，必须等下一次保存事件。
+
+## Expected
+
+提供立即同步命令；正常退出发现未完成同步时取消本次退出并启动同步，同时允许用户
+明确选择保留本地状态退出。退出保护必须覆盖 Store dirty、pending timer/in-flight、
+受管 working tree 和 upstream ahead/behind，不以阻塞 kill hook 等待网络实现。
+
+## Verification
+
+- 真实临时 Git remote：立即同步把 working tree 改动 commit 并 push。
+- clean 状态允许退出，不显示误报。
+- 未同步时选择同步会取消退出并完成 Git 链；选择 local-only 时允许退出且不丢文件。
+- mode enable/disable 对称注册和移除退出 query。
+- Store 尚未落盘或 Git 进程正在运行时，普通退出直接取消，不提供不安全的
+  local-only 选择。
+- Git 37/37、默认全量 315/315、临时目录 byte-compile 与 `git diff --check`
+  通过。
+
+关联任务：task006。
+
+- User Confirmation: 待真实 GUI Emacs 人工退出演练。
+- Implementation Commit: `015db5a`
