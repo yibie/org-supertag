@@ -1479,6 +1479,18 @@ outright -- silently dropping the database from every auto-commit."
     (cl-remove-if-not (lambda (p) (supertag-git-sync--pathspec-matches-p root p))
                        candidates)))
 
+(defun supertag-git-sync--owned-changes-p (root)
+  "Return non-nil when auto-commit-owned paths have changes in ROOT."
+  (let ((result
+         (apply #'supertag-git--run root
+                (append (list "status" "--porcelain=v1" "--untracked-files=all" "--")
+                        (supertag-git-sync--commit-candidate-pathspecs root)))))
+    (if (supertag-git--ok-p result)
+        (> (length (cdr result)) 0)
+      (message "supertag-git-sync: could not inspect working tree: %s"
+               (string-trim (cdr result)))
+      t)))
+
 (defun supertag-git-sync--auto-commit-path-p (root path)
   "Return non-nil when repository-relative PATH is owned by auto-commit."
   (or (string-match-p "\\.org\\'" path)
@@ -1762,6 +1774,80 @@ that piled up, whether or not anything was behind to merge first."
         (setq supertag-git-sync--last-focus-pull-time now)
         (supertag-git-sync--pull)))))
 
+(defun supertag-git-sync--pending-p ()
+  "Return non-nil when the active vault is not fully synchronized."
+  (and supertag-git-sync--vault-root
+       (or (and (fboundp 'supertag-dirty-p) (supertag-dirty-p))
+           supertag-git-sync--commit-timer
+           supertag-git-sync--in-flight
+           (supertag-git-sync--owned-changes-p supertag-git-sync--vault-root)
+           (> (or (supertag-git-sync--rev-count
+                   supertag-git-sync--vault-root "@{upstream}..HEAD")
+                  0)
+              0)
+           (> (or (supertag-git-sync--rev-count
+                   supertag-git-sync--vault-root "HEAD..@{upstream}")
+                  0)
+              0))))
+
+;;;###autoload
+(defun supertag-git-sync-now ()
+  "Save the Store and synchronize the active Git vault immediately.
+
+When auto-commit-owned files changed, bypass the debounce and run the
+existing commit/push chain. Otherwise run the existing fetch/merge/push
+cycle. Returns non-nil when a sync operation was started."
+  (interactive)
+  (unless (and (bound-and-true-p supertag-git-sync-mode)
+               supertag-git-sync--vault-root)
+    (user-error "supertag-git-sync-mode is not enabled"))
+  (if supertag-git-sync--in-flight
+      (progn
+        (message "supertag-git-sync: synchronization is already running")
+        nil)
+    (when (fboundp 'supertag-save-store)
+      (supertag-save-store))
+    (when (and (fboundp 'supertag-dirty-p) (supertag-dirty-p))
+      (user-error "Supertag database could not be saved; resolve its persistence guard before Git sync"))
+    (when supertag-git-sync--commit-timer
+      (cancel-timer supertag-git-sync--commit-timer)
+      (setq supertag-git-sync--commit-timer nil))
+    (if (supertag-git-sync--owned-changes-p supertag-git-sync--vault-root)
+        (supertag-git-sync--fire-commit)
+      (supertag-git-sync--pull))
+    (message "supertag-git-sync: synchronization requested; exit remains safe to retry once it finishes")
+    t))
+
+(defun supertag-git-sync--query-exit ()
+  "Query before normal Emacs exit when Git synchronization is unfinished."
+  (if (not (and (bound-and-true-p supertag-git-sync-mode)
+                supertag-git-sync--vault-root))
+      t
+    (condition-case err
+        (when (fboundp 'supertag-save-store)
+          (supertag-save-store))
+      (error
+       (message "supertag-git-sync: final Store save failed: %s"
+                (error-message-string err))))
+    (cond
+     ((and (fboundp 'supertag-dirty-p) (supertag-dirty-p))
+      (message "supertag-git-sync: exit cancelled because the Store could not be saved")
+      nil)
+     (supertag-git-sync--in-flight
+      (message "supertag-git-sync: exit cancelled while Git synchronization is running")
+      nil)
+     ((not (supertag-git-sync--pending-p)) t)
+     ((y-or-n-p "Org-Supertag Git sync is unfinished. Sync now before exiting? ")
+      (condition-case err
+          (supertag-git-sync-now)
+        (error
+         (message "supertag-git-sync: could not start final sync: %s"
+                  (error-message-string err))))
+      nil)
+     (t
+      (yes-or-no-p
+       "Exit now with Org-Supertag changes kept only in the local Git vault? ")))))
+
 ;;; --- Post-merge handling: DB reload + org text-conflict guard ---
 
 (defun supertag-git-sync--after-merge (merge-result root)
@@ -1884,6 +1970,7 @@ until some unrelated new edit happens to trigger the next commit -- see
       (setq supertag-git-sync--conflicted-org-files nil)
       (add-hook 'supertag-persistence-after-save-hook #'supertag-git-sync--on-db-saved)
       (add-hook 'after-save-hook #'supertag-git-sync--on-file-saved)
+      (add-hook 'kill-emacs-query-functions #'supertag-git-sync--query-exit)
       (when (fboundp 'supertag-sync--process-single-file)
         (advice-add 'supertag-sync--process-single-file :around
                     #'supertag-git-sync--skip-conflicted-file-advice))
@@ -1910,6 +1997,7 @@ state."
     (setq supertag-git-sync--pull-timer nil))
   (remove-hook 'supertag-persistence-after-save-hook #'supertag-git-sync--on-db-saved)
   (remove-hook 'after-save-hook #'supertag-git-sync--on-file-saved)
+  (remove-hook 'kill-emacs-query-functions #'supertag-git-sync--query-exit)
   (remove-function after-focus-change-function #'supertag-git-sync--maybe-focus-pull)
   (when (fboundp 'supertag-sync--process-single-file)
     (advice-remove 'supertag-sync--process-single-file

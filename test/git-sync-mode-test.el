@@ -116,7 +116,7 @@ found on `exec-path'."
            "(setq after-init-time nil load-prefer-newer t) "
            "(require 'org-supertag) "
            "(let ((commands '(supertag-git-setup supertag-git-clone "
-           "supertag-git-sync-mode supertag-doctor))) "
+           "supertag-git-sync-mode supertag-git-sync-now supertag-doctor))) "
            "(unless (and (not (featurep 'supertag-git)) "
            "(not (featurep 'supertag-doctor)) "
            "(not (memq nil "
@@ -669,6 +669,78 @@ commit; firing it again with nothing new staged produces NO empty commit."
       (let ((log (supertag-git-sync-test--git! root "log" "--oneline")))
         (should (= 2 (length (split-string (string-trim log) "\n" t))))))))
 
+(supertag-git-sync-test--deftest supertag-git-sync-test-sync-now-and-exit-query
+    "Immediate sync commits/pushes owned changes; the exit query allows a
+clean exit, cancels an unsynced exit to sync, and permits an explicit
+local-only exit without losing the working-tree change."
+  (supertag-git-sync-test--with-temp-dir dir
+    (let* ((bare (expand-file-name "bare.git" dir))
+           (root (file-name-as-directory (expand-file-name "vault" dir)))
+           (db (expand-file-name "supertag-db.el" root)))
+      (supertag-git-sync-test--init-worktree root)
+      (supertag-git-sync-test--write-store
+       (supertag-git-sync-test--build-store '("n1")) db)
+      (supertag-git--configure-clone root db)
+      (supertag-git-sync-test--git! root "add" "-A")
+      (supertag-git-sync-test--git! root "commit" "-q" "-m" "initial")
+      (supertag-git-sync-test--init-bare bare)
+      (supertag-git-sync-test--git! root "remote" "add" "origin" bare)
+      (supertag-git-sync-test--git! root "push" "-q" "-u" "origin" "main")
+      (let ((supertag-git-sync--synchronous t)
+            (supertag-git-sync-mode t)
+            (supertag-git-sync--vault-root root)
+            (supertag-git-sync--in-flight nil)
+            (supertag-git-sync--pending-push-count 0)
+            (supertag-git-sync--offline-warned nil)
+            (supertag-git-sync--conflict-commit-warned nil)
+            (supertag-git-sync--commit-timer nil)
+            (supertag-db-file db)
+            (supertag-data-directory root))
+        (cl-letf (((symbol-function 'supertag-save-store) #'ignore)
+                  ((symbol-function 'supertag-dirty-p) (lambda () nil)))
+          ;; Public command: bypass the 30-second debounce.
+          (supertag-git-sync-test--edit-node db "n1" '(:title "sync now"))
+          (should (supertag-git-sync-now))
+          (should (= 2 (length (split-string
+                                (string-trim
+                                 (supertag-git-sync-test--git!
+                                  bare "log" "--oneline"))
+                                "\n" t))))
+          ;; Clean state exits without asking.
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (ert-fail "unexpected exit prompt"))))
+            (should (supertag-git-sync--query-exit)))
+          ;; Choosing sync cancels this exit and pushes immediately.
+          (supertag-git-sync-test--edit-node db "n1" '(:title "exit sync"))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+            (should-not (supertag-git-sync--query-exit)))
+          (should (= 3 (length (split-string
+                                (string-trim
+                                 (supertag-git-sync-test--git!
+                                  bare "log" "--oneline"))
+                                "\n" t))))
+          ;; Choosing local-only permits exit and leaves the file recoverable.
+          (supertag-git-sync-test--edit-node db "n1" '(:title "keep local"))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+            (should (supertag-git-sync--query-exit)))
+          (should (supertag-git-sync--owned-changes-p root))
+          ;; Never offer a normal exit while Store data is still only in
+          ;; memory or while a Git process is in flight.
+          (cl-letf (((symbol-function 'supertag-dirty-p) (lambda () t))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (ert-fail "unsafe dirty-Store prompt"))))
+            (should-not (supertag-git-sync--query-exit)))
+          (let ((supertag-git-sync--in-flight t))
+            (cl-letf (((symbol-function 'y-or-n-p)
+                       (lambda (&rest _) (ert-fail "unsafe in-flight prompt"))))
+              (should-not (supertag-git-sync--query-exit))))
+          (should (= 3 (length (split-string
+                                (string-trim
+                                 (supertag-git-sync-test--git!
+                                  bare "log" "--oneline"))
+                                "\n" t)))))))))
+
 (supertag-git-sync-test--deftest supertag-git-sync-test-push-reject-retry-succeeds
     "B's push is rejected because the remote advanced (A pushed first);
 `supertag-git-sync--push' fetches, merges, and retries the push exactly
@@ -980,6 +1052,8 @@ debounced commit."
               (should (memq #'supertag-git-sync--on-file-saved after-save-hook))
               (should (memq #'supertag-git-sync--on-db-saved
                             supertag-persistence-after-save-hook))
+              (should (memq #'supertag-git-sync--query-exit
+                            kill-emacs-query-functions))
               ;; Simulate a pending debounced commit.
               (supertag-git-sync-test--edit-node db "n1" '(:title "pending change"))
               (supertag-git-sync--schedule-commit)
@@ -991,6 +1065,8 @@ debounced commit."
               (should-not (memq #'supertag-git-sync--on-file-saved after-save-hook))
               (should-not (memq #'supertag-git-sync--on-db-saved
                                 supertag-persistence-after-save-hook))
+              (should-not (memq #'supertag-git-sync--query-exit
+                                kill-emacs-query-functions))
               ;; Flush: the pending change was committed before shutdown,
               ;; not silently dropped.
               (let ((log (supertag-git-sync-test--git! root "log" "--oneline")))

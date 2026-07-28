@@ -490,6 +490,8 @@ active vault when `supertag-sync-auto-start` is non-nil."
   "Clone and configure an Org-Supertag Git vault." t)
 (autoload 'supertag-git-sync-mode "supertag-git"
   "Toggle automatic Git synchronization for the current vault." t)
+(autoload 'supertag-git-sync-now "supertag-git"
+  "Synchronize the current Org-Supertag Git vault immediately." t)
 
 ;; --- Graph UI (optional) ---
 ;; Requires `websocket' and `simple-httpd' packages.
