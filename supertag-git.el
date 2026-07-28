@@ -1895,7 +1895,7 @@ until some unrelated new edit happens to trigger the next commit -- see
       (unless supertag-git-sync--in-flight
         (setq supertag-git-sync--in-flight t)
         (supertag-git-sync--maybe-push-after-cycle supertag-git-sync--vault-root))
-      (message "supertag-git-sync-mode: enabled for %s." supertag-git-sync--vault-root))))
+      (message "supertag-git-sync-mode: enabled for %s" supertag-git-sync--vault-root))))
 
 (defun supertag-git-sync--disable ()
   "Cancel all timers (flushing any pending debounced commit first, rather
