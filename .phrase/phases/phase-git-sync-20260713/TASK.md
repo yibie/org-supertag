@@ -25,3 +25,9 @@
   Git remote 覆盖 working tree → commit/push、clean exit、保留本地退出与 mode
   hook 清理，Git 37/37、默认全量 315/315 与临时目录 byte-compile。关联：
   issue028；提交：`015db5a`。
+
+- task007 [x] 按人工演练收紧退出语义：无本地改动时不因 timer/behind 同步；需要
+  同步时成功后自动走正常退出，同步失败或期间出现新改动则保持 Emacs。验证：
+  behind-only clean exit、异步完成自动退出、失败/新改动不退出与 timer 清理，
+  Git 37/37、默认全量 330/330、临时 byte-compile。关联：issue028；提交：
+  `8388d55`。

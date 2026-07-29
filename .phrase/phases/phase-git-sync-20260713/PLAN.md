@@ -378,3 +378,14 @@ S0–S4 初版完成后的反例审查发现，完成标准还需同时覆盖以
 边界：不在 `kill-emacs-hook` 中阻塞等待网络；低层 `kill-emacs` 本来就不执行
 `kill-emacs-query-functions`，仍属于强制退出路径。网络失败不丢数据，本地
 working tree/commit 保持可恢复。
+
+### 人工演练修订（2026-07-29）
+
+退出查询只处理本地尚未交付的工作：Store dirty、受管 working tree 改动、ahead
+commit，以及已经运行中的 Git 链。单独的 debounce timer 或 last-fetched upstream
+behind 不代表本地笔记有变动，不应在退出时启动同步。
+
+用户选择退出前同步后，异步链成功且期间没有新改动时自动重新执行正常退出；同步
+失败、冲突、Store 仍 dirty，或同步期间出现新改动时保持 Emacs 打开。自动退出仍
+走 `save-buffers-kill-emacs`，确保同步等待期间产生的其他 buffer 修改继续接受
+Emacs 自身的保存询问。

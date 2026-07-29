@@ -16,8 +16,9 @@ commit 可在下次启动补推；尚在 working tree 的改动不会由 mode-en
 ## Expected
 
 提供立即同步命令；正常退出发现未完成同步时取消本次退出并启动同步，同时允许用户
-明确选择保留本地状态退出。退出保护必须覆盖 Store dirty、pending timer/in-flight、
-受管 working tree 和 upstream ahead/behind，不以阻塞 kill hook 等待网络实现。
+明确选择保留本地状态退出。人工演练进一步确认：没有本地笔记改动时，不因单独的
+debounce timer 或 upstream behind 启动退出同步；确需同步时，成功后自动走正常
+退出。同步失败、冲突或同步期间出现新改动时保持 Emacs 打开。
 
 ## Verification
 
@@ -29,8 +30,13 @@ commit 可在下次启动补推；尚在 working tree 的改动不会由 mode-en
   local-only 选择。
 - Git 37/37、默认全量 315/315、临时目录 byte-compile 与 `git diff --check`
   通过。
+- 2026-07-29 修订：behind-only 且无本地改动时直接退出；选择同步后成功自动调用
+  正常退出；失败/新改动保持 Emacs；mode disable 清理 exit waiter。Git 37/37、
+  默认全量 330/330、临时目录 byte-compile 通过。
 
-关联任务：task006。
+关联任务：task006、task007。
 
-- User Confirmation: 待真实 GUI Emacs 人工退出演练。
+- User Confirmation: 2026-07-29，用户确认自动同步正常，并要求无本地改动直接
+  退出、退出同步成功后自动关闭 Emacs；最终行为待再次演练。
 - Implementation Commit: `015db5a`
+- Refinement Commit: `8388d55`

@@ -1,5 +1,27 @@
 # Git 原生同步变更记录
 
+## 2026-07-29 — task007 / issue028
+
+- Modify `supertag-git-sync--pending-p`：退出判定只保留 Store dirty、受管 working
+  tree 和 ahead commit；单独的 debounce timer 与 upstream behind 不再触发同步。
+- Add one-shot exit waiter：用户选择同步或退出时已有 Git 链运行，等待器每 250ms
+  仅检查既有异步链是否结束。成功且没有新本地工作时调用
+  `save-buffers-kill-emacs`；失败、冲突、Store dirty 或新改动则取消自动退出。
+- Modify mode disable：取消 exit waiter，避免关闭模式后遗留自动退出。
+- Modify Git sync ERT：覆盖 behind-only clean exit、不调用 sync、同步完成自动
+  退出、失败/新改动保持打开与 waiter 清理。
+- Modify `README.md`, `README_CN.md`：更新无改动直接退出、成功自动关闭与失败
+  保持打开的可见行为；只提交本任务对应 hunk，保留用户其他未提交修改。
+
+行为：没有本地笔记变动时，`C-x C-c` 直接退出；需要交付本地内容时选择同步一次，
+成功后 Emacs 自动关闭，不再要求第二次退出。网络失败或同步期间继续编辑不会误关
+Emacs。风险：低层 `kill-emacs` 继续绕过 query；自动退出等待期间如果其他 buffer
+产生修改，`save-buffers-kill-emacs` 仍会按 Emacs 标准流程询问保存。
+
+验证：新增 behind-only 回归先在旧实现上失败；修复后 Git 37/37、默认全量
+330/330；临时目录 batch byte-compile 成功（仅既有 warning），
+`git diff --check` 通过。
+
 ## 2026-07-28 — task006 / issue028
 
 - Add `supertag-git-sync-now`：保存 Store、取消 pending debounce，并复用既有

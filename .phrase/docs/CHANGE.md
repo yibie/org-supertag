@@ -40,5 +40,6 @@
 - 2026-07-28: phase-smart-key-20260721/change_smart_key_20260721.md  # Function-quote tag filtering + smaller SVG tag font
 - 2026-07-28: phase-git-sync-20260713/CHANGE.md  # Unambiguous sync root message + automatic mode enablement
 - 2026-07-28: phase-git-sync-20260713/CHANGE.md  # Immediate Git sync command + normal-exit synchronization guard
+- 2026-07-29: phase-git-sync-20260713/CHANGE.md  # Skip clean exit sync + auto-exit after successful synchronization
 - 2026-07-29: .phrase/docs/change_nested_tags_20260624.md  # Full-path nested Tag IDs + explicit descendant queries
 - 2026-07-29: .phrase/docs/change_nested_tags_20260624.md  # task013 Store-to-UI nested tag completion
