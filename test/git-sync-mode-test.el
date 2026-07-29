@@ -694,6 +694,7 @@ local-only exit without losing the working-tree change."
             (supertag-git-sync--offline-warned nil)
             (supertag-git-sync--conflict-commit-warned nil)
             (supertag-git-sync--commit-timer nil)
+            (supertag-git-sync--exit-wait-timer nil)
             (supertag-db-file db)
             (supertag-data-directory root))
         (cl-letf (((symbol-function 'supertag-save-store) #'ignore)
@@ -706,14 +707,34 @@ local-only exit without losing the working-tree change."
                                  (supertag-git-sync-test--git!
                                   bare "log" "--oneline"))
                                 "\n" t))))
-          ;; Clean state exits without asking.
-          (cl-letf (((symbol-function 'y-or-n-p)
-                     (lambda (&rest _) (ert-fail "unexpected exit prompt"))))
+          ;; No LOCAL work means no exit-time sync, even when the
+          ;; last-fetched upstream says this clone is behind.
+          (cl-letf (((symbol-function 'supertag-git-sync--rev-count)
+                     (lambda (_root range)
+                       (if (equal range "HEAD..@{upstream}") 1 0)))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (ert-fail "unexpected exit prompt")))
+                    ((symbol-function 'supertag-git-sync-now)
+                     (lambda () (ert-fail "unexpected clean-vault sync"))))
             (should (supertag-git-sync--query-exit)))
-          ;; Choosing sync cancels this exit and pushes immediately.
+          ;; Choosing sync cancels the current exit, pushes immediately,
+          ;; then automatically retries normal Emacs exit on completion.
           (supertag-git-sync-test--edit-node db "n1" '(:title "exit sync"))
-          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-            (should-not (supertag-git-sync--query-exit)))
+          (let ((supertag-git-sync--exit-wait-timer nil)
+                wait-callback
+                exit-called)
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                      ((symbol-function 'run-with-timer)
+                       (lambda (_secs _repeat function &rest args)
+                         (setq wait-callback
+                               (lambda () (apply function args)))
+                         'exit-wait-timer))
+                      ((symbol-function 'save-buffers-kill-emacs)
+                       (lambda (&rest _) (setq exit-called t))))
+              (should-not (supertag-git-sync--query-exit))
+              (should wait-callback)
+              (funcall wait-callback)
+              (should exit-called)))
           (should (= 3 (length (split-string
                                 (string-trim
                                  (supertag-git-sync-test--git!
@@ -725,6 +746,15 @@ local-only exit without losing the working-tree change."
                     ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
             (should (supertag-git-sync--query-exit)))
           (should (supertag-git-sync--owned-changes-p root))
+          ;; A failed sync or an edit made while sync was running must keep
+          ;; Emacs open instead of racing past the remaining local change.
+          (let ((supertag-git-sync--exit-wait-timer 'exit-wait-timer)
+                exit-called)
+            (cl-letf (((symbol-function 'save-buffers-kill-emacs)
+                       (lambda (&rest _) (setq exit-called t))))
+              (supertag-git-sync--exit-after-sync)
+              (should-not exit-called)
+              (should-not supertag-git-sync--exit-wait-timer)))
           ;; Never offer a normal exit while Store data is still only in
           ;; memory or while a Git process is in flight.
           (cl-letf (((symbol-function 'supertag-dirty-p) (lambda () t))
@@ -732,7 +762,9 @@ local-only exit without losing the working-tree change."
                      (lambda (&rest _) (ert-fail "unsafe dirty-Store prompt"))))
             (should-not (supertag-git-sync--query-exit)))
           (let ((supertag-git-sync--in-flight t))
-            (cl-letf (((symbol-function 'y-or-n-p)
+            (cl-letf (((symbol-function 'run-with-timer)
+                       (lambda (&rest _) 'exit-wait-timer))
+                      ((symbol-function 'y-or-n-p)
                        (lambda (&rest _) (ert-fail "unsafe in-flight prompt"))))
               (should-not (supertag-git-sync--query-exit))))
           (should (= 3 (length (split-string
@@ -1058,10 +1090,13 @@ debounced commit."
               (supertag-git-sync-test--edit-node db "n1" '(:title "pending change"))
               (supertag-git-sync--schedule-commit)
               (should supertag-git-sync--commit-timer)
+              (setq supertag-git-sync--exit-wait-timer
+                    (run-with-timer 60 nil #'ignore))
               (supertag-git-sync-mode 0)
               (should-not supertag-git-sync-mode)
               (should-not supertag-git-sync--commit-timer)
               (should-not supertag-git-sync--pull-timer)
+              (should-not supertag-git-sync--exit-wait-timer)
               (should-not (memq #'supertag-git-sync--on-file-saved after-save-hook))
               (should-not (memq #'supertag-git-sync--on-db-saved
                                 supertag-persistence-after-save-hook))

@@ -1204,6 +1204,9 @@ off.")
 (defvar supertag-git-sync--pull-timer nil
   "The repeating timer for periodic fetch(+merge), or nil.")
 
+(defvar supertag-git-sync--exit-wait-timer nil
+  "One-shot timer waiting to exit after an asynchronous sync, or nil.")
+
 (defvar supertag-git-sync--last-focus-pull-time nil
   "`float-time' of the last focus-triggered pull attempt, or nil.")
 
@@ -1775,20 +1778,40 @@ that piled up, whether or not anything was behind to merge first."
         (supertag-git-sync--pull)))))
 
 (defun supertag-git-sync--pending-p ()
-  "Return non-nil when the active vault is not fully synchronized."
+  "Return non-nil when the active vault has local work not yet delivered.
+
+A debounce timer by itself and an upstream-behind count do not qualify:
+neither means local notes changed, so neither should trigger sync while
+the user is exiting."
   (and supertag-git-sync--vault-root
        (or (and (fboundp 'supertag-dirty-p) (supertag-dirty-p))
-           supertag-git-sync--commit-timer
-           supertag-git-sync--in-flight
            (supertag-git-sync--owned-changes-p supertag-git-sync--vault-root)
            (> (or (supertag-git-sync--rev-count
                    supertag-git-sync--vault-root "@{upstream}..HEAD")
                   0)
-              0)
-           (> (or (supertag-git-sync--rev-count
-                   supertag-git-sync--vault-root "HEAD..@{upstream}")
-                  0)
               0))))
+
+(defun supertag-git-sync--schedule-exit-after-sync ()
+  "Wait for the active Git chain, then exit only if no local work remains."
+  (when supertag-git-sync--exit-wait-timer
+    (cancel-timer supertag-git-sync--exit-wait-timer))
+  (setq supertag-git-sync--exit-wait-timer
+        (run-with-timer 0.25 nil #'supertag-git-sync--exit-after-sync)))
+
+(defun supertag-git-sync--exit-after-sync ()
+  "Continue or finish an exit requested during asynchronous Git sync."
+  (setq supertag-git-sync--exit-wait-timer nil)
+  (cond
+   ((not (and (bound-and-true-p supertag-git-sync-mode)
+              supertag-git-sync--vault-root))
+    (message "supertag-git-sync: automatic exit cancelled because sync mode was disabled"))
+   (supertag-git-sync--in-flight
+    (supertag-git-sync--schedule-exit-after-sync))
+   ((supertag-git-sync--pending-p)
+    (message "supertag-git-sync: automatic exit cancelled; synchronization failed or new local changes remain"))
+   (t
+    (message "supertag-git-sync: synchronization complete; exiting Emacs")
+    (save-buffers-kill-emacs))))
 
 ;;;###autoload
 (defun supertag-git-sync-now ()
@@ -1815,7 +1838,7 @@ cycle. Returns non-nil when a sync operation was started."
     (if (supertag-git-sync--owned-changes-p supertag-git-sync--vault-root)
         (supertag-git-sync--fire-commit)
       (supertag-git-sync--pull))
-    (message "supertag-git-sync: synchronization requested; exit remains safe to retry once it finishes")
+    (message "supertag-git-sync: synchronization requested")
     t))
 
 (defun supertag-git-sync--query-exit ()
@@ -1834,15 +1857,21 @@ cycle. Returns non-nil when a sync operation was started."
       (message "supertag-git-sync: exit cancelled because the Store could not be saved")
       nil)
      (supertag-git-sync--in-flight
-      (message "supertag-git-sync: exit cancelled while Git synchronization is running")
+      (supertag-git-sync--schedule-exit-after-sync)
+      (message "supertag-git-sync: waiting for the running synchronization, then Emacs will exit")
       nil)
      ((not (supertag-git-sync--pending-p)) t)
      ((y-or-n-p "Org-Supertag Git sync is unfinished. Sync now before exiting? ")
-      (condition-case err
-          (supertag-git-sync-now)
-        (error
-         (message "supertag-git-sync: could not start final sync: %s"
-                  (error-message-string err))))
+      (let ((started
+             (condition-case err
+                 (supertag-git-sync-now)
+               (error
+                (message "supertag-git-sync: could not start final sync: %s"
+                         (error-message-string err))
+                nil))))
+        (when started
+          (supertag-git-sync--schedule-exit-after-sync)
+          (message "supertag-git-sync: synchronizing, then Emacs will exit automatically")))
       nil)
      (t
       (yes-or-no-p
@@ -1995,6 +2024,9 @@ state."
   (when supertag-git-sync--pull-timer
     (cancel-timer supertag-git-sync--pull-timer)
     (setq supertag-git-sync--pull-timer nil))
+  (when supertag-git-sync--exit-wait-timer
+    (cancel-timer supertag-git-sync--exit-wait-timer)
+    (setq supertag-git-sync--exit-wait-timer nil))
   (remove-hook 'supertag-persistence-after-save-hook #'supertag-git-sync--on-db-saved)
   (remove-hook 'after-save-hook #'supertag-git-sync--on-file-saved)
   (remove-hook 'kill-emacs-query-functions #'supertag-git-sync--query-exit)

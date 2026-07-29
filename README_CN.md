@@ -329,7 +329,7 @@ M-x supertag-git-clone
 
 **可选的自动化：** `M-x supertag-git-sync-mode` 会开启一个后台循环，自动 debounce 提交你的改动、按定时器和焦点事件 fetch/merge、并推送——包括在联网恢复后一次性追赶断网期间积累的提交，不需要等一次新的编辑来触发。不开这个模式，手动 `git pull`/`git push`（或 `magit-pull`/`magit-push`）效果完全一样；这个模式只是便利层，不是正确性所在。
 
-需要跳过 debounce 立即同步时，执行 `M-x supertag-git-sync-now`。模式开启后，正常的 `C-x C-c` 会检查尚未落盘的 Store、受管 working tree 改动、正在运行的 Git 操作，以及相对最近一次 fetch 的 ahead/behind commit；若仍有工作，Emacs 会取消本次退出并让你立即同步，也允许你明确选择保留可恢复的 working tree/local commit 后退出。低层 `kill-emacs` 会按 Emacs 自身约定绕过这项正常退出查询。
+需要跳过 debounce 立即同步时，执行 `M-x supertag-git-sync-now`。模式开启后，正常的 `C-x C-c` 会检查尚未落盘的 Store、受管 working tree 改动、正在运行的 Git 操作，以及相对最近一次 fetch 的 ahead commit。没有本地改动时直接退出，即使远端 ahead 也不在退出时主动同步；有本地改动时选择同步，成功后 Emacs 自动退出，同步失败或期间又有新改动则保持打开。你也可以明确选择保留可恢复的 working tree/local commit 后退出。低层 `kill-emacs` 会按 Emacs 自身约定绕过这项正常退出查询。
 
 **冲突。** 数据库自身的编辑在常见情况下——两侧改的是不同节点或字段——会自动合并。当**同一个**字段在两侧被改成不同的值，或者纯 `.org` 正文在两侧改了同一行，git 会把那个文件留在真实的、未解决的冲突状态：对 `supertag-db.el` 本身，它会拒绝加载直到冲突解决（报错信息会点名文件并指向这里）；对 `.org` 文件，同步扫描器会跳过导入任何仍带冲突标记的文件，而不是把垃圾内容导入进来。不管哪种情况，`M-x supertag-doctor`（"8. Git Sync" 一节）都会列出具体哪些还没解决——像处理其他 git 冲突一样，手工解决或用 `magit`/`git checkout --merge`。
 
