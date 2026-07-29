@@ -1665,15 +1665,18 @@ Relation creation function now has built-in duplicate checking."
            :created-at (current-time)))))
 
 (defun supertag--process-node-tags (node-data)
-  "Process tags for a node, creating tag entities and relations only when necessary.
+  "Make tag entities and node-tag relations agree with NODE-DATA.
 NODE-DATA is the node plist containing tag information.
 This function is called only when a node is actually being created or updated."
   (let ((node-id (plist-get node-data :id))
         (all-tags (plist-get node-data :tags)))
-    (when (and node-id all-tags)
-      ;; Create tag entities only if they don't exist
-      (let ((tag-ids (supertag--create-tag-entities all-tags)))
-        ;; Create node-tag relations only if they don't exist
+    (when node-id
+      (let ((tag-ids (if all-tags
+                         (supertag--create-tag-entities all-tags)
+                       '())))
+        (dolist (relation (supertag-relation-find-by-from node-id :node-tag))
+          (unless (member (plist-get relation :to) tag-ids)
+            (supertag-relation-delete (plist-get relation :id))))
         (supertag--create-node-tag-relations node-id tag-ids)))))
 
 
@@ -1838,15 +1841,16 @@ Returns: :title (cleaned, user-visible title),
 Returns: :olp (list of ancestor titles from root to current)."
   (list :olp (supertag--extract-outline-path headline)))
 
-(defun supertag-extractor--tags (headline _file ctx)
+(defun supertag-extractor--tags (headline _file _ctx)
   "Extract tags from a headline element.
-Reads inline #tags from title and content, optionally reads native
-org :tags: during full rescan.
+Reads inline #tags from title/content and native org :tags: unless the
+legacy-tag policy is `ignore'.
 Returns: :tags (list of sanitized tag strings)."
   (let* ((inline-tags (supertag--extract-inline-tags headline))
-         (org-native-tags (if (plist-get ctx :full-rescan-p)
-                              (or (supertag--extract-org-headline-tags headline) '())
-                            '()))
+         (org-native-tags
+          (if (eq supertag-sync-legacy-tags-policy 'ignore)
+              '()
+            (or (supertag--extract-org-headline-tags headline) '())))
          (all-tags (supertag--merge-and-sanitize-tags
                     inline-tags org-native-tags)))
     (list :tags all-tags)))
@@ -2215,7 +2219,7 @@ Parses the current state of the headline and updates the store."
   (when (org-at-heading-p)
     (let ((props (supertag--parse-node-at-point)))
       (when props
-        (supertag-node-create props)))))
+        (supertag-db-add-with-hash (plist-get props :id) props)))))
 
 ;;;###autoload
 (defun supertag-migrate-org-files-to-database (path &optional counters allow-no-id)

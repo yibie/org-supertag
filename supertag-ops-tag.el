@@ -16,6 +16,11 @@
 (require 'supertag-ops-schema)
 (require 'supertag-ops-global-field)
 
+(declare-function supertag-tag-path-rename-plan
+                  "supertag-ops-tag-merge" (old-root new-root))
+(declare-function supertag-tag-path-rename-execute
+                  "supertag-ops-tag-merge" (plan))
+
 ;;; --- Internal Helper ---
 
 (defun supertag--validate-tag-data (data)
@@ -371,57 +376,16 @@ Returns the updated tag data."
               (plist-put tag :fields new-fields))))))))
 
 (defun supertag-tag-rename (old-id new-id)
-  "Rename a tag from OLD-ID to NEW-ID across the entire system.
-This is a complex operation that updates the tag definition,
-all child tags that extend it, all node-tag relationships,
-and the tag text in all relevant Org files."
+  "Rename OLD-ID and every namespace descendant below NEW-ID."
   (interactive "sRename tag from: \nsRename tag to: ")
-  (let ((sanitized-new-id (supertag-sanitize-tag-name new-id)))
-    (when (supertag-tag-get sanitized-new-id)
-      (error "Tag '%s' already exists. Cannot rename." sanitized-new-id))
-
-    ;; 0. Find all affected nodes and files BEFORE any changes
-    (let* ((nodes-with-tag (supertag-find-nodes-by-tag old-id))
-           (files (delete-dups (mapcar (lambda (node-pair)
-                                         (let ((node (cdr node-pair)))
-                                           (plist-get node :file)))
-                                       nodes-with-tag))))
-
-      ;; 1. Get old tag data and create the new one
-      (let ((old-tag-data (supertag-tag-get old-id)))
-        (unless old-tag-data
-          (error "Tag '%s' not found." old-id))
-        (let ((new-tag-props (copy-tree (supertag--ensure-plist old-tag-data))))
-          (setq new-tag-props (plist-put new-tag-props :id sanitized-new-id))
-          (setq new-tag-props (plist-put new-tag-props :name sanitized-new-id))
-          (supertag-tag-create new-tag-props)))
-
-      ;; 2. Update all child tags that extend the old tag
-      (let ((all-tags (mapcar #'cdr (supertag-query :tags))))
-        (dolist (tag-data all-tags)
-          (let* ((tag-plist (supertag--ensure-plist tag-data))
-                 (parent-id (plist-get tag-plist :extends)))
-            (when (equal parent-id old-id)
-              (supertag--set-tag-parent (plist-get tag-plist :id) sanitized-new-id)))))
-
-      ;; 3. Update all node-tag relations
-      (let ((relations-to-update (supertag-relation-find-by-to old-id :node-tag)))
-        (dolist (rel relations-to-update)
-          (supertag-relation-update (plist-get rel :id)
-            (lambda (r) (plist-put r :to sanitized-new-id)))))
-
-      ;; 4. Delete the old tag definition
-      (supertag-tag-delete old-id)
-
-      ;; 5. Update the text in all relevant Org files
-      (require 'supertag-view-helper)
-      (let ((total-renamed (supertag-view-helper-rename-tag-text-in-files old-id sanitized-new-id files)))
-        (message "Tag renamed from '%s' to '%s' (%s total instances)."
-                 old-id sanitized-new-id total-renamed))
-
-      ;; 6. Rebuild schema cache to reflect all changes
-      (supertag-ops-schema-rebuild-cache)
-      sanitized-new-id)))
+  (require 'supertag-ops-tag-merge)
+  (let* ((plan (supertag-tag-path-rename-plan old-id new-id))
+         (result (supertag-tag-path-rename-execute plan)))
+    (message "Renamed %d tag path(s) from '%s' to '%s' (%d file edit(s))."
+             (length (plist-get result :mapping))
+             old-id (plist-get result :target-id)
+             (plist-get result :file-change-count))
+    (plist-get result :target-id)))
 
 (defun supertag--set-tag-parent (child-id parent-id)
   "Set CHILD-ID to extend PARENT-ID, rebuilding schema cache."

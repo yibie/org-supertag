@@ -8,7 +8,7 @@
 - issue006 [x] automation async worker 报错 changed-props 未绑定（phase-automation-alignment-20260116/issue_automation_alignment_20260121_changed_props_void.md）
 - issue007 [x] 父标题变更后 add-reference 候选仍显示旧 `:olp`（phase-view-dsl-20260204/issue_view_dsl_20260205_olp_stale.md）
 - issue008 [x] `supertag-add-reference` 在同一文件内插入反向链接后，正向链接偏离光标位置（fixed in `supertag-ui-commands.el`，见 `test-add-reference.el`）
-- issue009 [ ] 嵌套标签（`#a/b`）完整路径查询已实现并通过自动化验证，待真实 vault 验收（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
+- issue009 [ ] 嵌套标签（`#a/b`）Store→Schema/completion/View/Table 闭环与自动验收已完成，待用户实机确认（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
 - issue010 [x] persistence 候选去重导致显式 DB 被 snapshot 重复项降级（phase-sync-integrity-20251226/issue_sync_integrity_20260711_persistence_failover.md）
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）
@@ -21,7 +21,7 @@
 - issue019 [ ] `supertag-back-to-heading` 删除 Store node 后仍保留 Org `:ID:`（phase-smart-key-20260721/issue_back_to_heading_keeps_id_20260722.md）
 - issue020 [x] 后台同步把 Org TODO 关键字误存入 node title（已由用户在真实 vault 验证；phase-sync-improve-20251216/issue_sync_improve_20260722_todo_title.md）
 - issue021 [ ] Org 非正文对象与嵌入式 hash 被误渲染/同步为 tag（渲染与同步边界已对齐，待用户验证；phase-smart-key-20260721/issue_svg_tag_renders_link_fragment_20260725.md）
-- issue022 [ ] 原生 `:tag:` 在增量同步与 node-tag 关系清理间缺少一致策略（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）
+- issue022 [ ] 原生 `:tag:` 读取与 node-tag 回收已对齐；`lazy-convert` 文件改写入口仍待实现（phase-smart-key-20260721/issue_native_tag_incremental_reconciliation_20260726.md）
 - issue023 [x] 快照恢复会破坏降级文件并绕过数据安全保护（自动化验证完成；用户确认人工演练属于 Git 同步；phase-git-sync-20260713/issue_restore_safety_20260727.md）
 - issue024 [x] 直接加载源码时 `M-x` 找不到 Git 同步公开命令（用户已实机确认 setup 与首次推送成功；phase-git-sync-20260713/issue_git_command_discovery_20260727.md）
 - issue025 [x] 直接加载源码时 `M-x` 找不到 `supertag-doctor`（用户已实机确认 Doctor 与 Git Sync 健康检查正常；phase-git-sync-20260713/issue_doctor_command_discovery_20260728.md）

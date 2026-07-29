@@ -1,5 +1,50 @@
 # change_smart_key_20260721
 
+- 2026-07-29 Add/Modify
+  - Files: `supertag-core-tag-path.el`, `supertag-core-scan.el`,
+    `supertag-services-sync.el`, `supertag-ops-tag.el`,
+    `supertag-ops-tag-merge.el`, `supertag-ui-completion.el`,
+    `supertag-view-api.el`, `supertag-view-framework.el`,
+    `supertag-view-helper.el`, `supertag-view-schema.el`,
+    `supertag-view-table.el`, `test/tag-path-test.el`, phase/docs indexes
+  - Functions: path validation/parent/leaf/rebase, authoritative node-tag
+    reconciliation, Schema namespace tree, descendant View/Table queries,
+    transactional namespace branch rename
+  - Changes:
+    - Complete slash paths remain canonical Tag IDs; missing parents are derived
+      virtual namespaces and never become Tag entities or `:extends` links.
+    - Single-node and full synchronization now create the same Tag entities and
+      reconcile stale node-tag relations from the current authoritative tag set.
+    - Schema, completion, custom View and Table preserve namespace scope; aggregate
+      tables expose only common columns and reject schema/field edits.
+    - Branch rename preflights collisions, migrates descendants and exact structured
+      references, snapshots Org files, and rolls back Store/files on failure.
+    - Exact text deletion/rename uses the shared full-token matcher, so `#a` cannot
+      truncate `#a/b`; only `:tag` field values migrate during a branch rename.
+  - Simplification:
+    - No parent entities, Store schema migration, prefix index, duplicated raw path,
+      or second inheritance system.
+  - Verification:
+    - Focused nested-path ERT: 15/15; full stable ERT: 330/330.
+    - Completion self-check and Table ERT passed; 12 changed files passed
+      `check-parens`, byte compilation and `git diff --check`.
+    - Read-only copy of the current 101-tag/1554-node vault preserved its SHA-1;
+      `coding` exact=0, descendants=1, and Schema derived `coding/` → `日志`.
+    - Schema screenshot visual verdict: 92/100, pass.
+  - Risk:
+    - Descendant Table remains deliberately read-only until each row can carry an
+      unambiguous tag-specific schema context.
+    - Native `lazy-convert` file mutation remains tracked by issue022.
+  - Related: `issue009`, `issue022`, `task013`
+
+- 2026-07-29 Plan
+  - Files: nested-tag issue/plan/task docs
+  - Changes:
+    - Reclassified task012 as the descendant-query foundation rather than complete nested-tag support.
+    - Added task013 to cover sync consistency, namespace navigation, completion, aggregate views and safe branch rename.
+    - Locked the boundary between path namespace and explicit `:extends` field inheritance.
+  - Related: `issue009`, `task013`
+
 - 2026-07-29 Add
   - Files: `supertag-core-scan.el`, `supertag-view-api.el`, `test/tag-path-test.el`,
     `test/run-tests.sh`, nested-tag decision/issue docs, phase docs

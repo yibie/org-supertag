@@ -747,19 +747,14 @@ TAG-NAME is the tag name to remove."
   (save-excursion
     (org-back-to-heading t)
     (let ((subtree-end (save-excursion (org-end-of-subtree t t) (point)))
-          (regex (concat "#" (regexp-quote tag-name)))
           (case-fold-search nil)
           (removed-count 0))
-      ;; Search and remove from headline line first
       (beginning-of-line)
-      (while (re-search-forward regex (line-end-position) t)
-        (replace-match "")
-        (setq removed-count (1+ removed-count)))
-      ;; Now scan the subtree
-      (forward-line 1)
-      (while (re-search-forward regex subtree-end t)
-        (replace-match "")
-        (setq removed-count (1+ removed-count)))
+      (while (re-search-forward supertag-inline-tag-regexp subtree-end t)
+        (when (equal tag-name (match-string-no-properties 2))
+          (delete-region (1- (match-beginning 2)) (match-end 2))
+          (setq subtree-end (- subtree-end (1+ (length tag-name))))
+          (setq removed-count (1+ removed-count))))
       removed-count)))
 
 (defun supertag-view-helper-get-tag-at-point ()
@@ -818,44 +813,51 @@ Returns the total number of instances removed."
           (save-excursion
             (goto-char (point-min))
             (let ((removed-count 0))
-              (while (re-search-forward (concat "#" (regexp-quote tag-name)) nil t)
-                (let ((start (match-beginning 0))
-                      (end (match-end 0)))
+              (while (re-search-forward supertag-inline-tag-regexp nil t)
+                (let ((start (1- (match-beginning 2)))
+                      (end (match-end 2)))
                   ;; Only remove tags that are not in comments or code blocks
-                  (unless (or (save-excursion
+                  (when (and
+                         (equal tag-name (match-string-no-properties 2))
+                         (not
+                          (or (save-excursion
                                 (goto-char start)
                                 (org-in-src-block-p))
-                             (save-excursion
-                               (goto-char start)
-                               (beginning-of-line)
-                               (looking-at-p "^[ \t]*#\+")))
+                              (save-excursion
+                                (goto-char start)
+                                (beginning-of-line)
+                                (looking-at-p "^[ \t]*#\\+")))))
                     ;; Smart deletion with space handling
                     (let* ((prev-char (char-before start))
                            (next-char (char-after end))
                            (delete-start start)
                            (delete-end end))
-                      ;; Extend deletion to include surrounding spaces if appropriate
-                      (when (and prev-char (eq prev-char ?\s))
-                        (setq delete-start (1- delete-start)))
-                      (when (and next-char (eq next-char ?\s))
+                      ;; Keep one separator when the token sits between prose.
+                      (cond
+                       ((and prev-char next-char
+                             (eq prev-char ?\s) (eq next-char ?\s))
                         (setq delete-end (1+ delete-end)))
+                       ((and prev-char (eq prev-char ?\s)
+                             (or (null next-char) (eq next-char ?\n)))
+                        (setq delete-start (1- delete-start))))
                       (delete-region delete-start delete-end)
                       (setq removed-count (1+ removed-count))))))
               (when (> removed-count 0)
                 (save-buffer)
                 (setq total-removed (+ total-removed removed-count))
-                (message "Removed %d instances of #%s from %s" removed-count tag-name (file-name-nondirectory file))))))
-    total-removed))))
+                (message "Removed %d instances of #%s from %s"
+                         removed-count tag-name
+                         (file-name-nondirectory file))))))))
+    total-removed))
 
 (defun supertag-view-helper-rename-tag-text-in-buffer (old-tag-name new-tag-name)
   "Rename all occurrences of #OLD-TAG-NAME to #NEW-TAG-NAME in the current buffer.
 Returns the total number of instances renamed."
   (save-excursion
     (goto-char (point-min))
-    (let ((renamed-count 0)
-          (regex "#\\([^[:space:]#]+\\)"))
-      (while (re-search-forward regex nil t)
-        (when (and (string= (match-string-no-properties 1) old-tag-name)
+    (let ((renamed-count 0))
+      (while (re-search-forward supertag-inline-tag-regexp nil t)
+        (when (and (string= (match-string-no-properties 2) old-tag-name)
                    (not (or (save-excursion
                               (goto-char (match-beginning 0))
                               (org-in-src-block-p))
@@ -863,7 +865,7 @@ Returns the total number of instances renamed."
                               (goto-char (match-beginning 0))
                               (beginning-of-line)
                               (looking-at-p "^[ \t]*#\\+")))))
-          (replace-match (concat "#" new-tag-name) t t)
+          (replace-match new-tag-name t t nil 2)
           (setq renamed-count (1+ renamed-count))))
       renamed-count)))
 
@@ -879,27 +881,27 @@ Returns the total number of instances renamed."
         (with-current-buffer (find-file-noselect file)
           (save-excursion
             (goto-char (point-min))
-            (let ((renamed-count 0)
-                  (regex "#\\([^[:space:]#]+\\)"))
-              (while (re-search-forward regex nil t)
+            (let ((renamed-count 0))
+              (while (re-search-forward supertag-inline-tag-regexp nil t)
                 ;; Only rename tags that are not in comments or code blocks
-                (when (and (string= (match-string-no-properties 1) old-tag-name)
+                (when (and (string= (match-string-no-properties 2) old-tag-name)
                            (not (or (save-excursion
                                       (goto-char (match-beginning 0))
                                       (org-in-src-block-p))
                                     (save-excursion
                                       (goto-char (match-beginning 0))
                                       (beginning-of-line)
-                                      (looking-at-p "^[ \t]*#\+")))))
-                  (replace-match (concat "#" new-tag-name))
+                                      (looking-at-p "^[ \t]*#\\+")))))
+                  (replace-match new-tag-name t t nil 2)
                   (setq renamed-count (1+ renamed-count))))
               (when (> renamed-count 0)
                 (save-buffer)
                 (setq total-renamed (+ total-renamed renamed-count))
                 (message "Renamed %s instances from #%s to #%s in %s"
-                         renamed-count old-tag-name new-tag-name (file-name-nondirectory file)))))))
+                         renamed-count old-tag-name new-tag-name
+                         (file-name-nondirectory file))))))))
     ;; Ensure we always return a number, never nil
-    (or total-renamed 0))))
+    (or total-renamed 0)))
 
 ;;;----------------------------------------------------------------------
 ;;; Display Buffer Management

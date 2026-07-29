@@ -36,6 +36,7 @@
 ;; These MUST be loaded for completion to work correctly
 (require 'supertag-core-store)
 (require 'supertag-core-scan)
+(require 'supertag-core-tag-path)
 (require 'supertag-core-transform)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-node)
@@ -73,7 +74,7 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
                          (when (supertag-transform-inline-tag-name-p tag-id)
                            (push tag-id all-tags)))
                        tags-ht)
-              (nreverse all-tags))
+              (sort all-tags #'string<))
           ;; Fallback: scan nodes to collect unique tags
           (let ((nodes-ht (and (fboundp 'supertag-store-get-collection)
                                (supertag-store-get-collection :nodes))))
@@ -82,8 +83,10 @@ When non-nil, `global-supertag-ui-completion-mode' will be enabled by default."
                          (when-let ((tags (plist-get node-data :tags)))
                            (setq all-tags (append tags all-tags))))
                        nodes-ht))
-            (cl-remove-if-not #'supertag-transform-inline-tag-name-p
-                              (delete-dups all-tags)))))
+            (sort
+             (cl-remove-if-not #'supertag-transform-inline-tag-name-p
+                               (delete-dups all-tags))
+             #'string<))))
     (error
      (message "supertag-completion: Failed to get tags: %S" err)
      '())))
@@ -127,6 +130,15 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
 (defconst supertag-completion--new-tag-suffix "  [Create New Tag]"
   "Visible suffix used to flag the \"create new tag\" candidate.")
 
+(defun supertag-completion--namespace-candidates (tag-ids)
+  "Return slash-terminated navigation candidates derived from TAG-IDS."
+  (mapcar
+   (lambda (path)
+     (propertize (concat path "/")
+                 'supertag-namespace-prefix t
+                 'supertag-namespace-path path))
+   (supertag-tag-path-namespace-prefixes tag-ids)))
+
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
 The list contains existing tags not yet on the current node. When
@@ -151,10 +163,18 @@ match like \"or\" against \"org-supertag\" continues to work."
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
          (all-tags (supertag-completion--get-all-tags))
+         (all-candidates
+          (append all-tags
+                  (supertag-completion--namespace-candidates all-tags)))
          (available-tags (if current-tags
-                             (seq-remove (lambda (tag) (member tag current-tags)) all-tags)
-                           all-tags))
+                             (seq-remove
+                              (lambda (tag)
+                                (member (substring-no-properties tag)
+                                        current-tags))
+                              all-candidates)
+                           all-candidates))
          (should-add-new (and (not (string-empty-p safe-prefix))
+                             (supertag-tag-path-valid-p safe-prefix)
                              (not (member safe-prefix available-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
@@ -174,27 +194,33 @@ SELECTED-STRING is the bare tag name in all cases (the visible
 \"[Create New Tag]\" label lives on the candidate's `display'
 property, not in the candidate string itself, so the buffer only
 ever contains the real tag name)."
-  (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (substring-no-properties selected-string))
-         (node-id (org-id-get-create)))
+  (let* ((namespace (get-text-property
+                     0 'supertag-namespace-prefix selected-string))
+         (is-new (get-text-property 0 'is-new-tag selected-string))
+         (tag-name (substring-no-properties selected-string)))
 
-    (when (and tag-name (not (string-empty-p tag-name)) node-id)
+    (if namespace
+        (message "Namespace '%s': continue typing a child tag." tag-name)
+      (let ((node-id (org-id-get-create)))
+        (when (and (supertag-tag-path-valid-p tag-name) node-id)
 
-      ;; Ensure the node exists in the database
-      (unless (supertag-node-get node-id)
-        (when (fboundp 'supertag-node-sync-at-point)
-          (supertag-node-sync-at-point)))
+          ;; Ensure the node exists in the database
+          (unless (supertag-node-get node-id)
+            (when (fboundp 'supertag-node-sync-at-point)
+              (supertag-node-sync-at-point)))
 
-      ;; Add the tag to the node (creates tag if needed)
-      (when (fboundp 'supertag-ops-add-tag-to-node)
-        (let ((result (supertag-ops-add-tag-to-node node-id tag-name :create-if-needed t)))
-          (when result
-            (if is-new
-                (message "New tag '%s' created and added to node %s" tag-name node-id)
-              (message "Tag '%s' added to node %s" tag-name node-id)))))
+          ;; Add the tag to the node (creates tag if needed)
+          (when (fboundp 'supertag-ops-add-tag-to-node)
+            (let ((result (supertag-ops-add-tag-to-node
+                           node-id tag-name :create-if-needed t)))
+              (when result
+                (if is-new
+                    (message "New tag '%s' created and added to node %s"
+                             tag-name node-id)
+                  (message "Tag '%s' added to node %s" tag-name node-id)))))
 
-      ;; Finally, add the trailing space to delimit the tag.
-      (insert " "))))
+          ;; Finally, add the trailing space to delimit the tag.
+          (insert " "))))))
 
 ;;;----------------------------------------------------------------------
 ;;; Main CAPF Entry Point
@@ -222,14 +248,22 @@ ever contains the real tag name)."
                   (display-sort-function . identity)
                   (cycle-sort-function . identity)
                   (company-kind . (lambda (cand)
-                                    (if (get-text-property 0 'is-new-tag cand)
-                                        'snippet
-                                      'keyword)))
+                                    (cond
+                                     ((get-text-property 0 'is-new-tag cand)
+                                      'snippet)
+                                     ((get-text-property
+                                       0 'supertag-namespace-prefix cand)
+                                      'folder)
+                                     (t 'keyword))))
                   (annotation-function
                    . (lambda (cand)
-                       (if (get-text-property 0 'is-new-tag cand)
-                           (propertize "  [+NEW]" 'face 'warning)
-                         "  [tag]")))))
+                       (cond
+                        ((get-text-property 0 'is-new-tag cand)
+                         (propertize "  [New]" 'face 'warning))
+                        ((get-text-property
+                          0 'supertag-namespace-prefix cand)
+                         "  [namespace]")
+                        (t "  [tag]"))))))
                ;; Return all candidates (for display).
                ;; Two gotchas to handle here:
                ;;
@@ -346,7 +380,7 @@ tags, creates the tag entity if new)."
       (when-let* ((bounds (supertag-completion--get-prefix-bounds))
                   (prefix (buffer-substring-no-properties
                            (car bounds) (cdr bounds)))
-                  (_ (not (string-empty-p prefix))))
+                  (_ (supertag-tag-path-valid-p prefix)))
         (condition-case err
             (let ((node-id (org-id-get-create)))
               (when node-id
@@ -418,6 +452,8 @@ RET creates and records the tag immediately."
          (input (completing-read "Tag (RET on a typed name creates it): "
                                  available nil nil)))
     (when (and input (not (string-empty-p input)))
+      (unless (supertag-tag-path-valid-p input)
+        (user-error "Tag paths cannot contain empty segments"))
       (let ((is-new (not (member input all))))
         (unless (supertag-node-get node-id)
           (when (fboundp 'supertag-node-sync-at-point)

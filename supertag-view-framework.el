@@ -25,6 +25,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
+(require 'supertag-core-tag-path)
+(require 'supertag-view-api)
 
 ;; ============================================================================
 ;; Core Registry
@@ -67,11 +70,12 @@ View definition plist structure:
 (defun supertag-view--context-builder-from-context (context)
   "Build a context builder function from CONTEXT."
   (let ((builder (plist-get context :context-builder))
-        (tag (plist-get context :tag)))
+        (query (or (plist-get context :query)
+                   (plist-get context :tag))))
     (cond
      ((functionp builder) builder)
-     ((and (stringp tag) (> (length tag) 0))
-      (lambda () (supertag-view--build-context tag)))
+     (query
+      (lambda () (supertag-view--build-context query)))
      (t nil))))
 
 (defun supertag-view-register (&rest props)
@@ -290,10 +294,25 @@ Returns DEFAULT if not found or error."
 
 (declare-function supertag-view-table--get-current-tag-id "supertag-view-table" ())
 
-(defun supertag-view-select-and-render (tag-name)
-  "Interactively select a view for TAG-NAME and render it."
+(defun supertag-view--normalize-tag-query (tag-or-query)
+  "Return a canonical tag query plist for TAG-OR-QUERY."
+  (cond
+   ((and (stringp tag-or-query) (not (string-empty-p tag-or-query)))
+    (list :type :tag :value tag-or-query))
+   ((and (listp tag-or-query)
+         (eq (plist-get tag-or-query :type) :tag)
+         (stringp (plist-get tag-or-query :value))
+         (not (string-empty-p (plist-get tag-or-query :value))))
+    (copy-sequence tag-or-query))
+   (t
+    (user-error "Expected a tag name or tag query, got %S" tag-or-query))))
+
+(defun supertag-view-select-and-render (tag-or-query)
+  "Interactively select a view for TAG-OR-QUERY and render it."
   (interactive (list (supertag-view--read-tag)))
-  (let* ((views (supertag-view-list-for-tag tag-name))
+  (let* ((query (supertag-view--normalize-tag-query tag-or-query))
+         (tag-name (plist-get query :value))
+         (views (supertag-view-list-for-tag tag-name))
          (view-names (mapcar (lambda (v) (plist-get v :name)) views)))
     (if (null views)
         (message "No views available for tag '%s'" tag-name)
@@ -307,33 +326,55 @@ Returns DEFAULT if not found or error."
         (when selected
           (let ((id (plist-get selected :id)))
             (supertag-view-render id
-                                 (supertag-view--build-context tag-name))))))))
+                                 (supertag-view--build-context query))))))))
 
 (defun supertag-view-select-from-schema ()
   "Select and render a view from Schema View."
   (interactive)
-  (let ((tag-name (or (supertag-view--get-tag-at-point)
-                      (supertag-view--read-tag))))
-    (supertag-view-select-and-render tag-name)))
+  (let ((query (or (supertag-view--get-tag-at-point)
+                   (supertag-view--read-tag))))
+    (supertag-view-select-and-render query)))
 
 (defun supertag-view--read-tag ()
-  "Read a tag name interactively."
-  (read-string "Tag name: "))
+  "Read a tag query, including derived namespace choices."
+  (let* ((tag-ids (supertag-view-api-list-tag-ids))
+         (choices (sort (delete-dups
+                         (append tag-ids
+                                 (supertag-tag-path-namespace-prefixes tag-ids)))
+                        #'string<))
+         (tag (completing-read "Tag or namespace: " choices nil t)))
+    (append (list :type :tag :value tag)
+            (when (supertag-tag-path-has-descendants-p tag tag-ids)
+              '(:include-descendants t)))))
 
 (defun supertag-view--get-tag-at-point ()
-  "Try to get the tag name at point in schema view."
-  nil)
+  "Return a tag query derived from Schema View context at point."
+  (let* ((fallback (max (point-min) (1- (point))))
+         (context (or (get-text-property (point) 'supertag-context)
+                      (get-text-property fallback 'supertag-context)))
+         (type (plist-get context :type)))
+    (pcase type
+      (:namespace
+       (list :type :tag :value (plist-get context :path)
+             :include-descendants t))
+      ((or :tag :field)
+       (append (list :type :tag :value (plist-get context :tag-id))
+               (when (plist-get context :has-descendants)
+                 '(:include-descendants t)))))))
 
-(defun supertag-view--build-context (tag-name)
-  "Build render context for TAG-NAME."
-  (let* ((node-ids (when (and (stringp tag-name)
-                              (> (length tag-name) 0)
-                              (fboundp 'supertag-view-api-nodes-by-tag))
-                     (supertag-view-api-nodes-by-tag tag-name)))
+(defun supertag-view--build-context (tag-or-query)
+  "Build render context for TAG-OR-QUERY."
+  (let* ((query (supertag-view--normalize-tag-query tag-or-query))
+         (tag-name (plist-get query :value))
+         (include-descendants (plist-get query :include-descendants))
+         (node-ids (supertag-view-api-nodes-by-tag
+                    tag-name include-descendants))
          (nodes (when (and node-ids
                            (fboundp 'supertag-view-api-get-entities))
                   (supertag-view-api-get-entities :nodes node-ids))))
     (list :tag tag-name
+          :query query
+          :include-descendants include-descendants
           :nodes nodes
           :virtual-columns nil
           :get-vc #'supertag-view--get-vc

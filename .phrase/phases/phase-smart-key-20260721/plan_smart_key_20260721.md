@@ -15,13 +15,16 @@
 11. 保留最低/稳定 Emacs 矩阵，但将 CI 限制到 main、PR 的非文档变更及手动触发。
 12. 排除 Emacs Lisp `#'function` 引用，过滤 completion 中的同类历史污染，并缩小 SVG tag 默认字号。
 13. 保留完整路径 Tag ID，在查询 seam 增加显式后代匹配，不把 namespace 映射为 `:extends`。
+14. 将路径 namespace 接入同步、Schema、completion、View 与 Table；分支重命名使用单次映射迁移，聚合表保持只读。
 
 ## Scope
 
 - 代码：`supertag-smart-key.el`、`supertag-view-node.el`、`supertag-view-helper.el`、
   `supertag-ui-commands.el`、`supertag-ui-completion.el`、`supertag-core-transform.el`、
   `supertag-services-sync.el`、`supertag-view-svg-tag.el`、`supertag-core-scan.el`,
-  `supertag-view-api.el`、`org-supertag.el`。
+  `supertag-core-tag-path.el`、`supertag-view-api.el`、`supertag-view-framework.el`、
+  `supertag-view-schema.el`、`supertag-view-table.el`、`supertag-ops-tag.el`、
+  `supertag-ops-tag-merge.el`、`org-supertag.el`。
 - 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/run-tests.sh`。
 - CI：`.github/workflows/test.yml`。
 - 文档：本 phase 文档与 `.phrase/docs/CHANGE.md`。
@@ -36,6 +39,10 @@
 - P0: `#'function` 不得渲染、同步或出现在 tag completion；历史 Store 不做破坏性删除。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
+- P1: Schema View 以路径 namespace 缩进，`:extends` 仅作为继承元数据展示；虚拟 namespace 不冒充真实 Tag。
+- P1: 从 namespace/branch 打开的 View 与 Table 保留 `include-descendants` scope；聚合 Table 不读写父 Tag 的自定义字段。
+- P1: 单节点同步与全文件同步建立相同的 Tag entity/node-tag relation，并回收当前节点已失效的关系。
+- P1: 分支 Tag 重命名同时迁移所有路径后代并预检冲突；精确删除不得破坏后代 token。
 - P1: 复用既有命令，不复制 Ops 或 View 实现。
 - P2: 插件注册、上下文 Assist 与 Hyperbole Adapter 留到真实调用方出现后再做。
 - P2: Hyperbole Adapter 与第三方动作注册继续后置；对象级 Assist 只复用已有命令。
@@ -44,9 +51,12 @@
 
 - 现有 `supertag-context` 同名异形，归一化错误会导致 Node/Schema View 动作错配。
 - 现有 inline tag point helper 未应用 font-lock validator；需在共享 helper 处修正，避免 Smart Key 复制第二套规则。
-- 原生 `:tag:` 只在全量重扫读取；本任务不得借机删除历史 tag 定义或关系，避免增量同步造成数据损失。
+- 原生 `:tag:` 在非 ignore 策略下由增量/全量同步一致读取；当前节点关系可回收，
+  但独立 Tag entity/字段 schema 不自动删除，`lazy-convert` 文件改写仍由 issue022 跟踪。
 - 过滤 `#'function` 会隐藏此前误建的同名 tag；若用户确实需要以 `'` 开头的标签，需改用不冲突的名称。
 - 路径后代查询沿用现有 O(N) node scan；10k-node 基准不满足交互延迟时再考虑前缀索引。
+- 现有 Table 的字段列假设查询只有一个精确 Tag；后代聚合必须降级为通用只读列，避免把子路径字段写到父 namespace。
+- 历史异常路径（前导/尾随 `/` 或空路径段）不可自动修复；新建入口拒绝异常路径，旧数据按普通未结构化 Tag 保留。
 - 当前分支领先远端且包含既有提交；提交时只 stage 本 phase 文件，推送前按仓库协议 rebase。
 
 ## Rollback

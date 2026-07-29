@@ -2,7 +2,7 @@
 
 ## Summary
 
-支持 `#project/active` 这样的路径式标签写法，自动建立父标签（`project`）和子标签（`active`）的层级关系，替代当前手动使用 `supertag-set-tag-parent` 的方式。
+支持 `#project/active` 这样的路径式标签写法，以完整路径作为 Tag ID，并在读取侧派生 namespace 层级；路径层级与手动设置的字段继承 `:extends` 保持独立。
 
 ## Origin
 
@@ -23,21 +23,27 @@
 
 ## Current State
 
-- 提取、同步、写回和 completion 已将 `a/b/c` 作为一个完整 Tag ID 处理。
+- 提取、同步、写回和 completion 将 `a/b/c` 作为一个完整 Tag ID 处理。
 - `:extends` 是 schema/字段继承关系，不再承担路径 namespace 关系。
-- 缺失：查询层尚不能显式请求“当前 Tag + 路径后代”。
+- 单节点/全文件同步、显式后代查询、Schema namespace 树、路径补全、
+  View/Table 聚合入口和事务化分支重命名均已实现。
+- 自动化、真实 Store 副本和 Schema 视觉验收完成；等待用户实机交互确认。
 
 ## Scope (if implemented)
 
 1. 完整路径保持为 Tag ID，不拆叶子、不双写。
-2. 查询 API：`supertag-find-tag-descendants`。
-3. scan query 与 View Data API 显式支持 `include-descendants`。
-4. 默认精确查询、`:extends` 继承和 Store schema 保持不变。
+2. 同步为完整路径建立 Tag entity 与 node-tag relation，并与当前节点标签集合对齐。
+3. Schema View 从路径派生虚拟 namespace，提供子路径创建和后代聚合查看。
+4. completion 提供 namespace 导航候选，但只为真实完整 Tag 落库。
+5. View/Table 保留 `include-descendants` scope；后代聚合 Table 只读。
+6. 分支重命名原子迁移 exact + descendants；精确删除使用完整 token 边界。
+7. 默认精确查询、`:extends` 继承和 Store schema 保持不变。
 
 ## Status
 
 - 2026-07-29 用户确认实施完整路径方案。
-- 实现与自动化验证完成；待用户在真实 vault 验收。
+- task012 仅完成查询基础；2026-07-29 用户指出这还不构成真正的嵌套标签支持。
+- task013 已完成数据后端到前端交互闭环与自动验收；issue 保持打开，等待用户实机确认。
 
 ## Environment
 
@@ -64,18 +70,20 @@ N/A (feature request)
 
 ## Fix
 
-采用最小读取侧实现：
+采用完整路径 + 派生 namespace 实现：
 
 1. 保持 Node `:tags` 与 Tag entity ID 为完整路径。
-2. 新增 `supertag-find-tag-descendants`。
+2. 共享路径段边界、父路径和叶段语义。
 3. 扩展 scan query 与 View Data API，以可选参数显式包含路径后代。
-4. 精确查询默认行为不变；不新增配置、Store 字段、父实体或 `:extends` 写入。
+4. Schema、completion、View 与 Table 使用同一完整路径和 descendant query。
+5. 同步和分支重命名维护 Store 与 Org 文本的一致性。
+6. 精确查询默认行为不变；不新增配置、Store 字段、父实体或隐式 `:extends` 写入。
 
 详细方案见 `.phrase/docs/tech-refer_nested_tags_20260624.md`。
 
 ## Verification
 
-自动化验证：
+task012 自动化验证：
 - `#emacs/package` 提取后仍是 `"emacs/package"`。
 - 精确查询 `emacs` 不隐式命中 `emacs/package`。
 - 显式后代查询 `emacs` 命中 `emacs/package` 和更深层路径，不命中 `emacs2/package`。
@@ -83,11 +91,17 @@ N/A (feature request)
 - 10k-node / 100 次查询基准：精确查询 0.265s，总计约 2.65ms/次；后代查询 2.486s，
   总计约 24.86ms/次，无需新增索引。
 
-真实 vault 验收：
-- 在包含 `emacs/package` 的数据上调用
-  `(supertag-view-api-nodes-by-tag "emacs" t)`，确认包含期望节点且精确查询结果不变。
+task013 验收：
+- focused ERT 15/15：覆盖路径边界、单节点同步、原生 tag 策略、Schema namespace/
+  inheritance 分离、completion 无写导航、View/Table scope、分支迁移/冲突回滚和精确删除。
+- 全量稳定 ERT 330/330；completion 独立 self-check 与 Table ERT 通过。
+- 12 个改动文件通过 `check-parens`、byte compilation 和 `git diff --check`。
+- 当前真实 vault 的只读副本包含 101 tags/1554 nodes；`coding` exact=0、
+  descendants=1，Schema 派生 `coding/` → `日志`；原文件与副本 SHA-1 前后不变。
+- Schema View 截图视觉判定 92/100（pass）：namespace 缩进与 `:extends` 箭头/
+  inherited fields 可清楚区分。
 
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
-- 实现结果验收：Pending
+- 端到端实现结果验收：Pending

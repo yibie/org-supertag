@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'supertag-core-store)
+(require 'supertag-core-tag-path)
 (require 'supertag-core-notify)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
@@ -51,6 +52,37 @@
 
 (defvar-local supertag-view-table--current-table-index 0
   "Index of currently active table in multi-table view.")
+
+(defun supertag-view-table--normalize-query (query)
+  "Normalize QUERY while keeping string callers exact for compatibility."
+  (if (stringp query)
+      (list :type :tag :value query)
+    query))
+
+(defun supertag-view-table--query-for-path (path)
+  "Return a tag query for PATH, aggregating when it has descendants."
+  (append (list :type :tag :value path)
+          (when (supertag-tag-path-has-descendants-p
+                 path (supertag-view-api-list-tag-ids))
+            '(:include-descendants t))))
+
+(defun supertag-view-table--read-tag-query (&optional prompt choices)
+  "Read a canonical tag or namespace query."
+  (let ((path (completing-read (or prompt "View table for tag or namespace: ")
+                               (or choices
+                                   (supertag-view-table--get-available-tags))
+                               nil t)))
+    (supertag-view-table--query-for-path path)))
+
+(defun supertag-view-table--aggregate-p (&optional query)
+  "Return non-nil when QUERY or the current query includes descendants."
+  (plist-get (or query (supertag-view-table--get-current-query-obj))
+             :include-descendants))
+
+(defun supertag-view-table--ensure-exact-table ()
+  "Reject schema and field writes from a descendant aggregate table."
+  (when (supertag-view-table--aggregate-p)
+    (user-error "Descendant aggregate tables are read-only")))
 
 (defvar-local supertag-view-table--view-config nil
   "View configuration for filtering, sorting, and column selection.")
@@ -224,12 +256,18 @@ NAMED-VIEWS is an alist of pre-defined views.
 
 If called interactively without DATA-SOURCE, prompts for data source selection."
   (interactive
-   (let* ((tag (completing-read "View table for tag: " (supertag-view-table--get-available-tags) nil t)))
-     (list (list :type :tag :value tag))))
+   (list (supertag-view-table--read-tag-query)))
 
-  (let* ((query-objs (if (listp data-source)
-                        (if (plistp (car data-source)) data-source (list data-source))
-                      (list data-source)))
+  (let* ((query-objs
+          (cond
+           ((and (listp data-source) (keywordp (car data-source)))
+            (list (supertag-view-table--normalize-query data-source)))
+           ((and (listp data-source)
+                 (listp (car data-source))
+                 (keywordp (caar data-source)))
+            (mapcar #'supertag-view-table--normalize-query data-source))
+           (t
+            (list (supertag-view-table--normalize-query data-source)))))
          (entity-ids (supertag-view-table--get-entities (car query-objs)))
          (columns (or columns (supertag-view-table--get-columns (car query-objs))))
          (buf-name (if (> (length query-objs) 1)
@@ -440,7 +478,7 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
          (selected-tags '()))
     (while (let ((tag (completing-read "Select tag (RET to finish): " available-tags nil t)))
              (when (and tag (not (string-empty-p tag)))
-               (push (list :type :tag :value tag) selected-tags)
+               (push (supertag-view-table--query-for-path tag) selected-tags)
                t)))
     (nreverse selected-tags)))
 
@@ -452,7 +490,12 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
   "Get column configuration based on QUERY-OBJ."
   (pcase (plist-get query-obj :type)
     (:tag
-     (supertag-view-table--get-columns-for-tag (plist-get query-obj :value)))
+     (if (supertag-view-table--aggregate-p query-obj)
+         '((:name "Title" :key :title :width 40)
+           (:name "Tags" :key :tags :width 28)
+           (:name "File" :key :file :width 36))
+       (supertag-view-table--get-columns-for-tag
+        (plist-get query-obj :value))))
     (:behavior
      '((:name "Name" :key :name :width 30)
        (:name "Trigger" :key :trigger :width 15)
@@ -470,14 +513,15 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
   "Interactive table view with tag selection from list.
 Prompts user to select a tag from available tags."
   (interactive)
-  (let* ((available-tags (supertag-view-table--get-available-tags))
-         (selected-tag (completing-read "Select tag: " available-tags nil t)))
-    (when selected-tag
-      (supertag-view-table selected-tag))))
+  (supertag-view-table
+   (supertag-view-table--read-tag-query "Select tag or namespace: ")))
 
 (defun supertag-view-table--get-available-tags ()
-  "Return list of available tag names."
-  (supertag-view-api-list-tags))
+  "Return canonical tag IDs and derived namespace paths."
+  (let ((ids (supertag-view-api-list-tag-ids)))
+    (sort (delete-dups
+           (append ids (supertag-tag-path-namespace-prefixes ids)))
+          #'string<)))
 
 (defun supertag-tag-get-id-by-name (tag-name)
   "Get tag ID by TAG-NAME."
@@ -584,8 +628,11 @@ Automatically detects virtual databases and uses their database fields."
                               rows))
            (calculated-widths (supertag-view-table--calculate-column-widths headers data-rows))
            (table-info (when query-obj
-                         (format "Table: %s (%d/%d)"
+                         (format "Table: %s%s (%d/%d)"
                                  (plist-get query-obj :value)
+                                 (if (supertag-view-table--aggregate-p query-obj)
+                                     " + descendants"
+                                   "")
                                  (1+ supertag-view-table--current-table-index)
                                  (length supertag-view-table--query-objs))))
            (view-info (if supertag-view-table--current-view-name
@@ -1376,6 +1423,7 @@ Based on old version's superior navigation system."
 (defun supertag-view-table-add-column ()
   "Add a new column (field) to the current tag's schema."
   (interactive)
+  (supertag-view-table--ensure-exact-table)
   (let ((tag-id (supertag-view-table--get-current-tag-id)))
     (when tag-id
       (when-let* ((field-def (supertag-ui-create-field-definition))) ; Call with no arguments
@@ -1386,6 +1434,7 @@ Based on old version's superior navigation system."
 (defun supertag-view-table-delete-column ()
   "Delete the column at point from the current tag's schema."
   (interactive)
+  (supertag-view-table--ensure-exact-table)
   (let* ((coords (supertag-view-table--get-cell-coords))
          (col-key (plist-get coords :col-key))
          (col-name (symbol-name col-key))
@@ -1399,6 +1448,7 @@ Based on old version's superior navigation system."
 (defun supertag-view-table-rename-column ()
   "Rename the column at point."
   (interactive)
+  (supertag-view-table--ensure-exact-table)
   (let* ((coords (supertag-view-table--get-cell-coords))
          (col-key (plist-get coords :col-key))
          (old-name (symbol-name col-key))
@@ -1413,6 +1463,7 @@ Based on old version's superior navigation system."
 (defun supertag-view-table-set-column-type ()
   "Set the type of the column at point."
   (interactive)
+  (supertag-view-table--ensure-exact-table)
   (let* ((coords (supertag-view-table--get-cell-coords))
          (col-key (plist-get coords :col-key))
          (col-name (symbol-name col-key))
@@ -1478,6 +1529,7 @@ COORDS is a plist with :entity-id and :col-index."
 (defun supertag-view-table-edit-cell ()
   "Edit the current cell's value with type-specific input."
   (interactive)
+  (supertag-view-table--ensure-exact-table)
   (let ((coords (supertag-view-table--get-cell-coords)))
     (if (null coords)
         (message "No cell found at point. Please click on a table cell.")
@@ -1635,14 +1687,14 @@ With prefix argument INDEX, switch to specific table number."
 (defun supertag-view-table-show-tag ()
   "Switch the current view to display a tag."
   (interactive)
-  (let ((tag-name (completing-read "View table for tag: " (supertag-view-table--get-available-tags) nil t)))
+  (let* ((query-obj (supertag-view-table--read-tag-query))
+         (tag-name (plist-get query-obj :value)))
     (when (and tag-name (not (string-empty-p tag-name)))
-      (let ((query-obj (list :type :tag :value tag-name)))
-        (setq-local supertag-view-table--query-objs (list query-obj))
-        (setq-local supertag-view-table--current-table-index 0)
-        (rename-buffer (format "*Supertag Table: %s*" tag-name))
-        (supertag-view-table-refresh)
-        (message "Switched view to tag: %s" tag-name)))))
+      (setq-local supertag-view-table--query-objs (list query-obj))
+      (setq-local supertag-view-table--current-table-index 0)
+      (rename-buffer (format "*Supertag Table: %s*" tag-name))
+      (supertag-view-table-refresh)
+      (message "Switched view to tag: %s" tag-name))))
 
 (defun supertag-view-table-switch-view ()
   "Switch to a named view."
@@ -1802,7 +1854,7 @@ With prefix argument INDEX, switch to specific table number."
 
     (when (and new-tag-name (not (string-empty-p new-tag-name)))
       ;; 2. Create new query object and append it.
-      (let ((new-query-obj (list :type :tag :value new-tag-name)))
+      (let ((new-query-obj (supertag-view-table--query-for-path new-tag-name)))
         (setq-local supertag-view-table--query-objs (append supertag-view-table--query-objs (list new-query-obj))))
 
       ;; 3. Refresh and switch to the new table.

@@ -10,6 +10,7 @@
 (require 'supertag-services-query)
 (require 'supertag-services-ui)
 (require 'supertag-core-schema)
+(require 'supertag-core-tag-path)
 (require 'supertag-view-helper)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-tag-merge)
@@ -18,6 +19,9 @@
 (require 'supertag-view-api)
 (require 'supertag-virtual-column)
 (require 'supertag-view-framework)
+
+(declare-function supertag-view-table "supertag-view-table"
+                  (data-source &optional columns view-config named-views))
 
 ;;; --- Data Gathering and Structuring ---
 
@@ -44,39 +48,52 @@ tag contains its own ID, ensuring consistency for later processing."
           (puthash id plist-data tags-by-id))))
     tags-by-id))
 
-(defun supertag-schema--calculate-hierarchy (tags-by-id)
-  "Calculate parent-child relationships from a map of tags.
-Returns a list containing two items: the children-by-id map and the list of root IDs."
-  (let ((children-by-id (make-hash-table :test 'equal))
-        (root-ids '()))
-    (maphash
-     (lambda (id tag-plist)
-       (let ((parent-id (plist-get tag-plist :extends)))
-         (if (and parent-id (gethash parent-id tags-by-id))
-             (push id (gethash parent-id children-by-id))
-           (push id root-ids))))
-     tags-by-id)
-    (let ((unique-roots (cl-delete-duplicates root-ids :test #'equal)))
-      (list children-by-id unique-roots))))
-
-(defun supertag-schema--build-tree-from-maps (tags-by-id children-by-id root-ids)
-  "Recursively build a tree structure from pre-calculated hierarchy maps."
-  (cl-labels ((build-node (id)
-                 (let* ((tag-plist (gethash id tags-by-id))
-                        (child-ids (sort (gethash id children-by-id) #'string<))
-                        (children (mapcar #'build-node child-ids)))
-                   (plist-put (cl-copy-list tag-plist) :children children))))
-    (let ((sorted-roots (sort root-ids #'string<)))
-      (mapcar #'build-node sorted-roots))))
-
 (defun supertag-schema--build-tree ()
-  "Build a hierarchical tree of all tags by composing smaller helper functions."
-  (let* ((tags-by-id (supertag-schema--get-all-tags-by-id))
-         (hierarchy (supertag-schema--calculate-hierarchy tags-by-id))
-         (children-by-id (car hierarchy))
-         (root-ids (cadr hierarchy))
-         (tree (supertag-schema--build-tree-from-maps tags-by-id children-by-id root-ids)))
-    tree))
+  "Build a namespace tree from complete slash-delimited tag IDs.
+Missing namespace ancestors are virtual nodes.  Explicit `:extends'
+remains tag metadata and never controls indentation."
+  (let ((tags-by-id (supertag-schema--get-all-tags-by-id))
+        (nodes-by-id (make-hash-table :test 'equal))
+        (children-by-id (make-hash-table :test 'equal))
+        roots)
+    (cl-labels
+        ((ensure-node
+          (path)
+          (unless (gethash path nodes-by-id)
+            (puthash path
+                     (list :id path
+                           :label (supertag-tag-path-leaf path)
+                           :virtual t)
+                     nodes-by-id)
+            (when-let* ((parent (supertag-tag-path-parent path)))
+              (ensure-node parent)))))
+      (maphash
+       (lambda (id tag)
+         (ensure-node id)
+         (let ((actual (copy-sequence tag)))
+           (setq actual (plist-put actual :id id))
+           (setq actual (plist-put actual :label
+                                   (supertag-tag-path-leaf id)))
+           (setq actual (plist-put actual :virtual nil))
+           (puthash id actual nodes-by-id)))
+       tags-by-id))
+    (maphash
+     (lambda (id _node)
+       (let ((parent (supertag-tag-path-parent id)))
+         (if (and parent (gethash parent nodes-by-id))
+             (push id (gethash parent children-by-id))
+           (push id roots))))
+     nodes-by-id)
+    (cl-labels
+        ((build-node
+          (id)
+          (let ((node (copy-sequence (gethash id nodes-by-id))))
+            (plist-put
+             node :children
+             (mapcar #'build-node
+                     (sort (copy-sequence (gethash id children-by-id))
+                           #'string<))))))
+      (mapcar #'build-node (sort roots #'string<)))))
 
 
 ;;; --- Interactive Helpers ---
@@ -85,7 +102,8 @@ Returns a list containing two items: the children-by-id map and the list of root
   "Get context directly from text properties. This is robust."
   (or (get-text-property (point) 'supertag-context)
       ;; Fallback for when cursor is at the very end of the line
-      (get-text-property (1- (point)) 'supertag-context)))
+      (and (> (point) (point-min))
+           (get-text-property (1- (point)) 'supertag-context))))
 
 (defun supertag-schema--rename-tag-at-point ()
   "Interactively rename the tag at the current line. Internal helper."
@@ -185,11 +203,11 @@ For inherited fields, jumps to the parent tag definition."
       (dolist (root-tag tag-tree)
         (supertag-schema--render-tag-node root-tag))
       (supertag-view-helper-insert-simple-footer
-       "Add:    [a f] Field | [a c] Child Tag (new/existing) | [a r] Root Tag"
+       "Add:    [a f] Field | [a n] Nested Tag | [a c] Inheritance Child | [a r] Root Tag"
        "Edit:   [e e] Edit Field | [e r] Rename | [e p] Parent | [e b] Bind Field"
        "Delete: [d d] Delete | [d m] Delete Marked"
        "Mark:   [m m] Mark | [m u] Unmark | [m U] Unmark All | [m e] Extend Marked"
-       "Move:   [M-↑/↓] Move Field | [?] Full Help | [q] Quit")
+       "View:   [v v] Custom View | [v t] Table | [?] Full Help | [q] Quit")
       (goto-char (point-min)))))
 
 (defun supertag-schema--get-own-fields (tag-id)
@@ -217,29 +235,39 @@ This function handles both legacy and global field modes."
   (let* ((level (or level 0))
          (indent (make-string (* 2 level) ? ))
          (tag-id (plist-get tag-node :id))
+         (label (or (plist-get tag-node :label) tag-id))
+         (virtual (plist-get tag-node :virtual))
          (parent-id (plist-get tag-node :extends))
-         (children (plist-get tag-node :children)))
+         (children (plist-get tag-node :children))
+         (branch (and children t)))
     ;; Render the tag itself
-    (let ((start (point)))
-      (insert (format "%s%s" indent tag-id))
+    (let* ((start (point))
+           (context (if virtual
+                        (list :type :namespace :path tag-id
+                              :has-descendants t)
+                      (list :type :tag :tag-id tag-id
+                            :has-descendants branch))))
+      (insert (format "%s%s%s" indent label (if branch "/" "")))
       (when parent-id
         (insert (propertize (format " -> %s" parent-id) 'face 'font-lock-comment-face)))
       (insert "\n")
       (add-text-properties start (1- (point))
-                           `(supertag-context (:type :tag :tag-id ,tag-id))))
+                           `(supertag-context ,context)))
 
     ;; Render fields, grouped by origin
     ;; Use supertag-schema--get-own-fields to get only directly defined fields
-    (let* ((own-fields (supertag-schema--get-own-fields tag-id))
+    (unless virtual
+      (let* ((own-fields (supertag-schema--get-own-fields tag-id))
            (processed-fields (make-hash-table :test 'equal))
+           (visited-parents (make-hash-table :test 'equal))
            (current-parent-id parent-id))
 
       ;; 1. Render own fields (directly defined on this tag)
       (when own-fields
         (dolist (field-def own-fields)
-          (let ((start (point))
-                (field-id (plist-get field-def :id))
-                (field-name (or (plist-get field-def :name) field-id)))
+          (let* ((start (point))
+                 (field-id (plist-get field-def :id))
+                 (field-name (or (plist-get field-def :name) field-id)))
             (when field-name
               (puthash field-name t processed-fields) ; Mark as processed (by display name)
               (insert (format "%s  %s\n"
@@ -248,7 +276,9 @@ This function handles both legacy and global field modes."
                                    `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name :field-id ,field-id)))))))
 
       ;; 2. Traverse parents and render their fields as inherited
-      (while current-parent-id
+      (while (and current-parent-id
+                  (not (gethash current-parent-id visited-parents)))
+        (puthash current-parent-id t visited-parents)
         (let* ((parent-own-fields (supertag-schema--get-own-fields current-parent-id))
                (fields-to-render '()))
           ;; Collect only new, un-overridden fields from this parent
@@ -263,16 +293,20 @@ This function handles both legacy and global field modes."
             (insert (format "%s  %s\n"
                              indent (propertize (format "// Inherited from %s" current-parent-id) 'face 'font-lock-comment-face)))
             (dolist (field-def (nreverse fields-to-render))
-              (let ((start (point))
-                    (field-id (plist-get field-def :id))
-                    (field-name (or (plist-get field-def :name) field-id)))
+              (let* ((start (point))
+                     (field-id (plist-get field-def :id))
+                     (field-name (or (plist-get field-def :name) field-id)))
                 (insert (format "%s  %s\n"
                                  indent (supertag-schema--format-field field-def)))
                 (add-text-properties start (1- (point))
                                      `(supertag-context (:type :field :tag-id ,tag-id :field-name ,field-name :field-id ,field-id :inherited-from ,current-parent-id)))))))
 
         ;; Move to next parent
-        (setq current-parent-id (plist-get (supertag-schema--ensure-plist (supertag-tag-get current-parent-id)) :extends))))
+        (setq current-parent-id
+              (plist-get
+               (supertag-schema--ensure-plist
+                (supertag-tag-get current-parent-id))
+               :extends)))))
 
     ;; Render children recursively
     (dolist (child children)
@@ -301,7 +335,8 @@ This function handles both legacy and global field modes."
     ;; ========== Add Commands (a prefix) ==========
     (let ((add-map (make-sparse-keymap "Add...")))
       (define-key add-map "f" #'supertag-schema--add-field-at-point)      ; a f: Add Field
-      (define-key add-map "c" #'supertag-schema--add-child-tag-at-point)  ; a c: Add Child Tag
+      (define-key add-map "n" #'supertag-schema--add-nested-tag-at-point) ; a n: Add Nested Tag
+      (define-key add-map "c" #'supertag-schema--add-child-tag-at-point)  ; a c: Add Inheritance Child
       (define-key add-map "r" #'supertag-schema--add-new-tag)             ; a r: Add Root Tag
       (define-key map "a" add-map))
 
@@ -335,6 +370,7 @@ This function handles both legacy and global field modes."
       (define-key vc-map "d" #'supertag-virtual-column-delete-interactive)   ; v d: Delete
       (define-key vc-map "l" #'supertag-virtual-column-list-interactive)     ; v l: List
       (define-key vc-map "v" #'supertag-view-select-from-schema)             ; v v: Select View
+      (define-key vc-map "t" #'supertag-schema-view-table-at-point)          ; v t: Table
       (define-key map "v" vc-map))
 
     ;; ========== Move Commands ==========
@@ -397,6 +433,44 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
           (message "Tag '%s' created. Refreshing view..." new-name)
           (supertag-schema-refresh))
       (message "Tag creation cancelled."))))
+
+(defun supertag-schema--create-nested-tag (parent-path child-path)
+  "Create CHILD-PATH below PARENT-PATH without adding inheritance."
+  (let* ((child (supertag-sanitize-tag-name child-path))
+         (full-path (concat parent-path "/" child)))
+    (unless (and (supertag-tag-path-valid-p parent-path)
+                 (supertag-tag-path-valid-p child)
+                 (supertag-tag-path-valid-p full-path))
+      (user-error "Nested tag paths cannot contain empty segments"))
+    (when (supertag-tag-get full-path)
+      (user-error "Tag '%s' already exists" full-path))
+    (supertag-tag-create (list :id full-path :name full-path))))
+
+(defun supertag-schema--add-nested-tag-at-point ()
+  "Create a slash-delimited child below the namespace at point."
+  (interactive)
+  (let* ((context (supertag-schema--get-context-at-point))
+         (parent (pcase (plist-get context :type)
+                   (:namespace (plist-get context :path))
+                   (:tag (plist-get context :tag-id)))))
+    (if (not parent)
+        (message "Not on a tag or namespace line.")
+      (let ((child (read-string (format "Nested tag below '%s': " parent))))
+        (unless (string-empty-p child)
+          (let ((created (supertag-schema--create-nested-tag parent child)))
+            (supertag-schema-refresh)
+            (supertag-schema--goto-context
+             (list :type :tag :tag-id (plist-get created :id)))
+            (message "Nested tag '%s' created." (plist-get created :id))))))))
+
+(defun supertag-schema-view-table-at-point ()
+  "Open an exact or descendant table for the Schema item at point."
+  (interactive)
+  (let ((query (supertag-view--get-tag-at-point)))
+    (unless query
+      (user-error "Not on a tag or namespace line"))
+    (require 'supertag-view-table)
+    (supertag-view-table query)))
 
 (defun supertag-view-schema-set-extends ()
   "Interactively set or clear the inheritance for the tag at point."
@@ -635,39 +709,32 @@ Tries three strategies in order:
 
 (defun supertag-schema--goto-context (context)
   "Search for CONTEXT from top of buffer and move point there."
-  (let ((foundp nil))
+  (let ((foundp nil)
+        (wanted-type (plist-get context :type))
+        (wanted-tag (plist-get context :tag-id))
+        (wanted-path (plist-get context :path))
+        (wanted-field (plist-get context :field-name))
+        (wanted-origin (plist-get context :inherited-from)))
     (goto-char (point-min))
-    (let ((tag-id (plist-get context :tag-id))
-          (field-name (plist-get context :field-name)))
-      (when (and tag-id (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t))
-        ;; We found the tag line.
-        (if (eq (plist-get context :type) :tag)
-            ;; If we are looking for the tag, we're done.
-            (progn
-              (goto-char (line-beginning-position))
-              (setq foundp t))
-          ;; Otherwise, we are looking for a field under this tag.
-          (when (eq (plist-get context :type) :field)
-            (let ((eob (save-excursion (end-of-buffer) (point)))
-                  (search-active t))
-              (while (and search-active (re-search-forward (concat "^\\s-*- " (regexp-quote field-name)) eob t))
-                (let ((found-context (supertag-schema--get-context-at-point)))
-                  (when (equal (plist-get found-context :tag-id) tag-id)
-                    (goto-char (line-beginning-position))
-                    (setq foundp t)
-                    (setq search-active nil)))))))))
+    (while (and (not foundp) (not (eobp)))
+      (let ((candidate
+             (get-text-property (line-beginning-position) 'supertag-context)))
+        (when (and candidate
+                   (eq wanted-type (plist-get candidate :type))
+                   (equal wanted-tag (plist-get candidate :tag-id))
+                   (equal wanted-path (plist-get candidate :path))
+                   (equal wanted-field (plist-get candidate :field-name))
+                   (equal wanted-origin
+                          (plist-get candidate :inherited-from)))
+          (setq foundp t))
+        (unless foundp (forward-line 1))))
     foundp))
 
 (defun supertag-schema--goto-tag (tag-id)
   "Jump to the definition of TAG-ID in the schema view."
   (interactive "sTag ID to jump to: ") ; Make it interactive for testing, but will be called non-interactively
-  (let ((original-context (supertag-schema--get-context-at-point)))
-    (goto-char (point-min))
-    (when (re-search-forward (concat "^\\s-*" (regexp-quote tag-id)) nil t)
-      (goto-char (line-beginning-position))
-      (message "Jumped to tag '%s'." tag-id))
-    (unless (equal (supertag-schema--get-context-at-point) original-context)
-      (supertag-schema-refresh))))
+  (when (supertag-schema--goto-context (list :type :tag :tag-id tag-id))
+    (message "Jumped to tag '%s'." tag-id)))
 
 (defun supertag-schema--mark-item ()
   "Mark the item at point and move to the next line."
@@ -1019,7 +1086,8 @@ a parent tag and a child tag."
 
     (princ "Add Commands (prefix: a):\n")
     (princ "  a f     Add Field to current tag\n")
-    (princ "  a t     Add Child Tag (create new OR select existing)\n")
+    (princ "  a n     Add nested path tag below current namespace\n")
+    (princ "  a c     Add inheritance child (create new OR select existing)\n")
     (princ "  a r     Add Root Tag (no parent)\n\n")
 
     (princ "Edit Commands (prefix: e):\n")
@@ -1046,6 +1114,8 @@ a parent tag and a child tag."
     (princ "  E       Extend marked (legacy shortcut)\n\n")
 
     (princ "View Commands (prefix: v):\n")
+    (princ "  v t     Open exact/descendant table at point\n")
+    (princ "  v v     Select a custom view at point\n")
     (princ "  v c     Create virtual column\n")
     (princ "  v e     Edit virtual column\n")
     (princ "  v d     Delete virtual column\n")

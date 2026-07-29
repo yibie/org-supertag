@@ -17,6 +17,8 @@
 - 同步提取与渲染/point 识别共享“行首或空白后的 Org 正文 token”边界。
 - Emacs Lisp `#'function` 引用不进入渲染、同步提取或 tag completion。
 - SVG tag 字体低于正文行高，保持 badge 尺寸与标签可读性。
+- `a/b/c` 以完整路径作为唯一 Tag ID；Schema、completion、View 与 Table 从路径派生 namespace。
+- 路径 namespace 与显式 `:extends` 字段继承分别展示、分别操作。
 
 ### Non-goals
 
@@ -24,7 +26,8 @@
 - 不开放第三方 target/action 注册 Interface。
 - 不把交互 action 与 Automation action 合并。
 - 不改变 Store、Tag schema 或旧 Behavior 数据模型。
-- 不自动删除历史 tag 定义或 node-tag 关系；原生 `:tag:` 的增量清理策略另行处理。
+- 不自动删除历史 Tag entity 或字段 schema；当前节点的 node-tag relation 只按本次权威标签集合对齐。
+- 不创建父 namespace Tag entity、前缀索引、独立侧边栏或第二套继承关系。
 - 不实现动态 Transient、动作注册表或独立菜单框架；Assist 使用 Emacs 原生 completion UI。
 
 ## User Flows
@@ -36,6 +39,9 @@
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
 6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
 7. 用户输入 `#` 触发 tag completion；历史 Store 中由 `#'function` 误提取的条目不再显示，合法标签仍可选。
+8. 用户输入 `#emacs/` 时可先选择 namespace 继续补全，再选择真实 leaf；只有完整合法路径落库。
+9. 用户在 Schema View 中看到 `emacs/` → `package/` → `elpa`，并可在 namespace 下新建路径或打开后代聚合 Table。
+10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
 
 ## Edge Cases
 
@@ -51,6 +57,9 @@
 - recognizer 与 Node View 激活都不得为无 ID heading 调用 `org-id-get-create`；创建身份只属于显式的数据修改命令。
 - Node 退化必须删除 Org ID；若属性抽屉只含 ID，则不得留下空 drawer。
 - 只有局部 RET keymap、没有语义属性的旧渲染文本只作为最后兼容回落，不宣称可解释 target。
+- 缺失的路径父级只作为虚拟 namespace 展示，不写 Store；同名真实 Tag 可同时作为 branch。
+- 从 namespace/branch 打开的 descendant Table 只显示 Title/Tags/File，字段与 schema 修改命令必须拒绝执行。
+- 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
 
 ## Acceptance Criteria
 
@@ -64,4 +73,8 @@
 - `#'function` 在渲染、同步提取和 completion 三条路径上结论一致；不自动删除历史 Store 数据。
 - 20px frame character height 下，默认 SVG tag 字号为 14px；修改字号比例后不得命中旧尺寸缓存。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
+- 默认 Tag 查询保持精确；只有显式 `include-descendants` 命中路径后代且不命中 `emacs2/...`。
+- Schema 缩进只由 `/` 路径决定，`:extends` 仅以箭头和 inherited fields 表达。
+- 单节点同步后 Tag entity、node `:tags` 与 node-tag relation 一致；移除 token 后只回收当前节点的失效关系。
+- descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - focused ERT 与仓库稳定测试套件通过。

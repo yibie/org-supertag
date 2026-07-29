@@ -43,7 +43,7 @@
 - task009 [ ] 明确原生 `:tag:` 的增量同步与 node-tag 关系清理策略
   - 产出：按 `supertag-sync-legacy-tags-policy` 定义增量/全量一致的读取与关系回收规则
   - 验证方式：read-only、lazy-convert、preserve、ignore 四种策略的增量/全量矩阵
-  - 影响范围：延期处理；task008 不执行破坏性历史关系清理
+  - 影响范围：task013 已统一非 ignore 策略的读取与当前节点关系回收；`lazy-convert` 文件改写契约仍由 issue022 跟踪
 
 - task010 [x] 降低 GitHub Actions 的无效运行次数
   - 产出：仅在 main/PR 非文档变更或手动触发时运行；测试结果只在失败时上传
@@ -59,3 +59,8 @@
   - 产出：共享路径段边界判断、scan query/View Data API 可选后代查询、真实 Tag 后代枚举
   - 验证方式：focused ERT 锁定完整路径保留、精确查询兼容、段边界与多级后代；10k-node 基准、全量 ERT、byte compile、`git diff --check`
   - 影响范围：默认查询行为不变；不新增 Store 字段、父 Tag entity 或 `:extends` 关系
+
+- task013 [x] 完成嵌套标签从 Store 到交互视图的闭环
+  - 产出：共享路径语义、增量同步关系一致性、Schema namespace 树、子路径创建、路径补全、后代聚合 View/Table，以及安全的分支重命名
+  - 验证方式：focused ERT 锁定同步→Store→查询→Schema→View/Table→completion；真实 Store 只读验证、Schema 截图视觉判定、全量 ERT、byte compile、`git diff --check`
+  - 影响范围：完整路径仍是唯一 Tag ID；namespace 不写入 `:extends`；后代聚合表只读且不暴露 tag-specific 字段编辑

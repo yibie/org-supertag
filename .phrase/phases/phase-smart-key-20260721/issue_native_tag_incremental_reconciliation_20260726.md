@@ -35,9 +35,15 @@ native-tag input as authoritative and could remove valid user data.
 
 ## Verification
 
-- Pending task009: policy × full/incremental sync matrix.
+- task013 now reads native tags consistently for `read-only`, `preserve` and
+  `lazy-convert`, excludes them for `ignore`, and reconciles the current node's
+  node-tag relations without deleting Tag entities or field schemas.
+- Focused ERT covers the four extraction policies plus add/remove relation
+  reconciliation; full ERT 330/330 passes.
+- Still pending task009: wire and test the documented `lazy-convert` file rewrite
+  on the actual incremental/full sync entry points.
 
 ## Tracking
 
 - Task: `task009`
-- Status: open
+- Status: partially implemented; open for `lazy-convert` file mutation

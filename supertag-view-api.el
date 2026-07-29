@@ -125,6 +125,14 @@ Entities that do not exist are skipped."
        tags))
     (sort (delete-dups names) #'string<)))
 
+(defun supertag-view-api-list-tag-ids ()
+  "Return canonical tag IDs (sorted)."
+  (let ((tags (supertag-view-api-get-collection :tags))
+        ids)
+    (when (hash-table-p tags)
+      (maphash (lambda (id _tag-data) (push id ids)) tags))
+    (sort ids #'string<)))
+
 (defun supertag-view-api-tag-id (tag-name)
   "Return tag ID for TAG-NAME, or nil."
   (unless (and (stringp tag-name) (not (string-empty-p tag-name)))

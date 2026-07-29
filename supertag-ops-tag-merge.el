@@ -11,6 +11,7 @@
 (require 'ht)
 (require 'supertag-core-store)
 (require 'supertag-core-transform)
+(require 'supertag-core-tag-path)
 (require 'supertag-core-index)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
@@ -686,6 +687,410 @@ are restored from snapshots if any later step fails."
                         (error-message-string err)
                         (error-message-string restore-error)
                         (plist-get snapshot :dir))
+               (signal (car err) (cdr err))))))
+      (unless keep-snapshot
+        (supertag-tag-merge--delete-snapshot snapshot)))))
+
+;;; --- Namespace branch rename ---
+
+(defun supertag-tag-path-rename--mapped (value mapping)
+  "Return VALUE's replacement from MAPPING, or VALUE when unchanged."
+  (or (cdr (assoc value mapping)) value))
+
+(defun supertag-tag-path-rename--rewrite-values (value mapping)
+  "Recursively rewrite exact tag identifiers in VALUE using MAPPING."
+  (cond
+   ((stringp value)
+    (supertag-tag-path-rename--mapped value mapping))
+   ((hash-table-p value)
+    (let ((copy (make-hash-table :test (hash-table-test value))))
+      (maphash
+       (lambda (key item)
+         (puthash key
+                  (supertag-tag-path-rename--rewrite-values item mapping)
+                  copy))
+       value)
+      copy))
+   ((consp value)
+    (mapcar
+     (lambda (item)
+       (supertag-tag-path-rename--rewrite-values item mapping))
+     value))
+   (t value)))
+
+(defun supertag-tag-path-rename--rewrite-structured (form mapping)
+  "Rewrite tag identifiers in structured FORM according to MAPPING."
+  (cond
+   ((atom form) form)
+   ((memq (car form) '(has-tag tag))
+    (cons (car form)
+          (cons (supertag-tag-path-rename--mapped (cadr form) mapping)
+                (mapcar
+                 (lambda (item)
+                   (supertag-tag-path-rename--rewrite-structured item mapping))
+                 (cddr form)))))
+   ((memq (car form) '(has-any-tag has-all-tags))
+    (cons (car form)
+          (mapcar
+           (lambda (item)
+             (supertag-tag-path-rename--mapped item mapping))
+           (cdr form))))
+   ((supertag-tag-merge--plist-p form)
+    (let (result)
+      (while form
+        (let ((key (pop form))
+              (value (pop form)))
+          (setq result
+                (append
+                 result
+                 (list
+                  key
+                  (if (memq key supertag-tag-merge--tag-slot-keys)
+                      (cond
+                       ((stringp value)
+                        (supertag-tag-path-rename--mapped value mapping))
+                       ((listp value)
+                        (mapcar
+                         (lambda (item)
+                           (supertag-tag-path-rename--mapped item mapping))
+                         value))
+                       (t value))
+                    (supertag-tag-path-rename--rewrite-structured
+                     value mapping)))))))
+      result))
+   (t
+    (mapcar
+     (lambda (item)
+       (supertag-tag-path-rename--rewrite-structured item mapping))
+     form))))
+
+(defun supertag-tag-path-rename--saved-query-changes (mapping)
+  "Return (UPDATES . CONFLICTS) for saved queries touched by MAPPING."
+  (let ((sources (mapcar #'car mapping))
+        updates conflicts)
+    (when (boundp 'supertag-query-saved)
+      (dolist (entry supertag-query-saved)
+        (let ((name (car entry))
+              (text (cdr entry)))
+          (when (and (stringp text)
+                     (supertag-tag-merge--string-mentions-source-p
+                      text sources))
+            (condition-case err
+                (pcase-let* ((`(,form . ,end) (read-from-string text))
+                             (tail (substring text end))
+                             (rewritten
+                              (supertag-tag-path-rename--rewrite-structured
+                               form mapping)))
+                  (if (string-match-p "\\`[[:space:]]*\\'" tail)
+                      (unless (equal form rewritten)
+                        (push (list :name name :old text
+                                    :new (prin1-to-string rewritten))
+                              updates))
+                    (push (list :kind :free-text-query
+                                :name name :text text)
+                          conflicts)))
+              (error
+               (push (list :kind :invalid-saved-query
+                           :name name :text text
+                           :error (error-message-string err))
+                     conflicts)))))))
+    (cons (nreverse updates) (nreverse conflicts))))
+
+(cl-defun supertag-tag-path-rename-plan (old-root new-root)
+  "Build a conflict-checked rename plan for OLD-ROOT and its descendants."
+  (let* ((old (supertag-sanitize-tag-name old-root))
+         (new (supertag-sanitize-tag-name new-root)))
+    (unless (and (supertag-tag-path-valid-p old)
+                 (supertag-tag-path-valid-p new))
+      (error "Tag paths cannot contain empty segments"))
+    (unless (supertag-tag-get old)
+      (error "Tag '%s' not found" old))
+    (when (or (equal old new)
+              (supertag-tag-path-descendant-p new old))
+      (error "Cannot move tag path '%s' into its own namespace '%s'"
+             old new))
+    (let (sources)
+      (maphash
+       (lambda (tag-id _tag)
+         (when (or (equal tag-id old)
+                   (supertag-tag-path-descendant-p tag-id old))
+           (push tag-id sources)))
+       (supertag-store-get-collection :tags))
+      (setq sources (sort sources #'string<))
+      (let* ((mapping
+              (mapcar
+               (lambda (source)
+                 (cons source
+                       (supertag-tag-path-rebase source old new)))
+               sources))
+             (source-set sources)
+             (collision-conflicts
+              (cl-loop
+               for (_source . target) in mapping
+               when (and (supertag-tag-get target)
+                         (not (member target source-set)))
+               collect (list :kind :tag-id-collision :target-id target)))
+             (nodes (supertag-tag-merge--affected-nodes sources))
+             (file-backed-nodes
+              (cl-remove-if-not
+               (lambda (node) (stringp (plist-get node :file)))
+               nodes))
+             (files
+              (supertag-tag-merge--unique
+               (mapcar (lambda (node) (plist-get node :file))
+                       file-backed-nodes)))
+             (query-result
+              (supertag-tag-path-rename--saved-query-changes mapping)))
+        (list :old-root old
+              :target-id new
+              :mapping mapping
+              :nodes nodes
+              :files files
+              :saved-query-updates (car query-result)
+              :conflicts
+              (append collision-conflicts
+                      (supertag-tag-merge--file-conflicts file-backed-nodes)
+                      (cdr query-result)))))))
+
+(defun supertag-tag-path-rename--rewrite-tags (mapping)
+  "Rekey tag entities and inheritance references using MAPPING."
+  (let ((result (make-hash-table :test 'equal)))
+    (maphash
+     (lambda (tag-id raw-tag)
+       (let* ((new-id (supertag-tag-path-rename--mapped tag-id mapping))
+              (tag
+               (supertag-tag-path-rename--rewrite-structured
+                (copy-tree (supertag--ensure-plist raw-tag))
+                mapping))
+              (extends (plist-get tag :extends)))
+         (when (assoc tag-id mapping)
+           (setq tag (plist-put tag :id new-id))
+           (setq tag (plist-put tag :name new-id)))
+         (when extends
+           (setq tag
+                 (plist-put
+                  tag :extends
+                  (supertag-tag-path-rename--mapped extends mapping))))
+         (when (gethash new-id result)
+           (error "Tag rename produced duplicate id '%s'" new-id))
+         (puthash new-id tag result)))
+     (supertag-store-get-collection :tags))
+    (supertag-update '(:tags) result)))
+
+(defun supertag-tag-path-rename--rewrite-nodes (mapping)
+  "Rewrite node tag lists using MAPPING."
+  (let* ((nodes (supertag-store-get-collection :nodes))
+         (result (copy-hash-table nodes)))
+    (maphash
+     (lambda (node-id raw-node)
+       (let* ((node (copy-tree (supertag--ensure-plist raw-node)))
+              (tags (plist-get node :tags))
+              (rewritten
+               (mapcar
+                (lambda (tag-id)
+                  (supertag-tag-path-rename--mapped tag-id mapping))
+                tags)))
+         (unless (equal tags rewritten)
+           (puthash node-id
+                    (plist-put node :tags
+                               (supertag-tag-merge--unique rewritten))
+                    result))))
+     nodes)
+    (supertag-update '(:nodes) result)))
+
+(defun supertag-tag-path-rename--rewrite-relations (mapping)
+  "Rewrite relation endpoints and deterministic IDs using MAPPING."
+  (let ((result (make-hash-table :test 'equal)))
+    (maphash
+     (lambda (_relation-id raw-relation)
+       (let* ((relation
+               (supertag-tag-path-rename--rewrite-structured
+                (copy-tree raw-relation) mapping))
+              (from (supertag-tag-path-rename--mapped
+                     (plist-get relation :from) mapping))
+              (to (supertag-tag-path-rename--mapped
+                   (plist-get relation :to) mapping))
+              (type (plist-get relation :type))
+              (new-id (supertag-generate-relation-id from to type)))
+         (setq relation (plist-put relation :from from))
+         (setq relation (plist-put relation :to to))
+         (setq relation (plist-put relation :id new-id))
+         (when (gethash new-id result)
+           (error "Tag rename produced duplicate relation '%s'" new-id))
+         (puthash new-id relation result)))
+     (supertag-store-get-collection :relations))
+    (supertag-update '(:relations) result)))
+
+(defun supertag-tag-path-rename--rewrite-associations (mapping)
+  "Rekey global field associations using MAPPING."
+  (let ((result (make-hash-table :test 'equal)))
+    (maphash
+     (lambda (tag-id associations)
+       (let ((new-id (supertag-tag-path-rename--mapped tag-id mapping)))
+         (when (gethash new-id result)
+           (error "Tag rename produced duplicate field associations '%s'"
+                  new-id))
+         (puthash new-id (copy-tree associations) result)))
+     (supertag-store-get-collection :tag-field-associations))
+    (supertag-update '(:tag-field-associations) result)))
+
+(defun supertag-tag-path-rename--rewrite-legacy-fields (mapping)
+  "Rekey per-node legacy field tables using MAPPING."
+  (let ((fields-root (supertag-store-get-collection :fields)))
+    (maphash
+     (lambda (node-id tag-table)
+       (let ((new-tag-table (make-hash-table :test 'equal)))
+         (maphash
+          (lambda (tag-id fields)
+            (let ((new-id
+                   (supertag-tag-path-rename--mapped tag-id mapping))
+                  (new-fields (make-hash-table :test 'equal)))
+              (when (gethash new-id new-tag-table)
+                (error "Tag rename produced duplicate legacy fields '%s'"
+                       new-id))
+              (maphash
+               (lambda (field-name value)
+                 (puthash
+                  field-name
+                  (if (eq (plist-get
+                           (supertag-tag-get-field new-id field-name)
+                           :type)
+                          :tag)
+                      (supertag-tag-path-rename--rewrite-values value mapping)
+                    value)
+                  new-fields))
+               fields)
+              (puthash new-id new-fields new-tag-table)))
+          tag-table)
+         (unless (equal tag-table new-tag-table)
+           ;; `:fields' is a nested legacy collection.  Replace one node
+           ;; bucket directly so batch notifications never misclassify the
+           ;; whole hash table as a field entity.
+           (supertag--transaction-record-old-value
+            (list :fields node-id) t tag-table)
+           (puthash node-id new-tag-table fields-root))))
+     fields-root)))
+
+(defun supertag-tag-path-rename--rewrite-global-field-values (mapping)
+  "Rewrite exact tag references in global field values using MAPPING."
+  (let (updates)
+    (maphash
+     (lambda (node-id field-table)
+       (when (hash-table-p field-table)
+         (maphash
+          (lambda (field-id value)
+            (when (eq (plist-get
+                       (supertag-store-get-field-definition field-id)
+                       :type)
+                      :tag)
+              (let ((rewritten
+                     (supertag-tag-path-rename--rewrite-values value mapping)))
+                (unless (equal value rewritten)
+                  (push (list node-id field-id rewritten) updates)))))
+          field-table)))
+     (supertag-store-get-collection :field-values))
+    (dolist (update updates)
+      (supertag-store-put-field-value
+       (nth 0 update) (nth 1 update) (nth 2 update) t))))
+
+(defun supertag-tag-path-rename--rewrite-store-configs (mapping)
+  "Rewrite structured tag references in Store configuration collections."
+  (dolist (collection '(:automations :boards))
+    (let ((bucket (supertag-store-get-collection collection))
+          (result (make-hash-table :test 'equal)))
+      (maphash
+       (lambda (id value)
+         (puthash id
+                  (supertag-tag-path-rename--rewrite-structured
+                   value mapping)
+                  result))
+       bucket)
+      (supertag-update (list collection) result))))
+
+(defun supertag-tag-path-rename--rewrite-view-configs (mapping)
+  "Rewrite tag references in loaded view configurations."
+  (when (and (boundp 'supertag--view-configs)
+             (hash-table-p supertag--view-configs))
+    (maphash
+     (lambda (id config)
+       (puthash id
+                (supertag-tag-path-rename--rewrite-structured
+                 config mapping)
+                supertag--view-configs))
+     supertag--view-configs)))
+
+(defun supertag-tag-path-rename--rewrite-files (plan)
+  "Apply PLAN's complete path mapping to its Org files."
+  (let ((total 0)
+        (files (plist-get plan :files)))
+    (dolist (entry (plist-get plan :mapping) total)
+      (setq total
+            (+ total
+               (supertag-view-helper-rename-tag-text-in-files
+                (car entry) (cdr entry) files))))))
+
+(defun supertag-tag-path-rename-execute (plan)
+  "Execute conflict-free namespace rename PLAN with rollback."
+  (when (plist-get plan :conflicts)
+    (error "Tag path rename has %d conflict(s): %S"
+           (length (plist-get plan :conflicts))
+           (plist-get plan :conflicts)))
+  (when-let* ((fresh-conflicts
+               (supertag-tag-merge--file-conflicts
+                (cl-remove-if-not
+                 (lambda (node) (stringp (plist-get node :file)))
+                 (plist-get plan :nodes)))))
+    (error "Tag path rename file preflight failed: %S" fresh-conflicts))
+  (let* ((mapping (plist-get plan :mapping))
+         (query-before (and (boundp 'supertag-query-saved)
+                            (copy-tree supertag-query-saved)))
+         (views-before (supertag-tag-merge--copy-view-configs))
+         (snapshot (supertag-tag-merge--snapshot-files
+                    (plist-get plan :files)))
+         (keep-snapshot nil))
+    (unwind-protect
+        (condition-case err
+            (let ((file-changes
+                   (supertag-with-transaction
+                     (supertag-tag-path-rename--rewrite-tags mapping)
+                     (supertag-tag-path-rename--rewrite-nodes mapping)
+                     (supertag-tag-path-rename--rewrite-relations mapping)
+                     (supertag-tag-path-rename--rewrite-associations mapping)
+                     (supertag-tag-path-rename--rewrite-legacy-fields mapping)
+                     (supertag-tag-path-rename--rewrite-global-field-values
+                      mapping)
+                     (supertag-tag-path-rename--rewrite-store-configs mapping)
+                     (supertag-tag-path-rename--rewrite-view-configs mapping)
+                     (supertag-tag-merge--apply-query-updates
+                      (plist-get plan :saved-query-updates))
+                     (let ((count
+                            (supertag-tag-path-rename--rewrite-files plan)))
+                       (supertag-tag-merge--rebuild-derived-state)
+                       count))))
+              (list :status :renamed
+                    :target-id (plist-get plan :target-id)
+                    :mapping mapping
+                    :node-count (length (plist-get plan :nodes))
+                    :file-change-count file-changes))
+          (error
+           (let (restore-error)
+             (when snapshot
+               (condition-case file-error
+                   (supertag-tag-merge--restore-files snapshot)
+                 (error
+                  (setq restore-error file-error)
+                  (setq keep-snapshot t))))
+             (when (boundp 'supertag-query-saved)
+               (setq supertag-query-saved query-before))
+             (when (and (boundp 'supertag--view-configs) views-before)
+               (setq supertag--view-configs views-before))
+             (ignore-errors (supertag-tag-merge--rebuild-derived-state))
+             (if restore-error
+                 (error
+                  "Tag path rename failed (%s), file recovery failed (%s); backups kept at %s"
+                  (error-message-string err)
+                  (error-message-string restore-error)
+                  (plist-get snapshot :dir))
                (signal (car err) (cdr err))))))
       (unless keep-snapshot
         (supertag-tag-merge--delete-snapshot snapshot)))))
