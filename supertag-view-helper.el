@@ -14,6 +14,7 @@
 ;; Forward declare functions to avoid circular dependencies
 (declare-function supertag-field-get-with-default "supertag-ops-field")
 (declare-function supertag-field-normalize-node-reference-list "supertag-ops-field")
+(declare-function supertag-svg-tag--refresh-all-buffers "supertag-view-svg-tag")
 
 ;;;----------------------------------------------------------------------
 ;;; Constants and Configuration
@@ -110,6 +111,13 @@ Prefers SVG keywords when `supertag-svg-tag-enable' is non-nil."
   (when supertag-view-style-auto-enable
     (supertag-view-style-mode 1)))
 
+(defun supertag-view-helper--enable-existing-org-buffers ()
+  "Auto-enable inline tag styling in already existing Org buffers."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'org-mode)
+        (supertag-view-helper--auto-enable)))))
+
 ;; Hook into org-mode
 (add-hook 'org-mode-hook #'supertag-view-helper--auto-enable)
 
@@ -153,6 +161,11 @@ Prefers SVG keywords when `supertag-svg-tag-enable' is non-nil."
      (0 (if (supertag-view-helper--valid-inline-tag-match-p)
             'supertag-inline-face) t)))
   "Font-lock keywords for highlighting inline tags.")
+
+(supertag-view-helper--enable-existing-org-buffers)
+
+(with-eval-after-load 'supertag-view-svg-tag
+  (supertag-svg-tag--refresh-all-buffers))
 
 (defun supertag-view-helper-insert-section-header (title icon)
   "Insert a section header with ICON and TITLE."

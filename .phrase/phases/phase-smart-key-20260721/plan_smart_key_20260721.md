@@ -16,6 +16,7 @@
 12. 排除 Emacs Lisp `#'function` 引用，过滤 completion 中的同类历史污染，并缩小 SVG tag 默认字号。
 13. 保留完整路径 Tag ID，在查询 seam 增加显式后代匹配，不把 namespace 映射为 `:extends`。
 14. 将路径 namespace 接入同步、Schema、completion、View 与 Table；分支重命名使用单次映射迁移，聚合表保持只读。
+15. 延迟加载视图模块时补启用已经存在的 Org buffer，避免启动恢复的笔记失去 inline tag SVG。
 
 ## Scope
 
@@ -37,6 +38,7 @@
 - P0: 只渲染行首/空白后的正文 `#token`；tag 名仍允许中文、emoji、`/` 与非空白标点。
 - P0: 同步不得从 Org object、元数据、COMMENT subtree 或子 headline 提取 inline tag。
 - P0: `#'function` 不得渲染、同步或出现在 tag completion；历史 Store 不做破坏性删除。
+- P0: 视图模块晚于 Org buffer 加载时，现存与后续 Org buffer 都必须自动启用 inline tag 样式。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
 - P1: Schema View 以路径 namespace 缩进，`:extends` 仅作为继承元数据展示；虚拟 namespace 不冒充真实 Tag。

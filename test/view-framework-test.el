@@ -12,6 +12,8 @@
 (when load-file-name
   (add-to-list 'load-path (expand-file-name ".." (file-name-directory load-file-name))))
 (require 'supertag-view-framework)
+(require 'supertag-view-helper)
+(require 'supertag-view-svg-tag)
 
 ;; Setup and teardown
 (defun view-framework-test--setup ()
@@ -151,6 +153,40 @@
     (let ((content (buffer-string)))
       (should (string-match-p "Total: 100" content))
       (should (string-match-p "Done: 80" content)))))
+
+(ert-deftest test-view-style-enables-existing-org-buffers ()
+  "Late loading must enable styling in Org buffers that already exist."
+  (let ((org-buffer (generate-new-buffer " *supertag-existing-org*"))
+        (text-buffer (generate-new-buffer " *supertag-existing-text*"))
+        (supertag-view-style-auto-enable t))
+    (unwind-protect
+        (progn
+          (with-current-buffer org-buffer
+            (org-mode)
+            (supertag-view-style-mode -1))
+          (with-current-buffer text-buffer
+            (text-mode))
+          (let ((supertag-view-style-auto-enable nil))
+            (supertag-view-helper--enable-existing-org-buffers))
+          (with-current-buffer org-buffer
+            (should-not supertag-view-style-mode))
+          (supertag-view-helper--enable-existing-org-buffers)
+          (with-current-buffer org-buffer
+            (should supertag-view-style-mode)
+            (insert "plain #tag")
+            (cl-letf (((symbol-function 'display-graphic-p)
+                       (lambda (&optional _frame) t))
+                      ((symbol-function 'supertag-svg-tag--get-cached)
+                       (lambda (_tag) '(image :type svg :data "dummy"))))
+              (supertag-svg-tag--refresh-all-buffers)
+              (font-lock-ensure))
+            (goto-char (point-min))
+            (search-forward "#")
+            (should (get-text-property (1- (point)) 'display)))
+          (with-current-buffer text-buffer
+            (should-not supertag-view-style-mode)))
+      (kill-buffer org-buffer)
+      (kill-buffer text-buffer))))
 
 ;; Manual verification helper
 (defun test-view-framework-manual ()

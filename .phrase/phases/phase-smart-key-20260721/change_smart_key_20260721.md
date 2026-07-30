@@ -1,5 +1,23 @@
 # change_smart_key_20260721
 
+- 2026-07-30 Fix
+  - Files: `supertag-view-helper.el`, `test/view-framework-test.el`, phase/docs indexes
+  - Functions: `supertag-view-helper--enable-existing-org-buffers`
+  - Changes:
+    - Late loading now applies the existing auto-enable path to Org buffers that were already open.
+    - After the SVG module finishes loading, active style buffers replace the temporary face keywords
+      with the SVG keyword set.
+    - `supertag-view-style-auto-enable=nil` and non-Org buffers remain untouched.
+  - Simplification:
+    - Reused the existing mode enable and SVG refresh functions; no timer, advice or configuration workaround.
+  - Verification:
+    - Focused red/green view ERT: 14/14 passed; full stable ERT: 331/331 passed.
+    - Late-load smoke: `mode=t, face=nil, display-type=image`.
+    - Changed files passed `check-parens`, temp-directory byte compilation and `git diff --check`;
+      no repository `.elc` was generated.
+  - Risk: live GUI startup/session-restore confirmation remains pending.
+  - Related: `issue029`, `task014`
+
 - 2026-07-29 Add/Modify
   - Files: `supertag-core-tag-path.el`, `supertag-core-scan.el`,
     `supertag-services-sync.el`, `supertag-ops-tag.el`,

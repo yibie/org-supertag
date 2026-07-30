@@ -64,3 +64,8 @@
   - 产出：共享路径语义、增量同步关系一致性、Schema namespace 树、子路径创建、路径补全、后代聚合 View/Table，以及安全的分支重命名
   - 验证方式：focused ERT 锁定同步→Store→查询→Schema→View/Table→completion；真实 Store 只读验证、Schema 截图视觉判定、全量 ERT、byte compile、`git diff --check`
   - 影响范围：完整路径仍是唯一 Tag ID；namespace 不写入 `:extends`；后代聚合表只读且不暴露 tag-specific 字段编辑
+
+- task014 [x] 修复延迟加载后现存 Org buffer 不显示 inline tag SVG
+  - 产出：视图 helper 加载时补启用现存 Org buffer，并保留 `org-mode-hook` 对后续 buffer 的处理
+  - 验证方式：late-load 回归 ERT、view/full ERT、byte compile、`git diff --check`
+  - 影响范围：仅在 `supertag-view-style-auto-enable` 非 nil 时启用样式；非 Org buffer 与显式关闭配置不变

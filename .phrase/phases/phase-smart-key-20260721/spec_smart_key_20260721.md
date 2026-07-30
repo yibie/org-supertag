@@ -42,6 +42,7 @@
 8. 用户输入 `#emacs/` 时可先选择 namespace 继续补全，再选择真实 leaf；只有完整合法路径落库。
 9. 用户在 Schema View 中看到 `emacs/` → `package/` → `elpa`，并可在 namespace 下新建路径或打开后代聚合 Table。
 10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
+11. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
 
 ## Edge Cases
 
@@ -60,6 +61,7 @@
 - 缺失的路径父级只作为虚拟 namespace 展示，不写 Store；同名真实 Tag 可同时作为 branch。
 - 从 namespace/branch 打开的 descendant Table 只显示 Title/Tags/File，字段与 schema 修改命令必须拒绝执行。
 - 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
+- org-supertag 可以晚于 Org buffer 加载；自动样式启用必须同时覆盖现存 buffer 和以后进入 `org-mode` 的 buffer。
 
 ## Acceptance Criteria
 
@@ -77,4 +79,5 @@
 - Schema 缩进只由 `/` 路径决定，`:extends` 仅以箭头和 inherited fields 表达。
 - 单节点同步后 Tag entity、node `:tags` 与 node-tag relation 一致；移除 token 后只回收当前节点的失效关系。
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
+- 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - focused ERT 与仓库稳定测试套件通过。

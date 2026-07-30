@@ -43,3 +43,4 @@
 - 2026-07-29: phase-git-sync-20260713/CHANGE.md  # Skip clean exit sync + auto-exit after successful synchronization
 - 2026-07-29: .phrase/docs/change_nested_tags_20260624.md  # Full-path nested Tag IDs + explicit descendant queries
 - 2026-07-29: .phrase/docs/change_nested_tags_20260624.md  # task013 Store-to-UI nested tag completion
+- 2026-07-30: phase-smart-key-20260721/change_smart_key_20260721.md  # Late-loaded inline SVG styling covers existing Org buffers

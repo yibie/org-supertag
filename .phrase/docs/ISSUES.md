@@ -28,3 +28,4 @@
 - issue026 [ ] Emacs Lisp `#'function` 被误存并显示为 tag，SVG tag 字体偏大（phase-smart-key-20260721/issue_function_quote_tag_pollution_20260728.md）
 - issue027 [x] Git sync 启用提示把目录尾斜杠与句号显示成 `/.`，且启动配置未自动启用模式（phase-git-sync-20260713/issue_git_sync_mode_enable_20260728.md）
 - issue028 [ ] Emacs 正常退出不等待 debounce/Git 异步链，已保存内容可能停留在 working tree（自动化验证完成，待用户人工退出演练；phase-git-sync-20260713/issue_git_sync_exit_guard_20260728.md）
+- issue029 [ ] org-supertag 延迟加载后现存 Org buffer 不显示 inline tag SVG（phase-smart-key-20260721/issue_svg_tag_late_load_20260730.md）
