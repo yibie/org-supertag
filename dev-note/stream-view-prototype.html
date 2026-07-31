@@ -170,8 +170,22 @@
             data-tag="${escapeHtml(tag)}"
             class="text-sky-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400"
             aria-label="Follow tag ${escapeHtml(tag)}"
-          >[${escapeHtml(tag)}]</button>
+          >#${escapeHtml(tag)}</button>
         `).join(" ");
+      }
+
+      function sidebarTag(tag, depth) {
+        const padding = ["pl-1", "pl-5", "pl-9"][depth];
+        const face = state.tag === tag
+          ? "bg-slate-300 text-slate-950"
+          : "text-slate-300 hover:bg-slate-800 hover:text-sky-200";
+        return `
+          <button
+            type="button"
+            data-tag="${escapeHtml(tag)}"
+            class="block w-full py-0.5 pr-1 text-left ${padding} ${face} focus:outline-none focus:ring-2 focus:ring-sky-400"
+          >#${escapeHtml(tag)}</button>
+        `;
       }
 
       function noteBody(note, indent = "") {
@@ -223,14 +237,12 @@
             ${streamHeading(state.tag)}
             ${stream.map((note) => `
               <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
-                <div class="${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-500"}">
-                  ${state.activeNoteId === note.id ? "=> " : "   "}${tagButtons(note.tags)}
-                </div>
+                <div>${tagButtons(note.tags)}</div>
                 <button
                   type="button"
                   data-open-note="${note.id}"
                   class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                >* ${escapeHtml(note.title)}</button>
+                >${state.activeNoteId === note.id ? "=> " : "   "}* ${escapeHtml(note.title)}</button>
                 <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}  ::  ${note.id}</div>
                 ${noteBody(note, "  ")}
                 ${asciiRule("-")}
@@ -278,25 +290,25 @@
         const content = `
           <div class="grid h-[calc(100dvh-8rem)] min-h-96 w-full overflow-hidden border border-slate-600 lg:grid-cols-[30ch_minmax(0,1fr)]">
             <aside class="flex min-h-0 flex-col border-b border-slate-600 lg:border-b-0 lg:border-r">
-              <div class="bg-slate-900 px-2 py-1 text-slate-300">*supertag-tags*</div>
+              <div class="bg-slate-900 px-2 py-1 text-slate-300">Tags</div>
               <div class="min-h-0 flex-1 overflow-auto p-3 leading-6">
-                <div>[-] emacs</div>
-                <button type="button" data-tag="emacs/package" class="block text-left text-sky-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400">  [-] package</button>
-                <button type="button" data-tag="emacs/package/elpa" class="block text-left text-slate-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">      |- elpa</button>
-                <button type="button" data-tag="emacs/upgrade" class="block text-left text-slate-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">      \`- upgrade</button>
-                <div class="mt-3">[-] configuration</div>
-                <div>  \`- design</div>
+                ${sidebarTag("emacs", 0)}
+                ${sidebarTag("emacs/package", 1)}
+                ${sidebarTag("emacs/package/elpa", 2)}
+                ${sidebarTag("emacs/upgrade", 1)}
+                ${sidebarTag("configuration", 0)}
+                ${sidebarTag("checklist", 0)}
+                ${sidebarTag("design", 0)}
               </div>
               <div class="shrink-0 overflow-hidden whitespace-nowrap bg-slate-300 px-1 text-slate-950">-UU-  *supertag-tags*  (Supertag-Tags)</div>
             </aside>
             <section class="flex min-h-0 flex-col overflow-hidden">
-              <div class="shrink-0 bg-slate-900 px-2 py-1 text-slate-300">*supertag-stream: ${escapeHtml(state.tag)}*</div>
+              <div class="shrink-0 bg-slate-900 px-2 py-1 text-slate-300">#${escapeHtml(state.tag)}&nbsp;&nbsp; ${stream.length} notes&nbsp;&nbsp; read-only</div>
               <div class="min-h-0 flex-1 overflow-auto p-3">
-                ${streamHeading("split window")}
                 ${stream.map((note) => `
                   <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
-                    <div class="${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-500"}">${state.activeNoteId === note.id ? "=>" : "  "} ${tagButtons(note.tags)}</div>
-                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">* ${escapeHtml(note.title)}</button>
+                    <div>${tagButtons(note.tags)}</div>
+                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">${state.activeNoteId === note.id ? "=> " : "   "}* ${escapeHtml(note.title)}</button>
                     <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}</div>
                     ${noteBody(note, "  ")}
                     ${asciiRule("-")}
