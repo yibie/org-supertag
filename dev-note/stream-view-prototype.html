@@ -308,8 +308,7 @@
                 ${stream.map((note) => `
                   <article id="note-${note.id}" class="note-target -mx-1 mb-5 px-1 ${state.activeNoteId === note.id ? "bg-slate-900" : ""}" data-note-id="${note.id}">
                     <div>${tagButtons(note.tags)}</div>
-                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">* ${escapeHtml(note.title)}</button>
-                    <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}</div>
+                    <button type="button" data-open-note="${note.id}" class="mb-2 block text-left text-base font-semibold leading-6 text-balance text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">${escapeHtml(note.title)}</button>
                     ${noteBody(note, "  ")}
                     ${asciiRule("-")}
                   </article>
