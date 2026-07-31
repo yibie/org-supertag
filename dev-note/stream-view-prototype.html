@@ -7,48 +7,49 @@
     <link rel="icon" href="data:," />
     <!--
       THROWAWAY UI PROTOTYPE — not production code.
-      Question: What should an independent, read-only SuperTag Stream View look like?
-      Three variants, switchable with ?variant=A|B|C or the bottom switcher.
+      Question: How should an independent Stream View feel inside Emacs?
+      Three ASCII-first variants, switchable with ?variant=A|B|C.
       Run: open dev-note/stream-view-prototype.html
     -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+      :root {
+        color-scheme: dark;
+      }
+
       .prototype-switcher {
-        bottom: calc(env(safe-area-inset-bottom) + 1rem);
+        bottom: calc(env(safe-area-inset-bottom) + 3rem);
       }
 
       .note-target {
-        scroll-margin-top: 6rem;
+        scroll-margin-top: 3rem;
+      }
+
+      button {
+        font: inherit;
       }
     </style>
   </head>
-  <body class="m-0 bg-slate-950 text-slate-100 antialiased">
+  <body class="m-0 min-h-dvh bg-slate-950 text-slate-200">
     <main id="app"></main>
 
     <div
-      class="prototype-switcher fixed left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100 shadow-lg"
+      class="prototype-switcher fixed left-1/2 z-50 flex -translate-x-1/2 items-center border border-sky-400 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-100"
       aria-label="Prototype variant switcher"
     >
       <button
         id="previous-variant"
         type="button"
-        class="flex size-9 items-center justify-center rounded-full hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400"
+        class="px-2 py-1 text-sky-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400"
         aria-label="Previous prototype variant"
-      >
-        ←
-      </button>
-      <div class="min-w-48 px-2 text-center">
-        <div class="text-xs text-slate-400">THROWAWAY PROTOTYPE</div>
-        <div id="variant-label" class="font-medium tabular-nums"></div>
-      </div>
+      >[&lt;]</button>
+      <span id="variant-label" class="min-w-36 px-2 text-center tabular-nums"></span>
       <button
         id="next-variant"
         type="button"
-        class="flex size-9 items-center justify-center rounded-full hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400"
+        class="px-2 py-1 text-sky-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400"
         aria-label="Next prototype variant"
-      >
-        →
-      </button>
+      >[&gt;]</button>
     </div>
 
     <script>
@@ -56,74 +57,85 @@
         {
           id: "01J8-ARCHIVES",
           title: "Package archives and priority",
-          source: "~/notes/emacs.org · line 182",
+          source: "~/notes/emacs.org:182",
           tags: ["emacs/package", "emacs/package/elpa", "configuration"],
-          body: `
-            <p>MELPA 和 GNU ELPA 同时启用时，优先级应该写成显式数据，而不是依赖 archive 的排列顺序。这样换机器或重建配置后，行为仍然可解释。</p>
-            <pre><code>(setq package-archive-priorities
-      '((\"gnu\"   . 30)
-        (\"nongnu\" . 20)
-        (\"melpa\" . 10)))</code></pre>
-            <p>关键不是把 MELPA 放在最后，而是让选择规则能被未来的自己读懂。</p>
-          `,
+          body: [
+            "MELPA 和 GNU ELPA 同时启用时，优先级应该写成显式数据，而不是",
+            "依赖 archive 的排列顺序。换机器或重建配置后，行为仍然可解释。",
+            "",
+            "#+begin_src emacs-lisp",
+            "(setq package-archive-priorities",
+            "      '((\"gnu\"    . 30)",
+            "        (\"nongnu\" . 20)",
+            "        (\"melpa\"  . 10)))",
+            "#+end_src",
+            "",
+            "关键不是把 MELPA 放在最后，而是让选择规则能被未来的自己读懂。",
+          ],
         },
         {
           id: "01J8-PINNING",
           title: "ELPA package pinning notes",
-          source: "~/notes/package-management.org · line 47",
+          source: "~/notes/package-management.org:47",
           tags: ["emacs/package/elpa", "emacs/debugging"],
-          body: `
-            <p>当某个包在多个 archive 中同名时，可以用 pinning 固定来源。排查时先看 <code>package-alist</code> 和 archive metadata，不要直接删整个缓存。</p>
-            <table>
-              <thead><tr><th>Package</th><th>Archive</th><th>Reason</th></tr></thead>
-              <tbody>
-                <tr><td>org</td><td>gnu</td><td>跟随稳定版</td></tr>
-                <tr><td>magit</td><td>melpa</td><td>需要新版本修复</td></tr>
-              </tbody>
-            </table>
-            <blockquote>先确认解析结果，再清理状态；缓存不是第一嫌疑人。</blockquote>
-          `,
+          body: [
+            "当某个包在多个 archive 中同名时，可以用 pinning 固定来源。",
+            "排查时先看 package-alist 和 archive metadata，不要直接删整个缓存。",
+            "",
+            "| Package | Archive | Reason         |",
+            "|---------+---------+----------------|",
+            "| org     | gnu     | 跟随稳定版     |",
+            "| magit   | melpa   | 需要新版本修复 |",
+            "",
+            "> 先确认解析结果，再清理状态；缓存不是第一嫌疑人。",
+          ],
         },
         {
           id: "01J8-REBUILD",
           title: "Rebuilding packages after an Emacs upgrade",
-          source: "~/notes/emacs-upgrade.org · line 91",
+          source: "~/notes/emacs-upgrade.org:91",
           tags: ["emacs/package", "emacs/upgrade", "checklist"],
-          body: `
-            <p>大版本升级后只重编译真正依赖旧 ABI 的包。保留 package declarations，让安装状态可以重建。</p>
-            <ul>
-              <li>记录当前 Emacs 与 native-comp 版本。</li>
-              <li>删除旧版本生成的 native compilation cache。</li>
-              <li>重新启动，再处理实际失败的包。</li>
-              <li>最后运行一次配置 smoke test。</li>
-            </ul>
-            <p>不要把一次升级变成“重写整个配置”的借口。</p>
-          `,
+          body: [
+            "大版本升级后只重编译真正依赖旧 ABI 的包。保留 package declarations，",
+            "让安装状态可以重建。",
+            "",
+            "- 记录当前 Emacs 与 native-comp 版本。",
+            "- 删除旧版本生成的 native compilation cache。",
+            "- 重新启动，再处理实际失败的包。",
+            "- 最后运行一次配置 smoke test。",
+            "",
+            "不要把一次升级变成“重写整个配置”的借口。",
+          ],
         },
         {
           id: "01J8-DESIGN",
           title: "Package declarations are documentation",
-          source: "~/notes/configuration-design.org · line 28",
+          source: "~/notes/configuration-design.org:28",
           tags: ["emacs/package", "configuration", "design"],
-          body: `
-            <p>一段 package declaration 至少应该回答三件事：为什么安装、何时加载、用户入口是什么。其余配置尽量靠近第一次使用它的地方。</p>
-            <blockquote>配置的读者不是今天正在输入代码的人，而是半年后试图删除它的人。</blockquote>
-            <p>如果删除声明后复杂度没有重新出现在其他地方，这段配置本来就不需要存在。</p>
-          `,
+          body: [
+            "一段 package declaration 至少应该回答三件事：为什么安装、何时加载、",
+            "用户入口是什么。其余配置尽量靠近第一次使用它的地方。",
+            "",
+            "> 配置的读者不是今天正在输入代码的人，而是半年后试图删除它的人。",
+            "",
+            "如果删除声明后复杂度没有重新出现在其他地方，这段配置本来就不需要存在。",
+          ],
         },
       ];
 
       const variants = {
-        A: { name: "EKG Minimal", render: renderVariantA },
-        B: { name: "Editorial Reader", render: renderVariantB },
-        C: { name: "Navigator + Stream", render: renderVariantC },
+        A: { name: "plain-buffer", render: renderVariantA },
+        B: { name: "org-outline", render: renderVariantB },
+        C: { name: "split-window", render: renderVariantC },
       };
 
+      const params = new URLSearchParams(location.search);
       const state = {
-        variant: normalizeVariant(new URLSearchParams(location.search).get("variant")),
-        tag: new URLSearchParams(location.search).get("tag") || "emacs/package",
+        variant: normalizeVariant(params.get("variant")),
+        tag: params.get("tag") || "emacs/package",
         activeNoteId: notes[0].id,
-        message: "Read-only stream · exact + descendants · n/p move · o opens source · t follows a tag",
+        folded: new Set(),
+        message: "Read only.  4 notes matched exactly or by namespace prefix.",
       };
 
       function normalizeVariant(value) {
@@ -132,10 +144,9 @@
 
       function visibleNotes() {
         const prefix = `${state.tag}/`;
-        const matches = notes.filter((note) => note.tags.some(
+        return notes.filter((note) => note.tags.some(
           (tag) => tag === state.tag || tag.startsWith(prefix),
         ));
-        return matches.length ? matches : notes;
       }
 
       function escapeHtml(value) {
@@ -148,146 +159,165 @@
         })[character]);
       }
 
-      function tagButtons(tags, className) {
+      function asciiRule(character = "-", width = 94) {
+        return `<div class="overflow-hidden whitespace-nowrap text-slate-600">${character.repeat(width)}</div>`;
+      }
+
+      function tagButtons(tags) {
         return tags.map((tag) => `
           <button
             type="button"
             data-tag="${escapeHtml(tag)}"
-            class="${className} focus:outline-none focus:ring-2 focus:ring-sky-400"
-          >${escapeHtml(tag)}</button>
-        `).join("");
+            class="text-sky-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            aria-label="Follow tag ${escapeHtml(tag)}"
+          >[${escapeHtml(tag)}]</button>
+        `).join(" ");
       }
 
-      function richBody(body, variant) {
-        const classes = variant === "A"
-          ? "[&_p]:mb-4 [&_p]:leading-7 [&_pre]:mb-4 [&_pre]:overflow-x-auto [&_pre]:border-l-2 [&_pre]:border-sky-700 [&_pre]:bg-slate-900 [&_pre]:p-4 [&_code]:font-mono [&_code]:text-sm [&_table]:mb-4 [&_table]:w-full [&_th]:border-b [&_th]:border-slate-600 [&_th]:p-2 [&_th]:text-left [&_td]:border-b [&_td]:border-slate-800 [&_td]:p-2 [&_blockquote]:mb-4 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-600 [&_blockquote]:pl-4 [&_blockquote]:text-slate-400 [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-6 [&_li]:mb-1"
-          : "[&_p]:mb-5 [&_p]:leading-8 [&_pre]:mb-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-slate-900 [&_pre]:p-5 [&_pre]:text-slate-100 [&_code]:font-mono [&_code]:text-sm [&_table]:mb-5 [&_table]:w-full [&_th]:border-b [&_th]:border-slate-300 [&_th]:p-2 [&_th]:text-left [&_td]:border-b [&_td]:border-slate-200 [&_td]:p-2 [&_blockquote]:mb-5 [&_blockquote]:border-l-2 [&_blockquote]:border-sky-600 [&_blockquote]:pl-5 [&_blockquote]:italic [&_blockquote]:text-slate-600 [&_ul]:mb-5 [&_ul]:list-disc [&_ul]:pl-6 [&_li]:mb-2";
-        return `<div class="text-pretty ${classes}">${body}</div>`;
+      function noteBody(note, indent = "") {
+        const body = note.body.map((line) => `${indent}${line}`).join("\n");
+        return `<div class="whitespace-pre-wrap text-pretty leading-6 text-slate-200">${escapeHtml(body)}</div>`;
+      }
+
+      function emacsFrame(content, modeName) {
+        const bufferName = `*supertag-stream: ${state.tag}*`;
+        return `
+          <section class="flex h-dvh min-h-dvh flex-col overflow-hidden bg-slate-950 font-mono text-sm">
+            <header class="shrink-0">
+              <div class="bg-slate-200 px-2 py-1 text-slate-950">
+                File  Edit  Options  Buffers  Tools  Supertag  Help
+              </div>
+              <div class="border-b border-slate-600 bg-slate-900 px-2 py-1 text-slate-400">
+                GNU Emacs 30.1&nbsp;&nbsp; [ ${escapeHtml(bufferName)} ]&nbsp;&nbsp; +scratch+
+              </div>
+            </header>
+            <div class="flex-1 overflow-auto px-3 pb-28 pt-3 sm:px-5">
+              ${content}
+            </div>
+            <footer class="shrink-0">
+              <div class="overflow-hidden whitespace-nowrap bg-slate-300 px-2 text-slate-950">
+                -UU-:**--F1&nbsp; ${escapeHtml(bufferName)}&nbsp;&nbsp; All L1&nbsp;&nbsp; (${modeName}) ----------------
+              </div>
+              <div id="stream-status" class="overflow-hidden whitespace-nowrap bg-slate-950 px-2 py-1 text-slate-300" role="status" aria-live="polite">
+                ${escapeHtml(state.message)}
+              </div>
+            </footer>
+          </section>
+        `;
+      }
+
+      function streamHeading(label) {
+        return `
+          <div class="mb-5">
+            <div class="text-sky-300">Supertag Stream :: ${escapeHtml(label)}</div>
+            <div>query: tag == "${escapeHtml(state.tag)}" OR tag ^= "${escapeHtml(state.tag)}/"</div>
+            <div>view:  read-only / full body / creation order</div>
+            ${asciiRule("=")}
+          </div>
+        `;
       }
 
       function renderVariantA(stream) {
-        return `
-          <section class="min-h-dvh bg-slate-950 px-5 pb-32 pt-10 font-mono text-slate-200 sm:px-10">
-            <div class="mx-auto max-w-4xl">
-              <h1 class="mb-12 inline-block border border-slate-500 px-4 py-2 text-2xl font-semibold text-balance">
-                tag: ${escapeHtml(state.tag)}
-              </h1>
-              <div>
-                ${stream.map((note) => `
-                  <article id="note-${note.id}" data-note-id="${note.id}" class="note-target border-b border-slate-800 py-10 first:pt-0 ${state.activeNoteId === note.id ? "border-l-2 border-l-sky-500 pl-5" : ""}">
-                    <div class="mb-4 flex flex-wrap gap-2">
-                      ${tagButtons(note.tags, "border border-slate-500 px-2 py-1 text-xs text-sky-300 hover:border-sky-400")}
-                    </div>
-                    <button type="button" data-open-note="${note.id}" class="mb-2 text-left text-lg font-semibold text-slate-100 hover:text-sky-300 focus:outline-none focus:ring-2 focus:ring-sky-400">
-                      ${escapeHtml(note.title)}
-                    </button>
-                    <div class="mb-6 text-xs text-slate-500">${escapeHtml(note.source)} · ${note.id}</div>
-                    ${richBody(note.body, "A")}
-                  </article>
-                `).join("")}
-              </div>
-              ${streamFooter()}
-            </div>
-          </section>
+        const content = `
+          <div>
+            ${streamHeading(state.tag)}
+            ${stream.map((note) => `
+              <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
+                <div class="${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-500"}">
+                  ${state.activeNoteId === note.id ? "=> " : "   "}${tagButtons(note.tags)}
+                </div>
+                <button
+                  type="button"
+                  data-open-note="${note.id}"
+                  class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                >* ${escapeHtml(note.title)}</button>
+                <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}  ::  ${note.id}</div>
+                ${noteBody(note, "  ")}
+                ${asciiRule("-")}
+              </article>
+            `).join("")}
+            <div class="text-slate-500">-- end of stream --</div>
+          </div>
         `;
+        return emacsFrame(content, "Supertag-Stream");
       }
 
       function renderVariantB(stream) {
-        return `
-          <section class="min-h-dvh bg-stone-50 pb-32 text-slate-800">
-            <header class="sticky top-0 z-20 border-b border-stone-200 bg-stone-50 px-5 py-4 sm:px-10">
-              <div class="mx-auto flex max-w-3xl items-center justify-between gap-4">
-                <div>
-                  <div class="text-xs font-medium text-slate-500">SUPERTAG STREAM</div>
-                  <h1 class="font-serif text-2xl font-semibold text-balance">${escapeHtml(state.tag)}</h1>
-                </div>
-                <div class="hidden text-sm text-slate-500 sm:block">只读 · 完整正文</div>
-              </div>
-            </header>
-            <div class="mx-auto max-w-3xl px-5 sm:px-10">
-              ${stream.map((note, index) => `
-                <article id="note-${note.id}" data-note-id="${note.id}" class="note-target py-16 ${index ? "border-t border-stone-300" : ""}">
-                  <div class="mb-5 flex items-center justify-between gap-4 text-sm text-slate-500">
-                    <span class="tabular-nums">${String(index + 1).padStart(2, "0")}</span>
-                    <span class="truncate">${escapeHtml(note.source)}</span>
-                  </div>
-                  <button type="button" data-open-note="${note.id}" class="mb-5 text-left font-serif text-3xl font-semibold leading-tight text-balance hover:text-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500">
-                    ${escapeHtml(note.title)}
-                  </button>
-                  <div class="mb-8 flex flex-wrap gap-x-4 gap-y-2">
-                    ${tagButtons(note.tags, "text-sm text-sky-700 underline decoration-sky-300 underline-offset-4 hover:text-sky-900")}
-                  </div>
-                  <div class="font-serif text-lg text-slate-700 ${state.activeNoteId === note.id ? "border-l-2 border-sky-600 pl-6" : ""}">
-                    ${richBody(note.body, "B")}
-                  </div>
+        const content = `
+          <div>
+            ${streamHeading("Org outline")}
+            <div class="mb-3 text-slate-500">Click a heading to fold it.  z toggles the note at point.</div>
+            ${stream.map((note, index) => {
+              const folded = state.folded.has(note.id);
+              return `
+                <article id="note-${note.id}" class="note-target mb-4" data-note-id="${note.id}">
+                  <button
+                    type="button"
+                    data-toggle-note="${note.id}"
+                    aria-expanded="${!folded}"
+                    class="block text-left ${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-100"} hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  >${state.activeNoteId === note.id ? "=>" : "  "} ${folded ? "[+]" : "[-]"} * ${String(index + 1).padStart(2, "0")} ${escapeHtml(note.title)}</button>
+                  ${folded ? "" : `
+                    <div class="text-slate-500">     :PROPERTIES:</div>
+                    <div class="text-slate-500">     :ID:       ${note.id}</div>
+                    <div class="text-slate-500">     :SOURCE:   ${escapeHtml(note.source)}</div>
+                    <div class="text-slate-500">     :END:</div>
+                    <div class="mb-2">     :TAGS:     ${tagButtons(note.tags)}</div>
+                    ${noteBody(note, "     ")}
+                  `}
                 </article>
-              `).join("")}
-              ${streamFooter("text-slate-500")}
-            </div>
-          </section>
+              `;
+            }).join("")}
+            <div class="text-slate-500">-- end of outline --</div>
+          </div>
         `;
+        return emacsFrame(content, "Supertag-Stream Org");
       }
 
       function renderVariantC(stream) {
-        return `
-          <section class="min-h-dvh bg-slate-100 pb-32 text-slate-800 lg:grid lg:grid-cols-[19rem_minmax(0,1fr)]">
-            <aside class="border-b border-slate-300 bg-slate-900 px-5 py-8 text-slate-100 lg:sticky lg:top-0 lg:h-dvh lg:border-b-0 lg:border-r lg:border-slate-700 lg:px-7">
-              <div class="mb-8 text-xs font-medium text-slate-400">SUPERTAG STREAM</div>
-              <h1 class="mb-8 text-2xl font-semibold text-balance">${escapeHtml(state.tag)}</h1>
-              <nav aria-label="Notes in current stream">
-                <ol class="space-y-1">
-                  ${stream.map((note, index) => `
-                    <li>
-                      <button type="button" data-select-note="${note.id}" class="w-full rounded-md px-3 py-3 text-left text-sm ${state.activeNoteId === note.id ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"} focus:outline-none focus:ring-2 focus:ring-sky-400">
-                        <span class="mr-2 text-xs tabular-nums text-slate-400">${String(index + 1).padStart(2, "0")}</span>
-                        ${escapeHtml(note.title)}
-                      </button>
-                    </li>
-                  `).join("")}
-                </ol>
-              </nav>
-              <div class="mt-8 border-t border-slate-700 pt-5 text-xs leading-5 text-slate-400">
-                左侧只索引正文，不显示字段、计数或管理入口。
+        const content = `
+          <div class="grid h-[calc(100dvh-8rem)] min-h-96 w-full overflow-hidden border border-slate-600 lg:grid-cols-[30ch_minmax(0,1fr)]">
+            <aside class="flex min-h-0 flex-col border-b border-slate-600 lg:border-b-0 lg:border-r">
+              <div class="bg-slate-900 px-2 py-1 text-slate-300">*supertag-tags*</div>
+              <div class="min-h-0 flex-1 overflow-auto p-3 leading-6">
+                <div>[-] emacs</div>
+                <button type="button" data-tag="emacs/package" class="block text-left text-sky-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400">  [-] package</button>
+                <button type="button" data-tag="emacs/package/elpa" class="block text-left text-slate-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">      |- elpa</button>
+                <button type="button" data-tag="emacs/upgrade" class="block text-left text-slate-300 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">      \`- upgrade</button>
+                <div class="mt-3">[-] configuration</div>
+                <div>  \`- design</div>
               </div>
+              <div class="shrink-0 overflow-hidden whitespace-nowrap bg-slate-300 px-1 text-slate-950">-UU-  *supertag-tags*  (Supertag-Tags)</div>
             </aside>
-            <div class="px-5 py-10 sm:px-10 lg:px-14">
-              <div class="mx-auto max-w-4xl">
+            <section class="flex min-h-0 flex-col overflow-hidden">
+              <div class="shrink-0 bg-slate-900 px-2 py-1 text-slate-300">*supertag-stream: ${escapeHtml(state.tag)}*</div>
+              <div class="min-h-0 flex-1 overflow-auto p-3">
+                ${streamHeading("split window")}
                 ${stream.map((note) => `
-                  <article id="note-${note.id}" data-note-id="${note.id}" class="note-target mb-8 rounded-xl border ${state.activeNoteId === note.id ? "border-sky-500" : "border-slate-200"} bg-white p-6 shadow-sm sm:p-10">
-                    <div class="mb-4 flex flex-wrap gap-2">
-                      ${tagButtons(note.tags, "rounded-full bg-sky-50 px-3 py-1 text-xs text-sky-800 hover:bg-sky-100")}
-                    </div>
-                    <button type="button" data-open-note="${note.id}" class="mb-2 text-left text-2xl font-semibold text-balance hover:text-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500">
-                      ${escapeHtml(note.title)}
-                    </button>
-                    <div class="mb-7 text-sm text-slate-500">${escapeHtml(note.source)}</div>
-                    ${richBody(note.body, "B")}
+                  <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
+                    <div class="${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-500"}">${state.activeNoteId === note.id ? "=>" : "  "} ${tagButtons(note.tags)}</div>
+                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">* ${escapeHtml(note.title)}</button>
+                    <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}</div>
+                    ${noteBody(note, "  ")}
+                    ${asciiRule("-")}
                   </article>
                 `).join("")}
-                ${streamFooter("text-slate-500")}
               </div>
-            </div>
-          </section>
+              <div class="shrink-0 overflow-hidden whitespace-nowrap bg-slate-300 px-1 text-slate-950">-UU-  *supertag-stream*  (Supertag-Stream)</div>
+            </section>
+          </div>
         `;
-      }
-
-      function streamFooter(extraClasses = "text-slate-500") {
-        return `
-          <footer class="mt-10 border-t border-current py-8 text-sm ${extraClasses}">
-            <div class="mb-2">n/p 下一条/上一条 · o 打开原 Org 节点 · t 跟随 Tag · g 刷新 · q 关闭</div>
-            <div id="stream-status" class="text-pretty" role="status" aria-live="polite">${escapeHtml(state.message)}</div>
-          </footer>
-        `;
+        return emacsFrame(content, "Supertag-Workspace");
       }
 
       function render() {
         const stream = visibleNotes();
-        if (!stream.some((note) => note.id === state.activeNoteId)) {
+        if (stream.length && !stream.some((note) => note.id === state.activeNoteId)) {
           state.activeNoteId = stream[0].id;
         }
-        document.body.className = "m-0 antialiased";
         document.querySelector("#app").innerHTML = variants[state.variant].render(stream);
-        document.querySelector("#variant-label").textContent = `${state.variant} — ${variants[state.variant].name}`;
+        document.querySelector("#variant-label").textContent =
+          `${state.variant} / ${variants[state.variant].name}`;
         bindPrototypeActions();
       }
 
@@ -305,8 +335,8 @@
           button.addEventListener("click", () => openNote(button.dataset.openNote));
         });
 
-        document.querySelectorAll("[data-select-note]").forEach((button) => {
-          button.addEventListener("click", () => selectNote(button.dataset.selectNote));
+        document.querySelectorAll("[data-toggle-note]").forEach((button) => {
+          button.addEventListener("click", () => toggleNote(button.dataset.toggleNote));
         });
       }
 
@@ -314,7 +344,7 @@
         state.variant = normalizeVariant(nextVariant);
         updateUrl();
         render();
-        window.scrollTo({ top: 0 });
+        document.querySelector("#app > section > div")?.scrollTo({ top: 0 });
       }
 
       function cycleVariant(direction) {
@@ -332,7 +362,8 @@
 
       function selectNote(noteId) {
         state.activeNoteId = noteId;
-        state.message = `Selected ${notes.find((note) => note.id === noteId).title}`;
+        const note = notes.find((candidate) => candidate.id === noteId);
+        state.message = `Point moved to: ${note.title}`;
         render();
         document.querySelector(`#note-${CSS.escape(noteId)}`)?.scrollIntoView({ block: "start" });
       }
@@ -347,7 +378,15 @@
       function openNote(noteId = state.activeNoteId) {
         const note = notes.find((candidate) => candidate.id === noteId);
         state.activeNoteId = noteId;
-        state.message = `Prototype: o would open ${note.source} in the canonical Org buffer.`;
+        state.message = `o => find-file ${note.source}`;
+        render();
+      }
+
+      function toggleNote(noteId = state.activeNoteId) {
+        if (state.variant !== "B") return;
+        state.activeNoteId = noteId;
+        state.folded.has(noteId) ? state.folded.delete(noteId) : state.folded.add(noteId);
+        state.message = `z => ${state.folded.has(noteId) ? "folded" : "opened"} ${noteId}`;
         render();
       }
 
@@ -355,13 +394,13 @@
         const note = notes.find((candidate) => candidate.id === state.activeNoteId);
         const nextTag = note.tags.find((tag) => tag !== state.tag) || note.tags[0];
         state.tag = nextTag;
-        state.message = `Following tag: ${state.tag}`;
+        state.message = `t => following tag: ${state.tag}`;
         updateUrl();
         render();
       }
 
       function keyboardTargetIsEditable(target) {
-        return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable;
+        return ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName) || target.isContentEditable;
       }
 
       document.querySelector("#previous-variant").addEventListener("click", () => cycleVariant(-1));
@@ -375,15 +414,16 @@
         if (event.key === "p") moveNote(-1);
         if (event.key === "o") openNote();
         if (event.key === "t") followNextTag();
+        if (event.key === "z") toggleNote();
         if (event.key === "g") {
           state.tag = "emacs/package";
           state.activeNoteId = notes[0].id;
-          state.message = "Stream refreshed from the prototype query.";
+          state.message = "g => stream refreshed from exact + descendants query.";
           updateUrl();
           render();
         }
         if (event.key === "q") {
-          state.message = "Prototype: q would close the Stream View buffer.";
+          state.message = "q => quit-window";
           render();
         }
       });
