@@ -236,13 +236,13 @@
           <div>
             ${streamHeading(state.tag)}
             ${stream.map((note) => `
-              <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
+              <article id="note-${note.id}" class="note-target -mx-1 mb-5 px-1 ${state.activeNoteId === note.id ? "bg-slate-900" : ""}" data-note-id="${note.id}">
                 <div>${tagButtons(note.tags)}</div>
                 <button
                   type="button"
                   data-open-note="${note.id}"
                   class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                >${state.activeNoteId === note.id ? "=> " : "   "}* ${escapeHtml(note.title)}</button>
+                >* ${escapeHtml(note.title)}</button>
                 <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}  ::  ${note.id}</div>
                 ${noteBody(note, "  ")}
                 ${asciiRule("-")}
@@ -262,13 +262,13 @@
             ${stream.map((note, index) => {
               const folded = state.folded.has(note.id);
               return `
-                <article id="note-${note.id}" class="note-target mb-4" data-note-id="${note.id}">
+                <article id="note-${note.id}" class="note-target -mx-1 mb-4 px-1 ${state.activeNoteId === note.id ? "bg-slate-900" : ""}" data-note-id="${note.id}">
                   <button
                     type="button"
                     data-toggle-note="${note.id}"
                     aria-expanded="${!folded}"
                     class="block text-left ${state.activeNoteId === note.id ? "text-sky-300" : "text-slate-100"} hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                  >${state.activeNoteId === note.id ? "=>" : "  "} ${folded ? "[+]" : "[-]"} * ${String(index + 1).padStart(2, "0")} ${escapeHtml(note.title)}</button>
+                  >${folded ? "[+]" : "[-]"} * ${String(index + 1).padStart(2, "0")} ${escapeHtml(note.title)}</button>
                   ${folded ? "" : `
                     <div class="text-slate-500">     :PROPERTIES:</div>
                     <div class="text-slate-500">     :ID:       ${note.id}</div>
@@ -306,9 +306,9 @@
               <div class="shrink-0 bg-slate-900 px-2 py-1 text-slate-300">#${escapeHtml(state.tag)}&nbsp;&nbsp; ${stream.length} notes&nbsp;&nbsp; read-only</div>
               <div class="min-h-0 flex-1 overflow-auto p-3">
                 ${stream.map((note) => `
-                  <article id="note-${note.id}" class="note-target mb-5" data-note-id="${note.id}">
+                  <article id="note-${note.id}" class="note-target -mx-1 mb-5 px-1 ${state.activeNoteId === note.id ? "bg-slate-900" : ""}" data-note-id="${note.id}">
                     <div>${tagButtons(note.tags)}</div>
-                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">${state.activeNoteId === note.id ? "=> " : "   "}* ${escapeHtml(note.title)}</button>
+                    <button type="button" data-open-note="${note.id}" class="text-left text-slate-100 hover:bg-slate-800 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-400">* ${escapeHtml(note.title)}</button>
                     <div class="mb-2 text-slate-500">  ${escapeHtml(note.source)}</div>
                     ${noteBody(note, "  ")}
                     ${asciiRule("-")}
