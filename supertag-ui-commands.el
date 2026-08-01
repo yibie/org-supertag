@@ -58,11 +58,11 @@ When invoked interactively, allows selecting multiple child tags."
    (let* ((tags (mapcar #'car (supertag-query :tags))))
      (when (null tags)
        (user-error "No tags available"))
-     (let* ((parent (completing-read "Parent tag: " tags nil t))
+     (let* ((parent (supertag-ui-read-tag "Parent tag: " tags nil nil))
             (child-candidates (remove parent (copy-sequence tags)))
-            (children (completing-read-multiple
-                       (format "Child tags for '%s' (comma-separated): " parent)
-                       child-candidates nil t)))
+            (children (supertag-ui-read-tags
+                       (format "Child tags for '%s': " parent)
+                       child-candidates nil)))
        (when (null children)
          (user-error "You must select at least one child tag"))
        (list parent children))))
@@ -81,8 +81,8 @@ When invoked interactively, allows selecting multiple child tags."
    (let* ((tags (mapcar #'car (supertag-query :tags))))
      (when (null tags)
        (user-error "No tags available"))
-     (let ((children (completing-read-multiple
-                      "Clear parent for tag(s): " tags nil t)))
+     (let ((children (supertag-ui-read-tags
+                      "Clear parent for tag(s): " tags nil)))
        (when (null children)
          (user-error "You must select at least one tag"))
        (list children))))
@@ -164,7 +164,9 @@ file-level before any heading."
   "Create an interactive Kanban board view based on a tag's field."
   (interactive)
   (let* ((available-tags (supertag-view-kanban--get-all-tags))
-         (tag-name (completing-read "Select a tag to build Kanban from: " available-tags nil t))
+         (tag-name (supertag-ui-read-tag
+                    "Select a tag to build Kanban from: "
+                    available-tags nil nil))
          (tag-id (when tag-name (supertag-tag-get-id-by-name tag-name))))
     ;;
     (if (not tag-id)
@@ -694,9 +696,11 @@ new tag name, bypassing fuzzy completion matching."
                          (supertag-node-sync-at-point))
                        (list node-id))))
          (all-tags (mapcar #'car (supertag-query :tags))) ; For completion candidates
-         (raw-name (completing-read (format "Add tag to %d node(s) (use =tagname for exact match): "
-                                            (length node-ids))
-                                    all-tags nil nil))
+         (raw-name (or (supertag-ui-read-tag
+                        (format "Add tag to %d node(s) (use =tagname for exact match): "
+                                (length node-ids))
+                        all-tags t t)
+                       ""))
          (literal-tag (and (> (length raw-name) 0) (eq (aref raw-name 0) ?=))))
 
     (unless node-ids
@@ -797,8 +801,9 @@ Can be used both at headings and within node content areas."
 When OLD-ID is nil, prompt for the tag to rename."
   (interactive)
   (let* ((old-id (or old-id
-                     (completing-read "Tag to rename: "
-                                      (mapcar #'car (supertag-query :tags)) nil t)))
+                     (supertag-ui-read-tag
+                      "Tag to rename: "
+                      (mapcar #'car (supertag-query :tags)) nil nil)))
          (new-id (when (and old-id (not (string-empty-p old-id)))
                    (read-string (format "New name for '%s': " old-id)))))
     (when (and old-id (not (string-empty-p old-id))
@@ -813,8 +818,9 @@ When TAG-NAME is nil, prompt for the tag to delete.
 WARNING: This removes the tag from the database and from all org files."
   (interactive)
   (let ((tag-name (or tag-name
-                      (completing-read "Delete tag permanently: "
-                                       (mapcar #'car (supertag-query :tags)) nil t))))
+                      (supertag-ui-read-tag
+                       "Delete tag permanently: "
+                       (mapcar #'car (supertag-query :tags)) nil nil))))
     (when (and (not (string-empty-p tag-name))
                (yes-or-no-p (format "DELETE tag '%s' and ALL its uses? This is irreversible." tag-name)))
       ;; Call the centralized ops function to perform the deletion.
@@ -827,7 +833,7 @@ Returns the selected tag ID (a string), or nil if canceled."
          (tags (and node (plist-get node :tags))))
     (unless tags
       (user-error "Node has no tags to select from."))
-    (completing-read "Select tag: " tags nil t)))
+    (supertag-ui-read-tag "Select tag: " tags nil nil)))
 
 (defun supertag-change-tag-at-point ()
   "Interactively change a tag on the current node to a different tag.
@@ -840,7 +846,11 @@ This command reads the authoritative list of tags from the database."
       (user-error "No tag selected."))
 
     (let* ((all-tags (mapcar #'car (supertag-query :tags)))
-           (new-tag-raw (completing-read (format "Change tag '%s' to: " current-tag) all-tags nil nil))
+           (new-tag-raw
+            (or (supertag-ui-read-tag
+                 (format "Change tag '%s' to: " current-tag)
+                 all-tags t t)
+                ""))
            (new-tag (supertag-sanitize-tag-name new-tag-raw)))
       (when (and new-tag (not (string-empty-p new-tag)))
         ;; 1. Create new tag if it doesn't exist

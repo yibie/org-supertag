@@ -43,6 +43,7 @@
 9. 用户在 Schema View 中看到 `emacs/` → `package/` → `elpa`，并可在 namespace 下新建路径或打开后代聚合 Table。
 10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
 11. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
+12. 用户输入 `#a/` 时只看到 `a/` 的直接子级；Add/Change/Capture/Tag Field 等入口使用相同的逐层选择方式。
 
 ## Edge Cases
 
@@ -62,6 +63,7 @@
 - 从 namespace/branch 打开的 descendant Table 只显示 Title/Tags/File，字段与 schema 修改命令必须拒绝执行。
 - 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
 - org-supertag 可以晚于 Org buffer 加载；自动样式启用必须同时覆盖现存 buffer 和以后进入 `org-mode` 的 buffer。
+- namespace 下没有真实子路径时返回空候选，不回退显示无关根级 Tag；继续输入合法叶段仍可创建完整路径。
 
 ## Acceptance Criteria
 
@@ -80,4 +82,5 @@
 - 单节点同步后 Tag entity、node `:tags` 与 node-tag relation 一致；移除 token 后只回收当前节点的失效关系。
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
+- completion 的 `action=t` 仍按当前输入过滤候选；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
 - focused ERT 与仓库稳定测试套件通过。

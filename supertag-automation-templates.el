@@ -55,6 +55,7 @@
 (require 'supertag-automation)
 (require 'supertag-core-scan)      ; For `supertag-index-get-nodes-by-tag'
 (require 'supertag-services-query) ; For `supertag-query' (tag completion)
+(require 'supertag-services-ui)
 
 ;;; --- Small helpers ---
 
@@ -323,9 +324,11 @@ with no UI entry point provided elsewhere in the codebase to invoke it.")
 (defun supertag-automation-templates--read-tag (prompt)
   "Read a tag name for PROMPT, offering existing tags as completion."
   (string-trim
-   (completing-read (concat prompt ": ")
-                     (supertag-automation-templates--all-tag-names)
-                     nil nil)))
+   (or (supertag-ui-read-tag
+        (concat prompt ": ")
+        (supertag-automation-templates--all-tag-names)
+        t t)
+       "")))
 
 (defun supertag-automation-templates--read-todo-state (prompt)
   "Read a TODO keyword for PROMPT, offering `org-todo-keywords-1' when known."

@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'supertag-core-tag-path)
+(require 'supertag-services-ui)
 (require 'supertag-view-api)
 
 ;; ============================================================================
@@ -338,11 +339,8 @@ Returns DEFAULT if not found or error."
 (defun supertag-view--read-tag ()
   "Read a tag query, including derived namespace choices."
   (let* ((tag-ids (supertag-view-api-list-tag-ids))
-         (choices (sort (delete-dups
-                         (append tag-ids
-                                 (supertag-tag-path-namespace-prefixes tag-ids)))
-                        #'string<))
-         (tag (completing-read "Tag or namespace: " choices nil t)))
+         (tag (supertag-ui-read-tag
+               "Tag or namespace: " tag-ids nil nil t)))
     (append (list :type :tag :value tag)
             (when (supertag-tag-path-has-descendants-p tag tag-ids)
               '(:include-descendants t)))))

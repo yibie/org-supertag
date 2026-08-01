@@ -481,12 +481,13 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
       (let* ((child-id (plist-get context :tag-id))
              (all-tags (mapcar #'car (supertag-query :tags)))
              (parent-candidates (cl-remove child-id all-tags :test #'equal))
-             (parent-id (completing-read (format "Set parent for '%s' (empty to clear): " child-id)
-                                         (cons "" parent-candidates)
-                                         nil t)))
+             (parent-id
+              (supertag-ui-read-tag
+               (format "Set parent for '%s' (empty to clear): " child-id)
+               parent-candidates nil t)))
         (cond
          ;; Case 1: User entered empty string to clear inheritance
-         ((string-empty-p parent-id)
+         ((null parent-id)
           (when (yes-or-no-p (format "Clear parent for '%s'?" child-id))
             (supertag--clear-parent child-id)
             (message "Cleared parent for '%s'. Refreshing..." child-id) (supertag-schema-refresh)))
@@ -537,8 +538,10 @@ Offers choice between creating a new tag or selecting an existing tag."
                                               all-tags)))
             (if (null available-tags)
                 (message "No available tags to add as child (all tags are already children or is the parent).")
-              (let ((child-id (completing-read (format "Select tag to add as child of '%s': " parent-id)
-                                              available-tags nil t)))
+              (let ((child-id
+                     (supertag-ui-read-tag
+                      (format "Select tag to add as child of '%s': " parent-id)
+                      available-tags nil nil)))
                 (if (and child-id (not (string-empty-p child-id)))
                     (progn
                       (supertag--set-tag-parent child-id parent-id)
@@ -791,8 +794,10 @@ Tries three strategies in order:
       (let* ((all-tags (mapcar #'car (supertag-query :tags)))
              (marked-tag-ids (mapcar #'(lambda (ctx) (plist-get ctx :tag-id)) marked-tags))
              (parent-candidates (cl-set-difference all-tags marked-tag-ids :test #'equal))
-             (parent-id (completing-read (format "Set parent for %d marked tags: " (length marked-tags))
-                                         parent-candidates nil t)))
+             (parent-id
+              (supertag-ui-read-tag
+               (format "Set parent for %d marked tags: " (length marked-tags))
+               parent-candidates nil nil)))
         (when (and parent-id (not (string-empty-p parent-id)))
           (when (yes-or-no-p (format "Set %d tags to extend '%s'?" (length marked-tags) parent-id))
             (dolist (tag-context marked-tags)
@@ -803,17 +808,9 @@ Tries three strategies in order:
 
 (defun supertag-schema--merge-read-target ()
   "Read a merge destination."
-  (let* ((create-label "[Create new tag]")
-         (all-tags (sort (mapcar #'car (supertag-query :tags)) #'string<))
-         (choice (completing-read "Merge destination: "
-                                  (cons create-label all-tags) nil t)))
-    (if (string= choice create-label)
-        (let ((name (supertag-sanitize-tag-name
-                     (read-string "New destination tag: "))))
-          (when (or (string-empty-p name) (supertag-tag-get name))
-            (user-error "New destination must be a non-existing tag"))
-          name)
-      choice)))
+  (supertag-ui-read-tag
+   "Merge destination (RET on a typed path creates it): "
+   (mapcar #'car (supertag-query :tags)) t nil))
 
 (defun supertag-schema--merge-read-fields (source-ids)
   "Read source field keys to retain from SOURCE-IDS.

@@ -26,6 +26,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'supertag-services-query)
+(require 'supertag-services-ui)
 (require 'supertag-ops-node)
 
 (defgroup supertag-query-library nil
@@ -291,7 +292,7 @@ throughout supertag-ui-commands.el."
   "Read a tag name, completing against live tags when available."
   (let ((tags (supertag-query-library--live-tag-names)))
     (if tags
-        (completing-read "Tag: " tags nil nil)
+        (supertag-ui-read-tag "Tag: " tags t nil)
       (read-string "Tag: "))))
 
 (defun supertag-query-library--read-field-name ()

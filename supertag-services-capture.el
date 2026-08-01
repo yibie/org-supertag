@@ -34,7 +34,9 @@ Prompts user for title and allows multi-select of tags.
 Returns a plist with :headline string and :tags list."
   (let* ((title (read-string "Node title: "))
          (all-tags (mapcar #'car (supertag-query :tags)))
-         (selected-tags (completing-read-multiple "Select tags (comma separated, optional): " all-tags)))
+         (selected-tags
+          (supertag-ui-read-tags "Select tags (empty finishes): "
+                                 all-tags t)))
     (list :headline title
           :tags selected-tags)))
 
@@ -79,9 +81,10 @@ This function correctly uses the Tag -> Field -> Value data model."
         (cl-return-from supertag-capture-enrich-node))
 
       (while t
-        (let ((tag-id (completing-read "Select a tag to add field from (or empty to finish): "
-                                       (cons "" node-tags) nil t)))
-          (when (string-empty-p tag-id)
+        (let ((tag-id (supertag-ui-read-tag
+                       "Select a tag to add field from (or empty to finish): "
+                       node-tags nil t)))
+          (when (null tag-id)
             (message "Node enrichment complete for %s" node-id)
             (cl-return-from supertag-capture-enrich-node))
 
@@ -280,8 +283,12 @@ Supported placeholders:
   (let* ((prompt (car args))
          (props (cdr args))
          (initial-input (plist-get props :initial-input))
-         (all-tags (mapcar #'car (supertag-query :tags))))
-    (completing-read-multiple prompt all-tags nil nil initial-input)))
+         (all-tags (mapcar #'car (supertag-query :tags)))
+         (initial-tags
+          (when (and (stringp initial-input)
+                     (not (string-empty-p initial-input)))
+            (split-string initial-input "," t "[ \t\n\r]+"))))
+    (supertag-ui-read-tags prompt all-tags t initial-tags)))
 
 (defun supertag-capture--get-from-function (args)
   "Generator: Call a function to get content.

@@ -3,9 +3,11 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-id)
+(require 'seq)
 (require 'subr-x)
 (require 'supertag-services-query)
 (require 'supertag-core-store)
+(require 'supertag-core-tag-path)
 (require 'supertag-ops-node)
 (require 'supertag-ops-field)  ; For type-specific field input assistance
 (require 'supertag-ops-tag)
@@ -471,6 +473,96 @@ Returns a field definition plist, or nil if cancelled."
                 (setq field-def (plist-put field-def :options options)))
               field-def)))))))
 
+(cl-defun supertag-ui-read-tag
+    (prompt &optional (tag-ids nil tag-ids-supplied-p) allow-new allow-empty
+            allow-namespace)
+  "Read one Tag path one namespace level at a time.
+PROMPT is the initial minibuffer prompt.  TAG-IDS defaults to every
+stored Tag ID.  When ALLOW-NEW is non-nil, a valid path not already
+stored may be returned.  When ALLOW-EMPTY is non-nil, empty input
+returns nil.  Slash-terminated candidates only navigate.  When
+ALLOW-NAMESPACE is non-nil, their path without the trailing slash is
+also selectable as a virtual namespace result."
+  (let ((known-tags (sort (delete-dups
+                           (copy-sequence
+                            (if tag-ids-supplied-p
+                                tag-ids
+                              (supertag-view-api-list-tag-ids))))
+                          #'string<))
+        (namespace ""))
+    (catch 'selected
+      (while t
+        (let* ((direct
+                (supertag-tag-path-direct-candidates known-tags namespace))
+               (candidates
+                (if allow-namespace
+                    (sort
+                     (delete-dups
+                      (append direct
+                              (mapcar
+                               (lambda (candidate)
+                                 (string-remove-suffix "/" candidate))
+                               (seq-filter
+                                (lambda (candidate)
+                                  (string-suffix-p "/" candidate))
+                                direct))))
+                     #'string<)
+                  direct))
+               (answer
+                (completing-read
+                 (if (string-empty-p namespace)
+                     prompt
+                   (format "%s#%s " prompt namespace))
+                 (if allow-empty (cons "" candidates) candidates)
+                 nil (not allow-new))))
+          (when (string-empty-p answer)
+            (if allow-empty
+                (throw 'selected nil)
+              (user-error "A tag is required")))
+          (let ((path (if (or (string-empty-p namespace)
+                              (string-prefix-p namespace answer))
+                          answer
+                        (concat namespace answer))))
+            (if (string-suffix-p "/" path)
+                (let ((base (string-remove-suffix "/" path)))
+                  (unless (supertag-tag-path-valid-p base)
+                    (user-error "Invalid tag namespace '%s'" path))
+                  (unless (or allow-new (member path candidates))
+                    (user-error "Unknown tag namespace '%s'" path))
+                  (setq namespace path))
+              (unless (supertag-tag-path-valid-p path)
+                (user-error "Tag paths cannot contain empty segments"))
+              (unless (or allow-new
+                          (member path known-tags)
+                          (and allow-namespace
+                               (supertag-tag-path-has-descendants-p
+                                path known-tags)))
+                (user-error "Unknown tag '%s'" path))
+              (throw 'selected path))))))))
+
+(defun supertag-ui-read-tags (prompt &optional tag-ids allow-new initial-tags)
+  "Read zero or more Tag paths with hierarchical completion.
+PROMPT, TAG-IDS and ALLOW-NEW have the meaning used by
+`supertag-ui-read-tag'.  INITIAL-TAGS are kept and omitted from later
+choices."
+  (let ((known-tags (or tag-ids (supertag-view-api-list-tag-ids)))
+        (selected (copy-sequence initial-tags))
+        choice)
+    (while
+        (let ((remaining
+               (cl-set-difference known-tags selected :test #'equal)))
+          (setq choice
+                (unless (and (null remaining) (not allow-new))
+                  (supertag-ui-read-tag
+                   (if selected
+                       (format "%s(selected: %s) "
+                               prompt (string-join selected ", "))
+                     prompt)
+                   remaining allow-new t))))
+      (unless (member choice selected)
+        (setq selected (append selected (list choice)))))
+    selected))
+
 (defun supertag-ui-select-tag-on-node (node-id)
   "Interactively select a tag that is present on NODE-ID.
 Returns the selected tag ID, or nil if none."
@@ -480,7 +572,7 @@ Returns the selected tag ID, or nil if none."
         (progn
           (message "Node has no tags.")
           nil)
-      (completing-read "Select tag: " tag-ids nil t))))
+      (supertag-ui-read-tag "Select tag: " tag-ids nil nil))))
 
 (defun supertag-ui--read-tag-field (current-value)
   "Read tag field value with multi-selection support.
@@ -503,11 +595,10 @@ Returns a comma-separated string of selected tags."
                                  (string-join selected-tags ", "))
                        "Select tag (or empty to finish): "))
              (choice (if remaining-tags
-                         (completing-read prompt
-                                          (append remaining-tags '(""))
-                                          nil t)
+                         (supertag-ui-read-tag
+                          prompt remaining-tags nil t)
                        "")))
-        (if (string-empty-p choice)
+        (if (or (null choice) (string-empty-p choice))
             (setq continue nil)
           (push choice selected-tags))))
 

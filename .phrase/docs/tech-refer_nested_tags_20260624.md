@@ -2,6 +2,18 @@
 
 ## Decision Update (2026-07-29, supersedes the historical proposal below)
 
+### Frontend Completion Follow-up (2026-08-01)
+
+- Completion 只展示当前 namespace 的直接下一层；真实 Tag 与派生 namespace
+  不再作为全量扁平列表混排。
+- 候选的底层值仍是完整路径。末尾 `/` 表示只读导航候选，选择它不得创建
+  Tag、Node relation 或尾随空格。
+- 普通 Tag 候选不再重复显示 `[tag]`；`/` 已足够表达 namespace，只有新建
+  候选保留 `[New]`。
+- 行内 CAPF 与主要写入型 Tag reader 共享同一个直接子级候选函数；完整路径
+  校验、Store identity、精确查询默认值和 descendant query 均不改变。
+- 继续使用当前 O(T) Tag 列表推导候选；不新增缓存、索引、Store 字段或依赖。
+
 ### Data Model
 
 - 完整路径字符串就是稳定 Tag ID：`emacs/package` 与 `linux/package` 是两个不同标签。

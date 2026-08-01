@@ -122,7 +122,7 @@ the bare tag name and no leaked label."
 (message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
 
 ;;; --- 8. The new-tag candidate string is the BARE prefix. The
-;;;        "[Create New Tag]" label is supplied by the metadata
+;;;        "[New]" label is supplied by the metadata
 ;;;        annotation-function, never living in the candidate string
 ;;;        itself. This is what keeps corfu-preview-current 'insert
 ;;;        from leaking the label into the buffer.
@@ -151,8 +151,9 @@ the bare tag name and no leaked label."
           (old-label (funcall ann "existing")))
       (cl-assert (string-match-p "\\[New\\]" new-label)
                  nil "annotation did not label new-tag: %S" new-label)
-      (cl-assert (string-match-p "\\[tag\\]" old-label)
-                 nil "annotation did not label existing tag: %S" old-label))))
+      (cl-assert (null old-label)
+                 nil "existing tag should not repeat a [tag] label: %S"
+                 old-label))))
 
 ;;; --- 9. orderless-style filtering on user input "branding"
 ;;;        must KEEP the new-tag candidate in the list. ---
@@ -163,7 +164,7 @@ the bare tag name and no leaked label."
              nil "new-tag candidate filtered out by basic/substring: %S"
              filtered))
 
-(message "OK new-tag candidate \"PREFIX  [Create New Tag]\" survives filtering.")
+(message "OK new-tag candidate with [New] metadata survives filtering.")
 
 ;;; --- 10. CRITICAL: when the only surviving candidate is the new-tag
 ;;;        entry, the CAPF table must NOT report the user input as

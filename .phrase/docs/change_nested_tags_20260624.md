@@ -1,5 +1,21 @@
 # change_nested_tags_20260624
 
+## 2026-08-01 (task015)
+
+- **Action**: Make nested Tag completion and input navigate one namespace level at a time.
+- **Files**:
+  - Modify path helpers, completion, shared UI services, Tag command/capture/query/automation readers
+  - Modify Schema/View/Table tag selectors and nested-tag completion tests
+  - Update nested-tag issue, spec, task and change indexes
+- **Behavior**:
+  - `#a/` lists only direct children under `a/`; unrelated root Tags are excluded by the completion-table protocol.
+  - Slash-terminated candidates navigate without writing; full real paths remain the only stored Tag IDs.
+  - Normal candidates have no `[tag]` suffix; only a typed new path receives `[New]`.
+  - Add/Change/Capture/Tag Field and query/view selectors share the same hierarchical reader.
+- **Simplification**: One pure direct-child helper and one shared reader; no cache, index, Store field, namespace entity or dependency.
+- **Verification**: focused ERT 19/19; related View/Query ERT 54/54; full ERT 335/335; completion/inline self-checks; byte compilation, `check-parens`, `git diff --check`; independent review approved.
+- **Remaining**: issue009 stays open until the user confirms the corrected popup in their live Corfu configuration.
+
 ## 2026-07-29 (task013)
 
 - **Action**: Complete nested tags from authoritative Store synchronization through

@@ -27,7 +27,10 @@
 - `:extends` 是 schema/字段继承关系，不再承担路径 namespace 关系。
 - 单节点/全文件同步、显式后代查询、Schema namespace 树、路径补全、
   View/Table 聚合入口和事务化分支重命名均已实现。
-- 自动化、真实 Store 副本和 Schema 视觉验收完成；等待用户实机交互确认。
+- 自动化、真实 Store 副本和 Schema 视觉验收完成。
+- 2026-08-01 修复 completion 的扁平混排：候选按 namespace 直接子级逐层
+  展示，`#diary/` 不再泄漏 `ATTACH`、`Apple` 等根级候选。主要 Tag 写入
+  入口已复用同一套 namespace reader，自动化验收完成。
 
 ## Scope (if implemented)
 
@@ -43,7 +46,11 @@
 
 - 2026-07-29 用户确认实施完整路径方案。
 - task012 仅完成查询基础；2026-07-29 用户指出这还不构成真正的嵌套标签支持。
-- task013 已完成数据后端到前端交互闭环与自动验收；issue 保持打开，等待用户实机确认。
+- task013 已完成数据后端、Schema、View/Table 与初版 completion 自动验收。
+- task015 [x] 修复 completion-table 过滤协议；候选按 namespace 直接子级逐层展示；
+  行内输入、Add/Change、Capture 与 Tag Field 共用层级 Tag reader。验证方式：
+  focused ERT 覆盖 `#diary/` 无关候选、逐层候选、namespace 不落库和共享 reader；
+  全量 ERT、byte compilation、check-parens 与真实 Store 候选探测。
 
 ## Environment
 
@@ -101,7 +108,19 @@ task013 验收：
 - Schema View 截图视觉判定 92/100（pass）：namespace 缩进与 `:extends` 箭头/
   inherited fields 可清楚区分。
 
+task015 验收：
+- focused ERT 19/19，覆盖逐层 direct-child 候选、`#diary/` 过滤、namespace
+  不落库、共享 reader 导航与虚拟 namespace 选择。
+- View/Query 相关 ERT 54/54；全量 ERT 335/335；completion 与 inline-tag
+  独立 self-check 通过。
+- 12 个相关代码/测试文件通过非写入 byte compilation；所有改动文件通过
+  `check-parens` 与 `git diff --check`。
+- 当前真实 Store 中 `diary` 没有子路径；探测 `diary/` 返回空候选而非根级标签。
+- 独立代码审查无阻塞问题，确认未新增依赖、缓存、Store 字段或 namespace entity。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
+- 2026-08-01：实机确认初版 completion 的显示和输入仍是扁平的，task013
+  前端验收不通过；进入 task015 修复。
 - 端到端实现结果验收：Pending

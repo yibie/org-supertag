@@ -8,7 +8,7 @@
 - issue006 [x] automation async worker 报错 changed-props 未绑定（phase-automation-alignment-20260116/issue_automation_alignment_20260121_changed_props_void.md）
 - issue007 [x] 父标题变更后 add-reference 候选仍显示旧 `:olp`（phase-view-dsl-20260204/issue_view_dsl_20260205_olp_stale.md）
 - issue008 [x] `supertag-add-reference` 在同一文件内插入反向链接后，正向链接偏离光标位置（fixed in `supertag-ui-commands.el`，见 `test-add-reference.el`）
-- issue009 [ ] 嵌套标签（`#a/b`）Store→Schema/completion/View/Table 闭环与自动验收已完成，待用户实机确认（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
+- issue009 [ ] 嵌套标签（`#a/b`）Store→Schema/View/Table 与逐层 completion/input 闭环已完成，待用户实机确认（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
 - issue010 [x] persistence 候选去重导致显式 DB 被 snapshot 重复项降级（phase-sync-integrity-20251226/issue_sync_integrity_20260711_persistence_failover.md）
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）

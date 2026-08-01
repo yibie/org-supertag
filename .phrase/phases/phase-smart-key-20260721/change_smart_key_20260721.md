@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-01 Modify
+  - Files: nested Tag path/completion/UI readers, command/capture/query/view selectors, tests and phase/docs indexes
+  - Functions: `supertag-tag-path-direct-candidates`, `supertag-ui-read-tag`, `supertag-ui-read-tags`, CAPF completion table
+  - Changes: nested Tag candidates now advance one namespace level at a time; shared readers cover the primary Tag input surfaces; only new paths carry a type annotation.
+  - Simplification: reused canonical full paths and the existing completion APIs; no persisted namespace state or index.
+  - Verification: focused ERT 19/19, related ERT 54/54, full ERT 335/335, self-checks, byte compilation, paren/diff checks and independent review.
+  - Risk: live Corfu theme/display confirmation remains the final user acceptance gate.
+  - Related: `issue009`, `task015`
+
 - 2026-07-30 Fix
   - Files: `supertag-view-helper.el`, `test/view-framework-test.el`, phase/docs indexes
   - Functions: `supertag-view-helper--enable-existing-org-buffers`

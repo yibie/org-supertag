@@ -42,6 +42,9 @@
 (require 'supertag-ops-node)
 (require 'supertag-services-query)
 
+(declare-function supertag-ui-read-tag "supertag-services-ui"
+                  (prompt &optional tag-ids allow-new allow-empty allow-namespace))
+
 ;;;----------------------------------------------------------------------
 ;;; Customization
 ;;;----------------------------------------------------------------------
@@ -127,55 +130,53 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
       (when start
         (cons start end)))))
 
-(defconst supertag-completion--new-tag-suffix "  [Create New Tag]"
-  "Visible suffix used to flag the \"create new tag\" candidate.")
+(defun supertag-completion--namespace-for-prefix (prefix)
+  "Return the slash-terminated namespace containing PREFIX."
+  (if-let* ((slash (string-match "/[^/]*\\'" prefix)))
+      (substring prefix 0 (1+ slash))
+    ""))
 
-(defun supertag-completion--namespace-candidates (tag-ids)
-  "Return slash-terminated navigation candidates derived from TAG-IDS."
-  (mapcar
-   (lambda (path)
-     (propertize (concat path "/")
-                 'supertag-namespace-prefix t
-                 'supertag-namespace-path path))
-   (supertag-tag-path-namespace-prefixes tag-ids)))
+(defun supertag-completion--decorate-candidate (candidate)
+  "Attach navigation or Tag identity properties to CANDIDATE."
+  (if (string-suffix-p "/" candidate)
+      (propertize candidate
+                  'supertag-namespace-prefix t
+                  'supertag-namespace-path
+                  (string-remove-suffix "/" candidate))
+    (propertize candidate 'supertag-tag-id candidate)))
 
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
-The list contains existing tags not yet on the current node. When
-PREFIX is non-empty and matches no existing tag, the bare PREFIX
-itself is prepended as the new-tag candidate, carrying two text
-properties:
-- `is-new-tag' (and `new-tag-name') so the exit function knows it;
-- `display' holding \"PREFIX  [Create New Tag]\" so the popup and
-  any corfu preview render the full label while the underlying
-  candidate (what gets inserted into the buffer) stays just PREFIX.
-
-This split is crucial: with `corfu-preview-current' set to `'insert'
-corfu inserts the literal candidate string into the buffer as the
-user keeps typing. If the candidate literally contained
-\"  [Create New Tag]\", buffer contents like #org-supertag would
-break the moment the user typed `-' (which is not in
-`corfu-continue-commands' and so commits the preview).
-
-orderless still sees the bare PREFIX in the candidate, so a leading
-match like \"or\" against \"org-supertag\" continues to work."
+The list contains only real Tags and navigation namespaces directly
+below PREFIX's current namespace.  A valid PREFIX that is not stored
+is included as a new-Tag candidate carrying `is-new-tag' and
+`new-tag-name' properties.  The candidate string always remains the
+canonical path; the visible `[New]' label comes from CAPF metadata."
   (let* ((safe-prefix (or prefix ""))
+         (namespace (supertag-completion--namespace-for-prefix safe-prefix))
+         (namespace-valid
+          (or (string-empty-p namespace)
+              (supertag-tag-path-valid-p
+               (string-remove-suffix "/" namespace))))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
          (all-tags (supertag-completion--get-all-tags))
          (all-candidates
-          (append all-tags
-                  (supertag-completion--namespace-candidates all-tags)))
+          (when namespace-valid
+            (mapcar #'supertag-completion--decorate-candidate
+                    (supertag-tag-path-direct-candidates
+                     all-tags namespace))))
          (available-tags (if current-tags
                              (seq-remove
                               (lambda (tag)
-                                (member (substring-no-properties tag)
-                                        current-tags))
+                                (when-let* ((tag-id (get-text-property
+                                                    0 'supertag-tag-id tag)))
+                                  (member tag-id current-tags)))
                               all-candidates)
                            all-candidates))
          (should-add-new (and (not (string-empty-p safe-prefix))
                              (supertag-tag-path-valid-p safe-prefix)
-                             (not (member safe-prefix available-tags))
+                             (not (member safe-prefix all-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
         (let ((new-cand (propertize safe-prefix
@@ -190,12 +191,12 @@ match like \"or\" against \"org-supertag\" continues to work."
 
 (defun supertag-completion--post-completion-action (selected-string)
   "Post-completion action invoked after the UI inserts SELECTED-STRING.
-SELECTED-STRING is the bare tag name in all cases (the visible
-\"[Create New Tag]\" label lives on the candidate's `display'
-property, not in the candidate string itself, so the buffer only
-ever contains the real tag name)."
-  (let* ((namespace (get-text-property
-                     0 'supertag-namespace-prefix selected-string))
+SELECTED-STRING is always the canonical path.  Slash-terminated
+namespace candidates navigate without writing; all other valid paths
+are recorded as real Tags."
+  (let* ((namespace (or (get-text-property
+                         0 'supertag-namespace-prefix selected-string)
+                        (string-suffix-p "/" selected-string)))
          (is-new (get-text-property 0 'is-new-tag selected-string))
          (tag-name (substring-no-properties selected-string)))
 
@@ -238,32 +239,37 @@ ever contains the real tag name)."
             ;;    that always includes [Create New Tag] in results.
             ;;    Built to handle all completion actions for corfu/company compatibility.
             (lambda (str pred action)
-              (cond
-               ;; Handle boundaries (corfu/company compatibility)
-               ((eq (car-safe action) 'boundaries) nil)
-               ;; Return metadata (both corfu and company use this for display)
-               ((eq action 'metadata)
-                '(metadata
-                  (category . supertag-tag)
-                  (display-sort-function . identity)
-                  (cycle-sort-function . identity)
-                  (company-kind . (lambda (cand)
-                                    (cond
-                                     ((get-text-property 0 'is-new-tag cand)
-                                      'snippet)
-                                     ((get-text-property
-                                       0 'supertag-namespace-prefix cand)
-                                      'folder)
-                                     (t 'keyword))))
-                  (annotation-function
-                   . (lambda (cand)
-                       (cond
-                        ((get-text-property 0 'is-new-tag cand)
-                         (propertize "  [New]" 'face 'warning))
-                        ((get-text-property
-                          0 'supertag-namespace-prefix cand)
-                         "  [namespace]")
-                        (t "  [tag]"))))))
+              (let* ((live-bounds
+                      (and (not (minibufferp))
+                           (supertag-completion--get-prefix-bounds)))
+                     (live-prefix
+                      (if live-bounds
+                          (buffer-substring-no-properties
+                           (car live-bounds) (cdr live-bounds))
+                        prefix))
+                     (candidates
+                      (supertag-completion--get-completion-table live-prefix)))
+                (cond
+                 ;; Handle boundaries (corfu/company compatibility)
+                 ((eq (car-safe action) 'boundaries) nil)
+                 ;; Return metadata (both corfu and company use this for display)
+                 ((eq action 'metadata)
+                  '(metadata
+                    (category . supertag-tag)
+                    (display-sort-function . identity)
+                    (cycle-sort-function . identity)
+                    (company-kind . (lambda (cand)
+                                      (cond
+                                       ((get-text-property 0 'is-new-tag cand)
+                                        'snippet)
+                                       ((get-text-property
+                                         0 'supertag-namespace-prefix cand)
+                                        'folder)
+                                       (t 'keyword))))
+                    (annotation-function
+                     . (lambda (cand)
+                         (when (get-text-property 0 'is-new-tag cand)
+                           (propertize "  [New]" 'face 'warning))))))
                ;; Return all candidates (for display).
                ;; Two gotchas to handle here:
                ;;
@@ -285,48 +291,37 @@ ever contains the real tag name)."
                ;; from point to the leading `#', so the value is always
                ;; current. Fall back to the captured PREFIX (mainly for
                ;; non-interactive callers and tests).
-               ((eq action t)
-                (let* ((live-bounds (and (not (minibufferp))
-                                         (supertag-completion--get-prefix-bounds)))
-                       (live-prefix (if live-bounds
-                                        (buffer-substring-no-properties
-                                         (car live-bounds) (cdr live-bounds))
-                                      prefix)))
-                  (supertag-completion--get-completion-table live-prefix)))
+                 ((eq action t)
+                  (complete-with-action t candidates str pred))
                ;; Test for exact match. NEVER report the user input as an
                ;; exact match against the "[Create New Tag]" candidate
                ;; — that would convince the UI that completion is done
                ;; and it would auto-commit the labeled candidate.
-               ((eq action 'lambda)
-                (let ((cands (supertag-completion--get-completion-table str)))
-                  (and (test-completion str cands pred)
+                 ((eq action 'lambda)
+                  (and (test-completion str candidates pred)
                        ;; not satisfied if the only match is the new-tag entry
-                       (not (and (= (length cands) 1)
+                       (not (and (= (length candidates) 1)
                                  (get-text-property
-                                  0 'is-new-tag (car cands)))))))
+                                  0 'is-new-tag (car candidates))))))
                ;; Try completion (return common prefix or t if unique).
                ;; CRITICAL: if the only matching candidate is our
                ;; new-tag entry, returning t (or the bare prefix as a
                ;; "complete" match) lets corfu commit it silently
                ;; without showing the popup. Force the popup by
                ;; pretending the completion has not finished.
-               ((null action)
-                (let* ((cands (supertag-completion--get-completion-table str))
-                       (sole-new-tag
-                        (and (= (length cands) 1)
-                             (get-text-property
-                              0 'is-new-tag (car cands)))))
-                  (if sole-new-tag
-                      ;; Tell the UI "STR is what we have so far",
-                      ;; equivalent to no further progress — popup
-                      ;; appears.
-                      str
-                    (try-completion str cands pred))))
-               ;; Boundaries and other actions (handles (boundaries . "") etc.)
-               (t
-                (complete-with-action action
-                                     (supertag-completion--get-completion-table str)
-                                     str pred))))
+                 ((null action)
+                  (let ((sole-new-tag
+                         (and (= (length candidates) 1)
+                              (get-text-property
+                               0 'is-new-tag (car candidates)))))
+                    (if sole-new-tag
+                        ;; Tell the UI "STR is what we have so far",
+                        ;; equivalent to no further progress — popup appears.
+                        str
+                      (try-completion str candidates pred))))
+                 ;; Boundaries and other actions.
+                 (t
+                  (complete-with-action action candidates str pred)))))
 
             ;; 2. Company-specific: explicit prefix length hint.
             ;;    Company uses this to know how much of the prefix to keep
@@ -443,14 +438,16 @@ option in your UI stack. Prompts for a tag name with completion
 against existing tags. Typing a brand-new name and confirming with
 RET creates and records the tag immediately."
   (interactive)
+  (require 'supertag-services-ui)
   (let* ((all (supertag-completion--get-all-tags))
          (node-id (org-id-get-create))
          (current (when node-id (supertag-completion--get-node-tags node-id)))
          (available (if current
                         (seq-remove (lambda (tag) (member tag current)) all)
                       all))
-         (input (completing-read "Tag (RET on a typed name creates it): "
-                                 available nil nil)))
+         (input (supertag-ui-read-tag
+                 "Tag (RET on a typed name creates it): "
+                 available t t)))
     (when (and input (not (string-empty-p input)))
       (unless (supertag-tag-path-valid-p input)
         (user-error "Tag paths cannot contain empty segments"))

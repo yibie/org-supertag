@@ -69,3 +69,8 @@
   - 产出：视图 helper 加载时补启用现存 Org buffer，并保留 `org-mode-hook` 对后续 buffer 的处理
   - 验证方式：late-load 回归 ERT、view/full ERT、byte compile、`git diff --check`
   - 影响范围：仅在 `supertag-view-style-auto-enable` 非 nil 时启用样式；非 Org buffer 与显式关闭配置不变
+
+- task015 [x] 完成嵌套标签的逐层补全与统一输入
+  - 产出：namespace direct-child 候选、正确的 completion-table 过滤、共享 Tag reader，并接入行内/Add/Change/Capture/Tag Field/Query/View/Table
+  - 验证方式：focused ERT 19/19、相关 ERT 54/54、全量 ERT 335/335、completion/inline self-check、byte compile、`check-parens`、`git diff --check`
+  - 影响范围：完整路径仍是唯一 Tag ID；namespace 候选只导航；不新增缓存、索引、Store 字段、实体或依赖

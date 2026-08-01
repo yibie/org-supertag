@@ -68,10 +68,10 @@
 
 (defun supertag-view-table--read-tag-query (&optional prompt choices)
   "Read a canonical tag or namespace query."
-  (let ((path (completing-read (or prompt "View table for tag or namespace: ")
-                               (or choices
-                                   (supertag-view-table--get-available-tags))
-                               nil t)))
+  (let ((path (supertag-ui-read-tag
+               (or prompt "View table for tag or namespace: ")
+               (or choices (supertag-view-api-list-tag-ids))
+               nil nil t)))
     (supertag-view-table--query-for-path path)))
 
 (defun supertag-view-table--aggregate-p (&optional query)
@@ -474,11 +474,14 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
 
 (defun supertag-view-table--select-multiple-tags ()
   "Select multiple tags for multi-table view."
-  (let* ((available-tags (supertag-view-table--get-available-tags))
+  (let* ((available-tags (supertag-view-api-list-tag-ids))
          (selected-tags '()))
-    (while (let ((tag (completing-read "Select tag (RET to finish): " available-tags nil t)))
+    (while (let ((tag (supertag-ui-read-tag
+                       "Select tag (empty finishes): "
+                       available-tags nil t t)))
              (when (and tag (not (string-empty-p tag)))
                (push (supertag-view-table--query-for-path tag) selected-tags)
+               (setq available-tags (delete tag available-tags))
                t)))
     (nreverse selected-tags)))
 
@@ -1847,10 +1850,12 @@ With prefix argument INDEX, switch to specific table number."
     (user-error "This command is only for an active table view."))
 
   ;; 1. Get available tags and filter out existing ones.
-  (let* ((all-tags (supertag-view-table--get-available-tags))
+  (let* ((all-tags (supertag-view-api-list-tag-ids))
          (existing-tags (mapcar (lambda (obj) (plist-get obj :value)) supertag-view-table--query-objs))
          (available-to-add (cl-remove-if (lambda (tag) (member tag existing-tags)) all-tags))
-         (new-tag-name (completing-read "Add table for tag: " available-to-add nil t)))
+         (new-tag-name
+          (supertag-ui-read-tag
+           "Add table for tag: " available-to-add nil nil t)))
 
     (when (and new-tag-name (not (string-empty-p new-tag-name)))
       ;; 2. Create new query object and append it.
@@ -2032,10 +2037,12 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
 (defun supertag-view-table-project-task-correlation ()
   "Display project and task tables together for correlation analysis."
   (interactive)
-  (let* ((available-tags (supertag-view-table--get-available-tags))
-         (project-tag (completing-read "Select project tag: " available-tags nil t))
+  (let* ((available-tags (supertag-view-api-list-tag-ids))
+         (project-tag (supertag-ui-read-tag
+                       "Select project tag: " available-tags nil nil))
 
-         (task-tag (completing-read "Select task tag: " available-tags nil t)))
+         (task-tag (supertag-ui-read-tag
+                    "Select task tag: " available-tags nil nil)))
     (when (and project-tag task-tag)
       (supertag-view-table
        (list (list :type :tag :value project-tag)
