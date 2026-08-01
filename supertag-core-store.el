@@ -89,6 +89,15 @@ Data is stored in a tree-like structure using nested hash tables.")
       (puthash collection bucket supertag--store))
     bucket))
 
+(defun supertag-store-collection-names ()
+  "Return the names of all hash-table collections in the Store."
+  (let (names)
+    (maphash (lambda (name value)
+               (when (hash-table-p value)
+                 (push name names)))
+             (supertag--ensure-store))
+    (nreverse names)))
+
 (defun supertag-store-get-entity (collection id)
   "Return entity plist stored under COLLECTION keyed by ID."
   (gethash id (supertag-store-get-collection collection)))

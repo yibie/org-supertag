@@ -93,6 +93,27 @@ so an invalid query is rejected the same way the engine would reject it."
       (error (user-error "Invalid query `%s': %s"
                           query-string (error-message-string err))))))
 
+(defun supertag-query-saved-map-forms (function)
+  "Call FUNCTION with every readable saved query form.
+Return non-nil only when every saved query is a string containing exactly
+one readable form.  Callers can treat nil conservatively when references
+cannot be determined safely."
+  (catch 'invalid
+    (dolist (entry supertag-query-saved)
+      (let ((text (cdr entry)))
+        (unless (stringp text)
+          (throw 'invalid nil))
+        (let ((parsed
+               (condition-case nil
+                   (read-from-string text)
+                 (error (throw 'invalid nil)))))
+          (pcase-let* ((`(,form . ,end) parsed)
+                       (tail (substring text end)))
+            (unless (string-match-p "\\`[[:space:]]*\\'" tail)
+              (throw 'invalid nil))
+            (funcall function form)))))
+    t))
+
 (defun supertag-query-library--saved-query-string (name)
   "Return the saved query string for NAME, or signal a user-error."
   (or (cdr (assoc name supertag-query-saved))

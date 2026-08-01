@@ -46,3 +46,4 @@
 - 2026-07-30: phase-smart-key-20260721/change_smart_key_20260721.md  # Late-loaded inline SVG styling covers existing Org buffers
 - 2026-08-01: .phrase/docs/change_nested_tags_20260624.md  # task015 direct-child nested Tag completion and shared input
 - 2026-08-01: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 underscore-safe Tag parsing and explicit orphan cleanup
+- 2026-08-01: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 cleanup safety hardening after P0 review

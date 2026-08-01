@@ -76,6 +76,8 @@
   - 影响范围：完整路径仍是唯一 Tag ID；namespace 候选只导航；不新增缓存、索引、Store 字段、实体或依赖
 
 - task016 [x] 修复下划线 Tag 解析并提供安全的孤立 Tag 清理
-  - 产出：基于原始 buffer 区间的 Org-aware token 提取/标题清洗、保守孤立引用扫描、事务化删除 API、显式选择命令与源码优先测试入口
+  - 产出：基于原始 buffer 区间与已解析 object ranges 的 token 提取/标题清洗、保守孤立引用扫描、hook 后最终检查、rollback cache 修复、事务化删除 API、显式选择命令与源码优先测试入口
   - 验证方式：underscore/object 红绿回归、清理引用矩阵、真实笔记/Store 只读探测、全量 ERT、byte compile、`check-parens`、`git diff --check`
   - 影响范围：重扫会把错误 node tag 修正为完整下划线 ID；不会自动删除历史 Tag entity，也不会由清理命令修改 Org 文件
+  - Reopened 2026-08-01：复核发现 Org object 跨界、schema field 引用漏扫、hook 后 TOCTOU 与事务回滚 cache 不一致；完成四类回归前禁止建议运行清理命令
+  - Closed again 2026-08-01：上述四类回归及 underscore + nested object 组合边界均转绿；focused 42/42、full 344/344、真实笔记/Store 只读探测和双重复审通过

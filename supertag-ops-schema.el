@@ -161,6 +161,9 @@ Returns a list of field definition plists."
   "Return the materialized tag plist for TAG-ID, or nil if not cached."
   (gethash tag-id supertag-ops-schema--resolved-cache))
 
+(add-hook 'supertag-after-transaction-rollback-hook
+          #'supertag-ops-schema-rebuild-cache)
+
 (provide 'supertag-ops-schema)
 
 ;;; org-supertag/ops/schema.el ends here

@@ -294,6 +294,42 @@
                 "smart_companion")))
       (should (equal title "Tags")))))
 
+(ert-deftest extractor-inline-tags-stop-at-org-object-boundaries ()
+  "Adjacent Org objects must not become part of a Tag token."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* T #outer[[id:n][label]] #before ~code~\n"
+     "Body #body[[id:n][#linked]] #plain\n")
+    (let* ((headline (car (org-element-contents (org-element-parse-buffer))))
+           (tags (plist-get
+                  (supertag-extractor--tags headline "/tmp/f" nil)
+                  :tags))
+           (title (plist-get
+                   (supertag-extractor--title headline "/tmp/f" nil)
+                   :title)))
+      (should (equal (sort tags #'string<)
+                     '("before" "body" "outer" "plain")))
+      (should (equal title "T [[id:n][label]] ~code~")))))
+
+(ert-deftest extractor-underscore-tags-stop-at-nested-org-objects ()
+  "Transparent Org subscript parsing must not hide a nested link boundary."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* T #ai_suggestions[[id:n][label]] #plain\n"
+     "Body #smart_companion[[id:n][#linked]] #body\n")
+    (let* ((headline (car (org-element-contents (org-element-parse-buffer))))
+           (tags (plist-get
+                  (supertag-extractor--tags headline "/tmp/f" nil)
+                  :tags))
+           (title (plist-get
+                   (supertag-extractor--title headline "/tmp/f" nil)
+                   :title)))
+      (should (equal (sort tags #'string<)
+                     '("ai_suggestions" "body" "plain" "smart_companion")))
+      (should (equal title "T [[id:n][label]]")))))
+
 (ert-deftest extractor-inline-tag-string-boundaries-match-rendering ()
   "String extraction requires line start or whitespace before a hash."
   (should

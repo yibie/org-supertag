@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-01 Harden
+  - Files: `supertag-services-sync.el`, `supertag-ops-tag.el`, `supertag-core-store.el`, `supertag-core-transform.el`, `supertag-ops-schema.el`, `supertag-query-library.el`, focused tests and phase/docs indexes
+  - Functions: inline object range matching, Store/query/view public enumeration, guarded Tag deletion, transaction rollback hook
+  - Changes: Tag matches stop at parsed Org objects without losing underscore subscript text; schema field definitions participate in orphan references; stale previews are checked both before the batch and after each operation hook; rollback rebuilds the resolved schema cache.
+  - Simplification: replaced per-character Org context probing with one parsed range list per headline/paragraph; Tag Ops no longer reads the Store root or View registry private variable and no longer parses saved-query serialization itself.
+  - Verification: four reported safety reproductions plus underscore+nested-link regression passed; focused ERT 42/42, full ERT 344/344, real note/Store read-only probes, 1000-Tag benchmark, byte compilation, paren/diff checks and two independent reviews passed.
+  - Risk: cleanup remains deliberately conservative and still requires full rescan, explicit selection and confirmation; no user database deletion was performed.
+  - Related: `issue030`, `task016`, supersedes cleanup safety claims in `188a106`
+
 - 2026-08-01 Fix
   - Files: `supertag-services-sync.el`, `supertag-ops-tag.el`, `supertag-ui-commands.el`, `test/run-tests.sh`, focused tests and phase/docs indexes
   - Functions: `supertag--inline-tag-matches-in-region`, `supertag--extract-inline-tags`, `supertag--strip-inline-tags`, `supertag-tag-orphaned-ids`, `supertag-tag-delete-orphans`, `supertag-cleanup-orphaned-tags`

@@ -85,5 +85,8 @@
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - completion 的 `action=t` 仍按当前输入过滤候选；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
-- 孤立 Tag 候选不得包含被 node、relation、field/schema、inheritance、automation、saved query 或已加载 view config 引用的 ID；删除前必须重新计算。
+- 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
+- 孤立 Tag 候选不得包含被 node、relation、field/schema（含 `:tag` default/options）、inheritance、automation、saved query 或已加载 view config 引用的 ID。
+- 旧预览必须在调用时整体复检；每个实际删除还必须在 `before-operation-hook` 之后、Store mutation 之前再次复检。
+- 任何 Tag 批量事务回滚后，resolved schema cache 必须与已恢复的 Store 一致。
 - focused ERT 与仓库稳定测试套件通过。

@@ -135,6 +135,10 @@ for the duration."
     (dolist (entry log)
       (supertag--transaction-restore-entry entry))))
 
+(defvar supertag-after-transaction-rollback-hook nil
+  "Hook run after an outer transaction restores its Store state.
+Functions on this hook must not mutate the Store.")
+
 (defmacro supertag-with-transaction (&rest body)
   "Execute BODY within a transaction.
 If an error occurs during BODY execution, every path touched during the
@@ -177,7 +181,8 @@ which point exactly one batch notification flush happens."
              result) ; Return the result
          ;; Cleanup: roll back on error, then always reset transaction state.
          (unless supertag--tx-success
-           (supertag--transaction-rollback supertag--transaction-log))
+           (supertag--transaction-rollback supertag--transaction-log)
+           (run-hooks 'supertag-after-transaction-rollback-hook))
          (setq supertag--transaction-active nil)
          (setq supertag--transaction-log nil)
          (setq supertag--transaction-seen nil)))))

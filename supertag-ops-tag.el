@@ -22,8 +22,8 @@
 (declare-function supertag-tag-path-rename-execute
                   "supertag-ops-tag-merge" (plan))
 
-(defvar supertag-query-saved)
-(defvar supertag--view-configs)
+(declare-function supertag-query-saved-map-forms "supertag-query-library" (function))
+(declare-function supertag-view-config-list "supertag-view-framework" ())
 
 ;;; --- Internal Helper ---
 
@@ -165,9 +165,11 @@ Returns the updated tag data."
                           (supertag-ops-schema-rebuild-cache)
                           final-tag)))))))))
 
-(defun supertag-tag-delete (id)
+(defun supertag-tag-delete (id &optional before-delete)
   "Delete a tag using the unified commit system.
 ID is the unique identifier of the tag.
+When BEFORE-DELETE is non-nil, call it with ID after operation hooks and
+immediately before the Store mutation.
 Returns the deleted tag data."
   (let ((previous (supertag-tag-get id)))
     (when previous
@@ -177,6 +179,8 @@ Returns the deleted tag data."
        :id id
        :previous previous
        :perform (lambda ()
+                  (when before-delete
+                    (funcall before-delete id))
                   (supertag-store-remove-entity :tags id)
                   (supertag-ops-schema-rebuild-cache)
                   nil)))))
@@ -209,34 +213,22 @@ the Tag registry counts as a reference."
             ((consp value)
              (walk (car value))
              (walk (cdr value))))))
-      (maphash
-       (lambda (collection value)
-         (unless (eq collection :tags)
-           (walk value)))
-       (supertag--ensure-store))
+      (dolist (collection (supertag-store-collection-names))
+        (unless (eq collection :tags)
+          (walk (supertag-store-get-collection collection))))
       (maphash
        (lambda (id raw-tag)
          (let ((tag (supertag--ensure-plist raw-tag)))
            (when (or (plist-get tag :fields)
                      (plist-get tag :extends))
              (puthash id t referenced))
-           (walk (plist-get tag :extends))))
+           (walk (plist-get tag :extends))
+           (walk (plist-get tag :fields))))
        tags)
-      (when (and (boundp 'supertag--view-configs)
-                 (hash-table-p supertag--view-configs))
-        (walk supertag--view-configs))
-      (when (boundp 'supertag-query-saved)
-        (dolist (entry supertag-query-saved)
-          (let ((text (cdr entry)))
-            (if (not (stringp text))
-                (mark-all)
-              (condition-case nil
-                  (pcase-let* ((`(,form . ,end) (read-from-string text))
-                               (tail (substring text end)))
-                    (if (string-match-p "\\`[[:space:]]*\\'" tail)
-                        (walk form)
-                      (mark-all)))
-                (error (mark-all))))))))
+      (when (fboundp 'supertag-view-config-list)
+        (walk (supertag-view-config-list)))
+      (unless (supertag-query-saved-map-forms #'walk)
+        (mark-all)))
     (let (orphans)
       (maphash (lambda (id _value)
                  (unless (gethash id referenced)
@@ -257,7 +249,11 @@ Return the number of deleted Tag entities."
                   (string-join blocked ", ")))
     (supertag-with-transaction
       (dolist (id ids)
-        (supertag-tag-delete id)))
+        (supertag-tag-delete
+         id
+         (lambda (current-id)
+           (unless (member current-id (supertag-tag-orphaned-ids))
+             (user-error "Tag is no longer orphaned: %s" current-id))))))
     (length ids)))
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)

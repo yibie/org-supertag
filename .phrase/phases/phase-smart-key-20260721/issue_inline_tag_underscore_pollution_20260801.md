@@ -33,10 +33,12 @@ Org 将 `#ai_suggestions` 中的 `_suggestions` 解析为 subscript object；同
 
 ## Fix
 
-1. 直接在原始 buffer 区间扫描完整 token，并用 `org-element-context` 只接受 headline/paragraph 直接拥有的匹配。
+1. 直接在原始 buffer 区间扫描完整 token，并从调用方已有的 parse tree 一次性取得 Org object ranges；匹配在 link/code 等对象起点截断，sub/superscript 只对从外部开始的 token 透明。
 2. 标题清洗复用同一组绝对位置，保留 link/code 等 Org object 原文。
 3. 提供 `supertag-tag-orphaned-ids` 和 `supertag-tag-delete-orphans`：保守扫描 Store、schema、关系及已加载配置；删除前复检并使用事务。
 4. 提供 `M-x supertag-cleanup-orphaned-tags`：用户逐项选择并确认；不自动运行、不编辑 Org 文件。
+5. 使用 Store collection、saved-query form 与 View config 的公开枚举入口；schema `:fields` 参与保守引用扫描。
+6. 每个删除在 `before-operation-hook` 后再次检查；外层事务回滚后通过通用 hook 重建 resolved schema cache。
 
 ## Verification
 
@@ -47,10 +49,18 @@ Org 将 `#ai_suggestions` 中的 `_suggestions` 解析为 subscript object；同
 - 当前真实 Store 只读预览返回 `goodgoodgood`、`test/tag`、`to`、`too` 4 个候选；没有执行删除。
 - 变更文件 `check-parens`、临时目录 byte compilation 与 `git diff --check` 通过；编译仅有既有 warning。
 - 独立复审在修复保存查询加载顺序后 APPROVE，无剩余 finding。
+- 用户复核的 object boundary、schema default、stale preview、hook TOCTOU 与 rollback cache 均已先红后绿；underscore + nested link 组合复现也已锁定。
+- focused extractor/tag-merge ERT 42/42、全量 ERT 344/344 通过。
+- 精确复现得到 `tags=("ai_suggestions" "body" "plain" "smart_companion")`，标题保留 `[[id:n][label]]`。
+- 真实笔记再次只读解析得到 `("ai_suggestions" "smart_companion")`；真实 Store 只读预览仍为 4 个候选，没有执行删除。
+- 1000 Tag 病理基准约 0.36s；逐字符 context 原型的 14.22s 已删除。
+- 两路独立复审最终均 APPROVE；最新变更通过 byte compilation、`check-parens` 与 `git diff --check`。
 
 ## User Confirmation
 
 - 2026-08-01：用户提供根因诊断并明确不能靠 completion 过滤遮蔽脏数据。
+- 2026-08-01：用户复核否决当前清理安全性；在 object boundary、schema field reference、hook 后最终检查和 rollback cache 四项修复完成前，不得运行或推荐清理命令。
+- 2026-08-01：上述复核项已在自动化测试与独立复审中关闭；实际用户数据仍等待全量重扫后的人工候选确认。
 - 全量重扫与实际孤立 Tag 清理结果：Pending。
 
 ## Resolution

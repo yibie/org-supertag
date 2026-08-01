@@ -90,6 +90,70 @@
     (should-error (supertag-tag-delete-orphans '("used")))
     (should (supertag-tag-get "used"))))
 
+(ert-deftest tag-cleanup-protects-schema-tag-default-references ()
+  "A Tag referenced by a schema field definition is not an orphan."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "target" nil)
+    (tag-merge-test--create-tag
+     "schema" '((:name "related" :type :tag :default "target")))
+    (should-not (member "target" (supertag-tag-orphaned-ids)))
+    (should-error (supertag-tag-delete-orphans '("target")) :type 'user-error)
+    (should (supertag-tag-get "target"))))
+
+(ert-deftest tag-cleanup-keeps-all-tags-when-saved-query-is-unreadable ()
+  "Unreadable saved configuration must disable destructive candidates."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "keep" nil)
+    (setq supertag-query-saved '(("broken" . "(tag")))
+    (should-not (supertag-tag-orphaned-ids))))
+
+(ert-deftest tag-cleanup-rechecks-stale-preview ()
+  "A reference added after preview must block deletion."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "late" nil)
+    (let ((preview (supertag-tag-orphaned-ids)))
+      (should (member "late" preview))
+      (tag-merge-test--create-node "n1" nil '("late"))
+      (should-error (supertag-tag-delete-orphans preview) :type 'user-error)
+      (should (supertag-tag-get "late")))))
+
+(ert-deftest tag-cleanup-rechecks-after-before-operation-hook ()
+  "A hook-created reference must block the pending Tag deletion."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "late" nil)
+    (let* ((created nil)
+           (supertag-before-operation-hook
+            (list
+             (lambda (payload)
+               (when (and (not created)
+                          (eq (plist-get payload :operation) :delete)
+                          (equal (plist-get payload :id) "late"))
+                 (setq created t)
+                 (supertag-store-put-entity
+                  :nodes "hook-node"
+                  '(:id "hook-node" :title "Hook" :tags ("late"))))))))
+      (should-error (supertag-tag-delete-orphans '("late")) :type 'user-error)
+      (should (supertag-tag-get "late"))
+      (should-not (supertag-node-get "hook-node")))))
+
+(ert-deftest tag-cleanup-rollback-rebuilds-schema-cache ()
+  "Rollback after a partial batch delete restores the resolved cache."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "a" nil)
+    (tag-merge-test--create-tag "b" nil)
+    (supertag-ops-schema-rebuild-cache)
+    (let ((supertag-before-operation-hook
+           (list
+            (lambda (payload)
+              (when (and (eq (plist-get payload :operation) :delete)
+                         (equal (plist-get payload :id) "b"))
+                (error "Injected delete failure"))))))
+      (should-error (supertag-tag-delete-orphans '("a" "b")))
+      (should (supertag-tag-get "a"))
+      (should (supertag-tag-get "b"))
+      (should (supertag-ops-schema-get-resolved-tag "a"))
+      (should (supertag-ops-schema-get-resolved-tag "b")))))
+
 (ert-deftest tag-merge-plan-requires-two-participants ()
   (tag-merge-test--with-store
     (tag-merge-test--create-tag "task" nil)
