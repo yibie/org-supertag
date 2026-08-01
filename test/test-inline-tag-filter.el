@@ -33,6 +33,8 @@
        ("[[file:Copyright.xhtml#Copyright.xhtml][→ Copyright.xhtml]] #ok"
         ("#ok"))
        ("[[id:node][#linked]] #outside" ("#outside"))
+       ("* T #outer[[id:n][label]] #ai_suggestions[[id:n][x]]"
+        ("#outer" "#ai_suggestions"))
        ("word#tag 中文#标签 copyright &#169; &#xA9; \\#escaped (#wrapped)" nil)
        ("~#code~ =#verbatim= {{{hash(#macro)}}} <<#target>> <<<#radio>>>" nil)
        ("#+TITLE: #title\n# comment #comment\n:PROPERTIES:\n:URL: file#property\n:END:\n:DRAWER:\nvalue #drawer\n:END:\n| #table |\n: fixed #fixed"

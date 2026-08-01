@@ -1,6 +1,15 @@
 # change_smart_key_20260721
 
 - 2026-08-01 Harden
+  - Files: `supertag-core-transform.el`, `supertag-services-sync.el`, `supertag-view-helper.el`, `supertag-ops-tag.el`, focused tests and phase/docs indexes
+  - Functions: shared range-aware inline Tag matcher, explicit-candidate reference scan, post-hook batch validation, rollback hook runner
+  - Changes: Sync/face/SVG/Smart Key now truncate adjacent Org objects to the same Tag ID; orphan cleanup validates the original candidate set after all after-hooks; rollback runs every invariant before rethrowing the first hook error.
+  - Simplification: moved the existing Sync matcher to core and reused it; used native `run-hook-wrapped`; added no cache, Store field or dependency.
+  - Verification: four latest user reproductions passed; focused ERT 77/77, full ERT 349/349, inline self-check, 1000-line font-lock smoke, byte compilation, package load, paren/diff checks and independent review.
+  - Risk: no real database cleanup was run; full rescan and user review of candidates remain required before issue030 can close.
+  - Related: `issue030`, `task016`, supersedes cleanup safety claims in `a18e6d8`
+
+- 2026-08-01 Harden
   - Files: `supertag-services-sync.el`, `supertag-ops-tag.el`, `supertag-core-store.el`, `supertag-core-transform.el`, `supertag-ops-schema.el`, `supertag-query-library.el`, focused tests and phase/docs indexes
   - Functions: inline object range matching, Store/query/view public enumeration, guarded Tag deletion, transaction rollback hook
   - Changes: Tag matches stop at parsed Org objects without losing underscore subscript text; schema field definitions participate in orphan references; stale previews are checked both before the batch and after each operation hook; rollback rebuilds the resolved schema cache.

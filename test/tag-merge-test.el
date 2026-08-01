@@ -136,6 +136,42 @@
       (should (supertag-tag-get "late"))
       (should-not (supertag-node-get "hook-node")))))
 
+(ert-deftest tag-cleanup-rechecks-after-operation-hook ()
+  "An after-hook reference to a deleted candidate rolls back the cleanup."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "late" nil)
+    (let ((supertag-after-operation-hook
+           (list
+            (lambda (event)
+              (when (and (eq (plist-get event :operation) :delete)
+                         (eq (plist-get event :collection) :tags)
+                         (equal (plist-get event :id) "late"))
+                (supertag-store-put-entity
+                 :nodes "after-node"
+                 '(:id "after-node" :title "After" :tags ("late"))))))))
+      (should-error (supertag-tag-delete-orphans '("late")) :type 'user-error)
+      (should (supertag-tag-get "late"))
+      (should-not (supertag-node-get "after-node")))))
+
+(ert-deftest tag-cleanup-post-checks-all-explicit-batch-ids ()
+  "A later hook cannot reference an earlier, already deleted candidate."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "a" nil)
+    (tag-merge-test--create-tag "b" nil)
+    (let ((supertag-after-operation-hook
+           (list
+            (lambda (event)
+              (when (and (eq (plist-get event :operation) :delete)
+                         (eq (plist-get event :collection) :tags)
+                         (equal (plist-get event :id) "b"))
+                (supertag-store-put-entity
+                 :nodes "after-b"
+                 '(:id "after-b" :title "After B" :tags ("a"))))))))
+      (should-error (supertag-tag-delete-orphans '("a" "b")) :type 'user-error)
+      (should (supertag-tag-get "a"))
+      (should (supertag-tag-get "b"))
+      (should-not (supertag-node-get "after-b")))))
+
 (ert-deftest tag-cleanup-rollback-rebuilds-schema-cache ()
   "Rollback after a partial batch delete restores the resolved cache."
   (tag-merge-test--with-store
@@ -149,6 +185,29 @@
                          (equal (plist-get payload :id) "b"))
                 (error "Injected delete failure"))))))
       (should-error (supertag-tag-delete-orphans '("a" "b")))
+      (should (supertag-tag-get "a"))
+      (should (supertag-tag-get "b"))
+      (should (supertag-ops-schema-get-resolved-tag "a"))
+      (should (supertag-ops-schema-get-resolved-tag "b")))))
+
+(ert-deftest tag-cleanup-rollback-rebuilds-cache-after-earlier-hook-error ()
+  "A failing rollback hook cannot skip the schema cache invariant."
+  (tag-merge-test--with-store
+    (tag-merge-test--create-tag "a" nil)
+    (tag-merge-test--create-tag "b" nil)
+    (supertag-ops-schema-rebuild-cache)
+    (let ((supertag-before-operation-hook
+           (list
+            (lambda (payload)
+              (when (and (eq (plist-get payload :operation) :delete)
+                         (equal (plist-get payload :id) "b"))
+                (error "Injected delete failure")))))
+          (supertag-after-transaction-rollback-hook
+           (list (lambda () (error "Injected rollback invariant failure"))
+                 #'supertag-ops-schema-rebuild-cache)))
+      (let ((err (should-error (supertag-tag-delete-orphans '("a" "b")))))
+        (should (string-match-p "Injected rollback invariant failure"
+                                (error-message-string err))))
       (should (supertag-tag-get "a"))
       (should (supertag-tag-get "b"))
       (should (supertag-ops-schema-get-resolved-tag "a"))

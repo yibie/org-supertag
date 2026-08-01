@@ -9,6 +9,7 @@
 
 (require 'cl-lib) ; For cl-loop, cl-find, etc.
 (require 'ht) ; Ensures `ht` API availability
+(require 'org-element)
 (require 'supertag-core-store) ; Depends on supertag-get and supertag-update
 (require 'supertag-core-state) ; For shared state variables
 (require 'supertag-core-notify) ; For supertag--notify-change
@@ -139,6 +140,20 @@ for the duration."
   "Hook run after an outer transaction restores its Store state.
 Functions on this hook must not mutate the Store.")
 
+(defun supertag--run-transaction-rollback-hooks ()
+  "Run every rollback invariant and return the first error, if any."
+  (let (first-error)
+    (run-hook-wrapped
+     'supertag-after-transaction-rollback-hook
+     (lambda (function)
+       (condition-case err
+           (funcall function)
+         (error
+          (unless first-error
+            (setq first-error err))))
+       nil))
+    first-error))
+
 (defmacro supertag-with-transaction (&rest body)
   "Execute BODY within a transaction.
 If an error occurs during BODY execution, every path touched during the
@@ -169,6 +184,7 @@ which point exactly one batch notification flush happens."
            (supertag--transaction-log '()) ; Log for rollback
            (supertag--transaction-seen nil) ; Dedup set: first-touch only
            (supertag--tx-success nil)
+           (supertag--rollback-error nil)
            result) ; Variable to capture the result
        (unwind-protect
            (progn
@@ -182,10 +198,14 @@ which point exactly one batch notification flush happens."
          ;; Cleanup: roll back on error, then always reset transaction state.
          (unless supertag--tx-success
            (supertag--transaction-rollback supertag--transaction-log)
-           (run-hooks 'supertag-after-transaction-rollback-hook))
+           (setq supertag--rollback-error
+                 (supertag--run-transaction-rollback-hooks)))
          (setq supertag--transaction-active nil)
          (setq supertag--transaction-log nil)
-         (setq supertag--transaction-seen nil)))))
+         (setq supertag--transaction-seen nil)
+         (when supertag--rollback-error
+           (signal (car supertag--rollback-error)
+                   (cdr supertag--rollback-error)))))))
 
 ;;; --- Path Pattern Matching ---
 
@@ -250,6 +270,93 @@ not a tag."
   (and (stringp name)
        (not (string-empty-p name))
        (not (eq (aref name 0) ?'))))
+
+(defun supertag-transform--inline-tag-object-ranges
+    (begin end &optional element restriction)
+  "Return Org object ranges between BEGIN and END.
+When ELEMENT is nil, parse the region as secondary Org text using
+RESTRICTION.  Each range is (BEGIN END TRANSPARENT); sub/superscript
+objects are transparent so underscores and carets remain valid Tag text."
+  (let* ((parsed (or element
+                     (org-element-parse-secondary-string
+                      (buffer-substring-no-properties begin end)
+                      (org-element-restriction (or restriction 'paragraph)))))
+         (parts (cond
+                 ((null element) parsed)
+                 ((eq (org-element-type element) 'headline)
+                  (org-element-property :title element))
+                 (t (org-element-contents element))))
+         (offset (if element 0 (1- begin)))
+         ranges)
+    (cl-labels
+        ((collect (part)
+           (unless (stringp part)
+             (let ((object-begin (org-element-property :begin part))
+                   (object-end (org-element-property :end part)))
+               (when (and object-begin object-end)
+                 (setq object-begin (+ offset object-begin)
+                       object-end (+ offset object-end))
+                 (when (and (< object-begin end) (> object-end begin))
+                   (push (list object-begin object-end
+                               (memq (org-element-type part)
+                                     '(subscript superscript)))
+                         ranges))))
+             (dolist (child (org-element-contents part))
+               (collect child)))))
+      (dolist (part (if (listp parts) parts (list parts)))
+        (collect part)))
+    (sort ranges (lambda (a b) (< (car a) (car b))))))
+
+(defun supertag-transform--inline-tag-prose-end (begin end object-ranges)
+  "Return Tag prose end between BEGIN and END using OBJECT-RANGES.
+Return nil when BEGIN is inside an Org object.  Transparent ranges may
+occur later inside a Tag; other objects terminate it at their opening."
+  (unless (cl-some (lambda (range)
+                     (and (<= (nth 0 range) begin)
+                          (< begin (nth 1 range))))
+                   object-ranges)
+    (catch 'boundary
+      (dolist (range object-ranges)
+        (let ((object-begin (nth 0 range))
+              (transparent (nth 2 range)))
+          (when (and (not transparent)
+                     (> object-begin begin)
+                     (< object-begin end))
+            (throw 'boundary object-begin))))
+      end)))
+
+(defun supertag-transform-inline-tag-matches-in-region
+    (begin end &optional element restriction)
+  "Return range-aware prose Tag matches between BEGIN and END.
+Each result is (BEGIN END NAME), with absolute buffer positions.  ELEMENT
+may be the parsed headline or paragraph owning the region.  Otherwise the
+region is parsed as secondary Org text using RESTRICTION."
+  (save-excursion
+    (goto-char
+     (if (and (> begin (point-min))
+              (eq (char-syntax (char-before begin)) ?\s))
+         (1- begin)
+       begin))
+    (let ((object-ranges
+           (supertag-transform--inline-tag-object-ranges
+            begin end element restriction))
+          matches)
+      (while (re-search-forward supertag-inline-tag-regexp end t)
+        (let* ((name-begin (match-beginning 2))
+               (raw-end (match-end 2))
+               (tag-begin (1- name-begin))
+               (tag-end
+                (and (>= tag-begin begin)
+                     (save-match-data
+                       (supertag-transform--inline-tag-prose-end
+                        tag-begin raw-end object-ranges))))
+               (name (and tag-end
+                          (> tag-end name-begin)
+                          (buffer-substring-no-properties name-begin tag-end))))
+          (when (and name
+                     (supertag-transform-inline-tag-name-p name))
+            (push (list tag-begin tag-end name) matches))))
+      (nreverse matches))))
 
 (defun supertag-transform-extract-inline-tags (content-string)
   "Extract whitespace-delimited #tags from CONTENT-STRING."

@@ -81,3 +81,5 @@
   - 影响范围：重扫会把错误 node tag 修正为完整下划线 ID；不会自动删除历史 Tag entity，也不会由清理命令修改 Org 文件
   - Reopened 2026-08-01：复核发现 Org object 跨界、schema field 引用漏扫、hook 后 TOCTOU 与事务回滚 cache 不一致；完成四类回归前禁止建议运行清理命令
   - Closed again 2026-08-01：上述四类回归及 underscore + nested object 组合边界均转绿；focused 42/42、full 344/344、真实笔记/Store 只读探测和双重复审通过
+  - Reopened again 2026-08-01：`a18e6d8` 只覆盖 before-hook；after-hook、跨批次已删除候选、Smart Key matcher 与 rollback hook fail-fast 仍有可执行反例
+  - Completed 2026-08-01：共享 range matcher、显式候选 post-hook 扫描与全量 rollback invariant runner 已实现；新增反例回归转绿，全量 ERT 349/349

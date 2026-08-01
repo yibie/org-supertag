@@ -52,20 +52,32 @@ This should be a plist of face attributes."
 (defun supertag-view-helper--valid-inline-tag-match-p ()
   "Return non-nil when the current match is an Org prose tag token.
 The token must start at a whitespace boundary and must not belong to a
-drawer, a commented subtree, or another inline Org object."
-  (let ((match-start (match-beginning 0))
-        (tag-name (substring-no-properties (match-string 0) 1)))
-    (save-match-data
-      (save-excursion
-        (goto-char match-start)
-        (let* ((context (org-element-context))
-               (heading (org-element-lineage context '(headline) t)))
-          (and (or (bolp) (eq (char-syntax (char-before)) ?\s))
-               (supertag-transform-inline-tag-name-p tag-name)
-               (memq (org-element-type context) '(headline paragraph))
-               (not (org-element-lineage context '(drawer property-drawer) t))
-               (not (and heading
-                         (org-element-property :commentedp heading)))))))))
+drawer, a commented subtree, or another inline Org object.
+When a broad font-lock match reaches an Org object, truncate match data to
+the prose Tag range so face, SVG, and point lookup see the same Tag ID."
+  (let* ((match-start (match-beginning 0))
+         (range
+          (save-match-data
+            (save-excursion
+              (goto-char match-start)
+              (let* ((context (org-element-context))
+                     (type (org-element-type context))
+                     (heading (org-element-lineage context '(headline) t)))
+                (when (and (or (bolp)
+                               (eq (char-syntax (char-before)) ?\s))
+                           (memq type '(headline paragraph))
+                           (not (org-element-lineage
+                                 context '(drawer property-drawer) t))
+                           (not (and heading
+                                     (org-element-property :commentedp heading))))
+                  (cl-find match-start
+                           (supertag-transform-inline-tag-matches-in-region
+                            (line-beginning-position) (line-end-position)
+                            nil type)
+                           :key #'car :test #'=)))))))
+    (when range
+      (set-match-data (list (nth 0 range) (nth 1 range)))
+      t)))
 
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API
@@ -781,9 +793,9 @@ Returns the tag name (without #) if found, nil otherwise."
         (goto-char (line-beginning-position))
         (catch 'tag
           (while (re-search-forward tag-re line-end t)
-            (when (and (<= (match-beginning 0) origin)
-                       (< origin (match-end 0))
-                       (supertag-view-helper--valid-inline-tag-match-p))
+            (when (and (supertag-view-helper--valid-inline-tag-match-p)
+                       (<= (match-beginning 0) origin)
+                       (< origin (match-end 0)))
               (throw 'tag (substring (match-string-no-properties 0) 1)))))))))
 
 (defun supertag-view-helper-rename-tag-text-in-node (old-tag-name new-tag-name)

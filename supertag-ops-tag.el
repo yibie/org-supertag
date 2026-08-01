@@ -185,19 +185,18 @@ Returns the deleted tag data."
                   (supertag-ops-schema-rebuild-cache)
                   nil)))))
 
-(defun supertag-tag-orphaned-ids ()
-  "Return sorted Tag IDs with no data or loaded configuration references.
-Tags that own fields or inheritance are treated as schema and retained.
-The scan is intentionally conservative: an exact Tag ID anywhere outside
-the Tag registry counts as a reference."
+(defun supertag-tag--referenced-ids (tag-ids)
+  "Return TAG-IDS referenced by data or loaded configuration.
+TAG-IDS are explicit so validation still sees candidates already removed
+from the Tag registry by an in-flight cleanup transaction."
   (require 'supertag-query-library)
   (let ((known (make-hash-table :test 'equal))
         (referenced (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'eq))
         (tags (supertag-store-get-collection :tags)))
-    (maphash (lambda (id value)
-               (when value (puthash id t known)))
-             tags)
+    (dolist (id tag-ids)
+      (when (stringp id)
+        (puthash id t known)))
     (cl-labels
         ((mark-all ()
            (maphash (lambda (id _value) (puthash id t referenced)) known))
@@ -221,7 +220,8 @@ the Tag registry counts as a reference."
          (let ((tag (supertag--ensure-plist raw-tag)))
            (when (or (plist-get tag :fields)
                      (plist-get tag :extends))
-             (puthash id t referenced))
+             (when (gethash id known)
+               (puthash id t referenced)))
            (walk (plist-get tag :extends))
            (walk (plist-get tag :fields))))
        tags)
@@ -229,12 +229,25 @@ the Tag registry counts as a reference."
         (walk (supertag-view-config-list)))
       (unless (supertag-query-saved-map-forms #'walk)
         (mark-all)))
-    (let (orphans)
+    (let (ids)
       (maphash (lambda (id _value)
-                 (unless (gethash id referenced)
-                   (push id orphans)))
-               known)
-      (sort orphans #'string<))))
+                 (push id ids))
+               referenced)
+      (sort ids #'string<))))
+
+(defun supertag-tag-orphaned-ids ()
+  "Return sorted Tag IDs with no data or loaded configuration references.
+Tags that own fields or inheritance are treated as schema and retained.
+The scan is intentionally conservative: an exact Tag ID anywhere outside
+the Tag registry counts as a reference."
+  (let ((tags (supertag-store-get-collection :tags))
+        ids)
+    (maphash (lambda (id value)
+               (when value (push id ids)))
+             tags)
+    (sort (cl-set-difference
+           ids (supertag-tag--referenced-ids ids) :test #'equal)
+          #'string<)))
 
 (defun supertag-tag-delete-orphans (tag-ids)
   "Delete TAG-IDS only when every ID is still an orphan.
@@ -253,7 +266,14 @@ Return the number of deleted Tag entities."
          id
          (lambda (current-id)
            (unless (member current-id (supertag-tag-orphaned-ids))
-             (user-error "Tag is no longer orphaned: %s" current-id))))))
+             (user-error "Tag is no longer orphaned: %s" current-id)))))
+      (let ((post-hook-blocked
+             (delete-dups
+              (append (supertag-tag--referenced-ids ids)
+                      (cl-remove-if-not #'supertag-tag-get ids)))))
+        (when post-hook-blocked
+          (user-error "Cleanup hooks retained or referenced Tag(s): %s"
+                      (string-join post-hook-blocked ", ")))))
     (length ids)))
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)

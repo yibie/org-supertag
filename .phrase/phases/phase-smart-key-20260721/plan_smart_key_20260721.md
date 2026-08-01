@@ -41,7 +41,7 @@
 - P0: `#'function` 不得渲染、同步或出现在 tag completion；历史 Store 不做破坏性删除。
 - P0: 视图模块晚于 Org buffer 加载时，现存与后续 Org buffer 都必须自动启用 inline tag 样式。
 - P0: `_` 在 Tag token 中必须保持字面值；Org object 边界仍不得泄漏内部 `#token`。
-- P0: cleanup 引用模型覆盖 Tag schema fields；最终引用检查位于 operation hook 后，事务回滚同步重建 schema cache。
+- P0: cleanup 引用模型覆盖 Tag schema fields；整批 `after-operation-hook` 后按显式候选 ID 复检，事务回滚执行全部 invariant handler 后重抛首错。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
 - P1: Schema View 以路径 namespace 缩进，`:extends` 仅作为继承元数据展示；虚拟 namespace 不冒充真实 Tag。
@@ -63,7 +63,7 @@
 - 现有 Table 的字段列假设查询只有一个精确 Tag；后代聚合必须降级为通用只读列，避免把子路径字段写到父 namespace。
 - 历史异常路径（前导/尾随 `/` 或空路径段）不可自动修复；新建入口拒绝异常路径，旧数据按普通未结构化 Tag 保留。
 - 自动 Tag entity 与用户手工创建的空 schema 无法可靠区分；孤立清理必须保守扫描、显式选择、删除前复检，禁止随重扫自动执行。
-- Org object ranges 必须来自调用方已有的完整 parse tree；逐字符调用 `org-element-context` 在病理输入上成本过高，禁止回退。
+- Sync 复用调用方已有的完整 parse tree；前端只解析当前行的 secondary Org text，二者共用同一个 range matcher，禁止回退到逐字符 `org-element-context`。
 - 当前分支领先远端且包含既有提交；提交时只 stage 本 phase 文件，推送前按仓库协议 rebase。
 
 ## Rollback

@@ -354,6 +354,22 @@ reset to nil so the next transaction starts clean."
     (should (null supertag--transaction-log))
     (should (null supertag--transaction-seen))))
 
+(ert-deftest tx-test-rollback-hooks-run-all-before-reraising ()
+  "Every rollback invariant runs even when an earlier hook fails."
+  (tx-test--with-temp-env
+    (let* ((ran-second nil)
+           (supertag-after-transaction-rollback-hook
+           (list (lambda () (error "first rollback hook"))
+                 (lambda () (setq ran-second t)))))
+      (let ((err (should-error
+                  (supertag-with-transaction
+                    (supertag-store-put-entity :nodes "n" '(:id "n"))
+                    (error "body failure")))))
+        (should (string-match-p "first rollback hook"
+                                (error-message-string err))))
+      (should ran-second)
+      (should-not (supertag-store-get-entity :nodes "n")))))
+
 ;;; --- 5. Automation joins the enclosing transaction ---
 
 (ert-deftest tx-test-automation-side-effect-joins-enclosing-transaction ()

@@ -235,6 +235,28 @@
           (supertag-smart-key)
           (should (eq opened :link)))))))
 
+(ert-deftest supertag-smart-key-stops-inline-tag-at-org-object-boundary ()
+  "Smart Key sees the same range-aware Tag ID as sync and font lock."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* T #outer[[id:n][label]] #ai_suggestions[[id:n][x]]\n")
+    (let (source)
+      (cl-letf (((symbol-function 'supertag-view-table)
+                 (lambda (value &rest _) (setq source value))))
+        (search-backward "outer")
+        (supertag-smart-key)
+        (should (equal source '(:type :tag :value "outer")))
+        (search-forward "label")
+        (should-not (supertag-view-helper-get-tag-at-point))
+        (search-forward "ai_suggestions")
+        (backward-char (length "ai_suggestions"))
+        (setq source nil)
+        (supertag-smart-key)
+        (should (equal source '(:type :tag :value "ai_suggestions")))
+        (search-forward "[x]")
+        (backward-char 2)
+        (should-not (supertag-view-helper-get-tag-at-point))))))
+
 (ert-deftest supertag-smart-key-prefix-offers-target-actions ()
   "A prefix argument offers actions for the target instead of every command."
   (with-temp-buffer

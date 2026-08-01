@@ -1479,81 +1479,6 @@ Returns a plist of keyword-value pairs, excluding org-internal properties."
               (push (or denote-id path) refs))))))
     (nreverse refs)))
 
-(defun supertag--inline-tag-object-ranges (begin end element)
-  "Return direct Org object ranges between BEGIN and END.
-ELEMENT is the parsed headline or paragraph that owns the region.  Each
-range is (BEGIN END TRANSPARENT), where sub/superscript objects are
-transparent only to a Tag that starts outside them, preserving raw
-underscore and caret text."
-  (let ((parts (if (eq (org-element-type element) 'headline)
-                   (org-element-property :title element)
-                 (org-element-contents element)))
-        ranges)
-    (cl-labels
-        ((collect (part)
-           (unless (stringp part)
-             (let ((object-begin (org-element-property :begin part))
-                   (object-end (org-element-property :end part)))
-               (when (and object-begin object-end
-                          (< object-begin end) (> object-end begin))
-                 (push (list object-begin object-end
-                             (memq (org-element-type part)
-                                   '(subscript superscript)))
-                       ranges)))
-             (dolist (child (org-element-contents part))
-               (collect child)))))
-      (dolist (part (if (listp parts) parts (list parts)))
-        (collect part)))
-    (sort ranges (lambda (a b) (< (car a) (car b))))))
-
-(defun supertag--inline-tag-prose-end (begin end object-ranges)
-  "Return Tag prose end between BEGIN and END using OBJECT-RANGES.
-Return nil when BEGIN is inside any Org object.  Transparent ranges may
-occur later inside a Tag; other objects terminate it at their opening."
-  (unless (cl-some (lambda (range)
-                     (and (<= (nth 0 range) begin)
-                          (< begin (nth 1 range))))
-                   object-ranges)
-    (catch 'boundary
-      (dolist (range object-ranges)
-        (let ((object-begin (nth 0 range))
-              (transparent (nth 2 range)))
-          (when (and (not transparent)
-                     (> object-begin begin)
-                     (< object-begin end))
-            (throw 'boundary object-begin))))
-      end)))
-
-(defun supertag--inline-tag-matches-in-region (begin end element)
-  "Return direct prose Tag matches between BEGIN and END.
-ELEMENT is the parsed headline or paragraph that owns each match.  Each
-result is (BEGIN END NAME), with absolute buffer positions."
-  (save-excursion
-    (goto-char
-     (if (and (> begin (point-min))
-              (eq (char-syntax (char-before begin)) ?\s))
-         (1- begin)
-       begin))
-    (let ((object-ranges
-           (supertag--inline-tag-object-ranges begin end element))
-          matches)
-      (while (re-search-forward supertag-inline-tag-regexp end t)
-        (let* ((name-begin (match-beginning 2))
-               (raw-end (match-end 2))
-               (tag-begin (1- name-begin))
-               (tag-end
-                (and (>= tag-begin begin)
-                     (save-match-data
-                       (supertag--inline-tag-prose-end
-                        tag-begin raw-end object-ranges))))
-               (name (and tag-end
-                          (> tag-end name-begin)
-                          (buffer-substring-no-properties name-begin tag-end))))
-          (when (and name
-                     (supertag-transform-inline-tag-name-p name))
-            (push (list tag-begin tag-end name) matches))))
-      (nreverse matches))))
-
 (defun supertag--strip-inline-tags (headline)
   "Return HEADLINE's title without direct-prose inline tags.
 Org links, code and other inline objects are preserved verbatim."
@@ -1571,7 +1496,7 @@ Org links, code and other inline objects are preserved verbatim."
         (when title-begin
           (dolist (match
                    (reverse
-                    (supertag--inline-tag-matches-in-region
+                    (supertag-transform-inline-tag-matches-in-region
                      title-begin (+ title-begin (length raw-title)) headline)))
             (let ((start (- (nth 0 match) title-begin))
                   (end (- (nth 1 match) title-begin)))
@@ -1590,7 +1515,7 @@ Org links, code and other inline objects are preserved verbatim."
     (let ((tags
            (mapcar
             #'caddr
-            (supertag--inline-tag-matches-in-region
+            (supertag-transform-inline-tag-matches-in-region
              (org-element-property :begin headline)
              (save-excursion
                (goto-char (org-element-property :begin headline))
@@ -1607,7 +1532,7 @@ Org links, code and other inline objects are preserved verbatim."
                      tags
                      (mapcar
                       #'caddr
-                      (supertag--inline-tag-matches-in-region
+                      (supertag-transform-inline-tag-matches-in-region
                        (org-element-property :begin paragraph)
                        (org-element-property :end paragraph)
                        paragraph))))))))

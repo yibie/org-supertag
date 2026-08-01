@@ -86,7 +86,9 @@
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - completion 的 `action=t` 仍按当前输入过滤候选；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
+- 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。
 - 孤立 Tag 候选不得包含被 node、relation、field/schema（含 `:tag` default/options）、inheritance、automation、saved query 或已加载 view config 引用的 ID。
 - 旧预览必须在调用时整体复检；每个实际删除还必须在 `before-operation-hook` 之后、Store mutation 之前再次复检。
-- 任何 Tag 批量事务回滚后，resolved schema cache 必须与已恢复的 Store 一致。
+- 全批删除及其 `after-operation-hook` 完成后，必须用原始显式候选 ID 再扫描一次引用；候选即使已从 `:tags` 移除也不能逃过校验。
+- 任何 Tag 批量事务回滚后，所有 invariant handler 都必须运行；即使前一个 handler 报错，resolved schema cache 仍须与已恢复的 Store 一致，随后再抛出首个 hook 错误。
 - focused ERT 与仓库稳定测试套件通过。
