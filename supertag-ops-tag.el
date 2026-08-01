@@ -11,6 +11,7 @@
 (require 'subr-x)
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
+(require 'supertag-core-transform)
 (require 'supertag-ops-relation)
 (require 'supertag-ops-node)
 (require 'supertag-ops-schema)
@@ -20,6 +21,9 @@
                   "supertag-ops-tag-merge" (old-root new-root))
 (declare-function supertag-tag-path-rename-execute
                   "supertag-ops-tag-merge" (plan))
+
+(defvar supertag-query-saved)
+(defvar supertag--view-configs)
 
 ;;; --- Internal Helper ---
 
@@ -176,6 +180,85 @@ Returns the deleted tag data."
                   (supertag-store-remove-entity :tags id)
                   (supertag-ops-schema-rebuild-cache)
                   nil)))))
+
+(defun supertag-tag-orphaned-ids ()
+  "Return sorted Tag IDs with no data or loaded configuration references.
+Tags that own fields or inheritance are treated as schema and retained.
+The scan is intentionally conservative: an exact Tag ID anywhere outside
+the Tag registry counts as a reference."
+  (require 'supertag-query-library)
+  (let ((known (make-hash-table :test 'equal))
+        (referenced (make-hash-table :test 'equal))
+        (seen (make-hash-table :test 'eq))
+        (tags (supertag-store-get-collection :tags)))
+    (maphash (lambda (id value)
+               (when value (puthash id t known)))
+             tags)
+    (cl-labels
+        ((mark-all ()
+           (maphash (lambda (id _value) (puthash id t referenced)) known))
+         (walk (value)
+           (cond
+            ((stringp value)
+             (when (gethash value known)
+               (puthash value t referenced)))
+            ((hash-table-p value)
+             (unless (gethash value seen)
+               (puthash value t seen)
+               (maphash (lambda (key item) (walk key) (walk item)) value)))
+            ((consp value)
+             (walk (car value))
+             (walk (cdr value))))))
+      (maphash
+       (lambda (collection value)
+         (unless (eq collection :tags)
+           (walk value)))
+       (supertag--ensure-store))
+      (maphash
+       (lambda (id raw-tag)
+         (let ((tag (supertag--ensure-plist raw-tag)))
+           (when (or (plist-get tag :fields)
+                     (plist-get tag :extends))
+             (puthash id t referenced))
+           (walk (plist-get tag :extends))))
+       tags)
+      (when (and (boundp 'supertag--view-configs)
+                 (hash-table-p supertag--view-configs))
+        (walk supertag--view-configs))
+      (when (boundp 'supertag-query-saved)
+        (dolist (entry supertag-query-saved)
+          (let ((text (cdr entry)))
+            (if (not (stringp text))
+                (mark-all)
+              (condition-case nil
+                  (pcase-let* ((`(,form . ,end) (read-from-string text))
+                               (tail (substring text end)))
+                    (if (string-match-p "\\`[[:space:]]*\\'" tail)
+                        (walk form)
+                      (mark-all)))
+                (error (mark-all))))))))
+    (let (orphans)
+      (maphash (lambda (id _value)
+                 (unless (gethash id referenced)
+                   (push id orphans)))
+               known)
+      (sort orphans #'string<))))
+
+(defun supertag-tag-delete-orphans (tag-ids)
+  "Delete TAG-IDS only when every ID is still an orphan.
+No Org file is edited.  The full set is rechecked immediately before the
+transaction so a stale preview cannot delete a newly referenced Tag.
+Return the number of deleted Tag entities."
+  (let* ((ids (delete-dups (copy-sequence tag-ids)))
+         (orphans (supertag-tag-orphaned-ids))
+         (blocked (cl-set-difference ids orphans :test #'equal)))
+    (when blocked
+      (user-error "Refusing to delete referenced or schema Tag(s): %s"
+                  (string-join blocked ", ")))
+    (supertag-with-transaction
+      (dolist (id ids)
+        (supertag-tag-delete id)))
+    (length ids)))
 
 (defun supertag-ops-delete-tag-everywhere (tag-name)
   "Delete a tag and all its uses from the database and all org files.

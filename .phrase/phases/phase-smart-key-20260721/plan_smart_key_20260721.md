@@ -17,6 +17,7 @@
 13. 保留完整路径 Tag ID，在查询 seam 增加显式后代匹配，不把 namespace 映射为 `:extends`。
 14. 将路径 namespace 接入同步、Schema、completion、View 与 Table；分支重命名使用单次映射迁移，聚合表保持只读。
 15. 延迟加载视图模块时补启用已经存在的 Org buffer，避免启动恢复的笔记失去 inline tag SVG。
+16. 从原始 buffer 区间识别 inline Tag，避免 Org subscript 改写下划线；旧污染只通过显式、保守的孤立 Tag 清理命令处理。
 
 ## Scope
 
@@ -26,7 +27,7 @@
   `supertag-core-tag-path.el`、`supertag-view-api.el`、`supertag-view-framework.el`、
   `supertag-view-schema.el`、`supertag-view-table.el`、`supertag-ops-tag.el`、
   `supertag-ops-tag-merge.el`、`org-supertag.el`。
-- 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/run-tests.sh`。
+- 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/tag-merge-test.el`、`test/run-tests.sh`。
 - CI：`.github/workflows/test.yml`。
 - 文档：本 phase 文档与 `.phrase/docs/CHANGE.md`。
 
@@ -39,6 +40,7 @@
 - P0: 同步不得从 Org object、元数据、COMMENT subtree 或子 headline 提取 inline tag。
 - P0: `#'function` 不得渲染、同步或出现在 tag completion；历史 Store 不做破坏性删除。
 - P0: 视图模块晚于 Org buffer 加载时，现存与后续 Org buffer 都必须自动启用 inline tag 样式。
+- P0: `_` 在 Tag token 中必须保持字面值；Org object 边界仍不得泄漏内部 `#token`。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
 - P1: Schema View 以路径 namespace 缩进，`:extends` 仅作为继承元数据展示；虚拟 namespace 不冒充真实 Tag。
@@ -59,6 +61,7 @@
 - 路径后代查询沿用现有 O(N) node scan；10k-node 基准不满足交互延迟时再考虑前缀索引。
 - 现有 Table 的字段列假设查询只有一个精确 Tag；后代聚合必须降级为通用只读列，避免把子路径字段写到父 namespace。
 - 历史异常路径（前导/尾随 `/` 或空路径段）不可自动修复；新建入口拒绝异常路径，旧数据按普通未结构化 Tag 保留。
+- 自动 Tag entity 与用户手工创建的空 schema 无法可靠区分；孤立清理必须保守扫描、显式选择、删除前复检，禁止随重扫自动执行。
 - 当前分支领先远端且包含既有提交；提交时只 stage 本 phase 文件，推送前按仓库协议 rebase。
 
 ## Rollback
@@ -66,4 +69,5 @@
 - 删除 `supertag-smart-key.el`、主包 wiring 与 focused test。
 - 恢复 inline tag point helper 的旧实现。
 - 恢复同步提取的旧字符串正则；Store schema 无需回滚。
+- 删除孤立 Tag 清理命令与 API；它没有迁移或自动修改 Store。
 - 删除本 phase 文档与 CHANGE 索引。

@@ -111,6 +111,7 @@ echo ""
 set +e
 emacs -batch \
     -L . \
+    --eval "(setq load-prefer-newer t)" \
     --eval "(package-initialize)" \
     $LOAD_ARGS \
     -f ert-run-tests-batch-and-exit 2>&1 | tee test/test-results.txt

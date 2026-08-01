@@ -74,3 +74,8 @@
   - 产出：namespace direct-child 候选、正确的 completion-table 过滤、共享 Tag reader，并接入行内/Add/Change/Capture/Tag Field/Query/View/Table
   - 验证方式：focused ERT 19/19、相关 ERT 54/54、全量 ERT 335/335、completion/inline self-check、byte compile、`check-parens`、`git diff --check`
   - 影响范围：完整路径仍是唯一 Tag ID；namespace 候选只导航；不新增缓存、索引、Store 字段、实体或依赖
+
+- task016 [x] 修复下划线 Tag 解析并提供安全的孤立 Tag 清理
+  - 产出：基于原始 buffer 区间的 Org-aware token 提取/标题清洗、保守孤立引用扫描、事务化删除 API、显式选择命令与源码优先测试入口
+  - 验证方式：underscore/object 红绿回归、清理引用矩阵、真实笔记/Store 只读探测、全量 ERT、byte compile、`check-parens`、`git diff --check`
+  - 影响范围：重扫会把错误 node tag 修正为完整下划线 ID；不会自动删除历史 Tag entity，也不会由清理命令修改 Org 文件

@@ -1160,7 +1160,24 @@ If INTERVAL is provided, use it as the sync interval in seconds."
        (message "Database cleanup complete. %d orphaned nodes deleted." deleted-count)))))
 
 ;;;###autoload
-
+(defun supertag-cleanup-orphaned-tags ()
+  "Select and delete unreferenced, schema-free Tag entities.
+Candidates are computed conservatively.  Nothing is deleted until the
+user selects Tags and confirms; Org files are never edited."
+  (interactive)
+  (let ((candidates (supertag-tag-orphaned-ids)))
+    (if (null candidates)
+        (message "No orphaned Tags found.")
+      (let ((selected
+             (supertag-ui-read-tags
+              "Select orphaned Tag to delete: " candidates nil)))
+        (when selected
+          (if (yes-or-no-p
+               (format "Delete %d orphaned Tag(s): %s? "
+                       (length selected) (string-join selected ", ")))
+              (message "Deleted %d orphaned Tag(s)."
+                       (supertag-tag-delete-orphans selected))
+            (message "Orphaned Tag cleanup cancelled.")))))))
 
 ;;;###autoload
 (defun supertag-cleanup-nil-tags ()

@@ -1479,52 +1479,59 @@ Returns a plist of keyword-value pairs, excluding org-internal properties."
               (push (or denote-id path) refs))))))
     (nreverse refs)))
 
-(defun supertag--inline-tag-prose-parts-text (parts)
-  "Return tag-searchable text from direct Org prose PARTS.
-Inline Org objects become a non-whitespace sentinel while their trailing
-spaces are retained, so tags inside or attached to those objects cannot leak
-into extraction."
-  (mapconcat
-   (lambda (part)
-     (if (stringp part)
-         (substring-no-properties part)
-       (concat "x"
-               (make-string (or (org-element-property :post-blank part) 0)
-                            ?\s))))
-   parts ""))
-
-(defun supertag--strip-inline-tags-from-text (text leading-boundary-p)
-  "Remove inline tag tokens from TEXT.
-LEADING-BOUNDARY-P means a leading hash is at a valid prose boundary."
-  (let* ((protected (if leading-boundary-p text (concat "x" text)))
-         (stripped (replace-regexp-in-string
-                    (concat supertag-inline-tag-regexp "[ \t]*")
-                    "\\1" protected)))
-    (if leading-boundary-p stripped (substring stripped 1))))
+(defun supertag--inline-tag-matches-in-region (begin end context-type)
+  "Return direct prose Tag matches between BEGIN and END.
+CONTEXT-TYPE is the Org element type that must own each match.  Each
+result is (BEGIN END NAME), with absolute buffer positions."
+  (save-excursion
+    (goto-char
+     (if (and (> begin (point-min))
+              (eq (char-syntax (char-before begin)) ?\s))
+         (1- begin)
+       begin))
+    (let (matches)
+      (while (re-search-forward supertag-inline-tag-regexp end t)
+        (let* ((name (match-string-no-properties 2))
+               (tag-begin (1- (match-beginning 2)))
+               (tag-end (match-end 2))
+               (context
+                (save-match-data
+                  (save-excursion
+                    (goto-char tag-begin)
+                    (org-element-context)))))
+          (when (and (>= tag-begin begin)
+                     (supertag-transform-inline-tag-name-p name)
+                     (eq (org-element-type context) context-type))
+            (push (list tag-begin tag-end name) matches))))
+      (nreverse matches))))
 
 (defun supertag--strip-inline-tags (headline)
   "Return HEADLINE's title without direct-prose inline tags.
 Org links, code and other inline objects are preserved verbatim."
-  (let ((raw-title (org-element-property :raw-value headline))
-        (parts (org-element-property :title headline)))
+  (let ((raw-title (org-element-property :raw-value headline)))
     (when raw-title
-      (let ((without-tags
-             (if (not (listp parts))
-                 (supertag--strip-inline-tags-from-text raw-title t)
-               (let ((leading-boundary-p t)
-                     chunks)
-                 (dolist (part parts)
-                   (let ((rendered
-                          (if (stringp part)
-                              (supertag--strip-inline-tags-from-text
-                               (substring-no-properties part)
-                               leading-boundary-p)
-                            (substring-no-properties
-                             (org-element-interpret-data part)))))
-                     (push rendered chunks)
-                     (setq leading-boundary-p
-                           (string-match-p "[[:space:]]\\'" rendered))))
-                 (apply #'concat (nreverse chunks))))))
+      (let* ((line-begin (org-element-property :begin headline))
+             (line-end (save-excursion
+                         (goto-char line-begin)
+                         (line-end-position)))
+             (title-begin
+              (save-excursion
+                (goto-char line-end)
+                (search-backward raw-title line-begin t)))
+             (without-tags raw-title))
+        (when title-begin
+          (dolist (match
+                   (reverse
+                    (supertag--inline-tag-matches-in-region
+                     title-begin (+ title-begin (length raw-title)) 'headline)))
+            (let ((start (- (nth 0 match) title-begin))
+                  (end (- (nth 1 match) title-begin)))
+              (while (and (< end (length without-tags))
+                          (memq (aref without-tags end) '(?\s ?\t)))
+                (setq end (1+ end)))
+              (setq without-tags
+                    (concat (substring without-tags 0 start)
+                            (substring without-tags end))))))
         (string-trim
          (replace-regexp-in-string "[ \t]+" " " without-tags))))))
 
@@ -1532,10 +1539,14 @@ Org links, code and other inline objects are preserved verbatim."
   "Extract inline tags from HEADLINE's own direct Org prose."
   (unless (org-element-property :commentedp headline)
     (let ((tags
-           (supertag-transform-extract-inline-tags
-            (supertag--inline-tag-prose-parts-text
-             (let ((title (org-element-property :title headline)))
-               (if (listp title) title (list title))))))
+           (mapcar
+            #'caddr
+            (supertag--inline-tag-matches-in-region
+             (org-element-property :begin headline)
+             (save-excursion
+               (goto-char (org-element-property :begin headline))
+               (line-end-position))
+             'headline)))
           (section (car (org-element-contents headline))))
       (when (eq (org-element-type section) 'section)
         (org-element-map section 'paragraph
@@ -1545,9 +1556,12 @@ Org links, code and other inline objects are preserved verbatim."
               (setq tags
                     (append
                      tags
-                     (supertag-transform-extract-inline-tags
-                      (supertag--inline-tag-prose-parts-text
-                       (org-element-contents paragraph)))))))))
+                     (mapcar
+                      #'caddr
+                      (supertag--inline-tag-matches-in-region
+                       (org-element-property :begin paragraph)
+                       (org-element-property :end paragraph)
+                       'paragraph))))))))
       (cl-delete-duplicates tags :test #'equal))))
 
   (defun supertag--extract-org-headline-tags (headline)

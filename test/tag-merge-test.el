@@ -64,6 +64,32 @@
     (supertag-relation-create (list :type :node-tag :from id :to tag)))
   id)
 
+(ert-deftest tag-cleanup-only-deletes-unreferenced-schema-free-tags ()
+  "Orphan cleanup is conservative and rechecks before deleting."
+  (tag-merge-test--with-store
+    (dolist (id '("orphan" "used" "schema" "parent" "child" "legacy"
+                  "automation" "query" "view" "relation" "associated"))
+      (tag-merge-test--create-tag id nil))
+    (supertag-tag-add-field "schema" '(:name "status" :type :string))
+    (supertag--set-tag-parent "child" "parent")
+    (tag-merge-test--create-node "n1" nil '("used"))
+    (supertag-store-put-legacy-field "n1" "legacy" "value" 1)
+    (supertag-store-put-tag-field-associations
+     "associated" '((:field-id "status")))
+    (supertag-relation-create
+     '(:type :related :from "relation" :to "n1"))
+    (supertag-store-put-entity
+     :automations "rule" '(:id "rule" :when (:tag "automation")))
+    (setq supertag-query-saved '(("saved" . "(tag \"query\")")))
+    (puthash 'saved-view '(:query (:type :tag :value "view"))
+             supertag--view-configs)
+    (should (equal (supertag-tag-orphaned-ids) '("orphan")))
+    (should (featurep 'supertag-query-library))
+    (should (= (supertag-tag-delete-orphans '("orphan")) 1))
+    (should-not (supertag-tag-get "orphan"))
+    (should-error (supertag-tag-delete-orphans '("used")))
+    (should (supertag-tag-get "used"))))
+
 (ert-deftest tag-merge-plan-requires-two-participants ()
   (tag-merge-test--with-store
     (tag-merge-test--create-tag "task" nil)

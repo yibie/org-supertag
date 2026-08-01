@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-01 Fix
+  - Files: `supertag-services-sync.el`, `supertag-ops-tag.el`, `supertag-ui-commands.el`, `test/run-tests.sh`, focused tests and phase/docs indexes
+  - Functions: `supertag--inline-tag-matches-in-region`, `supertag--extract-inline-tags`, `supertag--strip-inline-tags`, `supertag-tag-orphaned-ids`, `supertag-tag-delete-orphans`, `supertag-cleanup-orphaned-tags`
+  - Changes: sync now reads Tag identity from raw Org buffer spans, so Org subscript parsing cannot rewrite underscores; the cleanup command loads saved-query configuration, lists only conservatively unreferenced Tag entities, requires explicit selection and confirmation, rechecks references, and never edits Org files; the test runner prefers newer source over stale ignored byte-code.
+  - Simplification: removed the lossy AST-to-sentinel text conversion; reused the existing Tag reader, Store collections and transaction boundary without a migration, cache or new dependency.
+  - Verification: red/green underscore fixture; focused ERT 35/35; full ERT 337/337; real-note parse preserved `ai_suggestions` and `smart_companion`; real Store preview was read-only; self-checks, byte compilation, paren/diff checks and independent review passed.
+  - Risk: old polluted entities remain until a full rescan makes them orphaned and the user explicitly selects them for deletion.
+  - Related: `issue030`, `task016`
+
 - 2026-08-01 Modify
   - Files: nested Tag path/completion/UI readers, command/capture/query/view selectors, tests and phase/docs indexes
   - Functions: `supertag-tag-path-direct-candidates`, `supertag-ui-read-tag`, `supertag-ui-read-tags`, CAPF completion table

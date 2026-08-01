@@ -273,6 +273,27 @@
            (result (supertag-extractor--tags headline "/tmp/f" nil)))
       (should-not (plist-get result :tags)))))
 
+(ert-deftest extractor-inline-tags-preserve-underscores ()
+  "Org subscript parsing must not rewrite underscores inside Tag tokens."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Tags #ai_suggestions #smart_companion #a_b/c_d\n"
+     "Body #body_tag x_{ #nested_tag } [[id:n][#linked_tag]] ~#code_tag~\n\n"
+     "#leading_tag\n")
+    (let* ((headline (car (org-element-contents (org-element-parse-buffer))))
+           (tags (plist-get
+                  (supertag-extractor--tags headline "/tmp/f" nil)
+                  :tags))
+           (title (plist-get
+                   (supertag-extractor--title headline "/tmp/f" nil)
+                   :title)))
+      (should
+       (equal (sort tags #'string<)
+              '("a_b/c_d" "ai_suggestions" "body_tag" "leading_tag"
+                "smart_companion")))
+      (should (equal title "Tags")))))
+
 (ert-deftest extractor-inline-tag-string-boundaries-match-rendering ()
   "String extraction requires line start or whitespace before a hash."
   (should
