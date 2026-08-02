@@ -14,11 +14,9 @@
     (org-mode)
     (insert text)
     (goto-char (point-min))
-    (let ((regex (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
-          matches)
-      (while (re-search-forward regex nil t)
-        (when (supertag-view-helper--valid-inline-tag-match-p)
-          (push (match-string 0) matches)))
+    (let (matches)
+      (while (supertag-view-helper--font-lock-matcher (point-max))
+        (push (match-string 0) matches))
       (nreverse matches))))
 
 (dolist

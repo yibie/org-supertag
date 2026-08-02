@@ -83,3 +83,5 @@
   - Closed again 2026-08-01：上述四类回归及 underscore + nested object 组合边界均转绿；focused 42/42、full 344/344、真实笔记/Store 只读探测和双重复审通过
   - Reopened again 2026-08-01：`a18e6d8` 只覆盖 before-hook；after-hook、跨批次已删除候选、Smart Key matcher 与 rollback hook fail-fast 仍有可执行反例
   - Completed 2026-08-01：共享 range matcher、显式候选 post-hook 扫描与全量 rollback invariant runner 已实现；新增反例回归转绿，全量 ERT 349/349
+  - Reopened 2026-08-02：`a9257518` 的 predicate 虽缩短 match data，真实 face/SVG font-lock extent 仍使用预先固定的宽 group 0
+  - Completed 2026-08-02：face/SVG keyword 改用同一个 range-aware search matcher；真实 property extent 回归转绿，全量 ERT 351/351

@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-02 Fix
+  - Files: `supertag-view-helper.el`, `supertag-view-svg-tag.el`, `test/view-framework-test.el`, `test/test-inline-tag-filter.el`, phase/docs indexes
+  - Functions: `supertag-view-helper--font-lock-matcher`, face/SVG font-lock keywords, inline Tag point lookup
+  - Changes: font-lock now receives the range-aware `#outer` span directly from its matcher, so adjacent Org link text receives neither the Tag face nor SVG display property; point lookup reuses the same matcher.
+  - Simplification: removed the predicate-side match-data mutation and both duplicate wide regex keywords; no cleanup, Store or matcher-core changes.
+  - Verification: two real `font-lock-ensure` property tests red/green; focused View 16/16, Smart Key 12/12, full ERT 351/351, inline self-check, byte compilation, paren/diff checks.
+  - Risk: issue030 remains open for user review and real rescan/candidate preview; no database cleanup was run.
+  - Related: `issue030`, `task016`, supersedes frontend extent claims in `a9257518`
+
 - 2026-08-01 Harden
   - Files: `supertag-core-transform.el`, `supertag-services-sync.el`, `supertag-view-helper.el`, `supertag-ops-tag.el`, focused tests and phase/docs indexes
   - Functions: shared range-aware inline Tag matcher, explicit-candidate reference scan, post-hook batch validation, rollback hook runner

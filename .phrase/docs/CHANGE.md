@@ -48,3 +48,4 @@
 - 2026-08-01: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 underscore-safe Tag parsing and explicit orphan cleanup
 - 2026-08-01: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 cleanup safety hardening after P0 review
 - 2026-08-01: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 post-hook batch validation and shared frontend matcher
+- 2026-08-02: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 real face/SVG font-lock extent fix

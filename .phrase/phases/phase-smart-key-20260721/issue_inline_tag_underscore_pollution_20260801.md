@@ -40,6 +40,7 @@ Org 将 `#ai_suggestions` 中的 `_suggestions` 解析为 subscript object；同
 5. 使用 Store collection、saved-query form 与 View config 的公开枚举入口；schema `:fields` 参与保守引用扫描。
 6. 每个删除在 `before-operation-hook` 后再次检查；整批删除的全部 `after-operation-hook` 完成后，再使用原始显式候选 ID 扫描引用与残留实体，失败则回滚。
 7. transaction 使用非 fail-fast 的 hook runner：所有 rollback invariant handler 都执行完，再重新抛出第一个 hook 错误，保证 schema cache rebuild 不会被更早的异常跳过。
+8. face 与 SVG 的 font-lock keyword 使用真正的 range-aware search matcher；matcher 返回前固定精确 group 0，不再依赖 face expression 内修改 match data。
 
 ## Verification
 
@@ -60,6 +61,8 @@ Org 将 `#ai_suggestions` 中的 `_suggestions` 解析为 subscript object；同
 - Sync/face/SVG/Smart Key 现共用 core range matcher；Smart Key 精确返回 `outer` 与 `ai_suggestions`，link 内 point 返回 nil。
 - after-hook 新引用及“删除 b 时引用已删除 a”均触发整批回滚；较早 rollback hook 报错后 schema cache 仍恢复。
 - focused extractor 22/22、Smart Key 12/12、Tag merge 23/23、transaction 20/20；全量 ERT 349/349，inline self-check、1000 行 font-lock smoke（约 0.29s）、byte compilation、package load、paren/diff checks 通过。
+- 用户对 `a9257518` 的真实 `font-lock-ensure` 复核证明 face/SVG property 仍覆盖相邻 link；原 self-check 只读取 predicate 修改后的 match string，属于假绿。
+- 新增两个真实 property extent ERT：face 与 SVG 均只覆盖 `#outer`，link opening 与 label 不再获得 `supertag-inline-face`/`display`；focused View 16/16、全量 ERT 351/351 通过。
 
 ## User Confirmation
 
@@ -67,6 +70,7 @@ Org 将 `#ai_suggestions` 中的 `_suggestions` 解析为 subscript object；同
 - 2026-08-01：用户复核否决当前清理安全性；在 object boundary、schema field reference、hook 后最终检查和 rollback cache 四项修复完成前，不得运行或推荐清理命令。
 - 2026-08-01：上述复核项已在自动化测试与独立复审中关闭；实际用户数据仍等待全量重扫后的人工候选确认。
 - 2026-08-01：用户以相同 commit/tree 否决 `a18e6d8`；要求新提交覆盖 after-hook、显式候选整批校验、共享前端 matcher 与 rollback handler 全执行。本轮未运行真实数据库清理。
+- 2026-08-02：用户确认 cleanup transaction 四个安全缺陷已关闭，但以真实 font-lock extent 否决 `a9257518`；issue030 继续保持打开，直到 face/SVG 新提交复核通过。
 - 全量重扫与实际孤立 Tag 清理结果：Pending。
 
 ## Resolution

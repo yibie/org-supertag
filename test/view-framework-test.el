@@ -188,6 +188,52 @@
       (kill-buffer org-buffer)
       (kill-buffer text-buffer))))
 
+(ert-deftest test-view-style-face-stops-before-adjacent-org-link ()
+  "Face font-lock must style only the range-aware Tag token."
+  (let ((supertag-view-style-auto-enable nil)
+        (supertag-svg-tag-enable nil))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* T #outer[[id:n][label]]\n")
+      (supertag-view-style-mode 1)
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (search-forward "#outer")
+      (let ((tag-start (- (point) (length "#outer")))
+            (link-start (point))
+            (label-start (progn (search-forward "label")
+                                (- (point) (length "label")))))
+        (should (eq (get-text-property tag-start 'face)
+                    'supertag-inline-face))
+        (should-not (eq (get-text-property link-start 'face)
+                        'supertag-inline-face))
+        (should-not (eq (get-text-property label-start 'face)
+                        'supertag-inline-face))))))
+
+(ert-deftest test-view-style-svg-stops-before-adjacent-org-link ()
+  "SVG font-lock must not replace the Org link following a Tag token."
+  (let ((supertag-view-style-auto-enable nil)
+        (supertag-svg-tag-enable t))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* T #outer[[id:n][label]]\n")
+      (cl-letf (((symbol-function 'display-graphic-p)
+                 (lambda (&optional _frame) t))
+                ((symbol-function 'supertag-svg-tag--get-cached)
+                 (lambda (_tag) '(image :type svg :data "dummy"))))
+        (supertag-view-style-mode 1)
+        (font-lock-ensure))
+      (goto-char (point-min))
+      (search-forward "#outer")
+      (let ((tag-start (- (point) (length "#outer")))
+            (link-start (point))
+            (label-start (progn (search-forward "label")
+                                (- (point) (length "label")))))
+        (should (equal (get-text-property tag-start 'display)
+                       '(image :type svg :data "dummy")))
+        (should-not (get-text-property link-start 'display))
+        (should-not (get-text-property label-start 'display))))))
+
 ;; Manual verification helper
 (defun test-view-framework-manual ()
   "Run manual view framework tests."

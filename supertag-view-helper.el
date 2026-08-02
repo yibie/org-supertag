@@ -49,35 +49,34 @@ This should be a plist of face attributes."
   :type 'boolean
   :group 'supertag-view-style)
 
-(defun supertag-view-helper--valid-inline-tag-match-p ()
-  "Return non-nil when the current match is an Org prose tag token.
-The token must start at a whitespace boundary and must not belong to a
-drawer, a commented subtree, or another inline Org object.
-When a broad font-lock match reaches an Org object, truncate match data to
-the prose Tag range so face, SVG, and point lookup see the same Tag ID."
-  (let* ((match-start (match-beginning 0))
-         (range
-          (save-match-data
-            (save-excursion
-              (goto-char match-start)
-              (let* ((context (org-element-context))
-                     (type (org-element-type context))
-                     (heading (org-element-lineage context '(headline) t)))
-                (when (and (or (bolp)
-                               (eq (char-syntax (char-before)) ?\s))
-                           (memq type '(headline paragraph))
-                           (not (org-element-lineage
-                                 context '(drawer property-drawer) t))
-                           (not (and heading
-                                     (org-element-property :commentedp heading))))
-                  (cl-find match-start
-                           (supertag-transform-inline-tag-matches-in-region
-                            (line-beginning-position) (line-end-position)
-                            nil type)
-                           :key #'car :test #'=)))))))
-    (when range
-      (set-match-data (list (nth 0 range) (nth 1 range)))
-      t)))
+(defun supertag-view-helper--inline-tag-range-at (position)
+  "Return the range-aware prose Tag match starting at POSITION."
+  (save-match-data
+    (save-excursion
+      (goto-char position)
+      (let* ((context (org-element-context))
+             (type (org-element-type context))
+             (heading (org-element-lineage context '(headline) t)))
+        (when (and (memq type '(headline paragraph))
+                   (not (org-element-lineage
+                         context '(drawer property-drawer) t))
+                   (not (and heading
+                             (org-element-property :commentedp heading))))
+          (cl-find position
+                   (supertag-transform-inline-tag-matches-in-region
+                    (line-beginning-position) (line-end-position) nil type)
+                   :key #'car :test #'=))))))
+
+(defun supertag-view-helper--font-lock-matcher (limit)
+  "Find the next range-aware prose Tag before LIMIT."
+  (catch 'match
+    (while (re-search-forward supertag-inline-tag-regexp limit t)
+      (let* ((tag-start (1- (match-beginning 2)))
+             (range (supertag-view-helper--inline-tag-range-at tag-start)))
+        (when range
+          (set-match-data (list (nth 0 range) (nth 1 range)))
+          (throw 'match t))))
+    nil))
 
 ;;;----------------------------------------------------------------------
 ;;; Minor Mode Definition and Public API
@@ -169,9 +168,8 @@ Prefers SVG keywords when `supertag-svg-tag-enable' is non-nil."
   :group 'supertag-view-style)
 
 (defvar supertag-view-helper--font-lock-keywords
-  `((,(concat "#[" supertag-view-helper--valid-tag-chars "]+")
-     (0 (if (supertag-view-helper--valid-inline-tag-match-p)
-            'supertag-inline-face) t)))
+  '((supertag-view-helper--font-lock-matcher
+     (0 'supertag-inline-face t)))
   "Font-lock keywords for highlighting inline tags.")
 
 (supertag-view-helper--enable-existing-org-buffers)
@@ -787,14 +785,12 @@ TAG-NAME is the tag name to remove."
 Returns the tag name (without #) if found, nil otherwise."
   (when (derived-mode-p 'org-mode)
     (save-excursion
-      (let ((tag-re (concat "#[" supertag-view-helper--valid-tag-chars "]+"))
-            (origin (point))
+      (let ((origin (point))
             (line-end (line-end-position)))
         (goto-char (line-beginning-position))
         (catch 'tag
-          (while (re-search-forward tag-re line-end t)
-            (when (and (supertag-view-helper--valid-inline-tag-match-p)
-                       (<= (match-beginning 0) origin)
+          (while (supertag-view-helper--font-lock-matcher line-end)
+            (when (and (<= (match-beginning 0) origin)
                        (< origin (match-end 0)))
               (throw 'tag (substring (match-string-no-properties 0) 1)))))))))
 
