@@ -164,6 +164,14 @@ task020 验收：
   `diary/happy` 内部 ID 为 `happy`，formatter 无异常。
 - 全量 ERT 353/353、byte compile 与静态检查通过；仓库无 `.elc`。
 
+task021 验收：
+- `#dia` 的 try-completion 返回 `diary`，候选中已有 Tag 及其子标签全部位于
+  `dia [New]` 之前；真实 Corfu formatter 无异常。
+- nil exit、取消和未知前缀后的分隔符均不调用新建；只有带 `is-new-tag` 的显式
+  `[New]` 候选传入 `:create-if-needed t`。
+- focused ERT 22/22、completion self-check、全量 ERT 354/354、byte compile、
+  `check-parens`、`git diff --check` 通过；仓库无 `.elc`。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
@@ -174,4 +182,6 @@ task020 验收：
   `diary/happy`，并把 Schema 中的 parent-child 合并为一棵树；进入 task018。
 - 2026-08-03：实机捕获 task018 普通候选 suffix 为 `nil` 导致 Corfu 崩溃；进入 task019。
 - 2026-08-03：实机指出输入父级 `diary` 无法渐进发现子标签；进入 task020。
+- 2026-08-03：实机发现 `#dia` 被当作默认新 Tag 写入，并明确要求新 Tag 只能通过
+  completion 的 `[New]` 注册；进入 task021。
 - 端到端实现结果验收：Pending

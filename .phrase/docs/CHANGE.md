@@ -53,3 +53,4 @@
 - 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task018 leaf-first completion + unified parent Schema tree
 - 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task019 Corfu affixation string-shape fix
 - 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task020 progressive parent-to-child CAPF aliases
+- 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task021 explicit [New] registration gate

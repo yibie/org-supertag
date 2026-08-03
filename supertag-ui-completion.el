@@ -175,11 +175,8 @@ candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
         (let ((new-cand (propertize safe-prefix
                                     'is-new-tag t
                                     'new-tag-name safe-prefix)))
-          ;; Insert new-tag at position 2 (index 1) so it never becomes
-          ;; the default pick; if no existing tags, it stays alone.
-          (if available-tags
-              (cons (car available-tags) (cons new-cand (cdr available-tags)))
-            (list new-cand)))
+          ;; Creation is an explicit fallback, never the default match.
+          (append available-tags (list new-cand)))
       available-tags)))
 
 (defun supertag-completion--post-completion-action (selected-string)
@@ -202,10 +199,10 @@ Display aliases are replaced with their real Tag ID before any write."
         (when (fboundp 'supertag-node-sync-at-point)
           (supertag-node-sync-at-point)))
 
-      ;; Add the tag to the node (creates tag if needed)
+      ;; Only the explicit [New] candidate may create a Tag entity.
       (when (fboundp 'supertag-ops-add-tag-to-node)
         (let ((result (supertag-ops-add-tag-to-node
-                       node-id tag-name :create-if-needed t)))
+                       node-id tag-name :create-if-needed (and is-new t))))
           (when result
             (if is-new
                 (message "New tag '%s' created and added to node %s"
@@ -240,7 +237,12 @@ Display aliases are replaced with their real Tag ID before any write."
                            (car live-bounds) (cdr live-bounds))
                         prefix))
                      (candidates
-                      (supertag-completion--get-completion-table live-prefix)))
+                      (supertag-completion--get-completion-table live-prefix))
+                     (existing-candidates
+                      (seq-remove
+                       (lambda (candidate)
+                         (get-text-property 0 'is-new-tag candidate))
+                       candidates)))
                 (cond
                  ;; Handle boundaries (corfu/company compatibility)
                  ((eq (car-safe action) 'boundaries) nil)
@@ -287,11 +289,7 @@ Display aliases are replaced with their real Tag ID before any write."
                ;; — that would convince the UI that completion is done
                ;; and it would auto-commit the labeled candidate.
                  ((eq action 'lambda)
-                  (and (test-completion str candidates pred)
-                       ;; not satisfied if the only match is the new-tag entry
-                       (not (and (= (length candidates) 1)
-                                 (get-text-property
-                                  0 'is-new-tag (car candidates))))))
+                  (test-completion str existing-candidates pred))
                ;; Try completion (return common prefix or t if unique).
                ;; CRITICAL: if the only matching candidate is our
                ;; new-tag entry, returning t (or the bare prefix as a
@@ -299,15 +297,10 @@ Display aliases are replaced with their real Tag ID before any write."
                ;; without showing the popup. Force the popup by
                ;; pretending the completion has not finished.
                  ((null action)
-                  (let ((sole-new-tag
-                         (and (= (length candidates) 1)
-                              (get-text-property
-                               0 'is-new-tag (car candidates)))))
-                    (if sole-new-tag
-                        ;; Tell the UI "STR is what we have so far",
-                        ;; equivalent to no further progress — popup appears.
-                        str
-                      (try-completion str candidates pred))))
+                  (or (try-completion str existing-candidates pred)
+                      ;; No existing Tag matches. Keep the popup open so
+                      ;; the user can explicitly select the [New] row.
+                      str))
                  ;; Boundaries and other actions.
                  (t
                   (complete-with-action action candidates str pred)))))
@@ -330,14 +323,9 @@ Display aliases are replaced with their real Tag ID before any write."
             ;;    universally understood by all completion frameworks.
             :exit-function
             (lambda (selected-string status)
-              ;; Accept any "successful" exit. Corfu uses 'finished;
-              ;; default completion-at-point uses 'sole / 'exact; pressing
-              ;; SPC after typing a brand-new #tag exits with no status
-              ;; (status = nil) — that path must also count, otherwise
-              ;; new tags never reach the database until the user types
-              ;; C-M-i again. The only state we explicitly skip is
-              ;; 'unknown (incremental keystroke filter, not a real exit).
-              (unless (eq status 'unknown)
+              ;; Only an explicit completion commits. A nil status is a
+              ;; cancelled/incremental exit, never permission to create.
+              (when (memq status '(finished exact sole))
                 (supertag-completion--post-completion-action selected-string)))))))
 
 ;;;----------------------------------------------------------------------
@@ -345,14 +333,9 @@ Display aliases are replaced with their real Tag ID before any write."
 ;;;----------------------------------------------------------------------
 
 (defun supertag-completion--auto-record-on-boundary ()
-  "Record the `#prefix' right behind point if the user just ended it.
-Triggered from `post-self-insert-hook'. The corfu popup may have shown
-a `[new]' candidate, but if the user ignored it and typed SPC/RET/etc.
-to continue writing, the CAPF `:exit-function' is never called and the
-tag would be lost until the user re-triggered completion with C-M-i.
-This hook closes that gap: when the just-inserted character ends a
-`#tag' context, sync the node and add the tag (idempotent for existing
-tags, creates the tag entity if new)."
+  "Record an existing `#tag' right behind point after its delimiter.
+Unknown text is never registered here; new Tags require selecting the
+CAPF `[New]' candidate."
   (when (and (derived-mode-p 'org-mode)
              (not (supertag-completion--valid-tag-char-p (char-before)))
              (> (point) 2)
@@ -364,7 +347,8 @@ tags, creates the tag entity if new)."
       (when-let* ((bounds (supertag-completion--get-prefix-bounds))
                   (prefix (buffer-substring-no-properties
                            (car bounds) (cdr bounds)))
-                  (_ (supertag-tag-path-valid-p prefix)))
+                  (_ (supertag-tag-path-valid-p prefix))
+                  (_ (supertag-tag-get prefix)))
         (condition-case err
             (let ((node-id (org-id-get-create)))
               (when node-id
@@ -375,7 +359,7 @@ tags, creates the tag entity if new)."
                   (unless (member prefix node-tags)
                     (when (fboundp 'supertag-ops-add-tag-to-node)
                       (supertag-ops-add-tag-to-node
-                       node-id prefix :create-if-needed t))))))
+                       node-id prefix :create-if-needed nil))))))
           (error
            (message "supertag-completion: auto-record failed: %S" err)))))))
 

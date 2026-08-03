@@ -1,6 +1,15 @@
 # change_smart_key_20260721
 
 - 2026-08-03 Fix
+  - Files: `supertag-ui-completion.el`, completion regressions, task021 phase/docs
+  - Functions: CAPF completion protocol, exit commit gate and boundary recording
+  - Changes: `#dia` advances to existing `diary`; `[New]` is last and is the only completion candidate allowed to create a Tag; nil exits and raw delimiters do not register unknown text.
+  - Simplification: reused the existing candidate property as the creation capability and narrowed two write calls; no new state or abstraction.
+  - Verification: focused ERT 22/22; completion self-check; full ERT 354/354; live Store/Corfu returned `diary` first and `dia [New]` last; byte compile, paren/diff checks; no repository `.elc`.
+  - Risk: background source synchronization remains authoritative and is intentionally unchanged.
+  - Related: `issue009`, `task021`
+
+- 2026-08-03 Fix
   - Files: `supertag-ui-completion.el`, `test/tag-path-test.el`, task020 phase/docs
   - Functions: CAPF candidate construction and post-completion normalization
   - Changes: parent-prefix input now adds read-only display aliases such as `diary/happy`; selection replaces the alias with real ID `happy` before sync or Store writes.

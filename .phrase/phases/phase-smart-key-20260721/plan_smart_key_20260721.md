@@ -22,6 +22,7 @@
 18. 以真实 Tag ID 做叶子搜索，以 `:extends` 父链做补全展示和 Schema 缩进；`/` 路径树仅保留为旧数据兼容回退。
 19. 收紧 affixation 协议：三列始终返回字符串，并用真实 Corfu formatter 验证普通与新建候选。
 20. 为父链增加只读 completion alias，使输入父级可渐进枚举子标签；退出时在任何同步/写入前还原真实 ID。
+21. 将 `[New]` 设为行内 completion 唯一的新 Tag 注册入口；普通前缀、取消与分隔符不创建实体。
 
 ## Scope
 
@@ -46,6 +47,7 @@
 - P0: 视图模块晚于 Org buffer 加载时，现存与后续 Org buffer 都必须自动启用 inline tag 样式。
 - P0: `_` 在 Tag token 中必须保持字面值；Org object 边界仍不得泄漏内部 `#token`。
 - P0: cleanup 引用模型覆盖 Tag schema fields；整批 `after-operation-hook` 后按显式候选 ID 复检，事务回滚执行全部 invariant handler 后重抛首错。
+- P0: 行内 completion 只有显式选中 `[New]` 才能创建 Tag；未确认前缀不得写入 Store。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
 - P1: Schema View 以 `:extends` 为主父子树，旧完整路径 ID 在没有显式父级时才派生虚拟 namespace。

@@ -39,9 +39,10 @@ the bare tag name and no leaked label."
                                  'is-new-tag t
                                  'new-tag-name "newtag")))
       (insert candidate)
-      (when (memq status '(finished exact sole nil))
-        (supertag-completion--post-completion-action candidate))
-      (when (memq status '(finished exact sole nil))
+      (funcall (plist-get (nthcdr 3 (supertag-completion-at-point))
+                          :exit-function)
+               candidate status)
+      (when (memq status '(finished exact sole))
         (cl-assert (string-match-p "#newtag" (buffer-string))
                    nil "buffer missing #newtag: %s" (buffer-string))
         (cl-assert (not (string-match-p "Create New Tag" (buffer-string)))
@@ -58,12 +59,10 @@ the bare tag name and no leaked label."
 (cl-assert (equal test-completion-added-tag "newtag")
            nil "exact: tag not added (got %S)" test-completion-added-tag)
 
-;;; --- 3. THE BUG: user types `#newtag` and presses SPC. Many UIs
-;;;        report status = nil. With the old code (memq on
-;;;        '(finished exact sole)) this was silently dropped. ---
+;;; --- 3. A nil status is not an explicit completion selection. ---
 (test-completion--drive-exit nil)
-(cl-assert (equal test-completion-added-tag "newtag")
-           nil "nil status: tag not added — regression returned (got %S)"
+(cl-assert (null test-completion-added-tag)
+           nil "nil status incorrectly registered a tag (got %S)"
            test-completion-added-tag)
 
 ;;; --- 4. Incremental filter ticks (status 'unknown) must NOT
@@ -73,12 +72,11 @@ the bare tag name and no leaked label."
            nil "unknown status incorrectly committed tag (got %S)"
            test-completion-added-tag)
 
-(message "OK exit-function path: commits on finished/exact/nil; skips on unknown.")
+(message "OK exit-function path: commits explicit completion only.")
 
 ;;; --- 5. THE REAL USER SCENARIO ---
-;;; corfu shows a [new] candidate, user IGNORES it and types SPC to
-;;; keep writing. :exit-function is never called. Our post-self-insert
-;;; hook must catch this and record the tag anyway.
+;;; corfu shows a [New] candidate, user IGNORES it and types SPC to
+;;; keep writing. That raw prefix must not register a new Tag.
 (setq test-completion-added-tag nil)
 (with-temp-buffer
   (org-mode)
@@ -88,8 +86,8 @@ the bare tag name and no leaked label."
   (let ((last-command-event ?\s))
     (insert " ")
     (run-hooks 'post-self-insert-hook)))
-(cl-assert (equal test-completion-added-tag "ignoredtag")
-           nil "post-self-insert hook did not record ignored #newtag (got %S)"
+(cl-assert (null test-completion-added-tag)
+           nil "post-self-insert hook registered ignored #newtag (got %S)"
            test-completion-added-tag)
 
 ;;; --- 6. Hook must NOT fire on plain prose (no preceding #tag) ---
@@ -119,7 +117,7 @@ the bare tag name and no leaked label."
 (cl-assert (null test-completion-added-tag)
            nil "hook re-added existing tag (got %S)" test-completion-added-tag)
 
-(message "OK auto-record-on-boundary: catches ignored corfu candidate, skips prose and duplicates.")
+(message "OK boundary hook skips unknown text, prose, and duplicates.")
 
 ;;; --- 8. The new-tag candidate string is the BARE prefix. The
 ;;;        "[New]" label is supplied by the metadata

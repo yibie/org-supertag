@@ -105,3 +105,8 @@
   - 产出：为 `:extends` display path 生成只读 CAPF alias；输入 `diary`/`diary/` 可看到 `diary/happy`，选中后在同步和落库前还原为 `happy`
   - 验证方式：focused ERT 覆盖父级枚举、alias 真实 ID、buffer 归一化、Store 写入与真实完整路径冲突；真实 Corfu formatter 探测；全量 ERT、静态检查
   - 影响范围：只改变行内 completion 候选发现；手输完整路径、叶子搜索、共享 reader、查询与 Store schema 不变
+
+- task021 [x] 阻止未确认的补全前缀注册为新 Tag
+  - 产出：已有匹配优先于 `[New]`；新 Tag 只有选中 `[New]` 才允许 `:create-if-needed`
+  - 验证方式：focused ERT 锁定 `#dia` → `diary`、取消/空格零创建、显式 `[New]` 创建；真实 Corfu 候选顺序、全量 ERT、静态检查
+  - 影响范围：仅收紧行内 completion 的交互写入边界；已有 Tag 关联与后台文件同步语义不变

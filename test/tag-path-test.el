@@ -306,6 +306,49 @@
         (should (equal "diary/happy"
                        (get-text-property 0 'supertag-tag-id candidate)))))))
 
+(ert-deftest tag-path-completion-does-not-commit-a-partial-prefix ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (with-temp-buffer
+      (org-mode)
+      (insert "#dia")
+      (let* ((completion-styles '(basic))
+             (capf (supertag-completion-at-point))
+             (table (nth 2 capf))
+             (exit (plist-get (nthcdr 3 capf) :exit-function))
+             (candidates (all-completions "dia" table))
+             (plain (mapcar #'substring-no-properties candidates))
+             committed
+             create-if-needed)
+        (should (equal "diary" (funcall table "dia" nil nil)))
+        (should-not (funcall table "dia" nil 'lambda))
+        (should (equal '("diary" "dia") plain))
+        (should (get-text-property 0 'is-new-tag (cadr candidates)))
+        (cl-letf (((symbol-function
+                    'supertag-completion--post-completion-action)
+                   (lambda (_) (setq committed t))))
+          (funcall exit (cadr candidates) nil))
+        (should-not committed)
+        (insert " ")
+        (cl-letf (((symbol-function 'supertag-ops-add-tag-to-node)
+                   (lambda (&rest _) (setq committed t))))
+          (supertag-completion--auto-record-on-boundary))
+        (should-not committed)
+        (delete-char -1)
+        (cl-letf (((symbol-function 'org-id-get-create) (lambda () "node"))
+                  ((symbol-function 'supertag-node-get)
+                   (lambda (_) '(:id "node")))
+                  ((symbol-function 'supertag-ops-add-tag-to-node)
+                   (lambda (_node _tag &rest args)
+                     (setq create-if-needed
+                           (plist-get args :create-if-needed))
+                     t)))
+          (supertag-completion--post-completion-action (cadr candidates))
+          (should create-if-needed)
+          (setq create-if-needed 'unset)
+          (supertag-completion--post-completion-action (car candidates)))
+        (should-not create-if-needed)))))
+
 (ert-deftest tag-path-capf-filters-unrelated-root-tags-below-namespace ()
   (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
              (lambda () '("ATTACH" "Apple" "Apple/Shortcut/\u8bed\u8a00"

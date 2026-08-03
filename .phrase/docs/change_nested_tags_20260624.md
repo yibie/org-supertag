@@ -1,5 +1,12 @@
 # change_nested_tags_20260624
 
+## 2026-08-03 (task021)
+
+- **Action**: Require explicit `[New]` selection before inline completion can register a new Tag.
+- **Behavior**: `#dia` completes toward `diary`; `dia [New]` stays last, and cancellation or a delimiter performs no new-Tag write.
+- **Simplification**: The existing `is-new-tag` property is the creation capability; no second confirmation state or UI advice.
+- **Verification**: focused ERT 22/22; completion self-check; full ERT 354/354; live Corfu showed `diary` first and `dia [New]` last; byte compile and static checks passed.
+
 ## 2026-08-03 (task020)
 
 - **Action**: Let parent input progressively enumerate its real `:extends` children.
