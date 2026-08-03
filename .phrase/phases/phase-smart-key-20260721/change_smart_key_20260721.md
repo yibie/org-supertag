@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-03 Fix
+  - Files: `supertag-ui-completion.el`, `test/tag-path-test.el`, nested-tag phase/docs indexes
+  - Functions: `supertag-completion--get-completion-table`
+  - Changes: an exact existing flat Tag now offers a slash-terminated child namespace, so `#diary` can navigate to `diary/` before any child Tag exists.
+  - Simplification: reused the existing CAPF candidate and namespace-property path; no Store write, entity, cache, index or dependency.
+  - Verification: red/green real CAPF regression for basic and Corfu/orderless enumeration; focused ERT 20/20, full ERT 352/352, byte compilation, paren/diff checks; generated `.elc` removed.
+  - Risk: live Corfu display remains the user acceptance gate; issue009 stays open.
+  - Related: `issue009`, `task017`
+
 - 2026-08-02 Fix
   - Files: `supertag-view-helper.el`, `supertag-view-svg-tag.el`, `test/view-framework-test.el`, `test/test-inline-tag-filter.el`, phase/docs indexes
   - Functions: `supertag-view-helper--font-lock-matcher`, face/SVG font-lock keywords, inline Tag point lookup

@@ -39,7 +39,7 @@
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
 6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
 7. 用户输入 `#` 触发 tag completion；历史 Store 中由 `#'function` 误提取的条目不再显示，合法标签仍可选。
-8. 用户输入 `#emacs/` 时可先选择 namespace 继续补全，再选择真实 leaf；只有完整合法路径落库。
+8. 用户输入已有 Tag `#emacs` 时可选择 `emacs/` 进入子 namespace；继续输入 leaf 后，只有完整合法路径落库。
 9. 用户在 Schema View 中看到 `emacs/` → `package/` → `elpa`，并可在 namespace 下新建路径或打开后代聚合 Table。
 10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
 11. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
@@ -65,6 +65,7 @@
 - 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
 - org-supertag 可以晚于 Org buffer 加载；自动样式启用必须同时覆盖现存 buffer 和以后进入 `org-mode` 的 buffer。
 - namespace 下没有真实子路径时返回空候选，不回退显示无关根级 Tag；继续输入合法叶段仍可创建完整路径。
+- 当前输入精确匹配已有平面 Tag 时，同时提供其 `/` 子 namespace；该候选只导航，不创建 namespace entity。
 - Org 将 `_suffix` 解析为 subscript 时，若它属于同一个 `#token`，同步仍读取原始完整 token；独立 subscript/link/code 内的 `#` 仍不是 Tag。
 
 ## Acceptance Criteria
@@ -84,7 +85,7 @@
 - 单节点同步后 Tag entity、node `:tags` 与 node-tag relation 一致；移除 token 后只回收当前节点的失效关系。
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
-- completion 的 `action=t` 仍按当前输入过滤候选；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
+- completion 的 basic 与 `action=t` 枚举都能从已有平面 Tag 看到 `/` 子 namespace；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
 - 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。
 - 孤立 Tag 候选不得包含被 node、relation、field/schema（含 `:tag` default/options）、inheritance、automation、saved query 或已加载 view config 引用的 ID。

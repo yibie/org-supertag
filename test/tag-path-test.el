@@ -302,6 +302,25 @@
                 (mapcar #'substring-no-properties
                         (all-completions "diary/" table))))))))
 
+(ert-deftest tag-path-capf-can-descend-from-an-existing-flat-tag ()
+  (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
+             (lambda () '("diary" "diaryx"))))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#diary")
+      (let* ((completion-styles '(basic))
+             (capf (supertag-completion-at-point))
+             (table (nth 2 capf))
+             (candidates (all-completions "diary" table))
+             (enumerated (funcall table "" nil t))
+             (namespace
+              (cl-find "diary/" candidates
+                       :key #'substring-no-properties :test #'equal)))
+        (should namespace)
+        (should (cl-find "diary/" enumerated
+                         :key #'substring-no-properties :test #'equal))
+        (should (get-text-property 0 'supertag-namespace-prefix namespace))))))
+
 (ert-deftest tag-path-shared-reader-navigates-direct-children ()
   (let ((tags '("Apple/Shortcut/\u8bed\u8a00" "Apple/Shortcut/English"
                 "diary/work"))

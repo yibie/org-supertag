@@ -31,6 +31,8 @@
 - 2026-08-01 修复 completion 的扁平混排：候选按 namespace 直接子级逐层
   展示，`#diary/` 不再泄漏 `ATTACH`、`Apple` 等根级候选。主要 Tag 写入
   入口已复用同一套 namespace reader，自动化验收完成。
+- 2026-08-03 修复已有平面 Tag 无法下钻：输入 `#diary` 时即使尚无
+  `diary/...` 子 Tag，也会提供只导航的 `diary/` 候选。
 
 ## Scope (if implemented)
 
@@ -51,6 +53,8 @@
   行内输入、Add/Change、Capture 与 Tag Field 共用层级 Tag reader。验证方式：
   focused ERT 覆盖 `#diary/` 无关候选、逐层候选、namespace 不落库和共享 reader；
   全量 ERT、byte compilation、check-parens 与真实 Store 候选探测。
+- task017 [x] 精确匹配已有平面 Tag 时提供 `/` 子 namespace，允许在没有
+  既存后代的情况下继续创建下一层；basic 与 Corfu/orderless 枚举均已锁定。
 
 ## Environment
 
@@ -58,7 +62,10 @@ N/A
 
 ## Reproduction
 
-N/A (feature request)
+1. Store 中存在 `diary`、`diaryx`，但没有 `diary/...`。
+2. 在 Org buffer 输入 `#diary` 并触发 CAPF。
+3. 修复前只显示 `diary`、`diaryx`，无法从补全进入 `diary/`。
+4. 预期同时显示只导航的 `diary/`，选择后可继续输入 leaf。
 
 ## Investigation
 
@@ -73,7 +80,8 @@ N/A (feature request)
 
 ## Root Cause
 
-N/A (feature request)
+completion 只从已存在的完整路径派生 namespace；没有既存后代时，平面 Tag
+不会产生 `/` 候选。数据模型支持新子路径，但 UI 没有暴露进入该 namespace 的入口。
 
 ## Fix
 
@@ -85,6 +93,7 @@ N/A (feature request)
 4. Schema、completion、View 与 Table 使用同一完整路径和 descendant query。
 5. 同步和分支重命名维护 Store 与 Org 文本的一致性。
 6. 精确查询默认行为不变；不新增配置、Store 字段、父实体或隐式 `:extends` 写入。
+7. 当前输入精确匹配已有 Tag 时，额外派生一个只导航的 `/` 子 namespace 候选。
 
 详细方案见 `.phrase/docs/tech-refer_nested_tags_20260624.md`。
 
@@ -118,9 +127,16 @@ task015 验收：
 - 当前真实 Store 中 `diary` 没有子路径；探测 `diary/` 返回空候选而非根级标签。
 - 独立代码审查无阻塞问题，确认未新增依赖、缓存、Store 字段或 namespace entity。
 
+task017 验收：
+- 真实 CAPF fixture 使用 `("diary" "diaryx")` 与 buffer `#diary`，basic 和
+  Corfu/orderless `action=t` 都返回带 namespace property 的 `diary/`。
+- focused ERT 20/20、全量 ERT 352/352；byte compilation、`check-parens`、
+  `git diff --check` 通过；编译生成的 `.elc` 已删除。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
 - 2026-08-01：实机确认初版 completion 的显示和输入仍是扁平的，task013
   前端验收不通过；进入 task015 修复。
+- 2026-08-03：实机确认 `#diary` 仍无法显示可下钻的 nested namespace；进入 task017 修复。
 - 端到端实现结果验收：Pending

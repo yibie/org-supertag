@@ -148,10 +148,11 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
 The list contains only real Tags and navigation namespaces directly
-below PREFIX's current namespace.  A valid PREFIX that is not stored
-is included as a new-Tag candidate carrying `is-new-tag' and
-`new-tag-name' properties.  The candidate string always remains the
-canonical path; the visible `[New]' label comes from CAPF metadata."
+below PREFIX's current namespace.  An exact stored Tag also offers its
+child namespace so completion can descend from a flat Tag.  A valid
+PREFIX that is not stored is included as a new-Tag candidate carrying
+`is-new-tag' and `new-tag-name' properties.  The candidate string always
+remains the canonical path; the visible `[New]' label comes from CAPF metadata."
   (let* ((safe-prefix (or prefix ""))
          (namespace (supertag-completion--namespace-for-prefix safe-prefix))
          (namespace-valid
@@ -161,11 +162,20 @@ canonical path; the visible `[New]' label comes from CAPF metadata."
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
          (all-tags (supertag-completion--get-all-tags))
-         (all-candidates
+         (direct-candidates
           (when namespace-valid
-            (mapcar #'supertag-completion--decorate-candidate
-                    (supertag-tag-path-direct-candidates
-                     all-tags namespace))))
+            (supertag-tag-path-direct-candidates all-tags namespace)))
+         (child-namespace
+          (and namespace-valid
+               (supertag-tag-path-valid-p safe-prefix)
+               (member safe-prefix all-tags)
+               (concat safe-prefix "/")))
+         (all-candidates
+          (mapcar #'supertag-completion--decorate-candidate
+                  (if (and child-namespace
+                           (not (member child-namespace direct-candidates)))
+                      (sort (cons child-namespace direct-candidates) #'string<)
+                    direct-candidates)))
          (available-tags (if current-tags
                              (seq-remove
                               (lambda (tag)

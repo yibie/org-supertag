@@ -85,3 +85,8 @@
   - Completed 2026-08-01：共享 range matcher、显式候选 post-hook 扫描与全量 rollback invariant runner 已实现；新增反例回归转绿，全量 ERT 349/349
   - Reopened 2026-08-02：`a9257518` 的 predicate 虽缩短 match data，真实 face/SVG font-lock extent 仍使用预先固定的宽 group 0
   - Completed 2026-08-02：face/SVG keyword 改用同一个 range-aware search matcher；真实 property extent 回归转绿，全量 ERT 351/351
+
+- task017 [x] 允许从已有平面 Tag 继续补全子路径
+  - 产出：精确匹配已有 Tag 时生成只导航的 `/` 子 namespace 候选；复用现有 CAPF、namespace property 与落库边界
+  - 验证方式：真实 `#diary` CAPF basic + Corfu/orderless 枚举回归、focused ERT 20/20、全量 ERT 352/352、byte compile、`check-parens`、`git diff --check`
+  - 影响范围：不创建父 namespace entity，不改 Store；用户选择 `diary/` 后继续输入 leaf，只有完整路径落库

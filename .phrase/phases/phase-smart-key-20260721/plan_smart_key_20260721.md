@@ -18,6 +18,7 @@
 14. 将路径 namespace 接入同步、Schema、completion、View 与 Table；分支重命名使用单次映射迁移，聚合表保持只读。
 15. 延迟加载视图模块时补启用已经存在的 Org buffer，避免启动恢复的笔记失去 inline tag SVG。
 16. 从原始 buffer 区间识别 inline Tag，避免 Org subscript 改写下划线；旧污染只通过显式、保守的孤立 Tag 清理命令处理。
+17. 已有平面 Tag 精确匹配时提供只导航的子 namespace 候选，使用户无需先存在子 Tag 即可继续输入下一层。
 
 ## Scope
 
@@ -27,7 +28,7 @@
   `supertag-core-tag-path.el`、`supertag-view-api.el`、`supertag-view-framework.el`、
   `supertag-view-schema.el`、`supertag-view-table.el`、`supertag-ops-tag.el`、
   `supertag-ops-tag-merge.el`、`org-supertag.el`。
-- 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/tag-merge-test.el`、`test/run-tests.sh`。
+- 测试：`test/test-smart-key.el`、`test/test-inline-tag-filter.el`、`test/extractor-test.el`、`test/tag-merge-test.el`、`test/tag-path-test.el`、`test/run-tests.sh`。
 - CI：`.github/workflows/test.yml`。
 - 文档：本 phase 文档与 `.phrase/docs/CHANGE.md`。
 

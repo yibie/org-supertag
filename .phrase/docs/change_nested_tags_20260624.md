@@ -1,5 +1,14 @@
 # change_nested_tags_20260624
 
+## 2026-08-03 (task017)
+
+- **Action**: Let an existing flat Tag open its child namespace from inline completion.
+- **Files**: Modify `supertag-ui-completion.el`, `test/tag-path-test.el` and nested-tag phase/docs.
+- **Behavior**: Typing `#diary` offers `diary/` even before any `diary/...` Tag exists; the slash candidate navigates without writing.
+- **Simplification**: Reused the existing completion table and namespace properties; no Store mutation, parent entity, index or dependency.
+- **Verification**: focused ERT 20/20; full ERT 352/352; basic and Corfu/orderless CAPF protocols; byte compilation, `check-parens`, `git diff --check`; generated `.elc` removed.
+- **Remaining**: issue009 stays open for the user's live popup confirmation.
+
 ## 2026-08-01 (task015)
 
 - **Action**: Make nested Tag completion and input navigate one namespace level at a time.
