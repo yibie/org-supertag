@@ -51,3 +51,4 @@
 - 2026-08-02: phase-smart-key-20260721/change_smart_key_20260721.md  # task016 real face/SVG font-lock extent fix
 - 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task017 descend from an existing flat Tag in completion
 - 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task018 leaf-first completion + unified parent Schema tree
+- 2026-08-03: .phrase/docs/change_nested_tags_20260624.md  # task019 Corfu affixation string-shape fix

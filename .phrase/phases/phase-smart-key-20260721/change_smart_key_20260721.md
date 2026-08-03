@@ -1,6 +1,15 @@
 # change_smart_key_20260721
 
 - 2026-08-03 Fix
+  - Files: `supertag-ops-tag.el`, `test/tag-path-test.el`, task019 phase/docs
+  - Functions: `supertag-tag-affixate-candidates`
+  - Changes: ordinary candidates now return an empty suffix string instead of `nil`, satisfying Corfu's three-string affixation contract.
+  - Simplification: one data-shape correction in the shared producer; no Corfu advice, UI-specific branch or new abstraction.
+  - Verification: red/green focused ERT 19/19; full ERT 351/351; live `corfu--format-candidates` accepted both `("ta" "" "  [New]")` and `("task" "prj/" "")`; byte compile, paren/diff checks passed with no repository `.elc`.
+  - Risk: none beyond the existing live visual acceptance gate.
+  - Related: `issue009`, `task019`, follow-up to `aa74a24`
+
+- 2026-08-03 Fix
   - Files: `supertag-core-tag-path.el`, `supertag-ops-tag.el`, `supertag-services-ui.el`, `supertag-ui-completion.el`, `supertag-view-schema.el`, `test/tag-path-test.el`, nested-tag phase/docs
   - Functions: Tag display path/affixation, shared Tag reader, CAPF candidates, Schema tree and Child command
   - Changes: typing `happy` now displays `diary/happy` while preserving the real ID; Schema indents `happy` under its `:extends` parent and uses `/` only as a legacy fallback; `a n` and compatibility key `a c` share one Child command.

@@ -20,6 +20,7 @@
 16. 从原始 buffer 区间识别 inline Tag，避免 Org subscript 改写下划线；旧污染只通过显式、保守的孤立 Tag 清理命令处理。
 17. 已有平面 Tag 精确匹配时提供只导航的子 namespace 候选，使用户无需先存在子 Tag 即可继续输入下一层。
 18. 以真实 Tag ID 做叶子搜索，以 `:extends` 父链做补全展示和 Schema 缩进；`/` 路径树仅保留为旧数据兼容回退。
+19. 收紧 affixation 协议：三列始终返回字符串，并用真实 Corfu formatter 验证普通与新建候选。
 
 ## Scope
 

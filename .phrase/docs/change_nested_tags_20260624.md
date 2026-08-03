@@ -1,5 +1,12 @@
 # change_nested_tags_20260624
 
+## 2026-08-03 (task019)
+
+- **Action**: Fix the Corfu crash caused by a `nil` affixation suffix.
+- **Behavior**: Every affixation row is now `(string string string)`; ordinary candidates use `""`, new candidates retain `[New]`.
+- **Simplification**: Corrected the shared row producer instead of adding a Corfu-specific workaround.
+- **Verification**: red/green focused ERT 19/19; full ERT 351/351; live Corfu formatter accepted both ordinary and new candidates; byte compile and static checks passed.
+
 ## 2026-08-03 (task018)
 
 - **Action**: Unify nested Tag completion and Schema around the existing `:extends` parent relation.

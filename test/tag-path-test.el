@@ -258,6 +258,7 @@
         (should happy)
         (should (equal "happy"
                        (get-text-property 0 'supertag-tag-id happy)))
+        (should (cl-every #'stringp display))
         (should (equal "diary/" (nth 1 display)))
         (should (equal "happy" (substring-no-properties (car display))))))))
 

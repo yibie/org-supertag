@@ -161,8 +161,9 @@ Returns tag data, or nil if it does not exist."
             (prefix (if (string-suffix-p id path)
                         (substring path 0 (- (length path) (length id)))
                       ""))
-            (suffix (when (get-text-property 0 'is-new-tag candidate)
-                      (propertize "  [New]" 'face 'warning))))
+            (suffix (if (get-text-property 0 'is-new-tag candidate)
+                        (propertize "  [New]" 'face 'warning)
+                      "")))
        (list candidate prefix suffix)))
    candidates))
 

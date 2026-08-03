@@ -95,3 +95,8 @@
   - 产出：按叶子 ID 搜索并以前缀显示 `:extends` 父链；Schema 将显式父子关系直接缩进，旧 `/` 路径仅作兼容回退；新增子标签只写一套 `:extends`
   - 验证方式：focused ERT 锁定 `happy` → `diary/happy`、真实 ID 不变、共享 reader、统一 Schema 树、循环保护与单一 Child 命令；全量 ERT、byte compile、`check-parens`、`git diff --check`
   - 影响范围：不迁移或改写现有 Tag/Node；完整路径 ID、后代查询和分支重命名继续兼容
+
+- task019 [x] 修复 Corfu affixation 空 suffix 崩溃
+  - 产出：普通候选的 suffix 从 `nil` 改为空字符串，保证 candidate/prefix/suffix 三列满足 Corfu 字符串协议
+  - 验证方式：focused ERT 锁定三列 `stringp`；真实 `corfu--format-candidates` 同时格式化普通与 `[New]` 候选；全量 ERT、静态检查
+  - 影响范围：仅补全展示元数据；候选 ID、插入、Store 与 Schema 行为不变

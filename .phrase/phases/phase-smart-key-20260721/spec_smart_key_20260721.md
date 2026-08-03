@@ -65,6 +65,7 @@
 - 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
 - org-supertag 可以晚于 Org buffer 加载；自动样式启用必须同时覆盖现存 buffer 和以后进入 `org-mode` 的 buffer。
 - 父链展示不得改变候选值：选择 `diary/happy` 的视觉候选后，只能插入和持久化 `happy`。
+- affixation 的 candidate/prefix/suffix 三列必须始终是字符串；没有 suffix 时返回空字符串，不能把 `nil` 交给 Corfu。
 - Schema 优先采用显式 `:extends` 父级；旧完整路径 ID 无显式父级时才按 `/` 派生兼容层级，冲突时不得形成循环。
 - Org 将 `_suffix` 解析为 subscript 时，若它属于同一个 `#token`，同步仍读取原始完整 token；独立 subscript/link/code 内的 `#` 仍不是 Tag。
 
@@ -86,6 +87,7 @@
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - completion 的 basic 与 `action=t` 枚举都能用 `happy` 命中真实 ID，并把 `diary/` 作为 affixation 前缀；只有新 ID 显示 `[New]`。
+- Corfu 必须能直接格式化普通候选与 `[New]` 候选，不得触发 `wrong-type-argument arrayp nil`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
 - 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。
 - 孤立 Tag 候选不得包含被 node、relation、field/schema（含 `:tag` default/options）、inheritance、automation、saved query 或已加载 view config 引用的 ID。

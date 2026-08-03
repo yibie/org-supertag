@@ -59,6 +59,8 @@
   既存后代的情况下继续创建下一层；basic 与 Corfu/orderless 枚举均已锁定。
 - task018 [x] 以真实叶子 ID 直接搜索并显示 `:extends` 父链；Schema 合并父子
   关系与缩进，`/` 路径仅作旧数据兼容；task017 的逐层导航交互被替代。
+- task019 [x] 修复 task018 affixation 对普通候选返回 `nil` suffix 导致的 Corfu
+  `wrong-type-argument arrayp nil`；三列统一为字符串。
 
 ## Environment
 
@@ -147,6 +149,12 @@ task018 验收：
 - `diary/happy` 经源码、node 和保守 orphan scanner 确认为无引用后删除；DB 已备份，
   notes commit `b7bfdfe` 已推送。
 
+task019 验收：
+- 回归先以 `(cl-every #'stringp row)` 复现失败，再由共享 affixation producer 修复。
+- 真实运行中的 Corfu 对新候选 `("ta" "" "  [New]")` 与普通候选
+  `("task" "prj/" "")` 均完成格式化，无异常。
+- focused ERT 19/19、全量 ERT 351/351、byte compile 与静态检查通过；仓库无 `.elc`。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
@@ -155,4 +163,5 @@ task018 验收：
 - 2026-08-03：实机确认 `#diary` 仍无法显示可下钻的 nested namespace；进入 task017 修复。
 - 2026-08-03：实机确认逐层 namespace 仍不符合预期，要求直接输入 `happy` 显示
   `diary/happy`，并把 Schema 中的 parent-child 合并为一棵树；进入 task018。
+- 2026-08-03：实机捕获 task018 普通候选 suffix 为 `nil` 导致 Corfu 崩溃；进入 task019。
 - 端到端实现结果验收：Pending
