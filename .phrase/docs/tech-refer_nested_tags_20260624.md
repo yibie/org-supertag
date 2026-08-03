@@ -1,25 +1,24 @@
 # tech-refer: 嵌套标签 `#a/b/c` 的自动解析与层级展示
 
-## Decision Update (2026-07-29, supersedes the historical proposal below)
+## Decision Update (2026-08-03, supersedes the 2026-07-29 frontend model)
 
-### Frontend Completion Follow-up (2026-08-01)
+### Parent-aware completion and Schema
 
-- Completion 只展示当前 namespace 的直接下一层；真实 Tag 与派生 namespace
-  不再作为全量扁平列表混排。
-- 候选的底层值仍是完整路径。末尾 `/` 表示只读导航候选，选择它不得创建
-  Tag、Node relation 或尾随空格。
-- 普通 Tag 候选不再重复显示 `[tag]`；`/` 已足够表达 namespace，只有新建
-  候选保留 `[New]`。
-- 行内 CAPF 与主要写入型 Tag reader 共享同一个直接子级候选函数；完整路径
-  校验、Store identity、精确查询默认值和 descendant query 均不改变。
-- 继续使用当前 O(T) Tag 列表推导候选；不新增缓存、索引、Store 字段或依赖。
+- 用户按真实 Tag ID 直接搜索；`happy :extends diary` 可由输入 `happy` 命中。
+- completion 用 Emacs 原生 affixation 显示 `diary/happy`，但候选值、Org token
+  与 Store identity 始终仍是 `happy`。
+- Schema View 使用一棵树：显式 `:extends` 是主父子关系；没有显式父级的旧
+  完整路径 ID 才按 `/` 派生兼容层级。
+- Schema 的新增 Child Tag 只写 `:extends`。旧 `a n` 路径创建入口删除，`a c`
+  仅保留为同一命令的兼容快捷键。
+- 继续使用当前 O(T) Tag 列表与 Store 读取；不新增缓存、索引、字段或迁移。
 
 ### Data Model
 
-- 完整路径字符串就是稳定 Tag ID：`emacs/package` 与 `linux/package` 是两个不同标签。
-- Node `:tags` 原样保存完整路径；现有提取、同步、写回和 completion 已支持 `/`，不新增迁移或双写字段。
-- `/` 只表达命名空间包含关系；`:extends` 继续只表达显式 schema/字段继承，两者不得自动互相转换。
-- 父级与后代关系在读取时按 `"/"` 段边界推导，不创建中间 Tag entity。
+- Tag entity 的 `:id` 仍是唯一身份；父子关系复用现有 `:extends`，不新增第二套关系。
+- `happy :extends diary` 的展示路径是 `diary/happy`，但展示路径不是 ID，也不写回 Org。
+- 已有 `emacs/package` 等完整路径 ID 继续原样保存、查询和写回；本次不自动拆分或迁移。
+- 一个真实 Tag 只有一个 `:extends` 父级；需要同名叶子属于多个父级时，继续使用不同的完整路径 ID。
 
 ### Query Semantics
 
@@ -31,17 +30,17 @@
 
 ### Minimal Implementation
 
-1. 在 scan query seam 内集中实现路径段边界判断。
-2. 为 node ID 查询、完整 node 查询和 View Data API 增加可选的后代查询参数。
-3. 提供 `supertag-find-tag-descendants`，只返回 Store 中真实存在的完整路径 Tag ID。
-4. 不修改 Schema View：该视图展示 `:extends` 继承树，不应混入 namespace 树。
+1. 从现有 `:extends` 父链计算只读 display path，并以 affixation 接入 CAPF 和共享 reader。
+2. Schema 先连接显式 `:extends`，再为无显式父级的完整路径连接 `/` 父级；连接时拒绝循环。
+3. 保持实际候选字符串不变，选择 `diary/happy` 的视觉项仍只插入 `happy`。
+4. 删除独立路径子标签创建入口，复用现有 Child Tag 命令。
 
 ### Rejected
 
-- **只存叶子标签**：`emacs/package` 与 `linux/package` 都会坍缩为 `package`，破坏身份。
-- **`:raw-tag-paths` 双写**：完整路径本来就能无损存储，双写只会制造一致性问题。
-- **自动映射到 `:extends`**：命名空间包含不等于字段继承，会让改名和 schema 行为互相污染。
-- **自动创建父 Tag entity**：当前查询不需要它，且会向用户的 Tag 列表写入从未声明的实体。
+- **继续逐层导航 namespace**：要求用户先输入父级，且与已有 `:extends` 父子关系重复。
+- **把 display path 当候选值**：会把选择 `happy` 变成新 ID `diary/happy`，污染现有数据。
+- **自动迁移旧完整路径 ID**：身份与引用迁移风险高；当前兼容回退已经满足展示。
+- **自动从 `/` 写入 `:extends`**：会改变旧路径 Tag 的字段继承语义，本次只在读取侧兼容。
 
 ---
 

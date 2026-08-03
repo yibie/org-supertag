@@ -30,9 +30,10 @@
      (supertag--ensure-store)
      ,@body))
 
-(defun tag-path-test--put-tag (id)
-  "Put a minimal tag entity with ID into the test store."
-  (supertag-store-put-entity :tags id (list :id id :name id :type :tag)))
+(defun tag-path-test--put-tag (id &optional parent)
+  "Put a minimal tag entity with ID and optional PARENT into the test store."
+  (supertag-store-put-entity
+   :tags id (list :id id :name id :type :tag :extends parent :fields nil)))
 
 (defun tag-path-test--put-node (id tag)
   "Put a minimal node ID carrying TAG into the test store."
@@ -58,23 +59,6 @@
   (should (equal "lisp/package/elpa"
                  (supertag-tag-path-rebase
                   "emacs/package/elpa" "emacs/package" "lisp/package"))))
-
-(ert-deftest tag-path-completion-candidates-are-one-level-at-a-time ()
-  (let ((paths '("ATTACH" "Apple" "Apple/Shortcut/\u8bed\u8a00"
-                 "diary/personal" "diary/work")))
-    (should
-     (equal '("ATTACH" "Apple" "Apple/" "diary/")
-            (supertag-tag-path-direct-candidates paths "")))
-    (should
-     (equal '("Apple/Shortcut/")
-            (supertag-tag-path-direct-candidates paths "Apple/")))
-    (should
-     (equal '("Apple/Shortcut/\u8bed\u8a00")
-            (supertag-tag-path-direct-candidates
-             paths "Apple/Shortcut/")))
-    (should
-     (equal '("diary/personal" "diary/work")
-            (supertag-tag-path-direct-candidates paths "diary/")))))
 
 (ert-deftest tag-path-extraction-preserves-the-complete-id ()
   (should
@@ -174,43 +158,54 @@
         (should-not
          (plist-get (supertag-extractor--tags headline nil nil) :tags))))))
 
-(ert-deftest tag-path-schema-tree-separates-namespace-from-inheritance ()
+(ert-deftest tag-path-schema-tree-unifies-explicit-and-path-parents ()
   (tag-path-test--with-clean-store
-    (tag-path-test--put-tag "base")
-    (supertag-tag-add-field "base" '(:name "tier" :type :string))
-    (tag-path-test--put-tag "emacs/package")
-    (supertag-tag-create
-     '(:id "emacs/package/elpa" :name "emacs/package/elpa" :extends "base"))
+    (tag-path-test--put-tag "diary")
+    (supertag-tag-add-field "diary" '(:name "mood" :type :string))
+    (tag-path-test--put-tag "happy" "diary")
+    (tag-path-test--put-tag "coding/日志")
     (let* ((tree (supertag-schema--build-tree))
-           (emacs (cl-find "emacs" tree :key (lambda (node) (plist-get node :id))
+           (diary (cl-find "diary" tree
+                           :key (lambda (node) (plist-get node :id))
                            :test #'equal))
-           (package (car (plist-get emacs :children)))
-           (elpa (car (plist-get package :children))))
-      (should (plist-get emacs :virtual))
-      (should-not (plist-get package :virtual))
-      (should (equal "package" (plist-get package :label)))
-      (should (equal "emacs/package/elpa" (plist-get elpa :id)))
-      (should (equal "base" (plist-get elpa :extends))))
+           (coding (cl-find "coding" tree
+                            :key (lambda (node) (plist-get node :id))
+                            :test #'equal)))
+      (should (equal '("happy")
+                     (mapcar (lambda (node) (plist-get node :id))
+                             (plist-get diary :children))))
+      (should (plist-get coding :virtual))
+      (should (equal '("coding/日志")
+                     (mapcar (lambda (node) (plist-get node :id))
+                             (plist-get coding :children)))))
     (with-temp-buffer
       (supertag-schema--render)
-      (should (string-match-p "^emacs/$" (buffer-string)))
-      (should (string-match-p "^  package/$" (buffer-string)))
-      (should (string-match-p "^    elpa -> base$" (buffer-string)))
-      (should (string-match-p "Inherited from base" (buffer-string)))
-      (let ((namespace (tag-path-test--context-on-line "^emacs/$"))
-            (leaf (tag-path-test--context-on-line "^    elpa -> base$")))
-        (should (eq :namespace (plist-get namespace :type)))
-        (should (equal "emacs" (plist-get namespace :path)))
-        (should (eq :tag (plist-get leaf :type)))
-        (should (equal "emacs/package/elpa" (plist-get leaf :tag-id)))))))
+      (should (string-match-p "^diary/$" (buffer-string)))
+      (should (string-match-p "^  happy$" (buffer-string)))
+      (should-not (string-match-p "happy -> diary" (buffer-string)))
+      (should (string-match-p "Inherited from diary" (buffer-string)))
+      (should (string-match-p "^coding/$" (buffer-string)))
+      (should (string-match-p "^  日志$" (buffer-string)))
+      (let ((happy (tag-path-test--context-on-line "^  happy$")))
+        (should (eq :tag (plist-get happy :type)))
+        (should (equal "happy" (plist-get happy :tag-id)))))))
 
-(ert-deftest tag-path-schema-creates-a-path-child-without-inheritance ()
+(ert-deftest tag-path-schema-uses-one-child-command ()
+  (should (eq #'supertag-schema--add-child-tag-at-point
+              (lookup-key supertag-schema-view-mode-map (kbd "a n"))))
+  (should (eq #'supertag-schema--add-child-tag-at-point
+              (lookup-key supertag-schema-view-mode-map (kbd "a c")))))
+
+(ert-deftest tag-path-schema-tree-avoids-parent-path-cycle ()
   (tag-path-test--with-clean-store
-    (tag-path-test--put-tag "emacs/package")
-    (let ((created (supertag-schema--create-nested-tag
-                    "emacs/package" "elpa")))
-      (should (equal "emacs/package/elpa" (plist-get created :id)))
-      (should-not (plist-get created :extends)))))
+    (tag-path-test--put-tag "a" "a/b")
+    (tag-path-test--put-tag "a/b")
+    (let ((tree (supertag-schema--build-tree)))
+      (should (equal '("a/b")
+                     (mapcar (lambda (node) (plist-get node :id)) tree)))
+      (should (equal '("a")
+                     (mapcar (lambda (node) (plist-get node :id))
+                             (plist-get (car tree) :children)))))))
 
 (ert-deftest tag-path-view-context-retains-descendant-scope ()
   (tag-path-test--with-clean-store
@@ -244,48 +239,27 @@
       (should-error (supertag-view-table-add-column) :type 'user-error)
       (should-error (supertag-view-table-edit-cell) :type 'user-error))))
 
-(ert-deftest tag-path-completion-navigates-namespaces-without-writing ()
-  (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
-             (lambda () '("emacs/package" "emacs/package/elpa"
-                          "emacs2/package"))))
-    (let* ((candidates (supertag-completion--get-completion-table "emacs"))
-           (namespace
-            (cl-find-if
-             (lambda (candidate)
-               (get-text-property 0 'supertag-namespace-prefix candidate))
-             candidates))
-           (writes 0))
-      (should (equal "emacs/" (substring-no-properties namespace)))
-      (should-not (member "emacs/package" candidates))
-      (should
-       (equal '("emacs/package" "emacs/package/")
-              (mapcar #'substring-no-properties
-                      (seq-remove
-                       (lambda (candidate)
-                         (get-text-property 0 'is-new-tag candidate))
-                       (supertag-completion--get-completion-table "emacs/")))))
-      (should
-       (equal '("emacs/package/elpa")
-              (mapcar #'substring-no-properties
-                      (supertag-completion--get-completion-table
-                       "emacs/package/"))))
-      (cl-letf (((symbol-function 'org-id-get-create)
-                 (lambda () (setq writes (1+ writes)) "node"))
-                ((symbol-function 'supertag-ops-add-tag-to-node)
-                 (lambda (&rest _) (setq writes (1+ writes)))))
-        (with-temp-buffer
-          (insert namespace)
-          (supertag-completion--post-completion-action namespace)
-          (should (equal "emacs/" (buffer-string)))
-          (should (zerop writes))))
-      (should-not
-       (cl-find-if (lambda (candidate)
-                     (get-text-property 0 'is-new-tag candidate))
-                   (supertag-completion--get-completion-table "emacs/")))
-      (should-not
-       (cl-find-if (lambda (candidate)
-                     (get-text-property 0 'is-new-tag candidate))
-                   (supertag-completion--get-completion-table "emacs//new"))))))
+(ert-deftest tag-path-completion-searches-leaf-and-displays-parent-path ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
+    (with-temp-buffer
+      (org-mode)
+      (insert "#hap")
+      (let* ((completion-styles '(basic))
+             (capf (supertag-completion-at-point))
+             (table (nth 2 capf))
+             (metadata (funcall table "hap" nil 'metadata))
+             (affix (cdr (assq 'affixation-function (cdr metadata))))
+             (candidates (all-completions "hap" table))
+             (happy (cl-find "happy" candidates
+                             :key #'substring-no-properties :test #'equal))
+             (display (car (funcall affix (list happy)))))
+        (should happy)
+        (should (equal "happy"
+                       (get-text-property 0 'supertag-tag-id happy)))
+        (should (equal "diary/" (nth 1 display)))
+        (should (equal "happy" (substring-no-properties (car display))))))))
 
 (ert-deftest tag-path-capf-filters-unrelated-root-tags-below-namespace ()
   (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
@@ -302,42 +276,24 @@
                 (mapcar #'substring-no-properties
                         (all-completions "diary/" table))))))))
 
-(ert-deftest tag-path-capf-can-descend-from-an-existing-flat-tag ()
-  (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
-             (lambda () '("diary" "diaryx"))))
-    (with-temp-buffer
-      (org-mode)
-      (insert "#diary")
-      (let* ((completion-styles '(basic))
-             (capf (supertag-completion-at-point))
-             (table (nth 2 capf))
-             (candidates (all-completions "diary" table))
-             (enumerated (funcall table "" nil t))
-             (namespace
-              (cl-find "diary/" candidates
-                       :key #'substring-no-properties :test #'equal)))
-        (should namespace)
-        (should (cl-find "diary/" enumerated
-                         :key #'substring-no-properties :test #'equal))
-        (should (get-text-property 0 'supertag-namespace-prefix namespace))))))
-
-(ert-deftest tag-path-shared-reader-navigates-direct-children ()
-  (let ((tags '("Apple/Shortcut/\u8bed\u8a00" "Apple/Shortcut/English"
-                "diary/work"))
-        (answers '("Apple/" "Apple/Shortcut/" "Apple/Shortcut/\u8bed\u8a00"))
-        seen)
+(ert-deftest tag-path-shared-reader-searches-leaf-and-displays-parent-path ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
+    (let (seen display)
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt collection &rest _)
-                 (push (mapcar #'substring-no-properties collection) seen)
-                 (pop answers))))
+                 (setq seen (mapcar #'substring-no-properties collection)
+                       display
+                       (car (funcall
+                             (plist-get completion-extra-properties
+                                        :affixation-function)
+                             '("happy"))))
+                 "happy")))
       (should
-       (equal "Apple/Shortcut/\u8bed\u8a00"
-              (supertag-ui-read-tag "Tag: " tags nil nil)))
-      (should
-       (equal '(("Apple/" "diary/")
-                ("Apple/Shortcut/")
-                ("Apple/Shortcut/English" "Apple/Shortcut/\u8bed\u8a00"))
-              (nreverse seen))))))
+       (equal "happy" (supertag-ui-read-tag "Tag: ")))
+      (should (equal '("diary" "happy") seen))
+      (should (equal "diary/" (nth 1 display)))))))
 
 (ert-deftest tag-path-shared-reader-can-select-a-virtual-namespace ()
   (let (seen)
@@ -351,7 +307,10 @@
                "Tag or namespace: "
                '("Apple/Shortcut/\u8bed\u8a00" "diary/work")
                nil nil t)))
-      (should (equal '("Apple" "Apple/" "diary" "diary/") seen)))))
+      (should
+       (equal '("Apple" "Apple/Shortcut" "Apple/Shortcut/\u8bed\u8a00"
+                "diary" "diary/work")
+              seen)))))
 
 (ert-deftest tag-path-branch-rename-migrates-complete-identities ()
   (tag-path-test--with-clean-store

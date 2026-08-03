@@ -1,6 +1,16 @@
 # change_smart_key_20260721
 
 - 2026-08-03 Fix
+  - Files: `supertag-core-tag-path.el`, `supertag-ops-tag.el`, `supertag-services-ui.el`, `supertag-ui-completion.el`, `supertag-view-schema.el`, `test/tag-path-test.el`, nested-tag phase/docs
+  - Functions: Tag display path/affixation, shared Tag reader, CAPF candidates, Schema tree and Child command
+  - Changes: typing `happy` now displays `diary/happy` while preserving the real ID; Schema indents `happy` under its `:extends` parent and uses `/` only as a legacy fallback; `a n` and compatibility key `a c` share one Child command.
+  - Simplification: removed namespace-step CAPF navigation, the shared reader loop, the separate path-child creator and the `child -> parent` line suffix; no Store migration, cache, index or dependency.
+  - Verification: focused ERT 19/19, full ERT 351/351, live Store CAPF/Schema probe, byte compilation, `check-parens`, `git diff --check`; no repository `.elc` remains.
+  - Data cleanup: verified `diary/happy` had no source/node/schema references, backed up the DB to `/private/tmp/supertag-db.el.before-diary-slash-happy-cleanup-20260803`, then deleted the orphan; notes sync commit `b7bfdfe` is on `origin/main`.
+  - Risk: existing full-path Tag IDs remain supported and are not automatically converted to `:extends`.
+  - Related: `issue009`, `task018`; supersedes the task017 completion interaction.
+
+- 2026-08-03 Fix
   - Files: `supertag-ui-completion.el`, `test/tag-path-test.el`, nested-tag phase/docs indexes
   - Functions: `supertag-completion--get-completion-table`
   - Changes: an exact existing flat Tag now offers a slash-terminated child namespace, so `#diary` can navigate to `diary/` before any child Tag exists.

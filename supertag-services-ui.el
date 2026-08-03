@@ -476,72 +476,43 @@ Returns a field definition plist, or nil if cancelled."
 (cl-defun supertag-ui-read-tag
     (prompt &optional (tag-ids nil tag-ids-supplied-p) allow-new allow-empty
             allow-namespace)
-  "Read one Tag path one namespace level at a time.
-PROMPT is the initial minibuffer prompt.  TAG-IDS defaults to every
-stored Tag ID.  When ALLOW-NEW is non-nil, a valid path not already
-stored may be returned.  When ALLOW-EMPTY is non-nil, empty input
-returns nil.  Slash-terminated candidates only navigate.  When
-ALLOW-NAMESPACE is non-nil, their path without the trailing slash is
-also selectable as a virtual namespace result."
+  "Read one Tag ID with parent paths shown as completion prefixes.
+PROMPT is the minibuffer prompt.  TAG-IDS defaults to every stored Tag
+ID.  When ALLOW-NEW is non-nil, a valid new ID may be returned.  When
+ALLOW-EMPTY is non-nil, empty input returns nil.  ALLOW-NAMESPACE adds
+derived slash-path namespaces as selectable results."
   (let ((known-tags (sort (delete-dups
                            (copy-sequence
                             (if tag-ids-supplied-p
                                 tag-ids
                               (supertag-view-api-list-tag-ids))))
-                          #'string<))
-        (namespace ""))
-    (catch 'selected
-      (while t
-        (let* ((direct
-                (supertag-tag-path-direct-candidates known-tags namespace))
-               (candidates
-                (if allow-namespace
-                    (sort
-                     (delete-dups
-                      (append direct
-                              (mapcar
-                               (lambda (candidate)
-                                 (string-remove-suffix "/" candidate))
-                               (seq-filter
-                                (lambda (candidate)
-                                  (string-suffix-p "/" candidate))
-                                direct))))
-                     #'string<)
-                  direct))
-               (answer
-                (completing-read
-                 (if (string-empty-p namespace)
-                     prompt
-                   (format "%s#%s " prompt namespace))
-                 (if allow-empty (cons "" candidates) candidates)
-                 nil (not allow-new))))
-          (when (string-empty-p answer)
-            (if allow-empty
-                (throw 'selected nil)
-              (user-error "A tag is required")))
-          (let ((path (if (or (string-empty-p namespace)
-                              (string-prefix-p namespace answer))
-                          answer
-                        (concat namespace answer))))
-            (if (string-suffix-p "/" path)
-                (let ((base (string-remove-suffix "/" path)))
-                  (unless (supertag-tag-path-valid-p base)
-                    (user-error "Invalid tag namespace '%s'" path))
-                  (unless (or allow-new (member path candidates))
-                    (user-error "Unknown tag namespace '%s'" path))
-                  (setq namespace path))
-              (unless (supertag-tag-path-valid-p path)
-                (user-error "Tag paths cannot contain empty segments"))
-              (unless (or allow-new
-                          (member path known-tags)
-                          (and allow-namespace
-                               (supertag-tag-path-has-descendants-p
-                                path known-tags)))
-                (user-error "Unknown tag '%s'" path))
-              (throw 'selected path))))))))
+                          #'string<)))
+    (let* ((candidates
+            (if allow-namespace
+                (sort (delete-dups
+                       (append known-tags
+                               (supertag-tag-path-namespace-prefixes known-tags)))
+                      #'string<)
+              known-tags))
+           (completion-extra-properties
+            '(:affixation-function supertag-tag-affixate-candidates))
+           (answer (completing-read
+                    prompt
+                    (if allow-empty (cons "" candidates) candidates)
+                    nil (not allow-new))))
+      (cond
+       ((string-empty-p answer)
+        (if allow-empty nil (user-error "A tag is required")))
+       ((not (supertag-tag-path-valid-p answer))
+        (user-error "Tag paths cannot contain empty segments"))
+       ((or allow-new
+            (member answer known-tags)
+            (and allow-namespace (member answer candidates)))
+        answer)
+       (t (user-error "Unknown tag '%s'" answer))))))
 
 (defun supertag-ui-read-tags (prompt &optional tag-ids allow-new initial-tags)
-  "Read zero or more Tag paths with hierarchical completion.
+  "Read zero or more Tag IDs with parent-aware completion.
 PROMPT, TAG-IDS and ALLOW-NEW have the meaning used by
 `supertag-ui-read-tag'.  INITIAL-TAGS are kept and omitted from later
 choices."

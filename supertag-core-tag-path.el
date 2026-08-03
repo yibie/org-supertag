@@ -59,36 +59,6 @@
           (setq parent (supertag-tag-path-parent parent)))))
     (sort prefixes #'string<)))
 
-(defun supertag-tag-path-direct-candidates (paths namespace)
-  "Return real tags and namespaces directly below NAMESPACE in PATHS.
-NAMESPACE is either the empty string for roots or a slash-terminated
-path such as `emacs/package/'.  Returned namespace candidates keep
-their trailing slash; real Tag candidates keep their complete IDs.
-Malformed historical IDs remain selectable at the root but never
-participate in namespace derivation."
-  (unless (or (string-empty-p namespace)
-              (and (string-suffix-p "/" namespace)
-                   (supertag-tag-path-valid-p
-                    (string-remove-suffix "/" namespace))))
-    (error "Invalid tag namespace '%s'" namespace))
-  (let ((seen (make-hash-table :test 'equal))
-        candidates)
-    (dolist (path paths)
-      (let ((candidate
-             (cond
-              ((and (supertag-tag-path-valid-p path)
-                    (string-prefix-p namespace path))
-               (let ((remainder (substring path (length namespace))))
-                 (unless (string-empty-p remainder)
-                   (if-let* ((slash (string-match "/" remainder)))
-                       (concat namespace (substring remainder 0 (1+ slash)))
-                     path))))
-              ((string-empty-p namespace) path))))
-        (when (and candidate (not (gethash candidate seen)))
-          (puthash candidate t seen)
-          (push candidate candidates))))
-    (sort candidates #'string<)))
-
 (defun supertag-tag-path-has-descendants-p (path paths)
   "Return non-nil when one of PATHS is below PATH."
   (cl-some (lambda (candidate)

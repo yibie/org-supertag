@@ -17,8 +17,8 @@
 - 同步提取与渲染/point 识别共享“行首或空白后的 Org 正文 token”边界。
 - Emacs Lisp `#'function` 引用不进入渲染、同步提取或 tag completion。
 - SVG tag 字体低于正文行高，保持 badge 尺寸与标签可读性。
-- `a/b/c` 以完整路径作为唯一 Tag ID；Schema、completion、View 与 Table 从路径派生 namespace。
-- 路径 namespace 与显式 `:extends` 字段继承分别展示、分别操作。
+- 兼容已有 `a/b/c` 完整路径 Tag ID；新式父子关系以现有 `:extends` 为单一来源。
+- completion 按真实 Tag ID 搜索，但把 `:extends` 父链显示为前缀；Schema 用同一棵父子树表达层级与字段继承。
 
 ### Non-goals
 
@@ -39,11 +39,11 @@
 5. 用户以前缀参数调用命令，获得当前 target 的相关动作；没有 target 时回落到完整的 `supertag-menu`。
 6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
 7. 用户输入 `#` 触发 tag completion；历史 Store 中由 `#'function` 误提取的条目不再显示，合法标签仍可选。
-8. 用户输入已有 Tag `#emacs` 时可选择 `emacs/` 进入子 namespace；继续输入 leaf 后，只有完整合法路径落库。
-9. 用户在 Schema View 中看到 `emacs/` → `package/` → `elpa`，并可在 namespace 下新建路径或打开后代聚合 Table。
+8. Store 中 `happy :extends diary` 时，用户输入 `#happy` 即可看到 `diary/happy`；确认后写入的仍是 `#happy`。
+9. 用户在 Schema View 中看到 `diary/` 下直接缩进 `happy`；新增 Child Tag 也写入同一个 `:extends` 关系。
 10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
 11. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
-12. 用户输入 `#a/` 时只看到 `a/` 的直接子级；Add/Change/Capture/Tag Field 等入口使用相同的逐层选择方式。
+12. 行内 CAPF 与 Add/Change/Capture/Tag Field 等入口都可按叶子 ID 直接搜索，并使用同一父链展示。
 13. 用户写入 `#ai_suggestions` 后同步，Store 保留完整 ID；重扫后可通过 `M-x supertag-cleanup-orphaned-tags` 逐项选择旧孤立 Tag，确认前不修改数据。
 
 ## Edge Cases
@@ -64,8 +64,8 @@
 - 从 namespace/branch 打开的 descendant Table 只显示 Title/Tags/File，字段与 schema 修改命令必须拒绝执行。
 - 分支不得移动进自己的子 namespace；普通字符串字段即使等于旧 Tag ID 也不得被重命名。
 - org-supertag 可以晚于 Org buffer 加载；自动样式启用必须同时覆盖现存 buffer 和以后进入 `org-mode` 的 buffer。
-- namespace 下没有真实子路径时返回空候选，不回退显示无关根级 Tag；继续输入合法叶段仍可创建完整路径。
-- 当前输入精确匹配已有平面 Tag 时，同时提供其 `/` 子 namespace；该候选只导航，不创建 namespace entity。
+- 父链展示不得改变候选值：选择 `diary/happy` 的视觉候选后，只能插入和持久化 `happy`。
+- Schema 优先采用显式 `:extends` 父级；旧完整路径 ID 无显式父级时才按 `/` 派生兼容层级，冲突时不得形成循环。
 - Org 将 `_suffix` 解析为 subscript 时，若它属于同一个 `#token`，同步仍读取原始完整 token；独立 subscript/link/code 内的 `#` 仍不是 Tag。
 
 ## Acceptance Criteria
@@ -81,11 +81,11 @@
 - 20px frame character height 下，默认 SVG tag 字号为 14px；修改字号比例后不得命中旧尺寸缓存。
 - `supertag-back-to-heading` 不得留下可被同步重新识别的 ID，也不得删除无关 Org 属性。
 - 默认 Tag 查询保持精确；只有显式 `include-descendants` 命中路径后代且不命中 `emacs2/...`。
-- Schema 缩进只由 `/` 路径决定，`:extends` 仅以箭头和 inherited fields 表达。
+- Schema 缩进优先由 `:extends` 决定，不再另显示 `child -> parent`；无显式父级的旧完整路径 ID 继续按 `/` 缩进。
 - 单节点同步后 Tag entity、node `:tags` 与 node-tag relation 一致；移除 token 后只回收当前节点的失效关系。
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
-- completion 的 basic 与 `action=t` 枚举都能从已有平面 Tag 看到 `/` 子 namespace；普通 Tag/namespace 不显示冗余类型后缀，只有新路径显示 `[New]`。
+- completion 的 basic 与 `action=t` 枚举都能用 `happy` 命中真实 ID，并把 `diary/` 作为 affixation 前缀；只有新 ID 显示 `[New]`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
 - 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。
 - 孤立 Tag 候选不得包含被 node、relation、field/schema（含 `:tag` default/options）、inheritance、automation、saved query 或已加载 view config 引用的 ID。

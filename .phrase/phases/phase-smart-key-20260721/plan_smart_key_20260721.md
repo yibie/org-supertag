@@ -19,6 +19,7 @@
 15. 延迟加载视图模块时补启用已经存在的 Org buffer，避免启动恢复的笔记失去 inline tag SVG。
 16. 从原始 buffer 区间识别 inline Tag，避免 Org subscript 改写下划线；旧污染只通过显式、保守的孤立 Tag 清理命令处理。
 17. 已有平面 Tag 精确匹配时提供只导航的子 namespace 候选，使用户无需先存在子 Tag 即可继续输入下一层。
+18. 以真实 Tag ID 做叶子搜索，以 `:extends` 父链做补全展示和 Schema 缩进；`/` 路径树仅保留为旧数据兼容回退。
 
 ## Scope
 
@@ -45,7 +46,8 @@
 - P0: cleanup 引用模型覆盖 Tag schema fields；整批 `after-operation-hook` 后按显式候选 ID 复检，事务回滚执行全部 invariant handler 后重抛首错。
 - P1: SVG tag 默认字体小于正文行高，缓存键包含字号比例。
 - P1: 嵌套 Tag 查询只在调用方显式请求时包含路径后代；精确查询保持兼容。
-- P1: Schema View 以路径 namespace 缩进，`:extends` 仅作为继承元数据展示；虚拟 namespace 不冒充真实 Tag。
+- P1: Schema View 以 `:extends` 为主父子树，旧完整路径 ID 在没有显式父级时才派生虚拟 namespace。
+- P1: 所有 Tag 输入按真实 ID 搜索，父链只参与显示，不得改写插入值或 Store identity。
 - P1: 从 namespace/branch 打开的 View 与 Table 保留 `include-descendants` scope；聚合 Table 不读写父 Tag 的自定义字段。
 - P1: 单节点同步与全文件同步建立相同的 Tag entity/node-tag relation，并回收当前节点已失效的关系。
 - P1: 分支 Tag 重命名同时迁移所有路径后代并预检冲突；精确删除不得破坏后代 token。

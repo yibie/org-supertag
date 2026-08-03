@@ -90,3 +90,8 @@
   - 产出：精确匹配已有 Tag 时生成只导航的 `/` 子 namespace 候选；复用现有 CAPF、namespace property 与落库边界
   - 验证方式：真实 `#diary` CAPF basic + Corfu/orderless 枚举回归、focused ERT 20/20、全量 ERT 352/352、byte compile、`check-parens`、`git diff --check`
   - 影响范围：不创建父 namespace entity，不改 Store；用户选择 `diary/` 后继续输入 leaf，只有完整路径落库
+
+- task018 [x] 统一父子标签的补全与 Schema 展示
+  - 产出：按叶子 ID 搜索并以前缀显示 `:extends` 父链；Schema 将显式父子关系直接缩进，旧 `/` 路径仅作兼容回退；新增子标签只写一套 `:extends`
+  - 验证方式：focused ERT 锁定 `happy` → `diary/happy`、真实 ID 不变、共享 reader、统一 Schema 树、循环保护与单一 Child 命令；全量 ERT、byte compile、`check-parens`、`git diff --check`
+  - 影响范围：不迁移或改写现有 Tag/Node；完整路径 ID、后代查询和分支重命名继续兼容

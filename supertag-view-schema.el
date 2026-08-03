@@ -49,15 +49,14 @@ tag contains its own ID, ensuring consistency for later processing."
     tags-by-id))
 
 (defun supertag-schema--build-tree ()
-  "Build a namespace tree from complete slash-delimited tag IDs.
-Missing namespace ancestors are virtual nodes.  Explicit `:extends'
-remains tag metadata and never controls indentation."
+  "Build one parent tree from explicit parents and slash-path fallbacks."
   (let ((tags-by-id (supertag-schema--get-all-tags-by-id))
         (nodes-by-id (make-hash-table :test 'equal))
+        (parent-by-id (make-hash-table :test 'equal))
         (children-by-id (make-hash-table :test 'equal))
         roots)
     (cl-labels
-        ((ensure-node
+        ((ensure-namespace
           (path)
           (unless (gethash path nodes-by-id)
             (puthash path
@@ -66,23 +65,53 @@ remains tag metadata and never controls indentation."
                            :virtual t)
                      nodes-by-id)
             (when-let* ((parent (supertag-tag-path-parent path)))
-              (ensure-node parent)))))
+              (ensure-namespace parent))))
+         (would-cycle-p
+          (child parent)
+          (let ((current parent)
+                (seen (make-hash-table :test 'equal))
+                cycle)
+            (while (and current (not cycle) (not (gethash current seen)))
+              (puthash current t seen)
+              (if (equal current child)
+                  (setq cycle t)
+                (setq current (gethash current parent-by-id))))
+            cycle)))
       (maphash
        (lambda (id tag)
-         (ensure-node id)
          (let ((actual (copy-sequence tag)))
            (setq actual (plist-put actual :id id))
            (setq actual (plist-put actual :label
                                    (supertag-tag-path-leaf id)))
            (setq actual (plist-put actual :virtual nil))
            (puthash id actual nodes-by-id)))
-       tags-by-id))
+       tags-by-id)
+      (maphash
+       (lambda (id tag)
+         (unless (plist-get tag :extends)
+           (when-let* ((parent (supertag-tag-path-parent id)))
+             (ensure-namespace parent))))
+       tags-by-id)
+      (dolist (id (sort (hash-table-keys nodes-by-id) #'string<))
+        (let* ((node (gethash id nodes-by-id))
+               (explicit (and (not (plist-get node :virtual))
+                              (plist-get node :extends))))
+          (when (and explicit
+                     (gethash explicit nodes-by-id)
+                     (not (would-cycle-p id explicit)))
+            (puthash id explicit parent-by-id))))
+      (dolist (id (sort (hash-table-keys nodes-by-id)
+                        (lambda (left right) (< (length left) (length right)))))
+        (unless (gethash id parent-by-id)
+          (when-let* ((parent (supertag-tag-path-parent id)))
+            (when (and (gethash parent nodes-by-id)
+                       (not (would-cycle-p id parent)))
+              (puthash id parent parent-by-id))))))
     (maphash
      (lambda (id _node)
-       (let ((parent (supertag-tag-path-parent id)))
-         (if (and parent (gethash parent nodes-by-id))
-             (push id (gethash parent children-by-id))
-           (push id roots))))
+       (if-let* ((parent (gethash id parent-by-id)))
+           (push id (gethash parent children-by-id))
+         (push id roots)))
      nodes-by-id)
     (cl-labels
         ((build-node
@@ -203,7 +232,7 @@ For inherited fields, jumps to the parent tag definition."
       (dolist (root-tag tag-tree)
         (supertag-schema--render-tag-node root-tag))
       (supertag-view-helper-insert-simple-footer
-       "Add:    [a f] Field | [a n] Nested Tag | [a c] Inheritance Child | [a r] Root Tag"
+       "Add:    [a f] Field | [a n] Child Tag | [a r] Root Tag"
        "Edit:   [e e] Edit Field | [e r] Rename | [e p] Parent | [e b] Bind Field"
        "Delete: [d d] Delete | [d m] Delete Marked"
        "Mark:   [m m] Mark | [m u] Unmark | [m U] Unmark All | [m e] Extend Marked"
@@ -248,8 +277,6 @@ This function handles both legacy and global field modes."
                       (list :type :tag :tag-id tag-id
                             :has-descendants branch))))
       (insert (format "%s%s%s" indent label (if branch "/" "")))
-      (when parent-id
-        (insert (propertize (format " -> %s" parent-id) 'face 'font-lock-comment-face)))
       (insert "\n")
       (add-text-properties start (1- (point))
                            `(supertag-context ,context)))
@@ -335,8 +362,8 @@ This function handles both legacy and global field modes."
     ;; ========== Add Commands (a prefix) ==========
     (let ((add-map (make-sparse-keymap "Add...")))
       (define-key add-map "f" #'supertag-schema--add-field-at-point)      ; a f: Add Field
-      (define-key add-map "n" #'supertag-schema--add-nested-tag-at-point) ; a n: Add Nested Tag
-      (define-key add-map "c" #'supertag-schema--add-child-tag-at-point)  ; a c: Add Inheritance Child
+      (define-key add-map "n" #'supertag-schema--add-child-tag-at-point)  ; a n: Add Child Tag
+      (define-key add-map "c" #'supertag-schema--add-child-tag-at-point)  ; a c: Compatibility alias
       (define-key add-map "r" #'supertag-schema--add-new-tag)             ; a r: Add Root Tag
       (define-key map "a" add-map))
 
@@ -433,35 +460,6 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
           (message "Tag '%s' created. Refreshing view..." new-name)
           (supertag-schema-refresh))
       (message "Tag creation cancelled."))))
-
-(defun supertag-schema--create-nested-tag (parent-path child-path)
-  "Create CHILD-PATH below PARENT-PATH without adding inheritance."
-  (let* ((child (supertag-sanitize-tag-name child-path))
-         (full-path (concat parent-path "/" child)))
-    (unless (and (supertag-tag-path-valid-p parent-path)
-                 (supertag-tag-path-valid-p child)
-                 (supertag-tag-path-valid-p full-path))
-      (user-error "Nested tag paths cannot contain empty segments"))
-    (when (supertag-tag-get full-path)
-      (user-error "Tag '%s' already exists" full-path))
-    (supertag-tag-create (list :id full-path :name full-path))))
-
-(defun supertag-schema--add-nested-tag-at-point ()
-  "Create a slash-delimited child below the namespace at point."
-  (interactive)
-  (let* ((context (supertag-schema--get-context-at-point))
-         (parent (pcase (plist-get context :type)
-                   (:namespace (plist-get context :path))
-                   (:tag (plist-get context :tag-id)))))
-    (if (not parent)
-        (message "Not on a tag or namespace line.")
-      (let ((child (read-string (format "Nested tag below '%s': " parent))))
-        (unless (string-empty-p child)
-          (let ((created (supertag-schema--create-nested-tag parent child)))
-            (supertag-schema-refresh)
-            (supertag-schema--goto-context
-             (list :type :tag :tag-id (plist-get created :id)))
-            (message "Nested tag '%s' created." (plist-get created :id))))))))
 
 (defun supertag-schema-view-table-at-point ()
   "Open an exact or descendant table for the Schema item at point."
@@ -1083,8 +1081,8 @@ a parent tag and a child tag."
 
     (princ "Add Commands (prefix: a):\n")
     (princ "  a f     Add Field to current tag\n")
-    (princ "  a n     Add nested path tag below current namespace\n")
-    (princ "  a c     Add inheritance child (create new OR select existing)\n")
+    (princ "  a n     Add child (create new OR select existing)\n")
+    (princ "  a c     Same as a n (compatibility alias)\n")
     (princ "  a r     Add Root Tag (no parent)\n\n")
 
     (princ "Edit Commands (prefix: e):\n")

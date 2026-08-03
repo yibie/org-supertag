@@ -2,7 +2,7 @@
 
 ## Summary
 
-支持 `#project/active` 这样的路径式标签写法，以完整路径作为 Tag ID，并在读取侧派生 namespace 层级；路径层级与手动设置的字段继承 `:extends` 保持独立。
+统一 org-supertag 已有的父子关系：真实 Tag ID 负责搜索和写入，`:extends` 父链负责补全展示与 Schema 缩进；旧 `a/b` 完整路径 ID 继续兼容。
 
 ## Origin
 
@@ -24,22 +24,24 @@
 ## Current State
 
 - 提取、同步、写回和 completion 将 `a/b/c` 作为一个完整 Tag ID 处理。
-- `:extends` 是 schema/字段继承关系，不再承担路径 namespace 关系。
+- `:extends` 同时是 Schema 中唯一的显式父子关系与字段继承关系。
 - 单节点/全文件同步、显式后代查询、Schema namespace 树、路径补全、
   View/Table 聚合入口和事务化分支重命名均已实现。
 - 自动化、真实 Store 副本和 Schema 视觉验收完成。
 - 2026-08-01 修复 completion 的扁平混排：候选按 namespace 直接子级逐层
   展示，`#diary/` 不再泄漏 `ATTACH`、`Apple` 等根级候选。主要 Tag 写入
   入口已复用同一套 namespace reader，自动化验收完成。
-- 2026-08-03 修复已有平面 Tag 无法下钻：输入 `#diary` 时即使尚无
-  `diary/...` 子 Tag，也会提供只导航的 `diary/` 候选。
+- 2026-08-03 实机反馈证明逐层下钻仍不自然；改为输入真实 ID `happy`，候选
+  显示父链 `diary/happy`，确认后仍只写入 `#happy`。
+- Schema View 将 `happy :extends diary` 直接放入 `diary` 分支，不再用箭头把
+  父子关系拆成第二种表现；旧完整路径仅在没有显式父级时作兼容回退。
 
 ## Scope (if implemented)
 
-1. 完整路径保持为 Tag ID，不拆叶子、不双写。
-2. 同步为完整路径建立 Tag entity 与 node-tag relation，并与当前节点标签集合对齐。
-3. Schema View 从路径派生虚拟 namespace，提供子路径创建和后代聚合查看。
-4. completion 提供 namespace 导航候选，但只为真实完整 Tag 落库。
+1. 真实 Tag ID 保持不变，不迁移、不双写；父链只是显示信息。
+2. completion 与共享 Tag reader 按真实 ID 搜索，以 `:extends` 父链作为 affixation。
+3. Schema View 优先使用显式 `:extends` 父子树；旧完整路径 ID 才派生虚拟 namespace。
+4. 新增子标签统一写 `:extends`，不再提供独立的路径子标签入口。
 5. View/Table 保留 `include-descendants` scope；后代聚合 Table 只读。
 6. 分支重命名原子迁移 exact + descendants；精确删除使用完整 token 边界。
 7. 默认精确查询、`:extends` 继承和 Store schema 保持不变。
@@ -55,6 +57,8 @@
   全量 ERT、byte compilation、check-parens 与真实 Store 候选探测。
 - task017 [x] 精确匹配已有平面 Tag 时提供 `/` 子 namespace，允许在没有
   既存后代的情况下继续创建下一层；basic 与 Corfu/orderless 枚举均已锁定。
+- task018 [x] 以真实叶子 ID 直接搜索并显示 `:extends` 父链；Schema 合并父子
+  关系与缩进，`/` 路径仅作旧数据兼容；task017 的逐层导航交互被替代。
 
 ## Environment
 
@@ -62,10 +66,11 @@ N/A
 
 ## Reproduction
 
-1. Store 中存在 `diary`、`diaryx`，但没有 `diary/...`。
-2. 在 Org buffer 输入 `#diary` 并触发 CAPF。
-3. 修复前只显示 `diary`、`diaryx`，无法从补全进入 `diary/`。
-4. 预期同时显示只导航的 `diary/`，选择后可继续输入 leaf。
+1. Store 中存在 `diary` 与 `happy :extends diary`。
+2. 在 Org buffer 输入 `#happy` 并触发 CAPF。
+3. 修复前要先输入或选择 `diary/`，且 Schema 把 `happy -> diary` 与路径树分开显示。
+4. 预期输入 `happy` 直接看到 `diary/happy`，选择后写入 `#happy`；Schema 中
+   `happy` 直接缩进在 `diary` 下。
 
 ## Investigation
 
@@ -75,25 +80,24 @@ N/A
 
 1. **完整路径已经可用**：现有 Store 和 inline tag 边界允许 `/`，真实 vault 中已有 `Apple/Shortcut/语言` 等标签。
 2. **叶子存储不可用**：`emacs/package` 与 `linux/package` 会冲突为同一个 `package`。
-3. **namespace 与 inheritance 必须分离**：`/` 是路径包含，`:extends` 是显式字段继承。
+3. **已有父子来源就是 `:extends`**：把 `/` namespace 与它并排展示会制造两套层级心智模型。
 4. **性能风险很低**：现有 tag query 本来就是 O(N) scan；显式后代查询只在该 scan 中增加段边界前缀判断。
 
 ## Root Cause
 
-completion 只从已存在的完整路径派生 namespace；没有既存后代时，平面 Tag
-不会产生 `/` 候选。数据模型支持新子路径，但 UI 没有暴露进入该 namespace 的入口。
+上一版把“嵌套”建模为逐层进入 `/` namespace，但真实数据已经用
+`happy :extends diary` 表达父子关系。completion 只匹配候选 ID，不展示父链；Schema
+又把 `:extends` 画成箭头、把 `/` 画成缩进，因此输入和浏览都暴露了两套关系。
 
 ## Fix
 
-采用完整路径 + 派生 namespace 实现：
+采用真实 ID + 父链展示：
 
-1. 保持 Node `:tags` 与 Tag entity ID 为完整路径。
-2. 共享路径段边界、父路径和叶段语义。
-3. 扩展 scan query 与 View Data API，以可选参数显式包含路径后代。
-4. Schema、completion、View 与 Table 使用同一完整路径和 descendant query。
-5. 同步和分支重命名维护 Store 与 Org 文本的一致性。
-6. 精确查询默认行为不变；不新增配置、Store 字段、父实体或隐式 `:extends` 写入。
-7. 当前输入精确匹配已有 Tag 时，额外派生一个只导航的 `/` 子 namespace 候选。
+1. 从 `:extends` 计算只读 display path；cycle 时退回真实 ID。
+2. CAPF 与共享 Tag reader 的候选值保持真实 ID，以 Emacs affixation 显示父链。
+3. Schema 用 `:extends` 连接实际父子；只有无显式父级的旧路径 ID 才按 `/` 连接。
+4. 删除独立路径子标签入口；`a n` 与兼容键 `a c` 调用同一个 Child Tag 命令。
+5. 完整路径查询、后代聚合、分支重命名和 Store schema 保持兼容，不做数据迁移。
 
 详细方案见 `.phrase/docs/tech-refer_nested_tags_20260624.md`。
 
@@ -133,10 +137,22 @@ task017 验收：
 - focused ERT 20/20、全量 ERT 352/352；byte compilation、`check-parens`、
   `git diff --check` 通过；编译生成的 `.elc` 已删除。
 
+task018 验收：
+- focused ERT 19/19，覆盖 `happy` 搜索、`diary/` affixation、真实 ID 保留、
+  shared reader、统一 Schema 树、循环保护和单一 Child 命令。
+- 全量 ERT 351/351；byte compilation、`check-parens`、`git diff --check` 通过；
+  仓库无 `.elc`。
+- 真实 Store 只读探测得到 `happy :extends diary`、display path `diary/happy`、
+  CAPF 候选值 `happy` + 前缀 `diary/`，Schema 将 `happy` 放在 `diary` 子树。
+- `diary/happy` 经源码、node 和保守 orphan scanner 确认为无引用后删除；DB 已备份，
+  notes commit `b7bfdfe` 已推送。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
 - 2026-08-01：实机确认初版 completion 的显示和输入仍是扁平的，task013
   前端验收不通过；进入 task015 修复。
 - 2026-08-03：实机确认 `#diary` 仍无法显示可下钻的 nested namespace；进入 task017 修复。
+- 2026-08-03：实机确认逐层 namespace 仍不符合预期，要求直接输入 `happy` 显示
+  `diary/happy`，并把 Schema 中的 parent-child 合并为一棵树；进入 task018。
 - 端到端实现结果验收：Pending

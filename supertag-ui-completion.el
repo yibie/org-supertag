@@ -130,52 +130,23 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
       (when start
         (cons start end)))))
 
-(defun supertag-completion--namespace-for-prefix (prefix)
-  "Return the slash-terminated namespace containing PREFIX."
-  (if-let* ((slash (string-match "/[^/]*\\'" prefix)))
-      (substring prefix 0 (1+ slash))
-    ""))
-
 (defun supertag-completion--decorate-candidate (candidate)
-  "Attach navigation or Tag identity properties to CANDIDATE."
-  (if (string-suffix-p "/" candidate)
-      (propertize candidate
-                  'supertag-namespace-prefix t
-                  'supertag-namespace-path
-                  (string-remove-suffix "/" candidate))
-    (propertize candidate 'supertag-tag-id candidate)))
+  "Attach Tag identity to CANDIDATE."
+  (propertize candidate 'supertag-tag-id candidate))
 
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
-The list contains only real Tags and navigation namespaces directly
-below PREFIX's current namespace.  An exact stored Tag also offers its
-child namespace so completion can descend from a flat Tag.  A valid
-PREFIX that is not stored is included as a new-Tag candidate carrying
-`is-new-tag' and `new-tag-name' properties.  The candidate string always
-remains the canonical path; the visible `[New]' label comes from CAPF metadata."
+The list contains every real Tag so users can search directly by leaf.
+Parent chains affect display only; selecting a candidate keeps its real
+Tag ID.  A valid PREFIX that is not stored is included as a new-Tag
+candidate carrying `is-new-tag' and `new-tag-name' properties.  The
+candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
   (let* ((safe-prefix (or prefix ""))
-         (namespace (supertag-completion--namespace-for-prefix safe-prefix))
-         (namespace-valid
-          (or (string-empty-p namespace)
-              (supertag-tag-path-valid-p
-               (string-remove-suffix "/" namespace))))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
          (all-tags (supertag-completion--get-all-tags))
-         (direct-candidates
-          (when namespace-valid
-            (supertag-tag-path-direct-candidates all-tags namespace)))
-         (child-namespace
-          (and namespace-valid
-               (supertag-tag-path-valid-p safe-prefix)
-               (member safe-prefix all-tags)
-               (concat safe-prefix "/")))
          (all-candidates
-          (mapcar #'supertag-completion--decorate-candidate
-                  (if (and child-namespace
-                           (not (member child-namespace direct-candidates)))
-                      (sort (cons child-namespace direct-candidates) #'string<)
-                    direct-candidates)))
+          (mapcar #'supertag-completion--decorate-candidate all-tags))
          (available-tags (if current-tags
                              (seq-remove
                               (lambda (tag)
@@ -201,37 +172,28 @@ remains the canonical path; the visible `[New]' label comes from CAPF metadata."
 
 (defun supertag-completion--post-completion-action (selected-string)
   "Post-completion action invoked after the UI inserts SELECTED-STRING.
-SELECTED-STRING is always the canonical path.  Slash-terminated
-namespace candidates navigate without writing; all other valid paths
-are recorded as real Tags."
-  (let* ((namespace (or (get-text-property
-                         0 'supertag-namespace-prefix selected-string)
-                        (string-suffix-p "/" selected-string)))
-         (is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (substring-no-properties selected-string)))
+SELECTED-STRING is always the real Tag ID; display paths are not stored."
+  (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
+         (tag-name (substring-no-properties selected-string))
+         (node-id (org-id-get-create)))
+    (when (and (supertag-tag-path-valid-p tag-name) node-id)
+      ;; Ensure the node exists in the database
+      (unless (supertag-node-get node-id)
+        (when (fboundp 'supertag-node-sync-at-point)
+          (supertag-node-sync-at-point)))
 
-    (if namespace
-        (message "Namespace '%s': continue typing a child tag." tag-name)
-      (let ((node-id (org-id-get-create)))
-        (when (and (supertag-tag-path-valid-p tag-name) node-id)
+      ;; Add the tag to the node (creates tag if needed)
+      (when (fboundp 'supertag-ops-add-tag-to-node)
+        (let ((result (supertag-ops-add-tag-to-node
+                       node-id tag-name :create-if-needed t)))
+          (when result
+            (if is-new
+                (message "New tag '%s' created and added to node %s"
+                         tag-name node-id)
+              (message "Tag '%s' added to node %s" tag-name node-id)))))
 
-          ;; Ensure the node exists in the database
-          (unless (supertag-node-get node-id)
-            (when (fboundp 'supertag-node-sync-at-point)
-              (supertag-node-sync-at-point)))
-
-          ;; Add the tag to the node (creates tag if needed)
-          (when (fboundp 'supertag-ops-add-tag-to-node)
-            (let ((result (supertag-ops-add-tag-to-node
-                           node-id tag-name :create-if-needed t)))
-              (when result
-                (if is-new
-                    (message "New tag '%s' created and added to node %s"
-                             tag-name node-id)
-                  (message "Tag '%s' added to node %s" tag-name node-id)))))
-
-          ;; Finally, add the trailing space to delimit the tag.
-          (insert " "))))))
+      ;; Finally, add the trailing space to delimit the tag.
+      (insert " "))))
 
 ;;;----------------------------------------------------------------------
 ;;; Main CAPF Entry Point
@@ -268,14 +230,11 @@ are recorded as real Tags."
                     (category . supertag-tag)
                     (display-sort-function . identity)
                     (cycle-sort-function . identity)
+                    (affixation-function . supertag-tag-affixate-candidates)
                     (company-kind . (lambda (cand)
-                                      (cond
-                                       ((get-text-property 0 'is-new-tag cand)
-                                        'snippet)
-                                       ((get-text-property
-                                         0 'supertag-namespace-prefix cand)
-                                        'folder)
-                                       (t 'keyword))))
+                                      (if (get-text-property 0 'is-new-tag cand)
+                                          'snippet
+                                        'keyword)))
                     (annotation-function
                      . (lambda (cand)
                          (when (get-text-property 0 'is-new-tag cand)

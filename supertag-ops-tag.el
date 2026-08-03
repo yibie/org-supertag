@@ -11,6 +11,7 @@
 (require 'subr-x)
 (require 'supertag-core-store)
 (require 'supertag-core-schema)
+(require 'supertag-core-tag-path)
 (require 'supertag-core-transform)
 (require 'supertag-ops-relation)
 (require 'supertag-ops-node)
@@ -135,6 +136,35 @@ Returns the created tag data."
 ID is the unique identifier of the tag.
 Returns tag data, or nil if it does not exist."
   (supertag-store-get-entity :tags id))
+
+(defun supertag-tag-display-path (tag-id)
+  "Return TAG-ID prefixed by its explicit parent chain for display."
+  (let ((current tag-id)
+        (seen (make-hash-table :test 'equal))
+        parts cycle)
+    (while (and current (not cycle))
+      (if (gethash current seen)
+          (setq cycle t)
+        (puthash current t seen)
+        (let* ((tag (supertag--ensure-plist (supertag-tag-get current)))
+               (parent (plist-get tag :extends)))
+          (push (if parent (supertag-tag-path-leaf current) current) parts)
+          (setq current parent))))
+    (if cycle tag-id (string-join parts "/"))))
+
+(defun supertag-tag-affixate-candidates (candidates)
+  "Display CANDIDATES with parent paths without changing their Tag IDs."
+  (mapcar
+   (lambda (candidate)
+     (let* ((id (substring-no-properties candidate))
+            (path (supertag-tag-display-path id))
+            (prefix (if (string-suffix-p id path)
+                        (substring path 0 (- (length path) (length id)))
+                      ""))
+            (suffix (when (get-text-property 0 'is-new-tag candidate)
+                      (propertize "  [New]" 'face 'warning))))
+       (list candidate prefix suffix)))
+   candidates))
 
 (defun supertag-tag-update (id updater)
   "Update tag data using the unified commit system.

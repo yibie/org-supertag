@@ -1,5 +1,15 @@
 # change_nested_tags_20260624
 
+## 2026-08-03 (task018)
+
+- **Action**: Unify nested Tag completion and Schema around the existing `:extends` parent relation.
+- **Files**: Modify path helpers, Tag Ops, shared UI reader, inline completion, Schema View, focused tests and phase/docs.
+- **Behavior**: `happy` is searchable directly and displayed as `diary/happy`; selection still writes `happy`. Schema renders `happy` inside `diary` and uses slash paths only as a fallback for legacy full-path IDs.
+- **Simplification**: Removed stepwise namespace navigation, the duplicate path-child creation command and arrow-style parent display; reused Emacs affixation and the existing Child Tag operation.
+- **Verification**: focused ERT 19/19; full ERT 351/351; live Store confirmed parent/display/CAPF/Schema behavior; byte compilation, `check-parens`, `git diff --check`; no repository `.elc`.
+- **Cleanup**: Removed orphan `diary/happy` after source, Store and reference checks; recoverable from `/private/tmp/supertag-db.el.before-diary-slash-happy-cleanup-20260803`; notes commit `b7bfdfe` pushed.
+- **Remaining**: issue009 stays open for live popup and Schema View acceptance.
+
 ## 2026-08-03 (task017)
 
 - **Action**: Let an existing flat Tag open its child namespace from inline completion.
