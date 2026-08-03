@@ -100,3 +100,8 @@
   - 产出：普通候选的 suffix 从 `nil` 改为空字符串，保证 candidate/prefix/suffix 三列满足 Corfu 字符串协议
   - 验证方式：focused ERT 锁定三列 `stringp`；真实 `corfu--format-candidates` 同时格式化普通与 `[New]` 候选；全量 ERT、静态检查
   - 影响范围：仅补全展示元数据；候选 ID、插入、Store 与 Schema 行为不变
+
+- task020 [x] 允许从父级渐进补全真实子标签
+  - 产出：为 `:extends` display path 生成只读 CAPF alias；输入 `diary`/`diary/` 可看到 `diary/happy`，选中后在同步和落库前还原为 `happy`
+  - 验证方式：focused ERT 覆盖父级枚举、alias 真实 ID、buffer 归一化、Store 写入与真实完整路径冲突；真实 Corfu formatter 探测；全量 ERT、静态检查
+  - 影响范围：只改变行内 completion 候选发现；手输完整路径、叶子搜索、共享 reader、查询与 Store schema 不变

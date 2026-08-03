@@ -1,5 +1,12 @@
 # change_nested_tags_20260624
 
+## 2026-08-03 (task020)
+
+- **Action**: Let parent input progressively enumerate its real `:extends` children.
+- **Behavior**: `#diary` and `#diary/` show `diary/happy`; selecting it replaces the visual alias with `#happy` before synchronization or persistence.
+- **Simplification**: Derive aliases only for the live prefix and reuse the existing real-ID text property; no new Store state.
+- **Verification**: focused ERT 21/21; full ERT 353/353; live Corfu enumeration/formatting passed; real full-path collision remains bound to its own ID; byte compile and static checks passed.
+
 ## 2026-08-03 (task019)
 
 - **Action**: Fix the Corfu crash caused by a `nil` affixation suffix.

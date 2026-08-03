@@ -145,8 +145,20 @@ candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
          (all-tags (supertag-completion--get-all-tags))
+         (path-aliases
+          (unless (string-empty-p safe-prefix)
+            (delq nil
+                  (mapcar
+                   (lambda (tag-id)
+                     (let ((path (supertag-tag-display-path tag-id)))
+                       (when (and (not (equal path tag-id))
+                                  (not (member path all-tags))
+                                  (string-prefix-p safe-prefix path))
+                         (propertize path 'supertag-tag-id tag-id))))
+                   all-tags))))
          (all-candidates
-          (mapcar #'supertag-completion--decorate-candidate all-tags))
+          (append (mapcar #'supertag-completion--decorate-candidate all-tags)
+                  path-aliases))
          (available-tags (if current-tags
                              (seq-remove
                               (lambda (tag)
@@ -172,11 +184,19 @@ candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
 
 (defun supertag-completion--post-completion-action (selected-string)
   "Post-completion action invoked after the UI inserts SELECTED-STRING.
-SELECTED-STRING is always the real Tag ID; display paths are not stored."
+Display aliases are replaced with their real Tag ID before any write."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
-         (tag-name (substring-no-properties selected-string))
+         (selected-name (substring-no-properties selected-string))
+         (tag-name (or (get-text-property 0 'supertag-tag-id selected-string)
+                       selected-name))
          (node-id (org-id-get-create)))
     (when (and (supertag-tag-path-valid-p tag-name) node-id)
+      (unless (equal selected-name tag-name)
+        (when-let* ((bounds (supertag-completion--get-prefix-bounds)))
+          (delete-region (car bounds) (cdr bounds))
+          (goto-char (car bounds))
+          (insert tag-name)))
+
       ;; Ensure the node exists in the database
       (unless (supertag-node-get node-id)
         (when (fboundp 'supertag-node-sync-at-point)

@@ -21,6 +21,7 @@
 17. 已有平面 Tag 精确匹配时提供只导航的子 namespace 候选，使用户无需先存在子 Tag 即可继续输入下一层。
 18. 以真实 Tag ID 做叶子搜索，以 `:extends` 父链做补全展示和 Schema 缩进；`/` 路径树仅保留为旧数据兼容回退。
 19. 收紧 affixation 协议：三列始终返回字符串，并用真实 Corfu formatter 验证普通与新建候选。
+20. 为父链增加只读 completion alias，使输入父级可渐进枚举子标签；退出时在任何同步/写入前还原真实 ID。
 
 ## Scope
 

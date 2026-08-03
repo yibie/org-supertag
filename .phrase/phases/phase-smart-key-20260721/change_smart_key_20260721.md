@@ -1,6 +1,15 @@
 # change_smart_key_20260721
 
 - 2026-08-03 Fix
+  - Files: `supertag-ui-completion.el`, `test/tag-path-test.el`, task020 phase/docs
+  - Functions: CAPF candidate construction and post-completion normalization
+  - Changes: parent-prefix input now adds read-only display aliases such as `diary/happy`; selection replaces the alias with real ID `happy` before sync or Store writes.
+  - Simplification: aliases are derived only for the live parent prefix and reuse the existing `supertag-tag-id` property; no index, cache or second identity field.
+  - Verification: focused ERT 21/21; full ERT 353/353; live Corfu enumerated the real `diary` children and formatted `diary/happy`; collision regression preserves a real full-path ID; byte compile, paren/diff checks passed with no repository `.elc`.
+  - Risk: manually typing a display path without selecting completion remains a literal full-path Tag by design.
+  - Related: `issue009`, `task020`, follow-up to `ba78c7f`
+
+- 2026-08-03 Fix
   - Files: `supertag-ops-tag.el`, `test/tag-path-test.el`, task019 phase/docs
   - Functions: `supertag-tag-affixate-candidates`
   - Changes: ordinary candidates now return an empty suffix string instead of `nil`, satisfying Corfu's three-string affixation contract.

@@ -61,6 +61,8 @@
   关系与缩进，`/` 路径仅作旧数据兼容；task017 的逐层导航交互被替代。
 - task019 [x] 修复 task018 affixation 对普通候选返回 `nil` suffix 导致的 Corfu
   `wrong-type-argument arrayp nil`；三列统一为字符串。
+- task020 [x] 输入父级 `diary`/`diary/` 时渐进显示 `diary/happy` 等真实子标签；
+  选中后在 sync/Store 之前归一化为叶子真实 ID。
 
 ## Environment
 
@@ -155,6 +157,13 @@ task019 验收：
   `("task" "prj/" "")` 均完成格式化，无异常。
 - focused ERT 19/19、全量 ERT 351/351、byte compile 与静态检查通过；仓库无 `.elc`。
 
+task020 验收：
+- focused ERT 21/21，覆盖父级枚举、alias property、buffer `#happy` 归一化、
+  Store 写入 `happy` 以及真实 `diary/happy` ID 不被 alias 遮蔽。
+- 真实 Corfu 输入 `diary` 枚举 `diary/exp`、`diary/happy`、`diary/record` 等，
+  `diary/happy` 内部 ID 为 `happy`，formatter 无异常。
+- 全量 ERT 353/353、byte compile 与静态检查通过；仓库无 `.elc`。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
@@ -164,4 +173,5 @@ task019 验收：
 - 2026-08-03：实机确认逐层 namespace 仍不符合预期，要求直接输入 `happy` 显示
   `diary/happy`，并把 Schema 中的 parent-child 合并为一棵树；进入 task018。
 - 2026-08-03：实机捕获 task018 普通候选 suffix 为 `nil` 导致 Corfu 崩溃；进入 task019。
+- 2026-08-03：实机指出输入父级 `diary` 无法渐进发现子标签；进入 task020。
 - 端到端实现结果验收：Pending

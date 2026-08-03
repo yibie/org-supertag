@@ -262,6 +262,50 @@
         (should (equal "diary/" (nth 1 display)))
         (should (equal "happy" (substring-no-properties (car display))))))))
 
+(ert-deftest tag-path-completion-progresses-from-parent-display-path ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
+    (with-temp-buffer
+      (org-mode)
+      (insert "#diary")
+      (let* ((completion-styles '(basic))
+             (capf (supertag-completion-at-point))
+             (table (nth 2 capf))
+             (candidates (all-completions "diary" table))
+             (child (cl-find "diary/happy" candidates
+                             :key #'substring-no-properties :test #'equal))
+             recorded)
+        (should child)
+        (should (equal "happy"
+                       (get-text-property 0 'supertag-tag-id child)))
+        (delete-region (1+ (point-min)) (point-max))
+        (insert child)
+        (cl-letf (((symbol-function 'org-id-get-create) (lambda () "node"))
+                  ((symbol-function 'supertag-node-get) (lambda (_) '(:id "node")))
+                  ((symbol-function 'supertag-ops-add-tag-to-node)
+                   (lambda (_node tag &rest _) (setq recorded tag) t)))
+          (supertag-completion--post-completion-action child))
+        (should (equal "happy" recorded))
+        (should (equal "#happy " (buffer-string)))))))
+
+(ert-deftest tag-path-completion-does-not-shadow-a-real-full-path ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
+    (tag-path-test--put-tag "diary/happy")
+    (with-temp-buffer
+      (org-mode)
+      (insert "#diary/")
+      (let* ((completion-styles '(basic))
+             (table (nth 2 (supertag-completion-at-point)))
+             (candidate (cl-find "diary/happy"
+                                 (all-completions "diary/" table)
+                                 :key #'substring-no-properties :test #'equal)))
+        (should candidate)
+        (should (equal "diary/happy"
+                       (get-text-property 0 'supertag-tag-id candidate)))))))
+
 (ert-deftest tag-path-capf-filters-unrelated-root-tags-below-namespace ()
   (cl-letf (((symbol-function 'supertag-completion--get-all-tags)
              (lambda () '("ATTACH" "Apple" "Apple/Shortcut/\u8bed\u8a00"

@@ -5,6 +5,7 @@
 ### Parent-aware completion and Schema
 
 - 用户按真实 Tag ID 直接搜索；`happy :extends diary` 可由输入 `happy` 命中。
+- 输入父级 `diary`/`diary/` 时，CAPF 额外派生只读别名 `diary/happy`；选中后在任何写入前还原为 `happy`。
 - completion 用 Emacs 原生 affixation 显示 `diary/happy`，但候选值、Org token
   与 Store identity 始终仍是 `happy`。
 - Schema View 使用一棵树：显式 `:extends` 是主父子关系；没有显式父级的旧

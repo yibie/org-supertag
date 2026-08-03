@@ -40,11 +40,12 @@
 6. 用户执行 `supertag-back-to-heading`，heading 和子树保持不变，Node 的 Store 数据与 Org ID 被移除；其他 Org 属性保持不变。
 7. 用户输入 `#` 触发 tag completion；历史 Store 中由 `#'function` 误提取的条目不再显示，合法标签仍可选。
 8. Store 中 `happy :extends diary` 时，用户输入 `#happy` 即可看到 `diary/happy`；确认后写入的仍是 `#happy`。
-9. 用户在 Schema View 中看到 `diary/` 下直接缩进 `happy`；新增 Child Tag 也写入同一个 `:extends` 关系。
-10. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
-11. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
-12. 行内 CAPF 与 Add/Change/Capture/Tag Field 等入口都可按叶子 ID 直接搜索，并使用同一父链展示。
-13. 用户写入 `#ai_suggestions` 后同步，Store 保留完整 ID；重扫后可通过 `M-x supertag-cleanup-orphaned-tags` 逐项选择旧孤立 Tag，确认前不修改数据。
+9. 同一数据下输入 `#diary` 或 `#diary/` 时，completion 渐进显示 `diary/happy` 等子标签；选择后仍归一化为真实 ID。
+10. 用户在 Schema View 中看到 `diary/` 下直接缩进 `happy`；新增 Child Tag 也写入同一个 `:extends` 关系。
+11. 用户重命名一个分支时，根路径、全部后代、Store 引用与 Org token 一起迁移；冲突时零写入。
+12. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
+13. 行内 CAPF 与 Add/Change/Capture/Tag Field 等入口都可按叶子 ID 直接搜索，并使用同一父链展示。
+14. 用户写入 `#ai_suggestions` 后同步，Store 保留完整 ID；重扫后可通过 `M-x supertag-cleanup-orphaned-tags` 逐项选择旧孤立 Tag，确认前不修改数据。
 
 ## Edge Cases
 
@@ -67,6 +68,7 @@
 - 父链展示不得改变候选值：选择 `diary/happy` 的视觉候选后，只能插入和持久化 `happy`。
 - affixation 的 candidate/prefix/suffix 三列必须始终是字符串；没有 suffix 时返回空字符串，不能把 `nil` 交给 Corfu。
 - Schema 优先采用显式 `:extends` 父级；旧完整路径 ID 无显式父级时才按 `/` 派生兼容层级，冲突时不得形成循环。
+- display path 与真实完整路径 ID 同名时，真实 ID 优先，展示别名不得遮蔽它。
 - Org 将 `_suffix` 解析为 subscript 时，若它属于同一个 `#token`，同步仍读取原始完整 token；独立 subscript/link/code 内的 `#` 仍不是 Tag。
 
 ## Acceptance Criteria
@@ -87,6 +89,7 @@
 - descendant scope 在 View/Table 刷新后保持；聚合 Table 不提供 tag-specific 字段写入。
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - completion 的 basic 与 `action=t` 枚举都能用 `happy` 命中真实 ID，并把 `diary/` 作为 affixation 前缀；只有新 ID 显示 `[New]`。
+- completion 输入 `diary` 与 `diary/` 时必须枚举父链匹配的子标签；选中展示别名后，Org 与 Store 只能收到真实 ID `happy`。
 - Corfu 必须能直接格式化普通候选与 `[New]` 候选，不得触发 `wrong-type-argument arrayp nil`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
 - 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。
