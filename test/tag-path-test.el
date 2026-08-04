@@ -309,25 +309,39 @@
 (ert-deftest tag-path-completion-does-not-commit-a-partial-prefix ()
   (tag-path-test--with-clean-store
     (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
     (with-temp-buffer
       (org-mode)
       (insert "#dia")
       (let* ((completion-styles '(basic))
              (capf (supertag-completion-at-point))
              (table (nth 2 capf))
+             (metadata (funcall table "dia" nil 'metadata))
+             (sorter (cdr (assq 'display-sort-function (cdr metadata))))
+             (affix (cdr (assq 'affixation-function (cdr metadata))))
              (exit (plist-get (nthcdr 3 capf) :exit-function))
              (candidates (all-completions "dia" table))
-             (plain (mapcar #'substring-no-properties candidates))
+             (sorted (funcall sorter candidates))
+             (visible (mapcar
+                       (lambda (candidate)
+                         (or (get-text-property 0 'new-tag-name candidate)
+                             (substring-no-properties candidate)))
+                       sorted))
+             (new (cadr sorted))
              committed
              create-if-needed)
         (should (equal "diary" (funcall table "dia" nil nil)))
         (should-not (funcall table "dia" nil 'lambda))
-        (should (equal '("diary" "dia") plain))
-        (should (get-text-property 0 'is-new-tag (cadr candidates)))
+        (should (equal '("diary" "dia" "diary/happy") visible))
+        (should (get-text-property 0 'is-new-tag new))
+        (should-not (equal "dia" (substring-no-properties new)))
+        (should (equal "dia"
+                       (substring-no-properties
+                        (car (car (funcall affix (list new)))))))
         (cl-letf (((symbol-function
                     'supertag-completion--post-completion-action)
                    (lambda (_) (setq committed t))))
-          (funcall exit (cadr candidates) nil))
+          (funcall exit new nil))
         (should-not committed)
         (insert " ")
         (cl-letf (((symbol-function 'supertag-ops-add-tag-to-node)
@@ -343,10 +357,10 @@
                      (setq create-if-needed
                            (plist-get args :create-if-needed))
                      t)))
-          (supertag-completion--post-completion-action (cadr candidates))
+          (supertag-completion--post-completion-action new)
           (should create-if-needed)
           (setq create-if-needed 'unset)
-          (supertag-completion--post-completion-action (car candidates)))
+          (supertag-completion--post-completion-action (car sorted)))
         (should-not create-if-needed)))))
 
 (ert-deftest tag-path-capf-filters-unrelated-root-tags-below-namespace ()

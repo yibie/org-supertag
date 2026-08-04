@@ -172,6 +172,14 @@ task021 验收：
 - focused ERT 22/22、completion self-check、全量 ERT 354/354、byte compile、
   `check-parens`、`git diff --check` 通过；仓库无 `.elc`。
 
+task022 验收：
+- 捕获真实 Corfu state：旧顺序为 `diar [New]`、`diary`、children，证明 batch
+  枚举未覆盖 Corfu 最后的 exact-candidate 置顶。
+- 新候选使用不可见的 non-exact marker，display sorter 输出 `diary`、`dia [New]`、
+  children；affixation 与 exit 分别在显示和写入前移除 marker。
+- focused ERT 22/22、completion self-check、真实 `corfu--compute`/formatter 通过；
+  full ERT、byte compile、`check-parens`、`git diff --check` 通过。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
@@ -184,4 +192,6 @@ task021 验收：
 - 2026-08-03：实机指出输入父级 `diary` 无法渐进发现子标签；进入 task020。
 - 2026-08-03：实机发现 `#dia` 被当作默认新 Tag 写入，并明确要求新 Tag 只能通过
   completion 的 `[New]` 注册；进入 task021。
+- 2026-08-04：实机确认 Corfu 最终仍把 `[New]` 放第一行，要求真实补全项第一、
+  `[New]` 第二；进入 task022。
 - 端到端实现结果验收：Pending

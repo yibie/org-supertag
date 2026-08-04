@@ -156,7 +156,11 @@ Returns tag data, or nil if it does not exist."
   "Display CANDIDATES with parent paths without changing their Tag IDs."
   (mapcar
    (lambda (candidate)
-     (let* ((id (substring-no-properties candidate))
+     (let* ((new-name (get-text-property 0 'new-tag-name candidate))
+            (id (or new-name (substring-no-properties candidate)))
+            (display (if new-name
+                         (substring candidate 0 (length new-name))
+                       candidate))
             (path (supertag-tag-display-path id))
             (prefix (if (string-suffix-p id path)
                         (substring path 0 (- (length path) (length id)))
@@ -164,7 +168,7 @@ Returns tag data, or nil if it does not exist."
             (suffix (if (get-text-property 0 'is-new-tag candidate)
                         (propertize "  [New]" 'face 'warning)
                       "")))
-       (list candidate prefix suffix)))
+       (list display prefix suffix)))
    candidates))
 
 (defun supertag-tag-update (id updater)

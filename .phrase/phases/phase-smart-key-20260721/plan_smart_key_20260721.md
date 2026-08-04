@@ -23,6 +23,7 @@
 19. 收紧 affixation 协议：三列始终返回字符串，并用真实 Corfu formatter 验证普通与新建候选。
 20. 为父链增加只读 completion alias，使输入父级可渐进枚举子标签；退出时在任何同步/写入前还原真实 ID。
 21. 将 `[New]` 设为行内 completion 唯一的新 Tag 注册入口；普通前缀、取消与分隔符不创建实体。
+22. 绕开 Corfu 的 exact-candidate 置顶，把已有补全项固定为第一行、`[New]` 固定为第二行。
 
 ## Scope
 

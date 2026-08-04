@@ -46,7 +46,7 @@
 12. 用户启动 Emacs 时已经恢复的 Org buffer，在 org-supertag 延迟加载完成后自动恢复 inline tag SVG，无需重开文件。
 13. 行内 CAPF 与 Add/Change/Capture/Tag Field 等入口都可按叶子 ID 直接搜索，并使用同一父链展示。
 14. 用户写入 `#ai_suggestions` 后同步，Store 保留完整 ID；重扫后可通过 `M-x supertag-cleanup-orphaned-tags` 逐项选择旧孤立 Tag，确认前不修改数据。
-15. 用户输入 `#dia` 时，已有 `diary` 与其子标签排在 `dia [New]` 前；只有明确选中 `[New]` 才注册 `dia`。
+15. 用户输入 `#dia` 时，`diary` 排第一、`dia [New]` 排第二，之后才是其余匹配项；只有明确选中 `[New]` 才注册 `dia`。
 
 ## Edge Cases
 
@@ -92,7 +92,7 @@
 - 延迟加载完成后，现存 Org buffer 的 `supertag-view-style-mode` 自动开启；非 Org buffer 不受影响。
 - completion 的 basic 与 `action=t` 枚举都能用 `happy` 命中真实 ID，并把 `diary/` 作为 affixation 前缀；只有新 ID 显示 `[New]`。
 - completion 输入 `diary` 与 `diary/` 时必须枚举父链匹配的子标签；选中展示别名后，Org 与 Store 只能收到真实 ID `happy`。
-- completion 输入 `dia` 时，try-completion 必须推进到 `diary`；`dia [New]` 保留为末尾显式动作，且只有该候选可传入 `:create-if-needed t`。
+- completion 输入 `dia` 时，try-completion 必须推进到 `diary`；`dia [New]` 固定为第二项，且只有该候选可传入 `:create-if-needed t`。
 - Corfu 必须能直接格式化普通候选与 `[New]` 候选，不得触发 `wrong-type-argument arrayp nil`。
 - 原始 Tag token 必须在已解析的非透明 Org object 起点截断；sub/superscript 只保留 `_`/`^` 原文，不能隐藏其内部或紧邻的 link/code 边界。
 - 同步、face/SVG 与 Smart Key point lookup 必须调用同一个 range-aware matcher；`#outer[[...]]` 在三条路径中都只能产生 `outer`。

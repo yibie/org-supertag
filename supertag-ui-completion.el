@@ -134,13 +134,27 @@ Handles edge cases: cursor right after # (empty prefix), mid-word, etc."
   "Attach Tag identity to CANDIDATE."
   (propertize candidate 'supertag-tag-id candidate))
 
+(defun supertag-completion--display-sort (candidates)
+  "Place `[New]' after the first existing item in CANDIDATES."
+  (let ((new (cl-find-if
+              (lambda (candidate)
+                (get-text-property 0 'is-new-tag candidate))
+              candidates)))
+    (if (not new)
+        candidates
+      (let ((existing (delq new (copy-sequence candidates))))
+        (if existing
+            (cons (car existing) (cons new (cdr existing)))
+          (list new))))))
+
 (defun supertag-completion--get-completion-table (prefix)
   "Return the candidate list for PREFIX.
 The list contains every real Tag so users can search directly by leaf.
 Parent chains affect display only; selecting a candidate keeps its real
 Tag ID.  A valid PREFIX that is not stored is included as a new-Tag
 candidate carrying `is-new-tag' and `new-tag-name' properties.  The
-candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
+new candidate has a hidden final marker so completion UIs cannot treat
+unfinished input as an exact match; `[New]' comes from CAPF metadata."
   (let* ((safe-prefix (or prefix ""))
          (node-id (org-id-get))
          (current-tags (when node-id (supertag-completion--get-node-tags node-id)))
@@ -172,9 +186,13 @@ candidate string remains the Tag ID; `[New]' comes from CAPF metadata."
                              (not (member safe-prefix all-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new
-        (let ((new-cand (propertize safe-prefix
-                                    'is-new-tag t
-                                    'new-tag-name safe-prefix)))
+        (let ((new-cand (concat safe-prefix "\u200b")))
+          (add-text-properties
+           0 (length new-cand)
+           (list 'is-new-tag t 'new-tag-name safe-prefix)
+           new-cand)
+          (put-text-property (1- (length new-cand)) (length new-cand)
+                             'display "" new-cand)
           ;; Creation is an explicit fallback, never the default match.
           (append available-tags (list new-cand)))
       available-tags)))
@@ -185,6 +203,7 @@ Display aliases are replaced with their real Tag ID before any write."
   (let* ((is-new (get-text-property 0 'is-new-tag selected-string))
          (selected-name (substring-no-properties selected-string))
          (tag-name (or (get-text-property 0 'supertag-tag-id selected-string)
+                       (get-text-property 0 'new-tag-name selected-string)
                        selected-name))
          (node-id (org-id-get-create)))
     (when (and (supertag-tag-path-valid-p tag-name) node-id)
@@ -250,7 +269,7 @@ Display aliases are replaced with their real Tag ID before any write."
                  ((eq action 'metadata)
                   '(metadata
                     (category . supertag-tag)
-                    (display-sort-function . identity)
+                    (display-sort-function . supertag-completion--display-sort)
                     (cycle-sort-function . identity)
                     (affixation-function . supertag-tag-affixate-candidates)
                     (company-kind . (lambda (cand)

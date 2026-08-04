@@ -110,3 +110,8 @@
   - 产出：已有匹配优先于 `[New]`；新 Tag 只有选中 `[New]` 才允许 `:create-if-needed`
   - 验证方式：focused ERT 锁定 `#dia` → `diary`、取消/空格零创建、显式 `[New]` 创建；真实 Corfu 候选顺序、全量 ERT、静态检查
   - 影响范围：仅收紧行内 completion 的交互写入边界；已有 Tag 关联与后台文件同步语义不变
+
+- task022 [x] 将 `[New]` 固定在首个真实补全项之后
+  - 产出：避免 Corfu exact-candidate 强制置顶；共享 display sorter 将 `[New]` 放第二行，选中后移除内部显示标记
+  - 验证方式：真实 `corfu--compute` 候选顺序与 formatter、focused/full ERT、completion self-check、静态检查
+  - 影响范围：仅改变行内 completion 的候选排序；Tag ID、创建权限与 Store 数据不变

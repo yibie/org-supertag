@@ -1,5 +1,14 @@
 # change_smart_key_20260721
 
+- 2026-08-04 Fix
+  - Files: `supertag-ui-completion.el`, `supertag-ops-tag.el`, completion regressions, task022 phase/docs
+  - Functions: new-candidate encoding, completion display sorting and Tag affixation
+  - Changes: real matches stay first and `[New]` is second even after Corfu's exact/prefix promotion; the hidden internal marker is removed before display and insertion.
+  - Simplification: one zero-width internal discriminator plus one stable three-line ordering rule; no Corfu advice or user configuration mutation.
+  - Verification: focused ERT 22/22; completion self-check; live `corfu--compute` returned `diary`, `dia [New]`, then children; formatter passed; full ERT and static checks.
+  - Risk: completion UIs must preserve candidate text properties, which was already required for Tag identity and `[New]` behavior.
+  - Related: `issue009`, `task022`, follow-up to `6b6d837`
+
 - 2026-08-03 Fix
   - Files: `supertag-ui-completion.el`, completion regressions, task021 phase/docs
   - Functions: CAPF completion protocol, exit commit gate and boundary recording

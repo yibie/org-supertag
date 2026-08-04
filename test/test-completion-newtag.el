@@ -27,17 +27,15 @@
 
 (defun test-completion--drive-exit (status)
   "Simulate the UI committing the new-tag candidate at point.
-The candidate is the bare prefix \"newtag\" carrying `is-new-tag' +
-`display' properties. After commit, the buffer must contain exactly
-the bare tag name and no leaked label."
+The candidate carries `is-new-tag' plus a hidden non-exact marker.
+After commit, the buffer must contain exactly the bare tag name."
   (setq test-completion-added-tag nil)
   (with-temp-buffer
     (org-mode)
     (insert "* node\n")
     (insert "Some text #")
-    (let ((candidate (propertize "newtag"
-                                 'is-new-tag t
-                                 'new-tag-name "newtag")))
+    (let ((candidate
+           (car (supertag-completion--get-completion-table "newtag"))))
       (insert candidate)
       (funcall (plist-get (nthcdr 3 (supertag-completion-at-point))
                           :exit-function)
@@ -119,19 +117,23 @@ the bare tag name and no leaked label."
 
 (message "OK boundary hook skips unknown text, prose, and duplicates.")
 
-;;; --- 8. The new-tag candidate string is the BARE prefix. The
-;;;        "[New]" label is supplied by the metadata
-;;;        annotation-function, never living in the candidate string
-;;;        itself. This is what keeps corfu-preview-current 'insert
-;;;        from leaking the label into the buffer.
+;;; --- 8. The new-tag candidate has a hidden non-exact marker so Corfu
+;;;        cannot promote it ahead of real matches. Affixation still
+;;;        displays the bare prefix and metadata supplies [New].
 (advice-remove 'supertag-node-get #'ignore)
 (advice-add 'supertag-node-get :override
             (lambda (&rest _) '(:id "fake-node-id" :tags nil)))
 (let* ((cands (supertag-completion--get-completion-table "branding"))
        (first (car cands))
        (literal (substring-no-properties first)))
-  (cl-assert (string= literal "branding")
-             nil "candidate string must be bare prefix, got %S" literal)
+  (cl-assert (not (string= literal "branding"))
+             nil "new candidate must not be an exact completion")
+  (cl-assert
+   (string=
+    (substring-no-properties
+     (car (car (supertag-tag-affixate-candidates (list first)))))
+    "branding")
+   nil "candidate display must be the bare prefix")
   (cl-assert (get-text-property 0 'is-new-tag first)
              nil "candidate missing 'is-new-tag property")
   (cl-assert (equal (get-text-property 0 'new-tag-name first) "branding")
