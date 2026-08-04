@@ -17,6 +17,7 @@
 (require 'supertag-view-helper)
 (require 'supertag-core-notify)
 (require 'supertag-view-api)
+(require 'supertag-view-framework)
 
 ;;; --- State Management ---
 
@@ -29,9 +30,6 @@ Contains :base-tag, :group-field, and :columns.")
 
 (defvar-local supertag-view-kanban--column-values nil
   "The ordered list of column values for the current view.")
-
-(defvar-local supertag-view-kanban--unsubscribe-fn nil
-  "The function to call to unsubscribe from updates.")
 
 ;;; --- Configuration ---
 
@@ -141,18 +139,35 @@ Returns the card as a list of strings, each correctly padded."
       (mapcar (lambda (line)
                 (propertize line
                             'node-id node-id
+                            'supertag-entity-id node-id
                             'base-tag (plist-get config :base-tag)
                             'group-field (plist-get config :group-field)))
               final-lines))))
 
-(defun supertag-view-kanban-render (config &optional node-to-focus)
-  "Render the Kanban board based on CONFIG using the old visual style."
-  (let* ((base-tag (plist-get config :base-tag))
+(defun supertag-view-kanban--build-view-state (input)
+  "Build render state from Runtime INPUT."
+  (let* ((config (or (plist-get input :config) input))
+         (base-tag (plist-get config :base-tag))
          (group-field (plist-get config :group-field))
          (nodes (supertag-view-kanban--query-nodes base-tag))
          (grouped-nodes (supertag-view-kanban--group-nodes-by-field nodes base-tag group-field)))
+    (list :config config
+          :nodes nodes
+          :grouped-nodes grouped-nodes
+          :column-values
+          (supertag-view-kanban--get-column-values grouped-nodes config)
+          :node-to-focus (plist-get input :node-to-focus))))
 
-    (setq-local supertag-view-kanban--column-values (supertag-view-kanban--get-column-values grouped-nodes config))
+(defun supertag-view-kanban--render-view (state)
+  "Render Kanban STATE in the current buffer."
+  (let* ((config (plist-get state :config))
+         (base-tag (plist-get config :base-tag))
+         (group-field (plist-get config :group-field))
+         (nodes (plist-get state :nodes))
+         (grouped-nodes (plist-get state :grouped-nodes))
+         (node-to-focus (plist-get state :node-to-focus)))
+    (setq-local supertag-view-kanban--column-values
+                (plist-get state :column-values))
     (let* ((column-values supertag-view-kanban--column-values)
            (column-width 40)
            (separator "  ")
@@ -225,6 +240,12 @@ Returns the card as a list of strings, each correctly padded."
         (goto-char (match-beginning 0))))
     (message "Kanban board rendered for tag '%s'" (plist-get supertag-view-kanban--config :base-tag))))
 
+(defun supertag-view-kanban-render (config &optional node-to-focus)
+  "Render the Kanban board based on CONFIG using the old visual style."
+  (supertag-view-kanban--render-view
+   (supertag-view-kanban--build-view-state
+    (list :config config :node-to-focus node-to-focus))))
+
 ;;; --- Interactive Operations ---
 
 (defun supertag-view-kanban--get-card-info ()
@@ -293,30 +314,70 @@ Returns plist with :node-id, :current-value, and other card info."
   (interactive)
   (re-search-backward "┌" nil t))
 
-;;; --- Reactive Updates ---
-
-(defun supertag-view-kanban--subscribe-updates ()
-  "Subscribe to node update events for reactive Kanban updates."
-  (setq-local supertag-view-kanban--unsubscribe-fn
-              (supertag-view-api-subscribe
-               :node-updated
-               (lambda (path _old-value _new-value)
-                 (when (and (listp path) (eq (car path) :nodes))
-                   (supertag-view-kanban-refresh))))))
-
-(defun supertag-view-kanban--unsubscribe-updates ()
-  "Unsubscribe from update events."
-  (when (functionp supertag-view-kanban--unsubscribe-fn)
-    (funcall supertag-view-kanban--unsubscribe-fn)
-    (setq-local supertag-view-kanban--unsubscribe-fn nil)))
-
 ;;; --- Main Interface ---
+
+(defun supertag-view-kanban--buffer-name (input)
+  "Return the Kanban buffer name for Runtime INPUT."
+  (let* ((config (plist-get input :config))
+         (tag-name (or (plist-get input :tag-name)
+                       (plist-get config :base-tag))))
+    (format "*Supertag Kanban: %s by %s*"
+            tag-name (plist-get config :group-field))))
+
+(defun supertag-view-kanban--capture-selection ()
+  "Return the selected Kanban entity ID."
+  (or (get-text-property (point) 'supertag-entity-id)
+      (and (> (point) (point-min))
+           (get-text-property (1- (point)) 'supertag-entity-id))))
+
+(defun supertag-view-kanban--restore-selection (entity-id)
+  "Restore Kanban selection to ENTITY-ID when it still exists."
+  (when entity-id
+    (goto-char (point-min))
+    (when-let* ((match (text-property-search-forward
+                        'supertag-entity-id entity-id t)))
+      (goto-char (prop-match-beginning match)))))
+
+(defun supertag-view-kanban--subscribe-view (_input _state refresh)
+  "Subscribe the Kanban Adapter and call REFRESH for relevant changes."
+  (supertag-view-api-subscribe
+   :store-changed
+   (lambda (path _old-value _new-value)
+     (when (and (listp path)
+                (memq (car path)
+                      '(:nodes :fields :field-values :tags
+                        :field-definitions :tag-field-associations)))
+       (funcall refresh)))))
+
+(defun supertag-view-kanban--register-view ()
+  "Register the Kanban Adapter when needed."
+  (unless (supertag-view-get 'kanban)
+    (supertag-view-register
+     :id 'kanban
+     :name "Kanban"
+     :runtime t
+     :selectable nil
+     :buffer-name-fn #'supertag-view-kanban--buffer-name
+     :mode-fn #'supertag-view-kanban-mode
+     :state-fn #'supertag-view-kanban--build-view-state
+     :render-fn #'supertag-view-kanban--render-view
+     :subscribe-fn #'supertag-view-kanban--subscribe-view
+     :capture-selection-fn #'supertag-view-kanban--capture-selection
+     :restore-selection-fn #'supertag-view-kanban--restore-selection
+     :display-action '(display-buffer-same-window))))
+
+(defun supertag-view-kanban-open (config &optional tag-name)
+  "Open a Runtime-managed Kanban for CONFIG and display TAG-NAME."
+  (supertag-view-kanban--register-view)
+  (supertag-view-open 'kanban (list :config config :tag-name tag-name)))
 
 (defun supertag-view-kanban-refresh (&optional node-to-focus)
   "Refresh the Kanban view with current data."
   (interactive)
   (when supertag-view-kanban--config
-    (supertag-view-kanban-render supertag-view-kanban--config node-to-focus)))
+    (if supertag-view--instance
+        (supertag-view-refresh (current-buffer))
+      (supertag-view-kanban-render supertag-view-kanban--config node-to-focus))))
 
 ;;; --- Mode Definition ---
 
@@ -336,13 +397,6 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
   "Major mode for Supertag Kanban board views."
   :keymap supertag-view-kanban-mode-map
   (setq buffer-read-only t))
-
-(defun supertag-view-kanban-cleanup ()
-  "Clean up Kanban view subscriptions."
-  (interactive)
-  (supertag-view-kanban--unsubscribe-updates))
-
-(add-hook 'kill-buffer-hook #'supertag-view-kanban-cleanup)
 
 (provide 'supertag-view-kanban)
 ;;; supertag-view-kanban.el ends here

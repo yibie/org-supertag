@@ -20,6 +20,7 @@
 (require 'supertag-view-helper)
 (require 'supertag-services-ui)
 (require 'supertag-view-api)
+(require 'supertag-view-framework)
 (declare-function supertag-view--resolve-node-tags "supertag-services-ui" (node-id))
 
 ;;; --- Variables ---
@@ -71,31 +72,105 @@ Point must be at an Org heading. when invoked from other modes."
    ;; Other modes: do not assume Org context; avoid calling Org-dependent helpers
    (t nil)))
 
+(defun supertag-view-node--display-buffer (buffer _alist)
+  "Display Node BUFFER using the configured side-window policy."
+  (let ((size-key (if (memq supertag-view-node-side '(left right))
+                      'window-width
+                    'window-height)))
+    (display-buffer-in-side-window
+     buffer
+     `((side . ,supertag-view-node-side)
+       (slot . 0)
+       (,size-key . ,supertag-view-node-side-size)))))
+
+(defun supertag-view-node--build-view-state (input)
+  "Build Node view state from Runtime INPUT."
+  (let ((node-id (plist-get input :node-id)))
+    (or (and node-id (supertag-view-build-node-state node-id))
+        (list :id node-id :node nil))))
+
+(defun supertag-view-node--render-view (state)
+  "Render Node view STATE in the current buffer."
+  (if (plist-get state :node)
+      (supertag-view-node--render-from-state state)
+    (let ((inhibit-read-only t)
+          (node-id (plist-get state :id)))
+      (erase-buffer)
+      (setq supertag-view-node--current-node-id nil)
+      (when node-id
+        (insert (format "Node %s not found." node-id)))
+      (goto-char (point-min)))))
+
+(defun supertag-view-node--capture-selection ()
+  "Return the current Node field selection."
+  (supertag-view-node--get-context-at-point))
+
+(defun supertag-view-node--restore-selection (selection)
+  "Restore opaque Node field SELECTION."
+  (let ((tag-id (plist-get selection :tag-id))
+        (field-name (plist-get selection :field-name)))
+    (unless (and tag-id field-name
+                 (supertag-view-node--goto-field-in-buffer
+                  (current-buffer) tag-id field-name))
+      (supertag-view-node--goto-first-field))))
+
+(defun supertag-view-node--subscribe-view (input _state refresh)
+  "Subscribe Node view INPUT and return all cleanup callbacks."
+  (let* ((origin (plist-get input :follow-buffer))
+         (unsubscribe
+          (supertag-view-api-subscribe
+           :store-changed
+           (lambda (path _old-value _new-value)
+             (when (and (listp path)
+                        (memq (car path)
+                              '(:nodes :relations :fields :field-values)))
+               (funcall refresh)))))
+         (follow-local-p
+          (and (buffer-live-p origin) (not supertag-view-node-auto-show))))
+    (when follow-local-p
+      (with-current-buffer origin
+        (add-hook 'post-command-hook #'supertag-view-node--post-command nil t)))
+    (list unsubscribe
+          (lambda ()
+            (when (and follow-local-p (buffer-live-p origin))
+              (with-current-buffer origin
+                (remove-hook 'post-command-hook
+                             #'supertag-view-node--post-command t)))))))
+
+(defun supertag-view-node--register-view ()
+  "Register the Node Adapter when needed."
+  (unless (supertag-view-get 'node)
+    (supertag-view-register
+     :id 'node
+     :name "Node"
+     :runtime t
+     :selectable nil
+     :buffer-name supertag-view-node--buffer-name
+     :mode-fn #'supertag-view-node-mode
+     :state-fn #'supertag-view-node--build-view-state
+     :render-fn #'supertag-view-node--render-view
+     :subscribe-fn #'supertag-view-node--subscribe-view
+     :capture-selection-fn #'supertag-view-node--capture-selection
+     :restore-selection-fn #'supertag-view-node--restore-selection
+     :display-action '(supertag-view-node--display-buffer))))
+
 (defun supertag-view-node--show-side (&optional node-id)
   "Show node view as a side window and enable follow."
   (setq supertag-view-node--enabled t)
   (setq supertag-view-node--last-entity-id nil)
-  (let* ((buf (or (supertag-view-node--buffer) (get-buffer-create supertag-view-node--buffer-name)))
-         (target-id (or node-id (supertag-view-node--current-entity-id)))
-         (side supertag-view-node-side)
-         (size supertag-view-node-side-size)
-         (param (if (memq side '(left right))
-                    `((side . ,side) (slot . 0) (window-width . ,size))
-                  `((side . ,side) (slot . 0) (window-height . ,size)))))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t)) (erase-buffer))
-      (supertag-view-node-mode)
-      (when (fboundp 'evil-local-mode) (ignore-errors (evil-local-mode -1)))
-      (when target-id (supertag-view-node--render target-id)))
-    (display-buffer-in-side-window buf param)
-    (add-hook 'post-command-hook #'supertag-view-node--post-command nil t)))
+  (let ((target-id (or node-id (supertag-view-node--current-entity-id)))
+        (origin (current-buffer)))
+    (supertag-view-node--register-view)
+    (supertag-view-open
+     'node (list :node-id target-id :follow-buffer origin))))
 
 (defun supertag-view-node--hide-side ()
   "Hide the side window and disable follow."
   (interactive)
   (setq supertag-view-node--enabled nil)
-  (remove-hook 'post-command-hook #'supertag-view-node--post-command t)
   (when-let ((buf (supertag-view-node--buffer)))
+    (with-current-buffer buf
+      (supertag-view--cleanup-instance))
     (dolist (win (get-buffer-window-list buf nil t))
       (when (window-live-p win) (delete-window win)))))
 
@@ -108,8 +183,15 @@ Point must be at an Org heading. when invoked from other modes."
         (when eid
           (when-let ((buf (supertag-view-node--buffer)))
             (with-current-buffer buf
-              (let ((inhibit-read-only t)) (erase-buffer))
-              (supertag-view-node--render eid))))))))
+              (if supertag-view--instance
+                  (progn
+                    (setf (plist-get supertag-view--instance :input)
+                          (plist-put
+                           (copy-sequence
+                            (plist-get supertag-view--instance :input))
+                           :node-id eid))
+                    (supertag-view-refresh buf))
+                (supertag-view-node--render eid)))))))))
 
 (defun supertag-view-node-ensure-shown ()
   "Ensure the Node View side window is visible and following."
@@ -255,49 +337,9 @@ Key Bindings:
   ;; Ensure Evil does not take over this buffer: disable Evil locally if available.
   (when (fboundp 'evil-local-mode)
     (ignore-errors (evil-local-mode -1)))
-  ;; Line highlighting disabled to prevent cursor movement flickering
-  ;; (supertag-view-helper-enable-line-highlighting)
-
-  ;; Subscribe to store changes for auto-refresh
-  (supertag-view-node--subscribe-to-events))
-
-;;; --- Event Subscription ---
-
-(defun supertag-view-node--subscribe-to-events ()
-  "Subscribe to store events for auto-refresh.
-This implements the correct separation: data layer emits events, UI subscribes."
-  (when (fboundp 'supertag-view-api-subscribe)
-    ;; Subscribe to store changes
-    (supertag-view-api-subscribe :store-changed #'supertag-view-node--handle-store-change)))
-
-(defun supertag-view-node--handle-store-change (path old-value new-value)
-  "Handle store change events and refresh if relevant.
-PATH is the change path, e.g., (:nodes node-id) or (:relations rel-id).
-OLD-VALUE is the value before change (used for deletions).
-NEW-VALUE is the value after change (nil for deletions)."
-  (when (and supertag-view-node--current-node-id
-             (listp path)
-             (>= (length path) 2))
-    (let* ((entity-type (car path))
-           (entity-id (cadr path))
-           ;; For relations, use new-value if available, otherwise use old-value
-           ;; This is critical for detecting deletions!
-           (relation-data (when (eq entity-type :relations)
-                           (or new-value old-value))))
-      ;; Refresh if:
-      ;; 1. The changed entity is the current node
-      ;; 2. The changed entity is a relation involving the current node (create/update/delete)
-      ;; 3. The changed entity is a field of the current node
-      (when (or (and (eq entity-type :nodes)
-                     (equal entity-id supertag-view-node--current-node-id))
-                (and (eq entity-type :relations)
-                     relation-data
-                     (or (equal (plist-get relation-data :from) supertag-view-node--current-node-id)
-                         (equal (plist-get relation-data :to) supertag-view-node--current-node-id)))
-                (and (memq entity-type '(:fields :field-values))
-                     (equal entity-id supertag-view-node--current-node-id)))
-        ;; Refresh after a short delay to batch multiple rapid changes
-        (run-with-idle-timer 0.1 nil #'supertag-view-node-refresh)))))
+  ;; Line highlighting disabled to prevent cursor movement flickering.
+  ;; Runtime owns Store subscriptions and cleanup.
+  )
 
 ;;; --- Helper Functions ---
 
@@ -383,13 +425,16 @@ Only strips keywords if `supertag-view-node-strip-todo-keywords' is non-nil."
          (field-count (supertag-view-node--count-fields node-id))
          (ref-count (+ (length (supertag-view-node--get-references node-id))
                        (length (supertag-view-node--get-referenced-by node-id))))
-         (stats (format "⚡ %d fields | 🔗 %d refs" field-count ref-count)))
+         (stats (format "⚡ %d fields | 🔗 %d refs" field-count ref-count))
+         (start (point)))
     (supertag-view-helper-insert-simple-header
      (format "📄 %s" (supertag-view-helper-render-org-links title))
      stats)
     (when file
       (insert (propertize (format "📁 %s\n\n" (file-name-nondirectory file))
-                          'face `(:foreground ,(supertag-view-helper-get-muted-color) :slant italic))))))
+                          'face `(:foreground ,(supertag-view-helper-get-muted-color) :slant italic))))
+    (add-text-properties start (point)
+                         `(supertag-entity-id ,node-id))))
 
 ;;; --- Rendering Functions ---
 
@@ -602,22 +647,8 @@ STATE 应由 `supertag-view-build-node-state' 构造，只包含数据，不做�
 
 (defun supertag-view-node--render (node-id)
   "Render a simple, clean view for NODE-ID."
-  (let ((state (supertag-view-build-node-state node-id)))
-    (if (not state)
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (setq supertag-view-node--current-node-id nil)
-          (insert (format "Node %s not found." node-id))
-          (goto-char (point-min)))
-      ;; 首选：如果 View Table 的 node-detail layout 可用，则通过 layout 渲染。
-      (if (and (fboundp 'supertag-view-table--build-node-detail-state)
-               (fboundp 'supertag-view-table-render))
-          (let ((table-state (supertag-view-table--build-node-detail-state node-id)))
-            (if table-state
-                (supertag-view-table-render 'node-detail table-state)
-              (supertag-view-node--render-from-state state)))
-        ;; 回退方案：直接使用本地渲染函数。
-        (supertag-view-node--render-from-state state)))))
+  (supertag-view-node--render-view
+   (supertag-view-node--build-view-state (list :node-id node-id))))
 
 ;;; --- Link Activation ---
 
@@ -786,17 +817,20 @@ Falls back to beginning of buffer when no field is found."
 (defun supertag-view-node--refresh-view ()
   "Refresh side-window content, preserving scroll position."
   (when-let ((buf (supertag-view-node--buffer)))
-    (let ((eid (or supertag-view-node--current-node-id
-                   (supertag-view-node--current-entity-id))))
-      (when eid
-        (with-current-buffer buf
-          (let* ((saved-context (supertag-view-node--get-context-at-point))
-                 (saved-tag (plist-get saved-context :tag-id))
-                 (saved-field (plist-get saved-context :field-name)))
-            (supertag-view-node--render eid)
-            (unless (and saved-tag saved-field
-                         (supertag-view-node--goto-field-in-buffer buf saved-tag saved-field))
-              (supertag-view-node--goto-first-field))))))))
+    (with-current-buffer buf
+      (if supertag-view--instance
+          (supertag-view-refresh buf)
+        (let ((eid (or supertag-view-node--current-node-id
+                       (supertag-view-node--current-entity-id))))
+          (when eid
+            (let* ((saved-context (supertag-view-node--get-context-at-point))
+                   (saved-tag (plist-get saved-context :tag-id))
+                   (saved-field (plist-get saved-context :field-name)))
+              (supertag-view-node--render eid)
+              (unless (and saved-tag saved-field
+                           (supertag-view-node--goto-field-in-buffer
+                            buf saved-tag saved-field))
+                (supertag-view-node--goto-first-field)))))))))
 
 
 ;;; --- Commands ---

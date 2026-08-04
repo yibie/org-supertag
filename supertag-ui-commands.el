@@ -24,8 +24,6 @@
 ;; Forward declarations for view-node
 (declare-function supertag-view-node--buffer "supertag-view-node" ())
 (declare-function supertag-view-node--show-side "supertag-view-node" (&optional node-id))
-(declare-function supertag-view-node--render "supertag-view-node" (node-id))
-(declare-function supertag-view-node--render-from-state "supertag-view-node" (state))
 (declare-function supertag-view-node--focus-view "supertag-view-node" ())
 (declare-function supertag-view-node--goto-field "supertag-view-node" (&optional tag-id field-name))
 (declare-function supertag-view-node-edit-at-point "supertag-view-node" ())
@@ -189,14 +187,9 @@ file-level before any heading."
           (let* ((field-name (completing-read "Group columns by which field: " field-names nil t))
                  (config (supertag-view-kanban-create-config tag-id field-name)))
             (when field-name
-              (let* ((buf-name (format "*Supertag Kanban: %s by %s*" tag-name-from-data field-name))
-                     (buf (get-buffer-create buf-name)))
-                (with-current-buffer buf
-                  (supertag-view-kanban-mode)
-                  (supertag-view-kanban-render config)
-                  (supertag-view-kanban--subscribe-updates))
-                (switch-to-buffer buf)
-                (message "Kanban board created for tag '%s' grouped by '%s'" tag-name-from-data field-name)))))))))
+              (supertag-view-kanban-open config tag-name-from-data)
+              (message "Kanban board created for tag '%s' grouped by '%s'"
+                       tag-name-from-data field-name))))))))
 
 
 ;;; --- Node Commands: Create, move, find, delete
@@ -1443,21 +1436,9 @@ For file nodes, appends to #+FILETAGS: line."
              (tag-id (car choice))
              (field-name (cdr choice)))
         (supertag-ui--ensure-node-synced node-id)
-        (unless (supertag-view-node--buffer)
-          (supertag-view-node--show-side node-id))
-        (let ((buf (or (supertag-view-node--buffer)
-                       (progn (supertag-view-node--show-side node-id)
-                              (supertag-view-node--buffer)))))
-          (with-current-buffer buf
-            (if (fboundp 'supertag-view-build-node-state)
-                (let ((state (supertag-view-build-node-state node-id)))
-                  (if state
-                      (supertag-view-node--render-from-state state)
-                    (supertag-view-node--render node-id)))
-              (supertag-view-node--render node-id))
-            (setq supertag-view-node--current-node-id node-id))
-          (supertag-view-node--focus-view)
-          (when (supertag-view-node--goto-field tag-id field-name)
-            (supertag-view-node-edit-at-point)))))))
+        (supertag-view-node--show-side node-id)
+        (supertag-view-node--focus-view)
+        (when (supertag-view-node--goto-field tag-id field-name)
+          (supertag-view-node-edit-at-point))))))
 
 (provide 'supertag-ui-commands)

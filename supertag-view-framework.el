@@ -44,7 +44,15 @@ View definition plist structure:
   :description  - Optional description (string)
   :category     - Optional category (symbol)
   :render-fn    - Function to render the view (required)
-  :valid-for    - List of tag names this view applies to, or nil for all")
+  :valid-for    - List of tag names this view applies to, or nil for all
+  :runtime      - Non-nil when the view uses `supertag-view-open'
+  :selectable   - Nil hides an internal Adapter from the custom-view picker
+  :buffer-name / :buffer-name-fn - Runtime buffer naming
+  :mode-fn      - Runtime major-mode installer
+  :state-fn     - Build refreshable state from the original input
+  :display-action - Native `display-buffer' action
+  :subscribe-fn - Return cleanup callbacks for Runtime-owned resources
+  :capture-selection-fn / :restore-selection-fn - Refresh position hooks")
 
 (defvar supertag-view--rendering-view-id nil
   "Dynamic var: current view id while rendering.")
@@ -63,6 +71,9 @@ View definition plist structure:
 
 (defvar-local supertag-view--buffer-context-builder nil
   "Buffer-local context builder for refresh.")
+
+(defvar-local supertag-view--instance nil
+  "Buffer-local View Runtime instance plist.")
 
 ;; ============================================================================
 ;; Core API
@@ -91,6 +102,11 @@ Optional properties:
   :description - Description string
   :category    - Category symbol (e.g., :project-management)
   :valid-for   - List of tag names, or nil for all tags
+  :runtime     - Non-nil for Runtime-managed views
+  :selectable  - Nil to hide an internal Adapter from the view picker
+  :buffer-name or :buffer-name-fn - Runtime buffer naming
+  :mode-fn, :state-fn, :display-action, :subscribe-fn
+  :capture-selection-fn, :restore-selection-fn
 
 Example:
   (supertag-view-register
@@ -137,6 +153,67 @@ Returns the removed view definition, or nil if not found."
 Returns the view plist, or nil if not found."
   (gethash id supertag--view-registry))
 
+(defun supertag-view--cleanup-instance ()
+  "Clean the current buffer's View Runtime instance."
+  (when supertag-view--instance
+    (let ((cleanup-fns (plist-get supertag-view--instance :cleanup-fns))
+          first-error)
+      (setq supertag-view--instance nil)
+      (dolist (cleanup cleanup-fns)
+        (condition-case err
+            (funcall cleanup)
+          (error
+           (unless first-error
+             (setq first-error err)))))
+      (when first-error
+        (message "View cleanup failed: %s"
+                 (error-message-string first-error))))))
+
+(defun supertag-view-open (id input &optional display-action)
+  "Open registered view ID with INPUT through the View Runtime."
+  (let ((view (supertag-view-get id)))
+    (unless view
+      (user-error "Unknown view: %s" id))
+    (let* ((state-fn (plist-get view :state-fn))
+           (state (if state-fn (funcall state-fn input) input))
+           (buffer-name-fn (plist-get view :buffer-name-fn))
+           (buffer-name
+            (cond
+             (buffer-name-fn (funcall buffer-name-fn input))
+             ((plist-get view :buffer-name))
+             (t (format "*View: %s*" (plist-get view :name)))))
+           (buffer (get-buffer-create buffer-name))
+           (mode-fn (or (plist-get view :mode-fn) #'special-mode))
+           (subscribe-fn (plist-get view :subscribe-fn)))
+      (condition-case err
+          (progn
+            (with-current-buffer buffer
+              (supertag-view--cleanup-instance)
+              (funcall mode-fn)
+              (add-hook 'kill-buffer-hook #'supertag-view--cleanup-instance nil t)
+              (let ((inhibit-read-only t))
+                (funcall (plist-get view :render-fn) state))
+              (setq-local supertag-view--instance
+                          (list :view-id id :input input :state state
+                                :cleanup-fns nil))
+              (when subscribe-fn
+                (let ((cleanup
+                       (funcall subscribe-fn input state
+                                (lambda (&rest _event)
+                                  (when (buffer-live-p buffer)
+                                    (with-current-buffer buffer
+                                      (supertag-view-refresh)))))))
+                  (setf (plist-get supertag-view--instance :cleanup-fns)
+                        (if (functionp cleanup) (list cleanup) cleanup)))))
+            (display-buffer buffer (or display-action
+                                       (plist-get view :display-action)))
+            buffer)
+        (error
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (supertag-view--cleanup-instance)))
+         (signal (car err) (cdr err)))))))
+
 (defun supertag-view-list ()
   "List all registered views.
 Returns a list of view definition plists sorted by name."
@@ -154,8 +231,10 @@ If a view has :valid-for nil, it applies to all tags."
   (cl-remove-if-not
    (lambda (view)
      (let ((valid-for (plist-get view :valid-for)))
-       (or (null valid-for)
-           (member tag-name valid-for))))
+       (and (not (and (plist-member view :selectable)
+                      (null (plist-get view :selectable))))
+            (or (null valid-for)
+                (member tag-name valid-for)))))
    (supertag-view-list)))
 
 (defun supertag-view-render (id context)
@@ -325,9 +404,11 @@ Returns DEFAULT if not found or error."
                                :key (lambda (v) (plist-get v :name))
                                :test #'string=)))
         (when selected
-          (let ((id (plist-get selected :id)))
-            (supertag-view-render id
-                                 (supertag-view--build-context query))))))))
+          (let ((id (plist-get selected :id))
+                (context (supertag-view--build-context query)))
+            (if (plist-get selected :runtime)
+                (supertag-view-open id context)
+              (supertag-view-render id context))))))))
 
 (defun supertag-view-select-from-schema ()
   "Select and render a view from Schema View."
@@ -401,9 +482,8 @@ Returns DEFAULT if not found or error."
           (princ "\n")))))
   (pop-to-buffer "*Supertag Views*"))
 
-(defun supertag-view-refresh ()
-  "Refresh current view buffer."
-  (interactive)
+(defun supertag-view--refresh-legacy ()
+  "Refresh the current legacy view buffer."
   (unless supertag-view--buffer-view-id
     (user-error "Not in a view buffer"))
   (let* ((builder (or supertag-view--buffer-context-builder
@@ -420,6 +500,35 @@ Returns DEFAULT if not found or error."
         (supertag-view-render supertag-view--buffer-view-id context)
       (error
        (message "View refresh failed: %s" (error-message-string err))))))
+
+(defun supertag-view--refresh-instance ()
+  "Refresh the current buffer's View Runtime instance."
+  (let* ((view-id (plist-get supertag-view--instance :view-id))
+         (view (supertag-view-get view-id)))
+    (unless view
+      (user-error "Unknown view: %s" view-id))
+    (let* ((input (plist-get supertag-view--instance :input))
+           (state-fn (plist-get view :state-fn))
+           (capture-fn (plist-get view :capture-selection-fn))
+           (restore-fn (plist-get view :restore-selection-fn))
+           (selection (when capture-fn (funcall capture-fn)))
+           (state (if state-fn (funcall state-fn input) input)))
+      (let ((inhibit-read-only t))
+        (funcall (plist-get view :render-fn) state))
+      (setf (plist-get supertag-view--instance :state) state)
+      (when restore-fn
+        (funcall restore-fn selection)))))
+
+(defun supertag-view-refresh (&optional buffer)
+  "Refresh BUFFER or the current view buffer."
+  (interactive)
+  (let ((target (or buffer (current-buffer))))
+    (unless (buffer-live-p target)
+      (user-error "View buffer is not live"))
+    (with-current-buffer target
+      (if supertag-view--instance
+          (supertag-view--refresh-instance)
+        (supertag-view--refresh-legacy)))))
 
 ;; ============================================================================
 ;; Configuration Persistence
@@ -895,17 +1004,35 @@ Widget definition:
          (tag (plist-get config :tag))
          (widgets (plist-get config :widgets)))
 
-    ;; Create render function from widgets
-    (let ((render-fn (lambda (context)
-                       (let ((tag (plist-get context :tag)))
-                         (supertag-view--with-buffer name tag
-                           (supertag-view--render-widgets widgets context))))))
+    ;; Create a Runtime renderer from widgets.
+    (let ((render-fn
+           (lambda (context)
+             (erase-buffer)
+             (let ((supertag-view--rendering-view-id id)
+                   (supertag-view--rendering-context context)
+                   (supertag-view--rendering-context-builder
+                    (supertag-view--context-builder-from-context context)))
+               (supertag-view--render-widgets widgets context))
+             (goto-char (point-min))))
+          (state-fn
+           (lambda (context)
+             (if-let* ((builder
+                        (supertag-view--context-builder-from-context context)))
+                 (funcall builder)
+               context))))
 
       ;; Register the view
       (supertag-view-register
        :id id
        :name name
+       :runtime t
+       :buffer-name-fn
+       (lambda (context)
+         (format "*View: %s - %s*" name (plist-get context :tag)))
+       :mode-fn #'special-mode
+       :state-fn state-fn
        :render-fn render-fn
+       :display-action '(display-buffer-pop-up-window)
        :valid-for (when tag (list tag)))
 
       ;; Also store config for persistence
@@ -944,11 +1071,10 @@ Widget definition:
 
 (defun supertag-view-framework-init ()
   "Initialize the view framework.
-Clears all registered views and stored configurations."
+Clears registered views and stored configurations."
   (interactive)
   (clrhash supertag--view-registry)
   (clrhash supertag--view-configs)
-  (clrhash supertag--widget-registry)
   (message "View framework initialized"))
 
 (provide 'supertag-view-framework)

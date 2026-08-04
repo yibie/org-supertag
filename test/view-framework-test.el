@@ -129,6 +129,18 @@
     (should (string= (plist-get (nth 1 list) :name) "View B"))
     (should (string= (plist-get (nth 2 list) :name) "View C"))))
 
+(ert-deftest test-view-list-for-tag-hides-runtime-only-adapters ()
+  "Runtime-only adapters must not appear in the custom view picker."
+  (view-framework-test--setup)
+  (supertag-view-register
+   :id 'visible-view :name "Visible" :render-fn #'ignore)
+  (supertag-view-register
+   :id 'hidden-adapter :name "Hidden" :render-fn #'ignore
+   :runtime t :selectable nil)
+  (should (equal (mapcar (lambda (view) (plist-get view :id))
+                         (supertag-view-list-for-tag "demo"))
+                 '(visible-view))))
+
 ;; Tests for rendering utilities
 (ert-deftest test-view-header ()
   "Test header insertion."

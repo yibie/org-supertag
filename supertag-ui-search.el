@@ -15,6 +15,7 @@
 (require 'org)
 (require 'supertag-core-store) ; For data access
 (require 'supertag-ops-node)
+(require 'supertag-view-framework)
 
 ;;; --- Search History Management ---
 
@@ -42,6 +43,9 @@
 
 (defvar-local supertag-search--marked-nodes nil
   "List of marked node IDs in the search buffer.")
+
+(defconst supertag-search--buffer-name "*Org SuperTag Search*"
+  "Name of the Search results buffer.")
 
 (defun supertag-search--load-history ()
   "Load search history from file."
@@ -300,38 +304,84 @@ Handles both time stamps (list) and date strings."
   (insert " [n/p] Navigate [SPC] Toggle Mark [RET] Visit Node [i] Insert Links\n")
   (insert " [e f] Export to File [e n] Export to New File [q] Quit\n\n"))
 
+(defun supertag-search--build-view-state (input)
+  "Build Search view state from INPUT."
+  (let ((keywords (plist-get input :keywords)))
+    (list :keywords keywords
+          :nodes (if (plist-member input :nodes)
+                     (plist-get input :nodes)
+                   (supertag-search-find-nodes keywords)))))
+
+(defun supertag-search--view-mode ()
+  "Install the Search results buffer modes."
+  (fundamental-mode)
+  (org-supertag-search-mode 1)
+  (setq-local supertag-search--marked-nodes nil))
+
+(defun supertag-search--render-view (state)
+  "Render Search view STATE in the current buffer."
+  (let ((keyword-list (plist-get state :keywords))
+        (nodes (plist-get state :nodes))
+        (card-width 80))
+    (erase-buffer)
+    (supertag-search-insert-header keyword-list nodes)
+    (if (not nodes)
+        (insert "  No matching nodes found.\n")
+      (dolist (result-pair nodes)
+        (let* ((node (car result-pair))
+               (context (cdr result-pair))
+               (node-id (plist-get node :id))
+               (card-lines (supertag-search--format-card
+                            node context card-width
+                            (member node-id supertag-search--marked-nodes)))
+               (start (point)))
+          (dolist (line card-lines)
+            (insert line "\n"))
+          (add-text-properties start (point)
+                               `(result-pair ,result-pair
+                                             node-id ,node-id
+                                             supertag-entity-id ,node-id))
+          (insert "\n"))))
+    (when nodes
+      (goto-char (point-min))
+      (re-search-forward "^┌" nil t)
+      (beginning-of-line)
+      (supertag-search-highlight-current))))
+
+(defun supertag-search--capture-selection ()
+  "Return the selected Search result entity ID."
+  (get-text-property (point) 'supertag-entity-id))
+
+(defun supertag-search--restore-selection (entity-id)
+  "Restore Search selection to ENTITY-ID when it still exists."
+  (when entity-id
+    (goto-char (point-min))
+    (when-let* ((match (text-property-search-forward
+                        'supertag-entity-id entity-id t)))
+      (goto-char (prop-match-beginning match))
+      (supertag-search-highlight-current))))
+
+(defun supertag-search--register-view ()
+  "Register the Search Adapter when needed."
+  (unless (supertag-view-get 'search)
+    (supertag-view-register
+     :id 'search
+     :name "Search"
+     :runtime t
+     :selectable nil
+     :buffer-name supertag-search--buffer-name
+     :mode-fn #'supertag-search--view-mode
+     :state-fn #'supertag-search--build-view-state
+     :render-fn #'supertag-search--render-view
+     :capture-selection-fn #'supertag-search--capture-selection
+     :restore-selection-fn #'supertag-search--restore-selection
+     :display-action '(display-buffer-same-window))))
+
 (defun supertag-search-show-results (keyword-list nodes)
   "Display search results in a card-based layout."
-  (let ((buf (get-buffer-create "*Org SuperTag Search*"))
-        (card-width 80))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (org-supertag-search-mode 1)
-        (setq-local supertag-search--marked-nodes nil)
-        (supertag-search-insert-header keyword-list nodes)
-        (if (not nodes)
-            (insert "  No matching nodes found.\n")
-          (dolist (result-pair nodes)
-            (let* ((node (car result-pair))
-                   (context (cdr result-pair))
-                   (node-id (plist-get node :id))
-                   (card-lines (supertag-search--format-card
-                                node context card-width
-                                (member node-id supertag-search--marked-nodes))))
-              (let ((start (point)))
-                (dolist (line card-lines)
-                  (insert line "\n"))
-                (add-text-properties start (point) `(result-pair ,result-pair
-                                                               node-id ,node-id)))
-              (insert "\n")))))
-      ;; Highlight first result
-      (when nodes
-        (goto-char (point-min))
-        (re-search-forward "^┌" nil t)
-        (beginning-of-line)
-        (supertag-search-highlight-current)))
-    (switch-to-buffer buf)))
+  (supertag-search--register-view)
+  (supertag-view-open 'search
+                      (list :keywords keyword-list :nodes nodes)))
 
 ;;; --- Navigation Functions ---
 
@@ -573,9 +623,9 @@ This is the main entry point for the renamed search functionality."
   ;; Load history
   (supertag-search--load-history)
 
-  (let* ((keywords (supertag-search--get-keywords))
-         (nodes (supertag-search-find-nodes keywords)))
-    (supertag-search-show-results keywords nodes)))
+  (let ((keywords (supertag-search--get-keywords)))
+    (supertag-search--register-view)
+    (supertag-view-open 'search (list :keywords keywords))))
 
 (provide 'supertag-ui-search)
 
