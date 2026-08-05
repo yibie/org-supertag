@@ -456,32 +456,24 @@ RAG 有三种模式：
 用 View Framework，我建了一个自定义仪表盘，在一个 buffer 里展示我关心的所有内容：
 
 #+begin_src emacs-lisp
-  ;; 定义自定义仪表盘视图
-  (define-supertag-view evening-review "晚间复盘仪表盘"
-    (tag "task")
-    ;; 区域 1：今天完成的任务
-    (insert (supertag-view-header "✅ 今日已完成"))
-    (dolist (node (supertag-query
-                   '(and (tag "task")
-                         (field "status" "done")
-                         (after "-1d"))))
-      (supertag-view-card node))
-    ;; 区域 2：明天的任务
-    (insert (supertag-view-header "📅 明日待办"))
-    (dolist (node (supertag-query
-                   '(and (tag "task")
-                         (field "due" ,(format-time-string "%Y-%m-%d"
-                                          (time-add (current-time) (days-to-time 1)))))))
-      (supertag-view-card node))
-    ;; 区域 3：待读论文
-    (insert (supertag-view-header "📚 阅读队列"))
-    (dolist (node (supertag-query
-                   '(and (tag "paper")
-                         (field "status" "unread"))))
-      (supertag-view-card node)))
+  (supertag-view-define-from-config
+   (list :id 'evening-review
+         :name "晚间复盘仪表盘"
+         :tag "task"
+         :widgets
+         (list
+          (list :type :section :title "✅ 任务"
+                :children
+                (list
+                 (list :type :stats-row
+                       :stats
+                       (lambda (context)
+                         (list (cons "总数"
+                                     (length (plist-get context :nodes))))))))
+          (list :type :toolbar
+                :items '("M-x supertag-view-refresh 刷新" "q quit-window 退出")))))
 
-  ;; 打开它
-  ;; M-x supertag-view-evening-review
+  (supertag-view-select-and-render "task")
 #+end_src
 
 详见 =doc/VIEW_FRAMEWORK_DEV_GUIDE.md=。

@@ -138,63 +138,67 @@ MAX-TITLE-LEN is the maximum title length."
 ;; Main View Definition
 ;; ============================================================================
 
-(define-supertag-view priority-matrix "Priority Matrix"
-  ;; Eisenhower Matrix: prioritize tasks by urgency and importance.
-  (tag nodes)
-
-  (let* ((matrix (supertag-view-priority--build-matrix tag))
+(defun supertag-view-priority--widgets (context)
+  "Return priority matrix widgets for CONTEXT."
+  (let* ((tag (plist-get context :tag))
+         (matrix (supertag-view-priority--build-matrix tag))
          (do-tasks (cdr (assoc 'do matrix)))
          (plan-tasks (cdr (assoc 'plan matrix)))
          (delegate-tasks (cdr (assoc 'delegate matrix)))
          (delete-tasks (cdr (assoc 'delete matrix)))
          (total-tasks (+ (length do-tasks) (length plan-tasks)
-                        (length delegate-tasks) (length delete-tasks))))
+                         (length delegate-tasks) (length delete-tasks))))
+    (append
+     (list
+      (list :type :header :text (format "Priority Matrix - #%s" tag))
+      (list :type :text
+            :content "Eisenhower Matrix: Urgency × Importance")
+      (list :type :stats-row
+            :stats `(("Total Tasks" . ,total-tasks)
+                     ("DO (Urgent+Important)" . ,(length do-tasks))
+                     ("PLAN (Important)" . ,(length plan-tasks))
+                     ("DELEGATE (Urgent)" . ,(length delegate-tasks))
+                     ("DELETE (Neither)" . ,(length delete-tasks))))
+      (list :type :subheader :text "The Matrix"))
+     (mapcar
+      (lambda (quadrant)
+        (let* ((tasks (cdr (assoc quadrant matrix)))
+               (visible (cl-subseq tasks 0 (min 10 (length tasks))))
+               (content
+                (if tasks
+                    (concat
+                     (mapconcat
+                      (lambda (task)
+                        (supertag-view-priority--format-task task 25))
+                      visible "\n")
+                     (when (> (length tasks) 10)
+                       (format "\n  ... and %d more"
+                               (- (length tasks) 10))))
+                  "  (no tasks)")))
+          (list :type :section
+                :key quadrant
+                :title (supertag-view-priority--quadrant-title quadrant)
+                :face (supertag-view-priority--quadrant-color quadrant)
+                :children (list (list :type :text :content content)))))
+      '(do plan delegate delete))
+     (list
+      (list :type :separator)
+      (list :type :text
+            :content
+            (concat
+             "How to use:\n"
+             "  1. DO: Do these tasks immediately\n"
+             "  2. PLAN: Schedule time for these\n"
+             "  3. DELEGATE: Assign to someone else\n"
+             "  4. DELETE: Consider eliminating these\n\n"
+             "Set 'urgency' and 'importance' fields (0-10) on nodes "
+             "for accurate classification."))))))
 
-    (supertag-view--with-buffer "Priority Matrix" tag
-      ;; Header
-      (supertag-view--header (format "Priority Matrix - #%s" tag))
-      (insert "Eisenhower Matrix: Urgency × Importance\n\n")
-
-      ;; Summary
-      (supertag-view--stat-row
-       `(("Total Tasks" . ,total-tasks)
-         ("DO (Urgent+Important)" . ,(length do-tasks))
-         ("PLAN (Important)" . ,(length plan-tasks))
-         ("DELEGATE (Urgent)" . ,(length delegate-tasks))
-         ("DELETE (Neither)" . ,(length delete-tasks))))
-
-      ;; The Matrix (2x2 grid)
-      (supertag-view--subheader "The Matrix")
-
-      ;; Show each quadrant
-      (dolist (quadrant '(do plan delegate delete))
-        (let ((tasks (cdr (assoc quadrant matrix)))
-              (title (supertag-view-priority--quadrant-title quadrant)))
-
-          ;; Quadrant header with color
-          (insert (propertize (format "\n%s\n" title)
-                             'face (supertag-view-priority--quadrant-color quadrant)))
-          (insert (make-string (+ 2 (length title)) ?─))
-          (insert "\n")
-
-          ;; Tasks in this quadrant
-          (if (null tasks)
-              (insert "  (no tasks)\n")
-            (dolist (task (cl-subseq tasks 0 (min 10 (length tasks))))
-              (insert (supertag-view-priority--format-task task 25))
-              (insert "\n"))
-            (when (> (length tasks) 10)
-              (insert (format "  ... and %d more\n" (- (length tasks) 10))))))
-
-      ;; Legend and help
-      (supertag-view--separator)
-      (insert "How to use:\n")
-      (insert "  1. DO: Do these tasks immediately\n")
-      (insert "  2. PLAN: Schedule time for these\n")
-      (insert "  3. DELEGATE: Assign to someone else\n")
-      (insert "  4. DELETE: Consider eliminating these\n")
-      (insert "\n")
-      (insert "Set 'urgency' and 'importance' fields (0-10) on nodes for accurate classification.\n")))))
+(supertag-view-define-from-config
+ (list :id 'priority-matrix
+       :name "Priority Matrix"
+       :persist nil
+       :widgets #'supertag-view-priority--widgets))
 
 ;; ============================================================================
 ;; Demo
@@ -217,11 +221,11 @@ MAX-TITLE-LEN is the maximum title length."
                 (cons "task-6" (list :title "Schedule meeting" :urgency 6 :importance 3))
                 ;; DELETE: Low urgency, low importance
                 (cons "task-7" (list :title "Check social media" :urgency 1 :importance 1))
-                (cons "task-8" (list :title "Organize desktop" :urgency 2 :importance 2)))))
+                (cons "task-8" (list :title "Organize desktop" :urgency 2 :importance 2))))))
 
-    (supertag-view-render 'priority-matrix
-                         (list :tag "task"
-                               :nodes nil)))))
+    (supertag-view-open 'priority-matrix
+                        (list :tag "task"
+                              :nodes nil))))
 
 (provide 'supertag-view-priority-matrix)
 

@@ -367,7 +367,6 @@ Handles both time stamps (list) and date strings."
     (supertag-view-register
      :id 'search
      :name "Search"
-     :runtime t
      :selectable nil
      :buffer-name supertag-search--buffer-name
      :mode-fn #'supertag-search--view-mode

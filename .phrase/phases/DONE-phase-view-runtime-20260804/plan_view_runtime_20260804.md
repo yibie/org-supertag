@@ -9,6 +9,9 @@
 5. **Inspector migration**：迁移 Node 的 side-window、subscription 与 selection/follow 生命周期。
 6. **Compatibility proof**：接入 Widget DSL，并用 Stream-shaped fixture 证明 Runtime 不需要特例。
 7. **Release gate**：全量测试、Emacs 29.1/29.4 CI、文档与 phase 闭环。
+8. **Hands-on gate**：用户在真实图形 Emacs 中完成窗口、焦点、按键、编辑回退和 teardown checklist，并明确批准后才允许最终 commit/push。
+9. **Legacy lifecycle cleanup**：三套 Dashboard 接入 Runtime 后，删除旧 Developer View 宏、独立 buffer 生命周期、`:runtime` 分流与 legacy refresh；不保留兼容 shim。
+10. **Renderer research record**：保存 Emacs Widget 文章、`widget-extra`、VUI 与当前 DSL 的对照结论；只形成后续 phase 的采用门槛，不在本阶段新增 renderer 代码或依赖。
 
 ## Scope
 
@@ -43,6 +46,14 @@
 - Adapter renderer 与写操作尽量原样保留；迁移只抽离共同生命周期。
 - 旧 public command 作为 wrapper，直到整个 phase 验收完成。
 
+### Legacy lifecycle cleanup order
+
+1. 用公共 `supertag-view-open` / `supertag-view-select-and-render` 回归锁定三套 Dashboard 的 buffer、内容与 refresh。
+2. 将 Progress Dashboard、Effort Distribution、Priority Matrix 注册为普通 Runtime Adapter；renderer 只写当前 buffer。
+3. 迁移 demo 与当前开发文档。
+4. 删除 `define-supertag-view`、`supertag-view--with-buffer`、`supertag-view-render`、legacy buffer-local state、`:runtime` 分支和对应实现耦合测试。
+5. 静态确认生产代码与当前文档不再引用旧入口；历史 phase 记录保持不改。
+
 ## Quality Gates
 
 每个原子任务至少运行对应 focused ERT。阶段完成前运行：
@@ -55,6 +66,8 @@ git diff --check
 ```
 
 `test/run-tests.sh` 设置 `load-prefer-newer`，是本阶段本地测试的权威入口；绕过 runner 的裸 Emacs 结果只能作为诊断信息。
+
+自动化与 CI 通过后，必须继续执行 `manual_test_view_runtime_20260804.md`。独立图形 `emacs -Q` 已完成该清单的隔离 smoke；用户于 2026-08-05 明确批准，task012/task014 已完成。
 
 ## Risks & Mitigations
 

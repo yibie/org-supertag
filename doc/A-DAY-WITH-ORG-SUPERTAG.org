@@ -492,32 +492,24 @@ Using the View Framework, I've built a custom dashboard that shows everything I 
 about in one buffer:
 
 #+begin_src emacs-lisp
-  ;; Define a custom dashboard view
-  (define-supertag-view evening-review "Evening Review Dashboard"
-    (tag "task")
-    ;; Section 1: Today's completed tasks
-    (insert (supertag-view-header "✅ Completed Today"))
-    (dolist (node (supertag-query
-                   '(and (tag "task")
-                         (field "status" "done")
-                         (after "-1d"))))
-      (supertag-view-card node))
-    ;; Section 2: Tomorrow's tasks
-    (insert (supertag-view-header "📅 Tomorrow"))
-    (dolist (node (supertag-query
-                   '(and (tag "task")
-                         (field "due" ,(format-time-string "%Y-%m-%d"
-                                          (time-add (current-time) (days-to-time 1)))))))
-      (supertag-view-card node))
-    ;; Section 3: Papers to read
-    (insert (supertag-view-header "📚 Reading Queue"))
-    (dolist (node (supertag-query
-                   '(and (tag "paper")
-                         (field "status" "unread"))))
-      (supertag-view-card node)))
+  (supertag-view-define-from-config
+   (list :id 'evening-review
+         :name "Evening Review Dashboard"
+         :tag "task"
+         :widgets
+         (list
+          (list :type :section :title "✅ Tasks"
+                :children
+                (list
+                 (list :type :stats-row
+                       :stats
+                       (lambda (context)
+                         (list (cons "Total"
+                                     (length (plist-get context :nodes))))))))
+          (list :type :toolbar
+                :items '("M-x supertag-view-refresh" "q quit-window")))))
 
-  ;; Open it
-  ;; M-x supertag-view-evening-review
+  (supertag-view-select-and-render "task")
 #+end_src
 
 See =doc/VIEW_FRAMEWORK_DEV_GUIDE.md= for the full View Framework API.

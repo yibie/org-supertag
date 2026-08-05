@@ -351,7 +351,6 @@ Only strips keywords if `supertag-view-table-strip-todo-keywords' is non-nil."
     (supertag-view-register
      :id 'table
      :name "Table"
-     :runtime t
      :selectable nil
      :buffer-name-fn #'supertag-view-table--view-buffer-name
      :mode-fn #'supertag-view-table-mode

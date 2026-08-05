@@ -22,7 +22,7 @@
 - Store 正常变更能触发需要更新的视图，不累积重复 subscriber。
 - 刷新后尽量恢复当前 entity/cell/card/field；没有可恢复对象时使用安全 point fallback。
 - 迁移 Search、Table、Kanban、Node，同时保留现有用户命令和交互。
-- 保持 View DSL、Widget registry 与 `define-supertag-view` 兼容。
+- 保持 View DSL 与 Widget registry；所有开发者 view 统一使用 `supertag-view-register`、`supertag-view-open` 和 `supertag-view-refresh`。
 - 建立统一的 `supertag-entity-id` 定位契约，并在迁移期保留现有 `entity-id` 等属性。
 
 ## Non-goals
@@ -85,6 +85,8 @@
 | Node | 保留 follow、字段焦点、side-window 与“不因查看创建 Org ID” |
 | DSL | 保留 registry、widgets、配置定义与手动刷新路径 |
 
+旧的 `define-supertag-view`、`supertag-view--with-buffer` 与 `supertag-view-render` 不属于兼容面。具体 Dashboard 完成 Runtime 迁移后删除这些入口，不增加 deprecated alias 或双生命周期回退。
+
 ## Runtime Contract
 
 - View Definition 必须有稳定 `:id`、state builder 与 renderer；mode/buffer/display 可使用现有默认值。
@@ -120,5 +122,24 @@
 - Node subscription 能取消，follow/selection 行为通过回归测试。
 - `supertag-view-refresh` 在四个视图可用，非 view buffer 报明确错误。
 - Widget DSL 旧测试通过；最小 Stream-shaped fixture 仅新增 Adapter，不修改 Runtime。
+- Progress Dashboard、Effort Distribution、Priority Matrix 通过 Runtime 建立 View Instance；picker 不再含 Runtime/legacy 分流。
+- 生产代码与当前开发文档不再引用 `define-supertag-view`、`supertag-view--with-buffer`、`supertag-view-render` 或 `:runtime` definition flag。
 - Focused ERT、全量 `./test/run-tests.sh all`、`git diff --check` 通过。
 - CI 在 Emacs 29.1 与 29.4 通过。
+
+## Automated Preflight — 2026-08-04
+
+- Runtime + Adapter focused ERT：56/56。
+- 全量 ERT：382/382。
+- Emacs 29.1 / 29.4：GitHub Actions run 30889643751 均 success。
+- `check-parens`、`git diff --check`：通过；repo-local `.elc`：0。
+- 独立 blocker review：P0/P1 为零。
+- Graphical smoke：Emacs 31.0.91、`display-graphic-p=t`，9/9 通过；完整记录见 `manual_test_view_runtime_20260804.md`。用户于 2026-08-05 明确批准，phase 验收完成。
+
+## Legacy Lifecycle Cleanup Verification — 2026-08-05
+
+- Picker 与三套 Dashboard Runtime 回归先以 2 个失败锁定旧分流和旧 buffer name，迁移后 focused 33/33、full 382/382。
+- `supertag-view-framework.el` 与三个 Dashboard 在 `byte-compile-error-on-warn=t` 下编译成功；四文件 checkdoc 零 warning，生成的 `.elc` 已删除。
+- 生产代码、tests 与当前 docs 对旧宏/render/refresh state 和 `:runtime` flag 的静态扫描结果为零；历史 phase 记录未改。
+- 图形 `Emacs.app -Q` 使用真实 `display-buffer` 路径完成 Dashboard 3/3；`display-graphic-p=t`，证据见 `manual_test_view_runtime_20260804.md` 第 8 节。
+- `package-lint` 未安装，因此没有新增依赖来运行它；主 runner、`git diff --check` 和 repo-local `.elc` 检查通过。

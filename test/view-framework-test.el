@@ -68,34 +68,6 @@
                  :id 'no-render-view
                  :name "No Render View")))
 
-;; Tests for the macro
-(ert-deftest test-define-supertag-view-macro ()
-  "Test the define-supertag-view macro."
-  (view-framework-test--setup)
-  (define-supertag-view macro-test "Macro Test"
-    (tag nodes)
-    (insert (format "Tag: %s, Nodes: %d" tag (length nodes))))
-  
-  ;; Check that view was registered
-  (let ((view (supertag-view-get 'macro-test)))
-    (should view)
-    (should (string= (plist-get view :name) "Macro Test"))
-    (should (functionp (plist-get view :render-fn)))))
-
-(ert-deftest test-define-supertag-view-rendering ()
-  "Test that macro-defined view renders correctly."
-  (view-framework-test--setup)
-  (define-supertag-view render-test "Render Test"
-    (tag nodes)
-    (insert (format "%s:%d" tag (length nodes))))
-  
-  (with-temp-buffer
-    (supertag-view-render 'render-test
-                         (list :tag "project" :nodes '(1 2 3)))
-    ;; The render function should insert into a buffer
-    ;; We can't easily test the output buffer, but at least it shouldn't error
-    ))
-
 ;; Tests for unregistration
 (ert-deftest test-view-unregister ()
   "Test view unregistration."
@@ -129,14 +101,14 @@
     (should (string= (plist-get (nth 1 list) :name) "View B"))
     (should (string= (plist-get (nth 2 list) :name) "View C"))))
 
-(ert-deftest test-view-list-for-tag-hides-runtime-only-adapters ()
-  "Runtime-only adapters must not appear in the custom view picker."
+(ert-deftest test-view-list-for-tag-hides-internal-adapters ()
+  "Internal adapters must not appear in the custom view picker."
   (view-framework-test--setup)
   (supertag-view-register
    :id 'visible-view :name "Visible" :render-fn #'ignore)
   (supertag-view-register
    :id 'hidden-adapter :name "Hidden" :render-fn #'ignore
-   :runtime t :selectable nil)
+   :selectable nil)
   (should (equal (mapcar (lambda (view) (plist-get view :id))
                          (supertag-view-list-for-tag "demo"))
                  '(visible-view))))
@@ -245,48 +217,6 @@
                        '(image :type svg :data "dummy")))
         (should-not (get-text-property link-start 'display))
         (should-not (get-text-property label-start 'display))))))
-
-;; Manual verification helper
-(defun test-view-framework-manual ()
-  "Run manual view framework tests."
-  (interactive)
-  (message "=== View Framework Tests ===")
-  
-  (supertag-view-framework-init)
-  
-  ;; Register test views using macro
-  (message "\nRegistering test views with macro...")
-  (define-supertag-view progress-dashboard "Progress Dashboard"
-    (tag nodes)
-    (supertag-view--with-buffer "Progress" tag
-      (supertag-view--header "Progress Dashboard")
-      (insert (format "Tag: %s\n" tag))
-      (insert (format "Nodes: %d\n\n" (length nodes)))
-      (dolist (node nodes)
-        (insert (format "- %s\n" (plist-get node :title))))))
-  
-  (define-supertag-view stats-view "Statistics View"
-    (tag nodes)
-    (supertag-view--with-buffer "Stats" tag
-      (supertag-view--header "Statistics")
-      (supertag-view--stat-row
-       `(("Total" . ,(length nodes))
-         ("Tag" . ,tag)))))
-  
-  ;; List all
-  (message "\nAll views:")
-  (dolist (v (supertag-view-list))
-    (message "  - %s (%s)" (plist-get v :name) (plist-get v :id)))
-  
-  ;; Render demo
-  (message "\nRendering 'progress-dashboard:")
-  (supertag-view-render 'progress-dashboard
-                       (list :tag "project"
-                             :nodes (list
-                                    (list :title "Project A")
-                                    (list :title "Project B"))))
-  
-  (message "\n=== Tests Complete ==="))
 
 (provide 'view-framework-test)
 

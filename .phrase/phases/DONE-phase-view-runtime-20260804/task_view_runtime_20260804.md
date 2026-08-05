@@ -66,10 +66,10 @@
   - 验证方式：旧 `view-framework-test.el` 通过；fixture 只注册 Adapter，不修改 Runtime
   - 影响范围：`supertag-view-framework.el`、framework/runtime tests
 
-- task012 [ ] 完成全量验收与 phase 回写
+- task012 [x] 完成全量验收与 phase 回写
   - 依据：plan「Quality Gates」
-  - 产出：focused/full ERT 结果、Emacs 29.1/29.4 CI、兼容手动检查、change/task/spec 回写
-  - 验证方式：清理 repo-local `.elc` 后 focused/full tests 与 `git diff --check` 通过；CI success
+  - 产出：focused/full ERT 结果、Emacs 29.1/29.4 CI、兼容自动化证据、独立 blocker review、实机验收与 change/task/spec 回写
+  - 验证方式：focused/full/CI 与图形 `emacs -Q` 9/9 已通过；用户于 2026-08-05 明确批准 task014
   - 影响范围：测试、phase 文档、全局 CHANGE 索引
 
 - task013 [x] 验证并消除 Runtime render/state 路径中的 Store 写入
@@ -77,3 +77,27 @@
   - 产出：以事件/Store 快照测试证明 Table 读列不写 Store；Refs schema 初始化只在用户显式编辑 Refs 时执行；静态复核其他 Adapter 的 state/render 只读/当前 buffer 边界
   - 验证方式：legacy/global schema purity ERT、Adapter focused ERT 与全量 ERT 通过；既有 Refs 列与编辑路径保留
   - 影响范围：Table 初始化 seam、runtime adapter tests；其他 Adapter 仅在测试暴露问题时修改
+
+- task014 [x] 完成 View Runtime 实机 hands-on 验收
+  - 依据：用户指出自动化/CI 不能替代真实 Emacs 的窗口、焦点、按键与编辑回退验证
+  - 产出：`manual_test_view_runtime_20260804.md` 中 Search、Table、Kanban、Node、Widget DSL、Refs purity 与 teardown 的图形 `emacs -Q` 实测记录
+  - 验证方式：Emacs 31.0.91、`display-graphic-p=t` 的隔离 Store smoke 9/9 通过；用户于 2026-08-05 明确批准
+  - 影响范围：实机运行状态与 phase 文档；默认不再修改产品代码
+
+- task015 [x] 修复 Kanban 并排卡片的操作目标解析
+  - 依据：issue031；task014 图形 smoke 暴露左列 point 会命中上一行右列边框
+  - 产出：公开移动命令的双列失败回归；卡片定位直接读取 point 上稳定的 `node-id`/`group-value` 元数据
+  - 验证方式：回归先红后绿；Kanban 4/4、full 382/382、图形 View Runtime smoke 9/9 通过
+  - 影响范围：`supertag-view-kanban.el`、`test/test-view-kanban.el`、issue031 与 phase 验收文档
+
+- task016 [x] 删除 Legacy Developer View 双生命周期
+  - 依据：用户要求新 Runtime 完成后清理同类旧代码；plan「Legacy lifecycle cleanup order」；ADR 2026-08-05 amendment
+  - 产出：三套 Dashboard 迁移为 Runtime Adapter；demo/当前开发文档迁移；删除旧宏、旧 render/buffer state、legacy refresh 与 `:runtime` 分支
+  - 验证方式：公共 open/select/refresh 回归先以 2 个失败锁定旧分流，再转绿；focused 33/33、full 382/382、四个核心文件零 warning byte compile/checkdoc、静态引用扫描、`git diff --check`、Widget table smoke 与图形 `emacs -Q` Dashboard 3/3 通过
+  - 影响范围：View Framework、三个 Dashboard、View tests、当前开发文档与本 phase 文档；不改 Schema View 和历史 phase 记录
+
+- task017 [x] 保存 Widget renderer backend 技术探索
+  - 依据：用户要求保存 Emacs Widget 优劣、`widget-extra` 依赖评估与本地解法的探索结论
+  - 产出：`tech_refer_widget_renderer_20260805.md`，记录 Runtime/DSL pain map、原生 primitive policy、stable key、两阶段 layout、完整重绘策略、依赖结论、最小实验和升级门槛
+  - 验证方式：来源链接、当前代码 seam、推荐/拒绝项和未来 acceptance gates 可独立追溯；`git diff --check` 通过
+  - 影响范围：本 phase 技术参考、plan/task/change 与全局 CHANGE 索引；不修改产品代码、配置或依赖

@@ -1,5 +1,88 @@
 # change_view_runtime_20260804
 
+## 2026-08-05 — task012/task014 — Verify
+
+- Verification: focused/full ERT、Emacs 29.1/29.4 CI、图形 `Emacs.app -Q` 9/9、legacy lifecycle 静态残留扫描、byte compile/checkdoc、`git diff --check` 与 repo-local `.elc` zero 均通过。
+- Approval: 用户于 2026-08-05 明确批准实机结果；task012/task014 完成，View Runtime phase 可结项。
+- Gap: `package-lint` 本机不可用，未为验收引入新依赖。
+
+## 2026-08-05 — task017 — Add / Modify
+
+- Files:
+  - `tech_refer_widget_renderer_20260805.md`
+  - `tech_refer_view_runtime_20260804.md`
+  - `plan_view_runtime_20260804.md`
+  - `task_view_runtime_20260804.md`
+  - `.phrase/docs/CHANGE.md`
+- Behavior: 无产品行为变化；保存 Emacs Widget、`widget-extra`、VUI 与当前 View Runtime/DSL 的技术探索，供后续 renderer phase 决策。
+- Decision: Runtime 保持 renderer-agnostic；Widget DSL 作为可选 renderer backend，优先使用 built-in `button.el`/`widget.el`，以不可变 render spec、稳定 `:key`、两阶段 layout 和完整重绘解决当前痛点；不强制迁移 Search/Table/Kanban。
+- Dependency: 当前拒绝 `widget-extra`，暂不采用或复制 VUI；达到复杂 local-state/async/reconciliation 门槛时重新评估 VUI。
+- Verification: 文档包含来源、pain map、module seam、最小实验、acceptance gates、upgrade triggers 与 non-goals；`git diff --check` 通过。
+- Risk: 这是研究建议而非批准实现；后续不得仅凭本记录新增依赖或扩张 Runtime，必须另开实现任务并先锁定真实 Dashboard/Stream workflow。
+
+## 2026-08-05 — task016 — Modify / Delete
+
+- Files:
+  - `supertag-view-framework.el`
+  - `supertag-view-progress-dashboard.el`
+  - `supertag-view-effort-distribution.el`
+  - `supertag-view-priority-matrix.el`
+  - `supertag-ui-search.el`
+  - `supertag-view-table.el`
+  - `supertag-view-kanban.el`
+  - `supertag-view-node.el`
+  - `test/view-framework-test.el`
+  - `test/view-runtime-test.el`
+  - `doc/VIEW_FRAMEWORK_DEV_GUIDE.md`
+  - `doc/examples/supertag-view-demo-dashboard.el`
+  - `doc/A-DAY-WITH-ORG-SUPERTAG.org`
+  - `doc/A-DAY-WITH-ORG-SUPERTAG_CN.org`
+  - `CHANGELOG.org`
+- Behavior: Progress Dashboard、Effort Distribution、Priority Matrix 作为普通 Runtime Adapter 注册；picker 一律走 `supertag-view-open`，refresh 只接受 View Instance；三个 demo 也走公开 open 路径。
+- Delete: 删除 `define-supertag-view`、`supertag-view--with-buffer`、`supertag-view-render`、legacy rendering/buffer-local state、`supertag-view--refresh-legacy`、`:runtime` definition flag、对应实现耦合测试与过时开发文档。
+- Simplify: DSL 与三套 Dashboard 共用一个 `supertag-view--rebuild-context` 状态规则；删除未使用的 config 临时值，并复用既有 line padding 修复 Widget table 的无效动态 format。
+- Verification: 两个公共路径回归先红后绿；focused 33/33、full 382/382；四个核心文件 byte compile/checkdoc 通过；静态残留为零；Widget table smoke、`git diff --check`、repo-local `.elc` 为零；图形 `Emacs.app -Q` Dashboard 3/3，`display-graphic-p=t`。
+- Risk: 这是有意的开发者 API 删除，不提供 deprecated alias；自定义旧 view 需按更新后的 Developer Guide 改为 `supertag-view-register` + `supertag-view-open`。Schema View 不在本任务范围。`package-lint` 本地未安装。
+
+## 2026-08-04 — task015 — Modify / Delete
+
+- Files:
+  - `supertag-view-kanban.el`
+  - `test/test-view-kanban.el`
+  - `issue_view_runtime_kanban_card_target_20260804.md`
+  - `task_view_runtime_20260804.md`
+- Function: `supertag-view-kanban--get-card-info`
+- Behavior: Kanban 卡片移动读取 point 所在卡片的稳定 `node-id`/`group-value`，不再因二维并排列布局误命中上一行相邻列卡片。
+- Delete: 删除对装饰字符 `┌` 的反向搜索与由此产生的显示文本重解析。
+- Verification: 新回归先以 `field-set-args=nil` 失败，再转绿；Kanban 4/4、full 382/382、图形 `emacs -Q` View Runtime smoke 9/9 通过。
+- Risk: point 位于列间空白时现在明确没有卡片目标；这比猜测相邻卡片安全，既有卡片行与导航点均带稳定属性。
+
+## 2026-08-04 — task014 — Add
+
+- Files:
+  - `manual_test_view_runtime_20260804.md`
+  - `task_view_runtime_20260804.md`
+  - `spec_view_runtime_20260804.md`
+  - `plan_view_runtime_20260804.md`
+- Behavior: 增加真实图形 Emacs 的 hands-on 验收步骤，覆盖窗口落点、焦点、按键、selection restore、写操作回退、Refs read purity 与 subscriber cleanup。
+- Verification: Emacs 31.0.91 的独立图形 `emacs -Q`（`display-graphic-p=t`）完成 9/9：Runtime、Search、Table、Kanban、Node、Widget DSL、Refs purity 与 teardown 全部 PASS；完整结果记录于 `manual_test_view_runtime_20260804.md`。
+- Risk: 用户明确批准仍是 commit/push 与 task012/task014 结项门槛。
+
+## 2026-08-04 — task012 — Partial verification
+
+- Files:
+  - `task_view_runtime_20260804.md`
+  - `spec_view_runtime_20260804.md`
+  - `change_view_runtime_20260804.md`
+  - `.phrase/docs/CHANGE.md`
+- Behavior: 完成本地、跨版本 CI 与独立 blocker review 预检；hands-on 验收尚未完成，不结项。
+- Verification:
+  - 本地 Emacs 31：focused ERT 55/55、full ERT 381/381。
+  - 静态：所有改动 Elisp `check-parens`、`git diff --check` 通过；repo-local `.elc` 为零。
+  - 独立审查：P0/P1 为零；未发现双 lifecycle、subscription 泄漏或 read-path Store 写入。
+  - GitHub Actions run 30889643751：提交 `3e652a70e16b027af8e2d3291c1d46550827acf2`，Emacs 29.1 与 29.4 jobs 均 success。
+- Risk: CI 对 `actions/checkout@v4` 报 Node 20 deprecation annotation，GitHub 已强制使用 Node 24；与本次 Elisp 代码无关。真实窗口、焦点、按键与编辑回退仍需 task014 验证。
+
 ## 2026-08-04 — task013 — Modify / Delete
 
 - Files:

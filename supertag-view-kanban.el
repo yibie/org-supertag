@@ -251,20 +251,11 @@ Returns the card as a list of strings, each correctly padded."
 (defun supertag-view-kanban--get-card-info ()
   "Get information about the card at point.
 Returns plist with :node-id, :current-value, and other card info."
-  (save-excursion
-    (let (node-id current-value)
-      ;; Search backwards from point for the beginning of a card
-      (when (re-search-backward "┌" nil t)
-        ;; Move forward one char to be inside the card's properties
-        (forward-char 1)
-        (setq node-id (get-text-property (point) 'node-id))
-        (setq current-value (get-text-property (point) 'group-value)))
-
-      (when node-id
-        (list :node-id node-id
-              :current-value current-value
-              :base-tag (plist-get supertag-view-kanban--config :base-tag)
-              :group-field (plist-get supertag-view-kanban--config :group-field))))))
+  (when-let* ((node-id (get-text-property (point) 'node-id)))
+    (list :node-id node-id
+          :current-value (get-text-property (point) 'group-value)
+          :base-tag (plist-get supertag-view-kanban--config :base-tag)
+          :group-field (plist-get supertag-view-kanban--config :group-field))))
 
 (defun supertag-view-kanban-move-card (direction)
   "Move the current card in DIRECTION (:left or :right)."
@@ -355,7 +346,6 @@ Returns plist with :node-id, :current-value, and other card info."
     (supertag-view-register
      :id 'kanban
      :name "Kanban"
-     :runtime t
      :selectable nil
      :buffer-name-fn #'supertag-view-kanban--buffer-name
      :mode-fn #'supertag-view-kanban-mode

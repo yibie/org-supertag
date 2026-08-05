@@ -284,7 +284,7 @@ Org-SuperTag 按定时器读取你的文件（可通过 `doc/SYNC-CONFIGURATION.
 | 标签和表格视图 | **自动化规则**——条件触发自动填字段 (`doc/AUTOMATION-SYSTEM-GUIDE_cn.md`) |
 | 手动捕获 | **捕获模板**——预定义常用录入表单 (`doc/CAPTURE-GUIDE_cn.md`) |
 | 基本查询 | **查询块**——在 Org 文件里嵌入动态查询结果 (`doc/ABOUT-QUERY-BLOCK_cn.md`) |
-| 默认视图 | **自定义视图**——打造自己的仪表盘 (`doc/VIEW_FRAMEWORK_DEV_GUIDE.md`) |
+| 默认视图 | **自定义视图**——用原生按钮和可编辑字段构建声明式仪表盘 (`doc/VIEW_FRAMEWORK_DEV_GUIDE.md`) |
 | 单资料库 | **多 Vault**——工作/个人分开管理 (`doc/SYNC-CONFIGURATION.md`) |
 | 写插件 | **插件开发指南**——自定义抽取器和扩展 (`doc/ORG-SUPERTAG-PLUGIN-GUIDE_cn.md`) |
 

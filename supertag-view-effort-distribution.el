@@ -65,12 +65,12 @@ Returns an alist of (related-tag . effort)."
                         (supertag-view--get-global-field node-id "effort_hours" 0)
                         0)))
         ;; Accumulate by each tag (except the main one)
-        (dolist (t node-tags)
-          (when (and (stringp t) (not (equal t tag-name)))
-            (let ((entry (assoc t tag-groups)))
+        (dolist (node-tag node-tags)
+          (when (and (stringp node-tag) (not (equal node-tag tag-name)))
+            (let ((entry (assoc node-tag tag-groups)))
               (if entry
                   (setcdr entry (+ (cdr entry) effort))
-                (push (cons t effort) tag-groups)))))))
+                (push (cons node-tag effort) tag-groups)))))))
     ;; Sort by effort descending
     (sort tag-groups (lambda (a b) (> (cdr a) (cdr b))))))
 
@@ -79,79 +79,93 @@ Returns an alist of (related-tag . effort)."
 ;; ============================================================================
 
 (defun supertag-view-effort--bar-chart (label value total &optional max-width)
-  "Draw a text bar chart.
+  "Return one text bar chart row.
 LABEL is the label, VALUE is the numeric value, TOTAL is for percentage.
 MAX-WIDTH is the bar width (default 30)."
   (let* ((w (or max-width 30))
          (percentage (if (> total 0) (/ (* value 100.0) total) 0))
          (filled (round (* w (/ percentage 100.0))))
          (empty (- w filled)))
-    (insert (format "%-15s " label))
-    (insert "[")
-    (insert (make-string filled ?█))
-    (insert (make-string empty ?░))
-    (insert (format "] %6.1f%% (%d)\n" percentage value))))
+    (format "%-15s [%s%s] %6.1f%% (%d)"
+            label
+            (make-string filled ?█)
+            (make-string empty ?░)
+            percentage value)))
 
 (defun supertag-view-effort--pie-chart-text (data)
-  "Draw a text-based pie chart representation.
+  "Return a text-based pie chart representation.
 DATA is an alist of (label . value)."
   (let* ((total (cl-reduce #'+ data :key #'cdr :initial-value 0))
          (sorted (sort (copy-sequence data) (lambda (a b) (> (cdr a) (cdr b))))))
-    (dolist (item sorted)
-      (supertag-view-effort--bar-chart (car item) (cdr item) total))))
+    (mapconcat (lambda (item)
+                 (supertag-view-effort--bar-chart
+                  (car item) (cdr item) total))
+               sorted "\n")))
 
 ;; ============================================================================
 ;; Main View Definition
 ;; ============================================================================
 
-(define-supertag-view effort-distribution "Effort Distribution"
-  ;; Analyzes effort distribution by status and related tags.
-  (tag nodes)
-
-  (let* ((by-status (supertag-view-effort--collect-by-status tag))
+(defun supertag-view-effort--widgets (context)
+  "Return effort distribution widgets for CONTEXT."
+  (let* ((tag (plist-get context :tag))
+         (nodes (plist-get context :nodes))
+         (by-status (supertag-view-effort--collect-by-status tag))
          (total-effort (cl-reduce #'+ by-status :key #'cdr :initial-value 0))
          (by-related-tags (supertag-view-effort--collect-by-tag tag))
-         (top-tags (cl-subseq by-related-tags 0 (min 5 (length by-related-tags)))))
+         (top-tags (cl-subseq by-related-tags
+                              0 (min 5 (length by-related-tags))))
+         (done-effort (cdr (assoc "done" by-status)))
+         (in-progress-effort (cdr (assoc "in-progress" by-status)))
+         (insights
+          (if (= total-effort 0)
+              "Insights:\n  No effort data available."
+            (concat
+             "Insights:\n"
+             (format "  • Completion rate: %.1f%%\n"
+                     (/ (* done-effort 100.0) total-effort))
+             (format "  • In progress: %.1f%%"
+                     (/ (* in-progress-effort 100.0) total-effort))
+             (when (> done-effort 0)
+               (format "\n  • Delivered value: %d hours" done-effort))))))
+    (append
+     (list
+      (list :type :header :text (format "Effort Distribution - #%s" tag))
+      (list :type :section :title "Overview"
+            :children
+            (list
+             (list :type :stats-row
+                   :stats `(("Total Effort" . ,(format "%d hours"
+                                                       total-effort))
+                            ("Nodes Analyzed" . ,(length nodes))
+                            ("Related Tags" . ,(length by-related-tags))))))
+      (list :type :section :title "By Status"
+            :children
+            (list
+             (if (= total-effort 0)
+                 (list :type :empty :title "No effort data found.")
+               (list :type :text
+                     :content (supertag-view-effort--pie-chart-text
+                               by-status))))))
+     (when by-related-tags
+       (list
+        (list :type :section :title "By Related Tags (Top 5)"
+              :children
+              (list
+               (list :type :text
+                     :content (supertag-view-effort--pie-chart-text
+                               top-tags))))))
+     (list
+      (list :type :separator)
+      (list :type :text :content insights)
+      (list :type :text
+            :content "Tip: Ensure nodes have 'effort' or 'effort_hours' field.")))))
 
-    (supertag-view--with-buffer "Effort Distribution" tag
-      ;; Header
-      (supertag-view--header (format "Effort Distribution - #%s" tag))
-
-      ;; Overall stats
-      (supertag-view--subheader "Overview")
-      (supertag-view--stat-row
-       `(("Total Effort" . ,(format "%d hours" total-effort))
-         ("Nodes Analyzed" . ,(length nodes))
-         ("Related Tags" . ,(length by-related-tags))))
-
-      ;; By status
-      (supertag-view--subheader "By Status")
-      (if (= total-effort 0)
-          (insert "No effort data found.\n")
-        (supertag-view-effort--pie-chart-text by-status))
-
-      ;; By related tags (if any)
-      (when (> (length by-related-tags) 0)
-        (supertag-view--subheader "By Related Tags (Top 5)")
-        (supertag-view-effort--pie-chart-text top-tags))
-
-      ;; Summary insights
-      (supertag-view--separator)
-      (insert "Insights:\n")
-      (let ((done-effort (cdr (assoc "done" by-status)))
-            (in-progress-effort (cdr (assoc "in-progress" by-status))))
-        (if (= total-effort 0)
-            (insert "  No effort data available.\n")
-          (insert (format "  • Completion rate: %.1f%%\n"
-                         (/ (* done-effort 100.0) total-effort)))
-          (insert (format "  • In progress: %.1f%%\n"
-                         (/ (* in-progress-effort 100.0) total-effort)))
-          (when (> done-effort 0)
-            (insert (format "  • Delivered value: %d hours\n" done-effort))))))
-
-      ;; Help
-      (insert "\n")
-      (insert "Tip: Ensure nodes have 'effort' or 'effort_hours' field.\n")))
+(supertag-view-define-from-config
+ (list :id 'effort-distribution
+       :name "Effort Distribution"
+       :persist nil
+       :widgets #'supertag-view-effort--widgets))
 
 ;; ============================================================================
 ;; Demo
@@ -167,11 +181,11 @@ DATA is an alist of (label . value)."
                 (cons "task-2" (list :title "Task 2" :status "done" :tags '("project" "backend") :effort 12))
                 (cons "task-3" (list :title "Task 3" :status "in-progress" :tags '("project" "frontend") :effort 6))
                 (cons "task-4" (list :title "Task 4" :status "todo" :tags '("project" "backend") :effort 10))
-                (cons "task-5" (list :title "Task 5" :status "in-progress" :tags '("project" "backend") :effort 8)))))
+                (cons "task-5" (list :title "Task 5" :status "in-progress" :tags '("project" "backend") :effort 8))))))
 
-    (supertag-view-render 'effort-distribution
-                         (list :tag "project"
-                               :nodes nil)))))  ; nodes are fetched by the mock
+    (supertag-view-open 'effort-distribution
+                        (list :tag "project"
+                              :nodes nil))))  ; nodes are fetched by the mock
 
 (provide 'supertag-view-effort-distribution)
 

@@ -282,7 +282,7 @@ When TAG is nil, prompt for a label (display-only)."
   (let* ((tag (or tag (read-string "Demo tag: " "demo")))
          (context (supertag-view-demo-dashboard--build-context tag)))
     (supertag-view-define-from-config supertag-view-demo-dashboard--config)
-    (supertag-view-render supertag-view-demo-dashboard--view-id context)))
+    (supertag-view-open supertag-view-demo-dashboard--view-id context)))
 
 (provide 'supertag-view-demo-dashboard)
 

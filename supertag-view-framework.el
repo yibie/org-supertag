@@ -3,29 +3,24 @@
 ;;; Commentary:
 
 ;; This module provides a framework for developers to create custom views
-;; of org-supertag data. It is NOT an end-user configuration tool - it is
+;; of org-supertag data.  It is NOT an end-user configuration tool - it is
 ;; a toolbox for Elisp developers.
 ;;
-;; Quick start - define a view:
-;;
-;;   (define-supertag-view progress-dashboard "Project Progress"
-;;     (tag nodes)
-;;     (supertag-view--with-buffer "Progress" tag
-;;       (supertag-view--header "Progress Dashboard")
-;;       (dolist (node nodes)
-;;         (insert (format "%s\n" (plist-get node :title))))))
-;;
-;; Or using the low-level API:
+;; Quick start - register a view:
 ;;
 ;;   (supertag-view-register
 ;;    :id 'my-view
 ;;    :name "My View"
+;;    :state-fn #'identity
 ;;    :render-fn #'my-render-function)
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'button)
 (require 'subr-x)
+(require 'widget)
+(require 'wid-edit)
 (require 'supertag-core-tag-path)
 (require 'supertag-services-ui)
 (require 'supertag-view-api)
@@ -45,7 +40,6 @@ View definition plist structure:
   :category     - Optional category (symbol)
   :render-fn    - Function to render the view (required)
   :valid-for    - List of tag names this view applies to, or nil for all
-  :runtime      - Non-nil when the view uses `supertag-view-open'
   :selectable   - Nil hides an internal Adapter from the custom-view picker
   :buffer-name / :buffer-name-fn - Runtime buffer naming
   :mode-fn      - Runtime major-mode installer
@@ -53,24 +47,6 @@ View definition plist structure:
   :display-action - Native `display-buffer' action
   :subscribe-fn - Return cleanup callbacks for Runtime-owned resources
   :capture-selection-fn / :restore-selection-fn - Refresh position hooks")
-
-(defvar supertag-view--rendering-view-id nil
-  "Dynamic var: current view id while rendering.")
-
-(defvar supertag-view--rendering-context nil
-  "Dynamic var: current view context while rendering.")
-
-(defvar supertag-view--rendering-context-builder nil
-  "Dynamic var: current context builder while rendering.")
-
-(defvar-local supertag-view--buffer-view-id nil
-  "Buffer-local current view id for refresh.")
-
-(defvar-local supertag-view--buffer-tag nil
-  "Buffer-local tag name for refresh.")
-
-(defvar-local supertag-view--buffer-context-builder nil
-  "Buffer-local context builder for refresh.")
 
 (defvar-local supertag-view--instance nil
   "Buffer-local View Runtime instance plist.")
@@ -90,11 +66,17 @@ View definition plist structure:
       (lambda () (supertag-view--build-context query)))
      (t nil))))
 
+(defun supertag-view--rebuild-context (context)
+  "Rebuild CONTEXT from its builder or query when available."
+  (if-let* ((builder (supertag-view--context-builder-from-context context)))
+      (funcall builder)
+    context))
+
 (defun supertag-view-register (&rest props)
   "Register a new view with properties PROPS.
 
 Required properties:
-  :id        - Symbol identifier (e.g., 'progress-dashboard)
+  :id        - Symbol identifier (for example, `progress-dashboard')
   :name      - Display name string
   :render-fn - Function to render the view
 
@@ -102,7 +84,6 @@ Optional properties:
   :description - Description string
   :category    - Category symbol (e.g., :project-management)
   :valid-for   - List of tag names, or nil for all tags
-  :runtime     - Non-nil for Runtime-managed views
   :selectable  - Nil to hide an internal Adapter from the view picker
   :buffer-name or :buffer-name-fn - Runtime buffer naming
   :mode-fn, :state-fn, :display-action, :subscribe-fn
@@ -110,12 +91,12 @@ Optional properties:
 
 Example:
   (supertag-view-register
-   :id 'progress-dashboard
+   :id (quote progress-dashboard)
    :name \"Progress Dashboard\"
    :description \"Show project progress overview\"
    :category :project-management
-   :render-fn #'supertag-view--render-progress
-   :valid-for '(\"project\"))
+   :render-fn (function supertag-view--render-progress)
+   :valid-for (list \"project\"))
 
 Returns the view definition plist."
   (let* ((id (plist-get props :id))
@@ -170,7 +151,8 @@ Returns the view plist, or nil if not found."
                  (error-message-string first-error))))))
 
 (defun supertag-view-open (id input &optional display-action)
-  "Open registered view ID with INPUT through the View Runtime."
+  "Open registered view ID with INPUT through the View Runtime.
+DISPLAY-ACTION overrides the view's registered display action."
   (let ((view (supertag-view-get id)))
     (unless view
       (user-error "Unknown view: %s" id))
@@ -237,83 +219,9 @@ If a view has :valid-for nil, it applies to all tags."
                 (member tag-name valid-for)))))
    (supertag-view-list)))
 
-(defun supertag-view-render (id context)
-  "Render view ID with CONTEXT.
-
-CONTEXT is a plist containing:
-  :tag          - Tag name being viewed
-  :nodes        - List of node data
-  :virtual-columns - Available virtual column definitions
-
-Example:
-  (supertag-view-render 'progress-dashboard
-                        (list :tag \"project\"
-                              :nodes node-list))"
-  (let ((view (supertag-view-get id)))
-    (unless view
-      (error "Unknown view: %s" id))
-    (let ((render-fn (plist-get view :render-fn)))
-      (let ((supertag-view--rendering-view-id id)
-            (supertag-view--rendering-context context)
-            (supertag-view--rendering-context-builder
-             (supertag-view--context-builder-from-context context)))
-        (funcall render-fn context)))))
-
-;; ============================================================================
-;; Developer Macro
-;; ============================================================================
-
-(defmacro define-supertag-view (id name arglist &rest body)
-  "Define a new view with ID, NAME, and ARGLIST.
-
-ARGLIST should be (TAG NODES) - these are extracted from context.
-BODY is the render code.
-
-Example:
-  (define-supertag-view my-progress \"My Progress\"
-    (tag nodes)
-    (supertag-view--with-buffer \"Progress\" tag
-      (insert \"Content here...\")))"
-  (declare (indent defun))
-  (let ((render-fn-name (intern (format "supertag-view--render-%s" id))))
-    `(progn
-       ;; Define the render function
-       (defun ,render-fn-name (context)
-         (let ((,(car arglist) (plist-get context :tag))
-               (,(cadr arglist) (plist-get context :nodes)))
-           ,@body))
-       ;; Register the view
-       (supertag-view-register
-        :id ',id
-        :name ,name
-        :render-fn #',render-fn-name))))
-
 ;; ============================================================================
 ;; Rendering Utilities (Developer Toolbox)
 ;; ============================================================================
-
-(defmacro supertag-view--with-buffer (base-name tag &rest body)
-  "Execute BODY in a buffer named '*View: BASE-NAME - TAG*'.
-Creates or reuses the buffer, makes it read-only at the end."
-  (declare (indent 2))
-  (let ((buf (gensym "buf"))
-        (buf-name (gensym "buf-name")))
-    `(let* ((,buf-name (format "*View: %s - %s*" ,base-name ,tag))
-            (,buf (get-buffer-create ,buf-name)))
-       (with-current-buffer ,buf
-         (when supertag-view--rendering-view-id
-           (setq-local supertag-view--buffer-view-id supertag-view--rendering-view-id)
-           (setq-local supertag-view--buffer-tag
-                       (plist-get supertag-view--rendering-context :tag))
-           (setq-local supertag-view--buffer-context-builder
-                       supertag-view--rendering-context-builder))
-         (let ((inhibit-read-only t))
-           (erase-buffer)
-           ,@body)
-         (special-mode)
-         (setq buffer-read-only t)
-         (goto-char (point-min)))
-       (pop-to-buffer ,buf))))
 
 (defun supertag-view--header (title)
   "Insert a header with TITLE."
@@ -363,7 +271,7 @@ Returns DEFAULT if not found or error."
     default))
 
 (defun supertag-view--get-global-field (node-id field-id &optional default)
-  "Get global field value for NODE-ID and FIELD-ID."
+  "Get global field value for NODE-ID and FIELD-ID, or DEFAULT."
   (if (fboundp 'supertag-node-get-global-field)
       (supertag-node-get-global-field node-id field-id default)
     default))
@@ -404,11 +312,8 @@ Returns DEFAULT if not found or error."
                                :key (lambda (v) (plist-get v :name))
                                :test #'string=)))
         (when selected
-          (let ((id (plist-get selected :id))
-                (context (supertag-view--build-context query)))
-            (if (plist-get selected :runtime)
-                (supertag-view-open id context)
-              (supertag-view-render id context))))))))
+          (supertag-view-open (plist-get selected :id)
+                              (supertag-view--build-context query)))))))
 
 (defun supertag-view-select-from-schema ()
   "Select and render a view from Schema View."
@@ -482,25 +387,6 @@ Returns DEFAULT if not found or error."
           (princ "\n")))))
   (pop-to-buffer "*Supertag Views*"))
 
-(defun supertag-view--refresh-legacy ()
-  "Refresh the current legacy view buffer."
-  (unless supertag-view--buffer-view-id
-    (user-error "Not in a view buffer"))
-  (let* ((builder (or supertag-view--buffer-context-builder
-                      (when (and (stringp supertag-view--buffer-tag)
-                                 (> (length supertag-view--buffer-tag) 0))
-                        (let ((tag supertag-view--buffer-tag))
-                          (lambda () (supertag-view--build-context tag))))))
-         (context (and builder (funcall builder))))
-    (unless builder
-      (user-error "No context builder available for refresh"))
-    (unless (listp context)
-      (user-error "Context builder did not return a plist"))
-    (condition-case err
-        (supertag-view-render supertag-view--buffer-view-id context)
-      (error
-       (message "View refresh failed: %s" (error-message-string err))))))
-
 (defun supertag-view--refresh-instance ()
   "Refresh the current buffer's View Runtime instance."
   (let* ((view-id (plist-get supertag-view--instance :view-id))
@@ -526,9 +412,9 @@ Returns DEFAULT if not found or error."
     (unless (buffer-live-p target)
       (user-error "View buffer is not live"))
     (with-current-buffer target
-      (if supertag-view--instance
-          (supertag-view--refresh-instance)
-        (supertag-view--refresh-legacy)))))
+      (unless supertag-view--instance
+        (user-error "Not in a view buffer"))
+      (supertag-view--refresh-instance))))
 
 ;; ============================================================================
 ;; Configuration Persistence
@@ -541,12 +427,8 @@ This is used for saving/loading view definitions.")
 
 (defun supertag-view-config-register (config)
   "Register a view CONFIG (plist) for persistence.
-This stores the configuration without the render function.
 The render function should be provided by the view implementation."
-  (let* ((id (plist-get config :id))
-         (config-without-fn (cl-remove-if (lambda (x) (eq x :render-fn)) config
-                                         :key #'identity
-                                         :test-not (lambda (a b) (eq a b)))))
+  (let ((id (plist-get config :id)))
     (puthash id config supertag--view-configs)
     config))
 
@@ -619,6 +501,64 @@ Note: This loads the Elisp code which should register the views."
 ;; Widget Rendering Helpers (DSL v2)
 ;; ============================================================================
 
+(defconst supertag-view--literal-props '(:key :action :on-change)
+  "Widget properties whose values are literals, not context bindings.")
+
+(defvar supertag-view-widget-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map
+                       (make-composed-keymap widget-keymap special-mode-map))
+    (define-key map (kbd "TAB") #'supertag-view-widget-forward)
+    (define-key map (kbd "<backtab>") #'supertag-view-widget-backward)
+    map)
+  "Keymap for `supertag-view-widget-mode'.")
+
+(defvar supertag-view-widget-field-map
+  (let ((map (copy-keymap widget-field-keymap)))
+    (define-key map (kbd "TAB") #'supertag-view-widget-forward)
+    (define-key map (kbd "<backtab>") #'supertag-view-widget-backward)
+    map)
+  "Keymap used by editable fields in Widget DSL views.")
+
+(define-derived-mode supertag-view-widget-mode special-mode "Supertag-View"
+  "Major mode for declarative Supertag views."
+  (setq buffer-read-only nil))
+
+(defun supertag-view-widget--interactive-positions ()
+  "Return sorted positions of text buttons and editable fields."
+  (let ((position (point-min))
+        button
+        positions)
+    (when (setq button (button-at position))
+      (push (button-start button) positions)
+      (setq position (button-start button)))
+    (while (setq button (next-button position))
+      (push (button-start button) positions)
+      (setq position (button-start button)))
+    (dolist (field widget-field-list)
+      (push (widget-field-start field) positions))
+    (sort (delete-dups positions) #'<)))
+
+(defun supertag-view-widget-forward (count)
+  "Move forward COUNT interactive controls, wrapping at buffer ends."
+  (interactive "p")
+  (let ((positions (supertag-view-widget--interactive-positions)))
+    (unless positions
+      (user-error "No interactive controls in this view"))
+    (dotimes (_ (abs count))
+      (goto-char
+       (if (> count 0)
+           (or (cl-find-if (lambda (position) (> position (point))) positions)
+               (car positions))
+         (or (cl-find-if (lambda (position) (< position (point)))
+                         positions :from-end t)
+             (car (last positions))))))))
+
+(defun supertag-view-widget-backward (count)
+  "Move backward COUNT interactive controls, wrapping at buffer ends."
+  (interactive "p")
+  (supertag-view-widget-forward (- count)))
+
 (defun supertag-view--resolve-prop (value context)
   "Resolve VALUE in CONTEXT.
 If VALUE is a function, call it with CONTEXT."
@@ -637,19 +577,36 @@ If VALUE is a function, call it with CONTEXT."
     (cl-loop for (key value) on widget by #'cddr
              unless (eq key :type)
              do (setq props (plist-put props key
-                                       (supertag-view--resolve-prop value context))))
+                                       (if (memq key supertag-view--literal-props)
+                                           value
+                                         (supertag-view--resolve-prop
+                                          value context)))))
     props))
+
+(defun supertag-view--add-widget-key (from to key)
+  "Add KEY between FROM and TO without replacing nested widget keys."
+  (let ((position from))
+    (while (< position to)
+      (let ((end (or (next-single-property-change
+                      position 'supertag-widget-key nil to)
+                     to)))
+        (unless (get-text-property position 'supertag-widget-key)
+          (put-text-property position end 'supertag-widget-key key))
+        (setq position end)))))
 
 (defun supertag-view--render-widget (widget context)
   "Render a single WIDGET definition with CONTEXT."
   (unless (listp widget)
     (error "Widget must be a plist, got: %S" widget))
-  (let ((type (plist-get widget :type)))
+  (let* ((type (plist-get widget :type))
+         (props (supertag-view--resolve-props widget context))
+         (key (plist-get props :key))
+         (start (point)))
     (unless type
       (error "Widget missing :type: %S" widget))
-    (supertag-widget-render type
-                            (supertag-view--resolve-props widget context)
-                            context)))
+    (supertag-widget-render type props context)
+    (when key
+      (supertag-view--add-widget-key start (point) key))))
 
 (defun supertag-view--render-widgets (widgets context)
   "Render WIDGETS list with CONTEXT."
@@ -664,6 +621,50 @@ If VALUE is a function, call it with CONTEXT."
   (with-temp-buffer
     (supertag-view--render-widgets widgets context)
     (split-string (buffer-string) "\n" nil)))
+
+(defun supertag-view-widget--clear ()
+  "Clear rendered text and stale editable-field bookkeeping."
+  (dolist (field (delete-dups (append widget-field-new widget-field-list)))
+    (widget-leave-text field))
+  (setq widget-field-new nil
+        widget-field-list nil)
+  (let ((inhibit-modification-hooks t))
+    (erase-buffer)))
+
+(defun supertag-view-widget--capture-selection ()
+  "Capture point as a stable Widget DSL key and offset."
+  (let* ((position (if (and (eobp) (> (point) (point-min)))
+                       (1- (point))
+                     (point)))
+         (key (get-text-property position 'supertag-widget-key)))
+    (when key
+      (let ((start position))
+        (while (and (> start (point-min))
+                    (equal (get-text-property
+                            (1- start) 'supertag-widget-key)
+                           key))
+          (setq start (1- start)))
+        (list :key key :offset (- position start))))))
+
+(defun supertag-view-widget--restore-selection (selection)
+  "Restore keyed SELECTION, falling back to `point-min'."
+  (goto-char (point-min))
+  (when-let* ((key (plist-get selection :key)))
+    (let ((position (point-min))
+          found)
+      (while (and (< position (point-max)) (not found))
+        (if (equal (get-text-property position 'supertag-widget-key) key)
+            (setq found position)
+          (setq position
+                (or (next-single-property-change
+                     position 'supertag-widget-key nil (point-max))
+                    (point-max)))))
+      (when found
+        (let ((end (or (next-single-property-change
+                        found 'supertag-widget-key nil (point-max))
+                       (point-max))))
+          (goto-char (min (1- end)
+                          (+ found (or (plist-get selection :offset) 0)))))))))
 
 (defun supertag-view--pad-line (line width)
   "Pad or truncate LINE to WIDTH."
@@ -698,15 +699,17 @@ Widgets are reusable UI components for building views.")
 
 (defface supertag-view-widget-badge-face
   '((t :weight bold))
-  "Face for badge widget content.")
+  "Face for badge widget content."
+  :group 'org-supertag)
 
 (defface supertag-view-widget-toolbar-label-face
   '((t :weight bold))
-  "Face for toolbar label text.")
+  "Face for toolbar label text."
+  :group 'org-supertag)
 
 (defun supertag-widget-register (type render-fn)
   "Register a widget TYPE with RENDER-FN.
-TYPE is a symbol like 'header, 'progress-bar, etc.
+TYPE is a symbol such as `header' or `progress-bar'.
 RENDER-FN is a function that takes a plist of properties and renders the widget."
   (let ((key (supertag-widget--normalize-type type)))
     (puthash key render-fn supertag--widget-registry)
@@ -717,7 +720,7 @@ RENDER-FN is a function that takes a plist of properties and renders the widget.
 TYPE is the widget type symbol.
 PROPS is a plist of properties for the widget.
 Optional CONTEXT is passed to renderers that accept it.
-Example: (supertag-widget-render 'header '(:text \"Title\"))"
+Example: (supertag-widget-render (quote header) (list :text \"Title\"))"
   (let* ((key (supertag-widget--normalize-type type))
          (render-fn (gethash key supertag--widget-registry)))
     (unless render-fn
@@ -726,7 +729,137 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
         (funcall render-fn props context)
       (funcall render-fn props))))
 
+(defun supertag-view-widget--insert-placeholder (descriptor text)
+  "Insert TEXT carrying interactive leaf DESCRIPTOR."
+  (let ((start (point)))
+    (insert text)
+    (put-text-property start (point)
+                       'supertag-widget-placeholder descriptor)))
+
+(defun supertag-widget--render-action (props face)
+  "Render PROPS as a deferred text button using FACE."
+  (let ((label (plist-get props :label))
+        (action (plist-get props :action)))
+    (unless (stringp label)
+      (error "Widget action :label must be a string, got: %S" label))
+    (unless (functionp action)
+      (error "Widget action :action must be a function, got: %S" action))
+    (supertag-view-widget--insert-placeholder
+     (list :kind 'button :action action :face face
+           :help-echo (plist-get props :help-echo))
+     label)
+    (unless (and (plist-member props :newline)
+                 (null (plist-get props :newline)))
+      (insert "\n"))))
+
+(defun supertag-widget--render-editable-field (props)
+  "Render PROPS as a deferred built-in editable field."
+  (let ((value (plist-get props :value))
+        (width (plist-get props :width))
+        (on-change (plist-get props :on-change)))
+    (unless (stringp value)
+      (error "Editable field :value must be a string, got: %S" value))
+    (unless (and (integerp width) (> width 0))
+      (error "Editable field :width must be positive, got: %S" width))
+    (when (> (string-width value) width)
+      (error "Editable field value is wider than :width %d: %S"
+             width value))
+    (unless (or (null on-change) (functionp on-change))
+      (error "Editable field :on-change must be a function, got: %S"
+             on-change))
+    (supertag-view-widget--insert-placeholder
+     (list :kind 'editable-field :value value :on-change on-change)
+     (concat value (make-string (- width (string-width value)) ?\s)))
+    (unless (and (plist-member props :newline)
+                 (null (plist-get props :newline)))
+      (insert "\n"))))
+
+(defun supertag-view-widget--placeholder-ranges ()
+  "Return deferred interactive ranges in reverse buffer order."
+  (let ((position (point-min))
+        ranges)
+    (while (< position (point-max))
+      (let* ((descriptor
+              (get-text-property position 'supertag-widget-placeholder))
+             (end (or (next-single-property-change
+                       position 'supertag-widget-placeholder nil (point-max))
+                      (point-max))))
+        (when descriptor
+          (push (list position end descriptor
+                      (get-text-property position 'supertag-widget-key))
+                ranges))
+        (setq position end)))
+    ranges))
+
+(defun supertag-view-widget--materialize ()
+  "Materialize deferred buttons and fields in the final buffer."
+  (dolist (range (supertag-view-widget--placeholder-ranges))
+    (pcase-let ((`(,from ,to ,descriptor ,key) range))
+      (remove-text-properties
+       from to '(supertag-widget-placeholder nil))
+      (pcase (plist-get descriptor :kind)
+        ('button
+         (let ((action (plist-get descriptor :action)))
+           (make-text-button
+            from to
+            'action (lambda (_button) (funcall action))
+            'face (plist-get descriptor :face)
+            'mouse-face 'highlight
+            'follow-link t
+            'help-echo (plist-get descriptor :help-echo))))
+        ('editable-field
+         (let ((on-change (plist-get descriptor :on-change))
+               (value (plist-get descriptor :value))
+               (width (string-width
+                       (buffer-substring-no-properties from to))))
+           (delete-region from to)
+           (goto-char from)
+           (let ((start (point)))
+             (widget-create
+              'editable-field
+              :format "%v"
+              :size (+ (length value) (- width (string-width value)))
+              :keymap supertag-view-widget-field-map
+              :value value
+              :notify (lambda (widget &rest _ignore)
+                        (let ((new-value (widget-value widget)))
+                          (when (> (string-width new-value) width)
+                            (user-error
+                             "Editable field value exceeds width %d"
+                             width))
+                          (when on-change
+                            (funcall on-change new-value)))))
+             (remove-text-properties
+              start (point) '(supertag-widget-placeholder nil))
+             (when key
+               (put-text-property start (point)
+                                  'supertag-widget-key key)))))
+        (_
+         (error "Unknown Widget placeholder kind: %S"
+                (plist-get descriptor :kind)))))))
+
+(defun supertag-view-widget--render-tree (widgets context)
+  "Render WIDGETS for CONTEXT and initialize native controls."
+  (supertag-view-widget--clear)
+  (supertag-view--render-widgets
+   (if (functionp widgets) (funcall widgets context) widgets)
+   context)
+  (supertag-view-widget--materialize)
+  (widget-setup)
+  (goto-char (point-min)))
+
 ;; Built-in widgets
+
+(supertag-widget-register 'button
+  (lambda (props)
+    (supertag-widget--render-action props 'button)))
+
+(supertag-widget-register 'link
+  (lambda (props)
+    (supertag-widget--render-action props 'link)))
+
+(supertag-widget-register 'editable-field
+  #'supertag-widget--render-editable-field)
 
 (supertag-widget-register 'header
   (lambda (props)
@@ -744,8 +877,12 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
 
 (supertag-widget-register 'text
   (lambda (props)
-    (let ((content (plist-get props :content)))
-      (insert (format "%s\n" content)))))
+    (let ((content (plist-get props :content))
+          (face (plist-get props :face))
+          (start (point)))
+      (insert (format "%s\n" content))
+      (when face
+        (add-text-properties start (point) (list 'face face))))))
 
 (supertag-widget-register 'progress-bar
   (lambda (props)
@@ -789,7 +926,9 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
                       (make-list (length headers) 15))))
       ;; Header row
       (dotimes (i (length headers))
-        (insert (format "%-*s " (nth i widths) (nth i headers))))
+        (insert (supertag-view--pad-line
+                 (format "%s" (nth i headers)) (nth i widths))
+                " "))
       (insert "\n")
       ;; Separator
       (dotimes (i (length headers))
@@ -798,7 +937,9 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
       ;; Data rows
       (dolist (row rows)
         (dotimes (i (length row))
-          (insert (format "%-*s " (nth i widths) (nth i row))))
+          (insert (supertag-view--pad-line
+                   (format "%s" (nth i row)) (nth i widths))
+                  " "))
         (insert "\n"))
       (insert "\n"))))
 
@@ -807,9 +948,13 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
 (supertag-widget-register 'section
   (lambda (props &optional context)
     (let ((title (plist-get props :title))
+          (face (plist-get props :face))
           (children (plist-get props :children)))
       (when title
-        (supertag-view--subheader title))
+        (let ((start (point)))
+          (supertag-view--subheader title)
+          (when face
+            (add-text-properties start (point) (list 'face face)))))
       (when children
         (unless (listp children)
           (error "Widget :children must be a list, got: %S" children))
@@ -867,7 +1012,7 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
 ;; Layout and info widgets (DSL v2)
 
 (defun supertag-widget--render-card (props context)
-  "Render a simple card container with box-drawing style."
+  "Render PROPS as a simple card using CONTEXT for child widgets."
   (let* ((title (plist-get props :title))
          (children (plist-get props :children))
          (width (plist-get props :width))
@@ -894,7 +1039,7 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
         (let ((padded (supertag-view--pad-line line inner-width)))
           (when (and is-title title)
             (setq padded (propertize padded 'face 'bold)))
-          (insert (format "│ %s │\n" padded)))
+          (insert "│ " padded " │\n"))
         (setq is-title nil)))
     (insert (format "└%s┘\n" (make-string (+ inner-width 2) ?─)))
     (insert "\n")))
@@ -903,7 +1048,7 @@ Example: (supertag-widget-render 'header '(:text \"Title\"))"
 (supertag-widget-register 'panel #'supertag-widget--render-card)
 
 (defun supertag-widget--render-field-table (props)
-  "Render field/value pairs in a table style aligned with `supertag-view-table`."
+  "Render field/value pairs from PROPS in a table style."
   (let* ((items (or (plist-get props :items) '()))
          (pairs
           (mapcar
@@ -994,7 +1139,8 @@ CONFIG is a plist with:
   :id       - View identifier (symbol)
   :name     - Display name
   :tag      - Target tag (optional)
-  :widgets  - List of widget definitions
+  :widgets  - List of widget definitions or a function of context
+  :persist  - Nil skips developer-config persistence
 
 Widget definition:
   :type can be a symbol (header) or keyword (:header).
@@ -1007,36 +1153,28 @@ Widget definition:
     ;; Create a Runtime renderer from widgets.
     (let ((render-fn
            (lambda (context)
-             (erase-buffer)
-             (let ((supertag-view--rendering-view-id id)
-                   (supertag-view--rendering-context context)
-                   (supertag-view--rendering-context-builder
-                    (supertag-view--context-builder-from-context context)))
-               (supertag-view--render-widgets widgets context))
-             (goto-char (point-min))))
-          (state-fn
-           (lambda (context)
-             (if-let* ((builder
-                        (supertag-view--context-builder-from-context context)))
-                 (funcall builder)
-               context))))
+             (supertag-view-widget--render-tree widgets context)))
+          (state-fn #'supertag-view--rebuild-context))
 
       ;; Register the view
       (supertag-view-register
        :id id
        :name name
-       :runtime t
        :buffer-name-fn
        (lambda (context)
          (format "*View: %s - %s*" name (plist-get context :tag)))
-       :mode-fn #'special-mode
+       :mode-fn #'supertag-view-widget-mode
        :state-fn state-fn
        :render-fn render-fn
+       :capture-selection-fn #'supertag-view-widget--capture-selection
+       :restore-selection-fn #'supertag-view-widget--restore-selection
        :display-action '(display-buffer-pop-up-window)
        :valid-for (when tag (list tag)))
 
       ;; Also store config for persistence
-      (supertag-view-config-register config)
+      (unless (and (plist-member config :persist)
+                   (null (plist-get config :persist)))
+        (supertag-view-config-register config))
 
       (message "View '%s' defined from config" name)
       id)))
@@ -1063,7 +1201,7 @@ Widget definition:
                  (list :type :progress-bar
                        :value (lambda (ctx)
                                 (or (plist-get (car (plist-get ctx :nodes)) :progress) 0)))
-                 (list :type :list :items ("Task A" "Task B" "Task C"))))))))
+                 (list :type :list :items (list "Task A" "Task B" "Task C"))))))))
 
 ;; ============================================================================
 ;; Initialization

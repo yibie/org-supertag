@@ -288,7 +288,7 @@ Org-SuperTag grows with you. Start simple, add power when you need it:
 | Tags and Table View | **Automation** — rules that auto-fill fields based on conditions (`doc/AUTOMATION-SYSTEM-GUIDE.md`) |
 | Manual capture | **Capture Templates** — predefined forms for common entries (`doc/CAPTURE-GUIDE.md`) |
 | Basic queries | **Query Blocks** — embed live query results inside Org files (`doc/ABOUT-QUERY-BLOCK.md`) |
-| Default views | **Custom Views** — build your own dashboards (`doc/VIEW_FRAMEWORK_DEV_GUIDE.md`) |
+| Default views | **Custom Views** — build declarative dashboards with native buttons and editable fields (`doc/VIEW_FRAMEWORK_DEV_GUIDE.md`) |
 | Single vault | **Multi-Vault** — separate databases for work/personal (`doc/SYNC-CONFIGURATION.md`) |
 | Writing plugins | **Plugin Guide** — extend with your own extractors and services (`doc/ORG-SUPERTAG-PLUGIN-GUIDE.md`) |
 

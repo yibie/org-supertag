@@ -143,7 +143,6 @@ Point must be at an Org heading. when invoked from other modes."
     (supertag-view-register
      :id 'node
      :name "Node"
-     :runtime t
      :selectable nil
      :buffer-name supertag-view-node--buffer-name
      :mode-fn #'supertag-view-node-mode

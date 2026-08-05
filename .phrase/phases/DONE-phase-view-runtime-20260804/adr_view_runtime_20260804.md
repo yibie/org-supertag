@@ -62,3 +62,9 @@ Search、Table、Kanban、Node 分别拥有 buffer 创建、display、refresh、
 ## Rollback
 
 旧 command wrapper 保留到 phase 验收。任一 Adapter 迁移失败时，将该 wrapper 路由回旧 open/refresh 实现；其他已验证 Adapter 和 Runtime 不受影响。
+
+## Amendment — 2026-08-05
+
+所有具体 view 已有统一 Runtime 后，不再保留旧 Developer View 生命周期作为回滚路径。Progress Dashboard、Effort Distribution 与 Priority Matrix 迁移为普通 Adapter；随后删除旧宏、独立 buffer renderer、legacy refresh 和仅用于分流的 `:runtime` flag。
+
+不提供 compatibility shim：旧 API 没有独立生命周期所有权，继续保留只会让新 view 可以绕过 Runtime 的 cleanup、refresh 与 display 契约。历史 phase 文档保留原决策记录，当前开发指南只描述统一 Runtime API。

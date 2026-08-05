@@ -11,6 +11,72 @@
 (require 'supertag-view-framework)
 (require 'supertag-ui-search)
 
+(ert-deftest test-view-runtime-picker-always-uses-public-open ()
+  "The custom-view picker must not route definitions around the Runtime."
+  (supertag-view-framework-init)
+  (let (opened)
+    (supertag-view-register
+     :id 'picker-runtime
+     :name "Picker Runtime"
+     :render-fn #'ignore)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _args) "Picker Runtime"))
+              ((symbol-function 'supertag-view--build-context)
+               (lambda (_query) '(:tag "demo" :nodes nil)))
+              ((symbol-function 'supertag-view-open)
+               (lambda (id input &optional _display-action)
+                 (setq opened (list id input)))))
+      (supertag-view-select-and-render "demo"))
+    (should (equal opened
+                   '(picker-runtime (:tag "demo" :nodes nil))))))
+
+(ert-deftest test-view-runtime-built-in-dashboards-open-and-refresh ()
+  "Built-in dashboards must use the single Runtime buffer lifecycle."
+  (supertag-view-framework-init)
+  (dolist (file '("supertag-view-progress-dashboard"
+                  "supertag-view-effort-distribution"
+                  "supertag-view-priority-matrix"))
+    (load file nil t))
+  (dolist (case '((progress-dashboard
+                   "Progress Dashboard"
+                   "No projects found."
+                   supertag-view-progress--render)
+                  (effort-distribution
+                   "Effort Distribution"
+                   "No effort data found."
+                   supertag-view-effort--render)
+                  (priority-matrix
+                   "Priority Matrix"
+                   "Eisenhower Matrix"
+                   supertag-view-priority--render)))
+    (pcase-let ((`(,id ,name ,body-text ,old-render) case))
+      (let* ((tag "demo")
+             (buffer-name (format "*View: %s - demo*" name))
+             (input (list :tag tag :nodes nil
+                          :context-builder
+                          (lambda () (list :tag tag :nodes nil)))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'display-buffer) #'ignore)
+              ((symbol-function 'supertag-find-nodes-by-tag)
+                       (lambda (_tag) nil)))
+              (let ((view (supertag-view-get id))
+                    (buffer (supertag-view-open id input)))
+                (should (eq (plist-get view :mode-fn)
+                            #'supertag-view-widget-mode))
+                (should-not (fboundp old-render))
+                (should (equal (buffer-name buffer) buffer-name))
+                (with-current-buffer buffer
+                  (should (eq (plist-get supertag-view--instance :view-id) id))
+                  (should (string-match-p body-text (buffer-string))))
+                (setq tag "updated")
+                (supertag-view-refresh buffer)
+                (with-current-buffer buffer
+                  (should (string-match-p
+                           (format "%s - #updated" name)
+                           (buffer-string))))))
+          (when-let* ((buffer (get-buffer buffer-name)))
+            (kill-buffer buffer)))))))
+
 (ert-deftest test-view-runtime-open-rejects-unknown-view ()
   "Opening an unknown view must fail at the public seam."
   (supertag-view-framework-init)
@@ -375,6 +441,165 @@
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 
+(ert-deftest test-view-runtime-dsl-restores-keyed-selection-after-refresh ()
+  "DSL refresh must restore the same keyed region and fall back safely."
+  (supertag-view-framework-init)
+  (let ((prefix "Short")
+        (show-target t)
+        (buffer-name "*View: Keyed DSL - demo*"))
+    (unwind-protect
+        (progn
+          (supertag-view-define-from-config
+           (list :id 'keyed-dsl
+                 :name "Keyed DSL"
+                 :tag "demo"
+                 :persist nil
+                 :widgets
+                 (lambda (_context)
+                   (append
+                    (list (list :type :text :content prefix))
+                    (when show-target
+                      (list (list :type :text
+                                  :key 'delete
+                                  :content "Target")))))))
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let ((buffer (supertag-view-open
+                           'keyed-dsl '(:tag "demo" :nodes nil))))
+              (with-current-buffer buffer
+                (goto-char (point-min))
+                (search-forward "Target")
+                (goto-char (- (point) 4)))
+              (setq prefix "A much longer prefix")
+              (supertag-view-refresh buffer)
+              (with-current-buffer buffer
+                (should (eq (get-text-property
+                             (point) 'supertag-widget-key)
+                            'delete))
+                (should (eq (char-after) ?r)))
+              (setq show-target nil)
+              (supertag-view-refresh buffer)
+              (with-current-buffer buffer
+                (should (= (point) (point-min)))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
+(ert-deftest test-view-runtime-dsl-uses-native-buttons-and-editable-field ()
+  "DSL actions and fields must use real built-in Emacs primitives."
+  (supertag-view-framework-init)
+  (let ((activated nil)
+        (changed nil)
+        (buffer-name "*View: Native DSL - demo*"))
+    (unwind-protect
+        (progn
+          (supertag-view-define-from-config
+           (list :id 'native-dsl
+                 :name "Native DSL"
+                 :tag "demo"
+                 :persist nil
+                 :widgets
+                 (list
+                  (list :type :button :key 'run :label "Run"
+                        :action (lambda () (setq activated 'button)))
+                  (list :type :link :key 'open :label "Open"
+                        :action (lambda () (setq activated 'link)))
+                  (list :type :editable-field :key 'title
+                        :value "old" :width 10
+                        :on-change (lambda (value) (setq changed value))))))
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let ((buffer (supertag-view-open
+                           'native-dsl '(:tag "demo" :nodes nil))))
+              (with-current-buffer buffer
+                (goto-char (point-min))
+                (search-forward "Run")
+                (button-activate (button-at (1- (point))))
+                (should (eq activated 'button))
+                (search-forward "Open")
+                (button-activate (button-at (1- (point))))
+                (should (eq activated 'link))
+                (search-forward "old")
+                (let ((field (widget-at (- (point) 2))))
+                  (should field)
+                  (widget-value-set field "new")
+                  (widget-apply field :notify field nil)
+                  (should (equal changed "new")))
+                (goto-char (point-min))
+                (should (eq (key-binding "x") 'undefined))
+                (supertag-view-widget-forward 1)
+                (should (equal (button-label (button-at (point))) "Open"))
+                (supertag-view-widget-forward 1)
+                (should (widget-at (point)))
+                (supertag-view-widget-backward 1)
+                (should (equal (button-label (button-at (point)))
+                               "Open"))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
+(ert-deftest test-view-runtime-dsl-materializes-interaction-after-layout ()
+  "Interactive leaves must remain live after columns/cards and refresh."
+  (supertag-view-framework-init)
+  (let ((activated 0)
+        (buffer-name "*View: Layout DSL - demo*"))
+    (unwind-protect
+        (progn
+          (supertag-view-define-from-config
+           (list :id 'layout-dsl
+                 :name "Layout DSL"
+                 :tag "demo"
+                 :persist nil
+                 :widgets
+                 (list
+                  (list :type :columns
+                        :columns
+                        (list
+                         (list :width 12
+                               :children
+                               (list
+                                (list :type :button :key 'run
+                                      :label "Run"
+                                      :action
+                                      (lambda () (setq activated
+                                                         (1+ activated))))))
+                         (list :width 12
+                               :children
+                               (list (list :type :text
+                                           :content "Status")))))
+                  (list :type :card :title "Editor" :width 14
+                        :children
+                        (list
+                         (list :type :editable-field :key 'title
+                               :value "旧值" :width 8
+                               :on-change #'ignore))))))
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let ((buffer (supertag-view-open
+                           'layout-dsl '(:tag "demo" :nodes nil))))
+              (with-current-buffer buffer
+                (goto-char (point-min))
+                (search-forward "Run")
+                (button-activate (button-at (1- (point))))
+                (should (= activated 1))
+                (search-forward "旧值")
+                (should (widget-at (- (point) 2)))
+                (let ((inhibit-field-text-motion t))
+                  (should (= (string-width
+                              (buffer-substring
+                               (line-beginning-position)
+                               (line-end-position)))
+                             18)))
+                (should (= (length widget-field-list) 1))
+                (let ((overlay-count (length (overlays-in
+                                              (point-min) (point-max)))))
+                  (supertag-view-refresh buffer)
+                  (should (= (length widget-field-list) 1))
+                  (should (= (length (overlays-in
+                                      (point-min) (point-max)))
+                             overlay-count)))
+                (goto-char (point-min))
+                (search-forward "Run")
+                (button-activate (button-at (1- (point))))
+                (should (= activated 2))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
 (ert-deftest test-view-runtime-dsl-selection-uses-runtime-open ()
   "Selecting a declarative view must create its Runtime buffer."
   (supertag-view-framework-init)
@@ -398,33 +623,61 @@
         (kill-buffer buffer)))))
 
 (ert-deftest test-view-runtime-stream-shaped-adapter-needs-no-special-case ()
-  "A Stream-shaped adapter must work using only the public Runtime contract."
+  "A keyed interactive Stream must need no Runtime special case."
   (supertag-view-framework-init)
-  (let ((buffer-name " *supertag-stream-fixture*")
-        (bodies '("First body" "Second body")))
+  (let ((buffer-name "*View: Stream Fixture - demo*")
+        (nodes '(("node-1" . "First body")
+                 ("node-2" . "Second body")))
+        opened
+        edited)
     (unwind-protect
         (progn
-          (supertag-view-register
-           :id 'stream-fixture
-           :name "Stream Fixture"
-           :runtime t
-           :selectable nil
-           :buffer-name buffer-name
-           :mode-fn #'special-mode
-           :state-fn (lambda (_input) bodies)
-           :render-fn (lambda (state)
-                        (erase-buffer)
-                        (dolist (body state)
-                          (insert body "\n\n"))))
+          (supertag-view-define-from-config
+           (list
+            :id 'stream-fixture
+            :name "Stream Fixture"
+            :tag "demo"
+            :persist nil
+            :widgets
+            (lambda (_context)
+              (mapcar
+               (lambda (node)
+                 (let ((id (car node))
+                       (body (cdr node)))
+                   (list
+                    :type :card
+                    :key (list 'node id)
+                    :width 32
+                    :children
+                    (list
+                     (list :type :text :key (list 'body id)
+                           :content body)
+                     (list :type :link :key (list 'tag id)
+                           :label "#demo"
+                           :action (lambda () (setq opened id)))
+                     (list :type :button :key (list 'edit id)
+                           :label "Edit"
+                           :action (lambda () (setq edited id)))))))
+               nodes))))
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((buffer (supertag-view-open 'stream-fixture '(:tag "demo"))))
               (with-current-buffer buffer
-                (should (equal (buffer-string)
-                               "First body\n\nSecond body\n\n")))
-              (setq bodies '("Updated body"))
+                (goto-char (point-min))
+                (search-forward "First body")
+                (goto-char (- (point) 4)))
+              (setq nodes (cons '("node-0" . "New body") nodes))
               (supertag-view-refresh buffer)
               (with-current-buffer buffer
-                (should (equal (buffer-string) "Updated body\n\n"))))))
+                (should (equal (get-text-property
+                                (point) 'supertag-widget-key)
+                               '(body "node-1")))
+                (goto-char (point-min))
+                (search-forward "#demo")
+                (button-activate (button-at (1- (point))))
+                (should (equal opened "node-0"))
+                (search-forward "Edit")
+                (button-activate (button-at (1- (point))))
+                (should (equal edited "node-0"))))))
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 

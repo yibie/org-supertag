@@ -1,5 +1,7 @@
 # tech_refer_view_runtime_20260804
 
+Renderer backend、Emacs Widget、`widget-extra` 与 VUI 的后续探索见 `tech_refer_widget_renderer_20260805.md`。该文档是研究记录，不改变本阶段已批准的 Runtime scope 或依赖。
+
 ## Existing Seams
 
 - `supertag-view-api.el`：现有 UI-agnostic read/subscription facade，继续作为数据边界。

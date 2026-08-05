@@ -110,6 +110,39 @@
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 
+(ert-deftest supertag-view-kanban-card-command-targets-card-under-point ()
+  "Moving a left-column card must not target the right-column card above it."
+  (supertag-view-framework-init)
+  (let ((config (supertag-view-kanban-create-config "task" "status"))
+        (buffer-name "*Supertag Kanban: task by status*")
+        field-set-args
+        (supertag-use-global-fields nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                  ((symbol-function 'supertag-find-nodes-by-tag)
+                   (lambda (_tag)
+                     '(("kanban-1" . (:id "kanban-1" :title "Left card"))
+                       ("kanban-2" . (:id "kanban-2" :title "Right card")))))
+                  ((symbol-function 'supertag-field-get)
+                   (lambda (node-id _tag _field)
+                     (if (equal node-id "kanban-1") "Todo" "Done")))
+                  ((symbol-function 'supertag-field-set)
+                   (lambda (&rest args)
+                     (setq field-set-args args)))
+                  ((symbol-function 'supertag-tag-get-all-fields)
+                   (lambda (_tag)
+                     '((:name "status" :type :options
+                              :options ("Todo" "Done"))))))
+          (let ((buffer (supertag-view-kanban-open config)))
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (search-forward "Left card")
+              (supertag-view-kanban-move-card-right))
+            (should (equal field-set-args
+                           '("kanban-1" "task" "status" "Done")))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
 (provide 'test-view-kanban)
 
 ;;; test-view-kanban.el ends here

@@ -157,6 +157,10 @@ Table、Kanban、Search 和 Node 的交互模型不同。统一 Widget 会把渲
 - 现有命令、编辑、导航和 Smart Key 回归测试通过；
 - 新建一个 Stream 形态的测试 Adapter 时，不需要修改 Runtime。
 
+### 2026-08-05 决策更新：为什么不再保留旧 Developer View 路径？
+
+`define-supertag-view` 的兼容承诺只用于 Adapter 迁移期。Progress Dashboard、Effort Distribution、Priority Matrix 全部接入 Runtime 后，这条旧路径不再提供回滚价值，反而允许 renderer 绕过统一的 buffer、refresh 和 cleanup 契约。因此本阶段在迁移三套 Dashboard 后直接删除旧宏、旧 buffer wrapper、legacy refresh 与 `:runtime` 分流，不提供兼容 shim；Widget DSL 继续保留并使用统一 Runtime。
+
 ### 10. 最大风险与回滚策略是什么？
 
 最大风险是 Table text properties、Node follow/selection、Search origin 和订阅 cleanup 的隐性行为被迁移破坏。每个 Adapter 单独迁移并保留旧 renderer 与公开 wrapper；任何一步失败，都只回退该 Adapter 的 open/refresh 路由，不回退已经验证的 Runtime 或其他 Adapter。

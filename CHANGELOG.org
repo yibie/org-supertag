@@ -26,6 +26,19 @@
 - See README "Data storage" / "Migration from older versions" for the
   user-facing upgrade/downgrade notes.
 
+** View framework
+- Progress Dashboard, Effort Distribution, and Priority Matrix now use the
+  same View Runtime as Search, Table, Kanban, Node, and the Widget DSL.
+- The Widget DSL is now a production renderer backend with dynamic render
+  trees, stable keyed selection, native text buttons/links, editable fields,
+  and layout-safe interaction inside columns and cards. The three built-in
+  dashboards now use this backend and no longer keep separate buffer renderer
+  functions. No external package dependency was added.
+- Removed the legacy developer lifecycle (=define-supertag-view=,
+  =supertag-view--with-buffer=, and =supertag-view-render=). Custom views now
+  register with =supertag-view-register= and open through
+  =supertag-view-open=; refresh has one Runtime-only path.
+
 ** Bug fixes
 - Fixed background sync storing custom Org TODO keywords such as =DOING= in
   node titles. The shared current-buffer parser now initializes Org before
