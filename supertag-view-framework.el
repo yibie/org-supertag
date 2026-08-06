@@ -889,7 +889,7 @@ Example: (supertag-widget-render (quote header) (list :text \"Title\"))"
     (let* ((value (plist-get props :value))
            (max (or (plist-get props :max) 100))
            (width (or (plist-get props :width) 20))
-           (percentage (* 100.0 (/ value max)))
+           (percentage (* 100.0 (/ (float value) max)))
            (filled (round (* width (/ percentage 100.0))))
            (empty (- width filled)))
       (insert "[")

@@ -203,12 +203,23 @@ LIMIT controls the number of entries; defaults to
   (setq supertag-view-demo-dashboard--interaction-state
         (list :button-clicks 0 :link-activations 0 :edited-value "Project Alpha")))
 
-(defun supertag-view-demo-dashboard--interaction-status (_context)
-  "Return a visible summary of the current demo interaction state."
-  (format "Button clicks: %d | Link activations: %d | Edited value: %s"
-          (plist-get supertag-view-demo-dashboard--interaction-state :button-clicks)
-          (plist-get supertag-view-demo-dashboard--interaction-state :link-activations)
-          (plist-get supertag-view-demo-dashboard--interaction-state :edited-value)))
+(defun supertag-view-demo-dashboard--interaction-stats (_context)
+  "Return visible rows for the current demo interaction state."
+  (list
+   (cons "Button clicks"
+         (plist-get supertag-view-demo-dashboard--interaction-state :button-clicks))
+   (cons "Link activations"
+         (plist-get supertag-view-demo-dashboard--interaction-state :link-activations))
+   (cons "Edited value"
+         (plist-get supertag-view-demo-dashboard--interaction-state :edited-value))))
+
+(defun supertag-view-demo-dashboard--right-column-width (_context)
+  "Return the demo's right column width for the current window."
+  (max 40 (- (window-width) 31)))
+
+(defun supertag-view-demo-dashboard--right-card-width (context)
+  "Return a card width that fits the demo's right column in CONTEXT."
+  (- (supertag-view-demo-dashboard--right-column-width context) 4))
 
 (defun supertag-view-demo-dashboard--increment ()
   "Increment the in-memory button counter and refresh the demo."
@@ -267,11 +278,12 @@ LIMIT controls the number of entries; defaults to
                                          (cons "Avg progress"
                                                (format "%d%%"
                                                        (supertag-view-demo-dashboard--avg-progress ctx))))))))))
-           (list :width 60
+           (list :width #'supertag-view-demo-dashboard--right-column-width
                  :children
                  (list
                   (list :type :card
                         :title "Nodes"
+                        :width #'supertag-view-demo-dashboard--right-card-width
                         :children
                         (list
                          (list :type :stack
@@ -280,43 +292,57 @@ LIMIT controls the number of entries; defaults to
                                            (supertag-view-demo-dashboard--node-widgets ctx)))))
                   (list :type :card
                         :title "Components"
+                        :width #'supertag-view-demo-dashboard--right-card-width
                         :children
                         (list
-                         (list :type :text
-                               :content
-                               (concat
-                                "Widget inventory: header subheader text progress-bar "
-                                "stats-row separator list table section stack columns "
-                                "card panel field kv badge empty toolbar button link "
-                                "editable-field"))
-                         (list :type :text
-                               :content #'supertag-view-demo-dashboard--interaction-status)
+                         (list :type :subheader :text "Interactive Widgets")
+                         (list :type :stats-row
+                               :stats #'supertag-view-demo-dashboard--interaction-stats)
+                         (list :type :text :content "button — updates the click counter")
                          (list :type :button :key 'increment
-                               :label "Increment"
+                               :label "Increment counter"
                                :action #'supertag-view-demo-dashboard--increment)
+                         (list :type :text :content "link — updates the activation counter")
                          (list :type :link :key 'sample-link
-                               :label "Sample link"
+                               :label "Sample link activation"
                                :action #'supertag-view-demo-dashboard--activate-link)
-                         (list :type :text :content "Editable sample:")
-                         (list :type :editable-field :key 'sample-title
-                               :value (lambda (_context)
-                                        (plist-get
-                                         supertag-view-demo-dashboard--interaction-state
-                                         :edited-value))
-                               :width 24
-                               :on-change #'supertag-view-demo-dashboard--edit-value)
+                         (list :type :columns
+                               :columns
+                               (list
+                                (list :width 18
+                                      :children
+                                      (list (list :type :text
+                                                  :content "editable-field →")))
+                                (list :width 26
+                                      :children
+                                      (list
+                                       (list :type :editable-field :key 'sample-title
+                                             :value
+                                             (lambda (_context)
+                                               (plist-get
+                                                supertag-view-demo-dashboard--interaction-state
+                                                :edited-value))
+                                             :width 24
+                                             :on-change
+                                             #'supertag-view-demo-dashboard--edit-value)))))
+                         (list :type :subheader :text "Data Widgets")
+                         (list :type :text :content "list")
                          (list :type :list
                                :items (list "List item A" "List item B" "List item C"))
+                         (list :type :text :content "table")
                          (list :type :table
                                :headers (list "Name" "Value")
                                :rows (list (list "Alpha" "1")
                                            (list "Beta" "2")
                                            (list "Gamma" "3"))
                                :widths (list 12 10))
+                         (list :type :text :content "badge")
                          (list :type :badge
                                :items (list "High" "Medium" "Low"))
+                         (list :type :text :content "kv — alias of field")
                          (list :type :kv
                                :items (list (cons "Alias" "kv → field")))
+                         (list :type :text :content "empty")
                          (list :type :empty
                                :title "Empty state"
                                :message "No data for this section.")))))))

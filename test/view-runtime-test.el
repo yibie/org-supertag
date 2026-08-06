@@ -632,6 +632,8 @@
                     (maphash (lambda (type _renderer)
                                (should (memq type showcased)))
                              supertag--widget-registry)))
+                (should (string-match-p "60%" (buffer-string)))
+                (should-not (string-match-p "…" (buffer-string)))
                 (goto-char (point-min))
                 (search-forward "Increment")
                 (button-activate (button-at (1- (point))))
@@ -641,7 +643,7 @@
                 (button-activate (button-at (1- (point))))
                 (should (string-match-p "Link activations: 1" (buffer-string)))
                 (goto-char (point-min))
-                (search-forward "Editable sample:")
+                (search-forward "editable-field")
                 (search-forward "Project Alpha")
                 (let ((field (widget-at (1- (point)))))
                   (widget-value-set field "Renamed")
@@ -652,7 +654,8 @@
                           supertag-view-demo-dashboard--interaction-state
                           :edited-value)
                          "Renamed"))
-                (should (string-match-p "Renamed" (buffer-string)))))))
+                (should (string-match-p "Edited value: Renamed"
+                                        (buffer-string)))))))
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 

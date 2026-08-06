@@ -130,6 +130,12 @@
       (should (string-match-p "\\]" content))
       (should (string-match-p "50%" content)))))
 
+(ert-deftest test-widget-progress-bar-preserves-integer-ratios ()
+  "Widget progress values must not be truncated by integer division."
+  (with-temp-buffer
+    (supertag-widget-render 'progress-bar '(:value 41 :max 100 :width 10))
+    (should (string-match-p "41%" (buffer-string)))))
+
 (ert-deftest test-view-stat-row ()
   "Test stat row insertion."
   (with-temp-buffer
