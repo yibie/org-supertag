@@ -31,3 +31,4 @@
 - issue029 [ ] org-supertag 延迟加载后现存 Org buffer 不显示 inline tag SVG（phase-smart-key-20260721/issue_svg_tag_late_load_20260730.md）
 - issue030 [ ] 下划线 inline Tag 被 Org subscript 改写；共享 range matcher 与 post-hook 整批清理安全已实现，待用户重扫/清理验收（phase-smart-key-20260721/issue_inline_tag_underscore_pollution_20260801.md）
 - issue031 [x] Kanban 并排卡片操作可能命中相邻列节点（实现、图形 `emacs -Q` 回归与用户验收通过；DONE-phase-view-runtime-20260804/issue_view_runtime_kanban_card_target_20260804.md）
+- issue033 [ ] Widget DSL editable-field 遗留 overlay 并推动同行边框 2px（实现与 live GUI 验证完成，待用户确认；phase-view-dsl-20260204/issue_widget_field_border_20260806.md）

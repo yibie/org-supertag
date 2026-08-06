@@ -441,6 +441,35 @@
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 
+(ert-deftest test-view-runtime-dsl-reopen-removes-old-field-overlays ()
+  "Reopening a DSL buffer must not orphan its previous editable field."
+  (supertag-view-framework-init)
+  (let ((buffer-name "*View: Runtime DSL Reopen - demo*"))
+    (unwind-protect
+        (progn
+          (supertag-view-define-from-config
+           (list :id 'runtime-dsl-reopen
+                 :name "Runtime DSL Reopen"
+                 :widgets
+                 (list (list :type :editable-field :key 'field
+                             :value "demo" :width 8))))
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (supertag-view-open 'runtime-dsl-reopen '(:tag "demo"))
+            (supertag-view-open 'runtime-dsl-reopen '(:tag "demo")))
+          (with-current-buffer buffer-name
+            (let ((field-overlays
+                   (cl-remove-if-not
+                    (lambda (overlay) (overlay-get overlay 'field))
+                    (overlays-in (point-min) (point-max)))))
+              (should (= (length field-overlays) 1))
+              (should (= (- (overlay-end (car field-overlays))
+                            (overlay-start (car field-overlays)))
+                         8))
+              (should (eq (overlay-get (car field-overlays) 'face)
+                          'supertag-view-widget-field-face)))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
 (ert-deftest test-view-runtime-dsl-restores-keyed-selection-after-refresh ()
   "DSL refresh must restore the same keyed region and fall back safely."
   (supertag-view-framework-init)

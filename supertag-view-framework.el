@@ -520,9 +520,23 @@ Note: This loads the Elisp code which should register the views."
     map)
   "Keymap used by editable fields in Widget DSL views.")
 
+(defface supertag-view-widget-field-face
+  '((t :inherit widget-field :box nil :extend nil))
+  "Face for editable fields that preserves fixed-width DSL layouts."
+  :group 'org-supertag)
+
+(defun supertag-view-widget--cleanup-fields ()
+  "Remove native editable fields from the current Widget DSL buffer."
+  (dolist (field (delete-dups (append widget-field-new widget-field-list)))
+    (widget-leave-text field))
+  (setq widget-field-new nil
+        widget-field-list nil))
+
 (define-derived-mode supertag-view-widget-mode special-mode "Supertag-View"
   "Major mode for declarative Supertag views."
-  (setq buffer-read-only nil))
+  (setq buffer-read-only nil)
+  (add-hook 'change-major-mode-hook
+            #'supertag-view-widget--cleanup-fields nil t))
 
 (defun supertag-view-widget--interactive-positions ()
   "Return sorted positions of text buttons and editable fields."
@@ -624,10 +638,7 @@ If VALUE is a function, call it with CONTEXT."
 
 (defun supertag-view-widget--clear ()
   "Clear rendered text and stale editable-field bookkeeping."
-  (dolist (field (delete-dups (append widget-field-new widget-field-list)))
-    (widget-leave-text field))
-  (setq widget-field-new nil
-        widget-field-list nil)
+  (supertag-view-widget--cleanup-fields)
   (let ((inhibit-modification-hooks t))
     (erase-buffer)))
 
@@ -820,6 +831,7 @@ Example: (supertag-widget-render (quote header) (list :text \"Title\"))"
               :format "%v"
               :size (+ (length value) (- width (string-width value)))
               :keymap supertag-view-widget-field-map
+              :value-face 'supertag-view-widget-field-face
               :value value
               :notify (lambda (widget &rest _ignore)
                         (let ((new-value (widget-value widget)))
