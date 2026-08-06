@@ -298,11 +298,11 @@ LIMIT controls the number of entries; defaults to
                          (list :type :subheader :text "Interactive Widgets")
                          (list :type :stats-row
                                :stats #'supertag-view-demo-dashboard--interaction-stats)
-                         (list :type :text :content "button — updates the click counter")
+                         (list :type :text :content "button - updates the click counter")
                          (list :type :button :key 'increment
                                :label "Increment counter"
                                :action #'supertag-view-demo-dashboard--increment)
-                         (list :type :text :content "link — updates the activation counter")
+                         (list :type :text :content "link - updates the activation counter")
                          (list :type :link :key 'sample-link
                                :label "Sample link activation"
                                :action #'supertag-view-demo-dashboard--activate-link)
@@ -312,7 +312,7 @@ LIMIT controls the number of entries; defaults to
                                 (list :width 18
                                       :children
                                       (list (list :type :text
-                                                  :content "editable-field →")))
+                                                  :content "editable-field ->")))
                                 (list :width 26
                                       :children
                                       (list
@@ -339,9 +339,9 @@ LIMIT controls the number of entries; defaults to
                          (list :type :text :content "badge")
                          (list :type :badge
                                :items (list "High" "Medium" "Low"))
-                         (list :type :text :content "kv — alias of field")
+                         (list :type :text :content "kv - alias of field")
                          (list :type :kv
-                               :items (list (cons "Alias" "kv → field")))
+                               :items (list (cons "Alias" "kv -> field")))
                          (list :type :text :content "empty")
                          (list :type :empty
                                :title "Empty state"

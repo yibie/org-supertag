@@ -634,6 +634,7 @@
                              supertag--widget-registry)))
                 (should (string-match-p "60%" (buffer-string)))
                 (should-not (string-match-p "…" (buffer-string)))
+                (should-not (string-match-p "[—→]" (buffer-string)))
                 (goto-char (point-min))
                 (search-forward "Increment")
                 (button-activate (button-at (1- (point))))

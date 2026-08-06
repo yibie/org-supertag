@@ -61,3 +61,4 @@
 - 2026-08-05: DONE-phase-widget-renderer-20260805/change_widget_renderer_20260805.md  # stable keys + native controls + Dashboard migration + Stream benchmark; hands-on approved
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task020 interactive in-memory Widget DSL Showcase
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task021 Showcase progress and responsive layout fixes
+- 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task022 ASCII-safe fixed-width borders
