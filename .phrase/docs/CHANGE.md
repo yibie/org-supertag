@@ -62,3 +62,4 @@
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task020 interactive in-memory Widget DSL Showcase
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task021 Showcase progress and responsive layout fixes
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task022 ASCII-safe fixed-width borders
+- 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task023 responsive 80-column breakpoint

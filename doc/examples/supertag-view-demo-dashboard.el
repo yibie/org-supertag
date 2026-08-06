@@ -213,13 +213,25 @@ LIMIT controls the number of entries; defaults to
    (cons "Edited value"
          (plist-get supertag-view-demo-dashboard--interaction-state :edited-value))))
 
+(defconst supertag-view-demo-dashboard--minimum-two-column-width 80
+  "Minimum target window width for the demo's two-column layout.")
+
+(defun supertag-view-demo-dashboard--window-width ()
+  "Return the width of the window displaying the current demo buffer."
+  (if-let* ((window (get-buffer-window (current-buffer) t)))
+      (window-body-width window)
+    (window-width)))
+
 (defun supertag-view-demo-dashboard--right-column-width (_context)
-  "Return the demo's right column width for the current window."
-  (max 40 (- (window-width) 31)))
+  "Return the demo's right column width for the target window."
+  (max 40 (- (supertag-view-demo-dashboard--window-width) 31)))
 
 (defun supertag-view-demo-dashboard--right-card-width (context)
   "Return a card width that fits the demo's right column in CONTEXT."
-  (- (supertag-view-demo-dashboard--right-column-width context) 4))
+  (let ((width (supertag-view-demo-dashboard--window-width)))
+    (if (< width supertag-view-demo-dashboard--minimum-two-column-width)
+        (max 1 (- width 4))
+      (- (supertag-view-demo-dashboard--right-column-width context) 4))))
 
 (defun supertag-view-demo-dashboard--increment ()
   "Increment the in-memory button counter and refresh the demo."
@@ -234,6 +246,110 @@ LIMIT controls the number of entries; defaults to
 (defun supertag-view-demo-dashboard--edit-value (value)
   "Store editable-field VALUE in memory."
   (setf (plist-get supertag-view-demo-dashboard--interaction-state :edited-value) value))
+
+(defconst supertag-view-demo-dashboard--wide-columns
+  (list
+   (list :width 30
+         :children
+         (list
+          (list :type :section :title "Overview")
+          (list :type :card
+                :title "Summary"
+                :children
+                (list
+                 (list :type :stats-row
+                       :stats #'supertag-view-demo-dashboard--build-stats)
+                 (list :type :progress-bar
+                       :value #'supertag-view-demo-dashboard--avg-progress)))
+          (list :type :panel
+                :title "Key Facts"
+                :children
+                (list
+                 (list :type :field
+                       :items
+                       (lambda (ctx)
+                         (list
+                          (cons "Tag" (plist-get ctx :tag))
+                          (cons "Nodes" (length (plist-get ctx :nodes)))
+                          (cons "Avg progress"
+                                (format "%d%%"
+                                        (supertag-view-demo-dashboard--avg-progress
+                                         ctx))))))))))
+   (list :width #'supertag-view-demo-dashboard--right-column-width
+         :children
+         (list
+          (list :type :card
+                :title "Nodes"
+                :width #'supertag-view-demo-dashboard--right-card-width
+                :children
+                (list
+                 (list :type :stack
+                       :spacing 1
+                       :children
+                       (lambda (ctx)
+                         (supertag-view-demo-dashboard--node-widgets ctx)))))
+          (list :type :card
+                :title "Components"
+                :width #'supertag-view-demo-dashboard--right-card-width
+                :children
+                (list
+                 (list :type :subheader :text "Interactive Widgets")
+                 (list :type :stats-row
+                       :stats #'supertag-view-demo-dashboard--interaction-stats)
+                 (list :type :text :content "button - click counter")
+                 (list :type :button :key 'increment
+                       :label "Increment counter"
+                       :action #'supertag-view-demo-dashboard--increment)
+                 (list :type :text :content "link - activation counter")
+                 (list :type :link :key 'sample-link
+                       :label "Sample link activation"
+                       :action #'supertag-view-demo-dashboard--activate-link)
+                 (list :type :text :content "editable-field")
+                 (list :type :editable-field :key 'sample-title
+                       :value
+                       (lambda (_context)
+                         (plist-get supertag-view-demo-dashboard--interaction-state
+                                    :edited-value))
+                       :width 24
+                       :on-change #'supertag-view-demo-dashboard--edit-value)
+                 (list :type :subheader :text "Data Widgets")
+                 (list :type :text :content "list")
+                 (list :type :list
+                       :items (list "List item A" "List item B" "List item C"))
+                 (list :type :text :content "table")
+                 (list :type :table
+                       :headers (list "Name" "Value")
+                       :rows (list (list "Alpha" "1")
+                                   (list "Beta" "2")
+                                   (list "Gamma" "3"))
+                       :widths (list 12 10))
+                 (list :type :text :content "badge")
+                 (list :type :badge :items (list "High" "Medium" "Low"))
+                 (list :type :text :content "kv - alias of field")
+                 (list :type :kv :items (list (cons "Alias" "kv -> field")))
+                 (list :type :text :content "empty")
+                 (list :type :empty
+                       :title "Empty state"
+                       :message "No data for this section."))))))
+  "Two-column widget definitions used by the demo at comfortable widths.")
+
+(defun supertag-view-demo-dashboard--layout-columns (_context)
+  "Return one or two demo columns for the current target window."
+  (let ((width (supertag-view-demo-dashboard--window-width)))
+    (if (< width supertag-view-demo-dashboard--minimum-two-column-width)
+        (list
+         (list :width width
+               :children
+               (apply #'append
+                      (mapcar (lambda (column)
+                                (plist-get column :children))
+                              supertag-view-demo-dashboard--wide-columns))))
+      supertag-view-demo-dashboard--wide-columns)))
+
+(defun supertag-view-demo-dashboard--window-size-changed (window)
+  "Refresh the current demo when its displaying WINDOW changes size."
+  (when (and (window-live-p window) supertag-view--instance)
+    (supertag-view-refresh)))
 
 (defconst supertag-view-demo-dashboard--config
   (list
@@ -252,100 +368,7 @@ LIMIT controls the number of entries; defaults to
                        "M-x supertag-view-refresh"))
     (list :type :columns
           :columns
-          (list
-           (list :width 30
-                 :children
-                 (list
-                  (list :type :section
-                        :title "Overview")
-                  (list :type :card
-                        :title "Summary"
-                        :children
-                        (list
-                         (list :type :stats-row
-                               :stats #'supertag-view-demo-dashboard--build-stats)
-                         (list :type :progress-bar
-                               :value #'supertag-view-demo-dashboard--avg-progress)))
-                  (list :type :panel
-                        :title "Key Facts"
-                        :children
-                        (list
-                         (list :type :field
-                               :items (lambda (ctx)
-                                        (list
-                                         (cons "Tag" (plist-get ctx :tag))
-                                         (cons "Nodes" (length (plist-get ctx :nodes)))
-                                         (cons "Avg progress"
-                                               (format "%d%%"
-                                                       (supertag-view-demo-dashboard--avg-progress ctx))))))))))
-           (list :width #'supertag-view-demo-dashboard--right-column-width
-                 :children
-                 (list
-                  (list :type :card
-                        :title "Nodes"
-                        :width #'supertag-view-demo-dashboard--right-card-width
-                        :children
-                        (list
-                         (list :type :stack
-                               :spacing 1
-                               :children (lambda (ctx)
-                                           (supertag-view-demo-dashboard--node-widgets ctx)))))
-                  (list :type :card
-                        :title "Components"
-                        :width #'supertag-view-demo-dashboard--right-card-width
-                        :children
-                        (list
-                         (list :type :subheader :text "Interactive Widgets")
-                         (list :type :stats-row
-                               :stats #'supertag-view-demo-dashboard--interaction-stats)
-                         (list :type :text :content "button - updates the click counter")
-                         (list :type :button :key 'increment
-                               :label "Increment counter"
-                               :action #'supertag-view-demo-dashboard--increment)
-                         (list :type :text :content "link - updates the activation counter")
-                         (list :type :link :key 'sample-link
-                               :label "Sample link activation"
-                               :action #'supertag-view-demo-dashboard--activate-link)
-                         (list :type :columns
-                               :columns
-                               (list
-                                (list :width 18
-                                      :children
-                                      (list (list :type :text
-                                                  :content "editable-field ->")))
-                                (list :width 26
-                                      :children
-                                      (list
-                                       (list :type :editable-field :key 'sample-title
-                                             :value
-                                             (lambda (_context)
-                                               (plist-get
-                                                supertag-view-demo-dashboard--interaction-state
-                                                :edited-value))
-                                             :width 24
-                                             :on-change
-                                             #'supertag-view-demo-dashboard--edit-value)))))
-                         (list :type :subheader :text "Data Widgets")
-                         (list :type :text :content "list")
-                         (list :type :list
-                               :items (list "List item A" "List item B" "List item C"))
-                         (list :type :text :content "table")
-                         (list :type :table
-                               :headers (list "Name" "Value")
-                               :rows (list (list "Alpha" "1")
-                                           (list "Beta" "2")
-                                           (list "Gamma" "3"))
-                               :widths (list 12 10))
-                         (list :type :text :content "badge")
-                         (list :type :badge
-                               :items (list "High" "Medium" "Low"))
-                         (list :type :text :content "kv - alias of field")
-                         (list :type :kv
-                               :items (list (cons "Alias" "kv -> field")))
-                         (list :type :text :content "empty")
-                         (list :type :empty
-                               :title "Empty state"
-                               :message "No data for this section.")))))))
+          #'supertag-view-demo-dashboard--layout-columns)
     (list :type :separator)
     (list :type :badge :text "Demo data only")
     (list :type :text :content "Hint: M-x supertag-view-refresh")))
@@ -361,7 +384,13 @@ When TAG is nil, prompt for a label (display-only)."
          (context (supertag-view-demo-dashboard--build-context tag)))
     (supertag-view-demo-dashboard--reset-interaction-state)
     (supertag-view-define-from-config supertag-view-demo-dashboard--config)
-    (supertag-view-open supertag-view-demo-dashboard--view-id context)))
+    (let ((buffer (supertag-view-open
+                   supertag-view-demo-dashboard--view-id context)))
+      (with-current-buffer buffer
+        (add-hook 'window-size-change-functions
+                  #'supertag-view-demo-dashboard--window-size-changed nil t)
+        (supertag-view-refresh))
+      buffer)))
 
 (provide 'supertag-view-demo-dashboard)
 

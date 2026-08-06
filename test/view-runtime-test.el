@@ -621,9 +621,12 @@
                           (list (supertag-widget--normalize-type
                                  (plist-get widget :type)))
                           (types (plist-get widget :children))
-                          (mapcan (lambda (column)
-                                    (types (plist-get column :children)))
-                                  (plist-get widget :columns))))
+                          (let ((columns (plist-get widget :columns)))
+                            (when (functionp columns)
+                              (setq columns (funcall columns nil)))
+                            (mapcan (lambda (column)
+                                      (types (plist-get column :children)))
+                                    columns))))
                        widgets)))
                   (let ((showcased
                          (types (plist-get
@@ -659,6 +662,48 @@
                                         (buffer-string)))))))
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
+
+(ert-deftest test-view-demo-dashboard-collapses-below-minimum-width ()
+  "The demo must switch between two columns and one at its breakpoint."
+  (let* ((example-dir (expand-file-name "doc/examples" default-directory))
+         (load-path (cons example-dir load-path))
+         (buffer-name "*View: Demo Dashboard - demo*")
+         (frame (selected-frame))
+         (original-width (window-total-width)))
+    (require 'supertag-view-demo-dashboard)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-frame-width frame 120)
+          (supertag-view-framework-init)
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let* ((buffer (supertag-view-demo-dashboard-open "demo"))
+                   (wide-window (selected-window)))
+              (set-window-buffer wide-window buffer)
+              (with-current-buffer buffer
+                (supertag-view-demo-dashboard--window-size-changed wide-window)
+                (goto-char (point-min))
+                (let ((nodes (search-forward "Nodes")))
+                  (goto-char (point-min))
+                  (should (< nodes (search-forward "Summary")))))
+              (let ((narrow-window (split-window-right)))
+                (set-window-buffer wide-window buffer)
+                (with-current-buffer buffer
+                  (supertag-view-demo-dashboard--window-size-changed wide-window)
+                  (goto-char (point-min))
+                  (let ((summary (search-forward "Summary")))
+                    (goto-char (point-min))
+                    (should (< summary (search-forward "Nodes")))))
+                (delete-window narrow-window))
+              (with-current-buffer buffer
+                (supertag-view-demo-dashboard--window-size-changed wide-window)
+                (goto-char (point-min))
+                (let ((nodes (search-forward "Nodes")))
+                  (goto-char (point-min))
+                  (should (< nodes (search-forward "Summary"))))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer))
+      (set-frame-width frame original-width))))
 
 (ert-deftest test-view-runtime-dsl-selection-uses-runtime-open ()
   "Selecting a declarative view must create its Runtime buffer."
