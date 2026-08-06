@@ -30,6 +30,9 @@
 (defconst supertag-view-demo-dashboard--priority-field-id "priority"
   "Global field id for priority.")
 
+(defvar supertag-view-demo-dashboard--interaction-state nil
+  "In-memory interaction state for the demo dashboard.")
+
 (defconst supertag-view-demo-dashboard--sample-nodes
   (list
    (list :id "node-1" :title "Project Alpha" :file "/tmp/alpha.org")
@@ -64,7 +67,7 @@
       "<untitled>"))
 
 (defun supertag-view-demo-dashboard--get-vc (node-id column-id &optional default)
-  "Return virtual column value for NODE-ID/COLUMN-ID from sample data."
+  "Return sample virtual column value for NODE-ID/COLUMN-ID or DEFAULT."
   (if (and (stringp column-id)
            (string= column-id supertag-view-demo-dashboard--progress-vc-id))
       (supertag-view-demo-dashboard--sample-get
@@ -72,7 +75,7 @@
     default))
 
 (defun supertag-view-demo-dashboard--get-global-field (node-id field-id &optional default)
-  "Return global field value for NODE-ID/FIELD-ID from sample data."
+  "Return sample global field value for NODE-ID/FIELD-ID or DEFAULT."
   (if (and (stringp field-id)
            (string= field-id supertag-view-demo-dashboard--priority-field-id))
       (supertag-view-demo-dashboard--sample-get
@@ -195,6 +198,32 @@ LIMIT controls the number of entries; defaults to
           :get-global-field #'supertag-view-demo-dashboard--get-global-field
           :context-builder (lambda () (supertag-view-demo-dashboard--build-context tag)))))
 
+(defun supertag-view-demo-dashboard--reset-interaction-state ()
+  "Reset the demo's in-memory interaction state."
+  (setq supertag-view-demo-dashboard--interaction-state
+        (list :button-clicks 0 :link-activations 0 :edited-value "Project Alpha")))
+
+(defun supertag-view-demo-dashboard--interaction-status (_context)
+  "Return a visible summary of the current demo interaction state."
+  (format "Button clicks: %d | Link activations: %d | Edited value: %s"
+          (plist-get supertag-view-demo-dashboard--interaction-state :button-clicks)
+          (plist-get supertag-view-demo-dashboard--interaction-state :link-activations)
+          (plist-get supertag-view-demo-dashboard--interaction-state :edited-value)))
+
+(defun supertag-view-demo-dashboard--increment ()
+  "Increment the in-memory button counter and refresh the demo."
+  (cl-incf (plist-get supertag-view-demo-dashboard--interaction-state :button-clicks))
+  (supertag-view-refresh))
+
+(defun supertag-view-demo-dashboard--activate-link ()
+  "Record an in-memory link activation and refresh the demo."
+  (cl-incf (plist-get supertag-view-demo-dashboard--interaction-state :link-activations))
+  (supertag-view-refresh))
+
+(defun supertag-view-demo-dashboard--edit-value (value)
+  "Store editable-field VALUE in memory."
+  (setf (plist-get supertag-view-demo-dashboard--interaction-state :edited-value) value))
+
 (defconst supertag-view-demo-dashboard--config
   (list
    :id supertag-view-demo-dashboard--view-id
@@ -248,13 +277,34 @@ LIMIT controls the number of entries; defaults to
                          (list :type :stack
                                :spacing 1
                                :children (lambda (ctx)
-                                           (supertag-view-demo-dashboard--node-widgets ctx))))))
+                                           (supertag-view-demo-dashboard--node-widgets ctx)))))
                   (list :type :card
                         :title "Components"
                         :children
                         (list
                          (list :type :text
-                               :content "List + Table + Badge + Empty")
+                               :content
+                               (concat
+                                "Widget inventory: header subheader text progress-bar "
+                                "stats-row separator list table section stack columns "
+                                "card panel field kv badge empty toolbar button link "
+                                "editable-field"))
+                         (list :type :text
+                               :content #'supertag-view-demo-dashboard--interaction-status)
+                         (list :type :button :key 'increment
+                               :label "Increment"
+                               :action #'supertag-view-demo-dashboard--increment)
+                         (list :type :link :key 'sample-link
+                               :label "Sample link"
+                               :action #'supertag-view-demo-dashboard--activate-link)
+                         (list :type :text :content "Editable sample:")
+                         (list :type :editable-field :key 'sample-title
+                               :value (lambda (_context)
+                                        (plist-get
+                                         supertag-view-demo-dashboard--interaction-state
+                                         :edited-value))
+                               :width 24
+                               :on-change #'supertag-view-demo-dashboard--edit-value)
                          (list :type :list
                                :items (list "List item A" "List item B" "List item C"))
                          (list :type :table
@@ -265,9 +315,11 @@ LIMIT controls the number of entries; defaults to
                                :widths (list 12 10))
                          (list :type :badge
                                :items (list "High" "Medium" "Low"))
+                         (list :type :kv
+                               :items (list (cons "Alias" "kv → field")))
                          (list :type :empty
                                :title "Empty state"
-                               :message "No data for this section."))))))
+                               :message "No data for this section.")))))))
     (list :type :separator)
     (list :type :badge :text "Demo data only")
     (list :type :text :content "Hint: M-x supertag-view-refresh")))
@@ -281,6 +333,7 @@ When TAG is nil, prompt for a label (display-only)."
   (interactive)
   (let* ((tag (or tag (read-string "Demo tag: " "demo")))
          (context (supertag-view-demo-dashboard--build-context tag)))
+    (supertag-view-demo-dashboard--reset-interaction-state)
     (supertag-view-define-from-config supertag-view-demo-dashboard--config)
     (supertag-view-open supertag-view-demo-dashboard--view-id context)))
 

@@ -119,7 +119,7 @@ For views that fit the built-in widgets, register a configuration instead of wri
               :items '("Review" "Plan" "Ship")))))
 ```
 
-Built-in widget types include `header`, `subheader`, `text`, `progress-bar`, `stats-row`, `separator`, `list`, `table`, `section`, `stack`, `columns`, `card`, `field`, `badge`, `empty`, `toolbar`, `button`, `link`, and `editable-field`. `button` and `link` require a zero-argument `:action`; `editable-field` requires a string `:value`, a positive display-column `:width`, and may provide a one-argument `:on-change` callback. An initial value wider than the declared field width is rejected instead of silently breaking its container layout.
+Built-in widget types include `header`, `subheader`, `text`, `progress-bar`, `stats-row`, `separator`, `list`, `table`, `section`, `stack`, `columns`, `card`/`panel`, `field`/`kv`, `badge`, `empty`, `toolbar`, `button`, `link`, and `editable-field`. `button` and `link` require a zero-argument `:action`; `editable-field` requires a string `:value`, a positive display-column `:width`, and may provide a one-argument `:on-change` callback. An initial value wider than the declared field width is rejected instead of silently breaking its container layout.
 
 `:widgets` may also be a function of the current context that returns a fresh widget tree. Add a stable `:key` to repeated or interactive nodes when selection must survive a full refresh. The DSL renderer preserves that logical key and the point offset within its range; if the key disappears, point falls back to the start of the view. Function-valued properties are context bindings except for the literal `:key`, `:action`, and `:on-change` properties.
 
@@ -144,6 +144,11 @@ Exercise the public lifecycle rather than calling the renderer directly:
 ```
 
 At minimum, verify the buffer name, mode, visible content, manual refresh, cleanup, and any selection identity promised by the adapter.
+
+For a complete in-memory showcase, add `doc/examples/` to `load-path`, require
+`supertag-view-demo-dashboard`, then run `M-x supertag-view-demo-dashboard-open`.
+The Dashboard renders every registered Widget type; its button, link, and editable
+field update demo-only memory and never read or write user data.
 
 ## Interactive Commands
 

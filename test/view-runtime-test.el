@@ -600,6 +600,62 @@
       (when-let* ((buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 
+(ert-deftest test-view-demo-dashboard-showcases-all-widgets-interactively ()
+  "The in-memory DSL demo must cover every widget and preserve interactions."
+  (let* ((example-dir (expand-file-name "doc/examples" default-directory))
+         (load-path (cons example-dir load-path))
+         (buffer-name "*View: Demo Dashboard - demo*"))
+    (require 'supertag-view-demo-dashboard)
+    (unwind-protect
+        (progn
+          (supertag-view-framework-init)
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let ((buffer (supertag-view-demo-dashboard-open "demo")))
+              (with-current-buffer buffer
+                (cl-labels
+                    ((types
+                      (widgets)
+                      (mapcan
+                       (lambda (widget)
+                         (append
+                          (list (supertag-widget--normalize-type
+                                 (plist-get widget :type)))
+                          (types (plist-get widget :children))
+                          (mapcan (lambda (column)
+                                    (types (plist-get column :children)))
+                                  (plist-get widget :columns))))
+                       widgets)))
+                  (let ((showcased
+                         (types (plist-get
+                                 supertag-view-demo-dashboard--config
+                                 :widgets))))
+                    (maphash (lambda (type _renderer)
+                               (should (memq type showcased)))
+                             supertag--widget-registry)))
+                (goto-char (point-min))
+                (search-forward "Increment")
+                (button-activate (button-at (1- (point))))
+                (should (string-match-p "Button clicks: 1" (buffer-string)))
+                (goto-char (point-min))
+                (search-forward "Sample link")
+                (button-activate (button-at (1- (point))))
+                (should (string-match-p "Link activations: 1" (buffer-string)))
+                (goto-char (point-min))
+                (search-forward "Editable sample:")
+                (search-forward "Project Alpha")
+                (let ((field (widget-at (1- (point)))))
+                  (widget-value-set field "Renamed")
+                  (widget-apply field :notify field nil))
+                (supertag-view-refresh)
+                (should (equal
+                         (plist-get
+                          supertag-view-demo-dashboard--interaction-state
+                          :edited-value)
+                         "Renamed"))
+                (should (string-match-p "Renamed" (buffer-string)))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
 (ert-deftest test-view-runtime-dsl-selection-uses-runtime-open ()
   "Selecting a declarative view must create its Runtime buffer."
   (supertag-view-framework-init)

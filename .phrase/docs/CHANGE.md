@@ -59,3 +59,4 @@
 - 2026-08-05: DONE-phase-view-runtime-20260804/change_view_runtime_20260804.md  # Widget renderer backend research: native primitives, stable keys, layout and dependency gates
 - 2026-08-05: DONE-phase-widget-renderer-20260805/change_widget_renderer_20260805.md  # native Widget renderer implementation phase
 - 2026-08-05: DONE-phase-widget-renderer-20260805/change_widget_renderer_20260805.md  # stable keys + native controls + Dashboard migration + Stream benchmark; hands-on approved
+- 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task020 interactive in-memory Widget DSL Showcase
