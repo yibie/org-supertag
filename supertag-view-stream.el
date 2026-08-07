@@ -456,9 +456,12 @@
   (unless (and (stringp tag) (not (string-empty-p tag)))
     (user-error "Stream View requires a tag"))
   (supertag-view-stream--register-view)
-  (let* ((origin (current-window-configuration))
+  (let* ((previous (supertag-view-stream--resolve-main-buffer))
+         (origin (current-window-configuration))
          (buffer (supertag-view-open
                   'stream (list :tag tag :layout 'split))))
+    (when (and previous (not (eq previous buffer)))
+      (supertag-view-stream--remove-index previous))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (setq-local supertag-view-stream--origin-window-configuration origin))

@@ -41,6 +41,7 @@
 - Focused Stream + Node workflow: 9/9 pass。
 - task009 index click regression: Stream 7/7、Stream + Runtime + View 47/47 pass；长正文后的目标节点同步 main window point/start。
 - task010 per-tag buffer identity: Stream 8/8、Stream + Runtime + View 48/48 pass；`diary`/`work` 使用不同 buffer，重开 `diary` 复用原 buffer，input/正文互不串流。
+- task011 active companion lifecycle: Stream 8/8、相关 48/48、full 400/400 pass；切换 tag 后仅当前 index window 可见，上一 main buffer 保持 live。
 - `supertag-view-stream.el`: `byte-compile-error-on-warn=t` pass；checkdoc pass。
 - 本次修改的 `supertag-db-add-with-hash` 与 `supertag-view-node-open`: 单函数 byte compile/checkdoc pass。
 - `check-parens`: 所有修改的 Elisp 与测试 pass。
@@ -53,3 +54,5 @@
 在用户日常 Emacs 中执行 `M-x supertag-view-stream`，选择一个含 `:extends` 后代且至少三个节点的真实 tag，确认阅读密度、`s`、`n`/`p`、`e`、`v` 与 `q`。用户明确回复通过前，task006、issue032 与 phase 均保持未完成。
 
 issue034 追加检查：在 split 左侧索引点击当前视口外的靠后节点，右侧应从该节点标题开始显示，正文开头无需额外滚动即可阅读。自动化已通过，待用户实机确认后关闭 issue034。
+
+issue035 追加检查：在已有 Stream split 与 Node View side window 的 frame 中连续打开 `diary`、`fun`；应只剩 `fun` index + main，不再保留 `diary` index 列。切回 diary 时反向成立。自动化已通过，待用户实机确认后关闭 issue035。

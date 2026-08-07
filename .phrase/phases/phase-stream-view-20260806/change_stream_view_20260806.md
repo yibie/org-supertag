@@ -1,5 +1,12 @@
 # change_stream_view_20260806
 
+## 2026-08-07 — task011 / issue035 — Modify
+
+- Files: `supertag-view-stream.el`、`test/test-view-stream.el`、Stream spec/task/issue/manual records。
+- Behavior: 切换 Stream tag 时撤下上一 tag 的 companion index window，只显示当前 index + main；上一 main buffer 与 Runtime instance 保持存活，切回时重建 index。
+- Simplification: 公共命令复用既有 `supertag-view-stream--resolve-main-buffer` 与 `--remove-index`，没有新增窗口注册表或全局扫描。
+- Verification: 截图场景回归先因旧 diary index 仍可见而失败；修复后 Stream 8/8、相关 48/48、full ERT 400/400；byte compile/checkdoc/check-parens/diff-check 通过，repo-local `.elc` zero。
+
 ## 2026-08-07 — task010 — Add / Confirm
 
 - Files: `test/test-view-stream.el`、Stream spec/task/manual records。

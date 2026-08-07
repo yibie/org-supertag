@@ -54,6 +54,7 @@ Stream state 是数据 plist：
 4. presentation boundary 在当前主窗口左侧建立 index window，主 Stream 保持在右侧。
 5. header-line 只显示 `#tag`、node count 与 split/plain 状态。
 6. tag 是 Stream buffer identity：不同 tag 使用不同 main/index buffer；重复打开同一 tag 复用并刷新原 buffer。
+7. 切换到另一个 tag 时保留前一个 main buffer，但撤下其 companion index window；当前 frame 只显示当前 tag 的 index + main。
 
 ### Flow B：导航与刷新
 
@@ -94,6 +95,7 @@ Stream state 是数据 plist：
 - 当前窗口太窄不能 split 时保持 plain 并给出消息，不破坏现有窗口布局。
 - refresh 时 companion/index 已被用户 kill，主 Stream 继续可用，并在下次切换 split 时重建。
 - 双列索引激活位于长 Stream 末端的节点时，必须同步主窗口 point/start，不能只移动 buffer point 后把目标留在窗口底部。
+- 连续打开多个 tag 时，旧 main buffer 保持存活，但旧 companion index 不得继续占用窗口；切回时按需重建。
 - kill main buffer 必须清理 index；重复 cleanup 必须幂等。
 
 ## Compatibility Contract
@@ -108,6 +110,7 @@ Stream state 是数据 plist：
 
 - 公共 Stream 命令通过真实 Runtime 建立一个主 instance。
 - 不同 tag 的公共命令返回不同且内容隔离的 main buffer；重复打开同一 tag 返回原 buffer。
+- tag 切换后只有当前 tag 的 companion index 可见；前一个 main buffer 仍可切回。
 - tag descendant query 使用传递 `:extends` 语义，并有 `diaryx` 与平面斜杠 ID 反例。
 - renderer 不显示 file path 或前导 Org 星号；title face 高于正文；完整 Org 内容与 `#tag` token 存在。
 - split/plain、index click、`n`/`p`、refresh selection 与 missing-node fallback 通过工作流 ERT。

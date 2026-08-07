@@ -59,3 +59,9 @@
   - 产出：不同 tag 独立 main buffer，同一 tag 重开复用原 buffer 的公共命令契约
   - 验证方式：真实 Runtime 连续打开 `diary`、`work`、`diary`，断言 buffer identity、input 与正文隔离
   - 影响范围：Stream 回归测试与文档；现有 identity 已满足时不改生产代码
+
+- task011 [x] 切换 tag 时只保留当前 Stream companion window
+  - 依据：issue035、spec Flow A、用户实机截图
+  - 产出：旧 main buffer 保持存活，旧 index window 撤下，当前 tag 恢复标准双列布局
+  - 验证方式：连续打开 `diary`、`work`、`diary`，每一步断言仅当前 tag index window 可见且另一 main buffer 存活
+  - 影响范围：Stream 公共命令的 presentation lifecycle；不改变 Runtime buffer identity

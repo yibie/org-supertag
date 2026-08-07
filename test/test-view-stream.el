@@ -214,24 +214,31 @@
           (supertag-view-stream-test--put-node
            "work-node" "Work title" '("work") "Work body" '(0 20 0 0))
           (let* ((diary (supertag-view-stream "diary"))
-                 (work (supertag-view-stream "work"))
-                 (diary-again (supertag-view-stream "diary")))
+                 (work (supertag-view-stream "work")))
             (should-not (eq diary work))
-            (should (eq diary diary-again))
             (should (equal (buffer-name diary) "*Supertag Stream: diary*"))
             (should (equal (buffer-name work) "*Supertag Stream: work*"))
-            (with-current-buffer diary
-              (should (equal (plist-get
-                              (plist-get supertag-view--instance :input) :tag)
-                             "diary"))
-              (should (string-match-p "Diary body" (buffer-string)))
-              (should-not (string-match-p "Work body" (buffer-string))))
-            (with-current-buffer work
-              (should (equal (plist-get
-                              (plist-get supertag-view--instance :input) :tag)
-                             "work"))
-              (should (string-match-p "Work body" (buffer-string)))
-              (should-not (string-match-p "Diary body" (buffer-string))))))
+            (should-not
+             (get-buffer-window "*Supertag Stream Index: diary*"))
+            (should (get-buffer-window "*Supertag Stream Index: work*"))
+            (let ((diary-again (supertag-view-stream "diary")))
+              (should (eq diary diary-again))
+              (should (buffer-live-p work))
+              (should-not
+               (get-buffer-window "*Supertag Stream Index: work*"))
+              (should (get-buffer-window "*Supertag Stream Index: diary*"))
+              (with-current-buffer diary
+                (should (equal (plist-get
+                                (plist-get supertag-view--instance :input) :tag)
+                               "diary"))
+                (should (string-match-p "Diary body" (buffer-string)))
+                (should-not (string-match-p "Work body" (buffer-string))))
+              (with-current-buffer work
+                (should (equal (plist-get
+                                (plist-get supertag-view--instance :input) :tag)
+                               "work"))
+                (should (string-match-p "Work body" (buffer-string)))
+                (should-not (string-match-p "Diary body" (buffer-string)))))))
       (supertag-view-stream-test--kill-buffers))))
 
 (ert-deftest supertag-view-stream-navigation-and-node-view-use-stable-id ()
