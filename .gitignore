@@ -53,14 +53,13 @@ simtag/nano-graphrag/
 .cursorules
 .pytest_cache/
 test/test-results.txt
-commands/
 .continue/
 .kiro/
 dev-note/
 .phrase/
 .phase/
 .beads/
-.qoder/
+/.qoder/
 .ruff_cache/
 IMPROVEMENT_PLAN.md
 AGENTS.md
@@ -69,8 +68,6 @@ AGENTS.md
 ext/board-ui/node_modules/
 ext/board-ui/.next/
 ext/board-ui/out/
-# allow ext/board-ui/hooks (overrides the global hooks/ rule above)
-!ext/board-ui/hooks/
 
 # ext/graph-ui build artifacts and dependencies
 ext/graph-ui/node_modules/
@@ -82,22 +79,23 @@ ext/graph-ui/out/
 .yoyo/
 
 # Claude Code guidance file
+# Agent scratch directories are repository-root state, not global names.
 CLAUDE.md
-.claude/
-commands/
-docs/
-hooks/
-logs/
-qoder/
+/.claude/
+/commands/
+/docs/
+/hooks/
+/logs/
+/qoder/
 
 # pi coding agent
-.pi/
-.agent-relay/
+/.pi/
+/.agent-relay/
 
 # reasonix
-.codegraph/
-.reasonix/
-.serena/
+/.codegraph/
+/.reasonix/
+/.serena/
 reasonix.toml
 
 # pictures

@@ -71,3 +71,4 @@
 - 2026-08-07: phase-stream-view-20260806/change_stream_view_20260806.md  # task010 one Stream buffer per tag
 - 2026-08-07: phase-stream-view-20260806/change_stream_view_20260806.md  # task011 active Stream companion lifecycle
 - 2026-08-08: phase-stream-view-20260806/change_stream_view_20260806.md  # task012 single-column title stream; companion/full-body projection removed
+- 2026-08-08: .phrase/docs/issue_board_ui_build_20260808.md  # issue036/task001 clean-clone Board UI build restored

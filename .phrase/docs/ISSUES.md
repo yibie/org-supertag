@@ -35,3 +35,4 @@
 - issue033 [ ] Widget DSL editable-field 遗留 overlay 并推动同行边框 2px（实现与 live GUI 验证完成，待用户确认；phase-view-dsl-20260204/issue_widget_field_border_20260806.md）
 - issue034 [x] Stream 双列索引点击后目标节点可能落在主窗口底部，正文不可见（task012 已删除双列索引；phase-stream-view-20260806/issue_stream_index_scroll_20260807.md）
 - issue035 [x] 切换 Stream tag 时旧 companion index window 残留并不断增加列数（task012 已删除 companion index；phase-stream-view-20260806/issue_stream_stale_index_window_20260807.md）
+- issue036 [x] 根级 agent ignore 规则误伤 Board UI hooks，导致 clean clone 无法构建（.phrase/docs/issue_board_ui_build_20260808.md）

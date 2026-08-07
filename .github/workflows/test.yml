@@ -53,3 +53,37 @@ jobs:
         with:
           name: test-results-emacs-${{ matrix.emacs_version }}
           path: test/test-results.txt
+
+  board-ui:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify agent scratch rules stay root-scoped
+        run: |
+          root_scratch_dirs=".claude commands docs hooks logs qoder .qoder .pi .codegraph .reasonix .serena"
+          for directory in ${root_scratch_dirs}; do
+            git check-ignore -q --no-index "${directory}/scratch"
+            if git check-ignore -q --no-index "ext/ignore-check/${directory}/source"; then
+              echo "Nested source directory is unexpectedly ignored: ${directory}" >&2
+              exit 1
+            fi
+          done
+          grep -Fxq '/.agent-relay/' .gitignore
+          ! grep -Fxq '.agent-relay/' .gitignore
+          ! git check-ignore -q --no-index ext/board-ui/hooks/useWebSocket.ts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ext/board-ui/package-lock.json
+
+      - name: Install Board UI dependencies
+        working-directory: ext/board-ui
+        run: npm ci
+
+      - name: Build Board UI
+        working-directory: ext/board-ui
+        run: npm run build
