@@ -68,16 +68,15 @@
      "untimed-b" "B" '("day") "b" nil)
     (supertag-view-stream-test--put-node
      "untimed-a" "A" '("private") "a" nil)
-    (let ((state (supertag-view-stream--build-state
-                  '(:tag "diary" :layout split))))
-      (should (eq (plist-get state :layout) 'split))
+    (let ((state (supertag-view-stream--build-state '(:tag "diary"))))
+      (should-not (plist-member state :layout))
       (should
        (equal (mapcar (lambda (node) (plist-get node :id))
                       (plist-get state :nodes))
               '("early" "late" "untimed-a" "untimed-b"))))))
 
-(ert-deftest supertag-view-stream-runtime-renders-full-lightweight-node-blocks ()
-  "The real Runtime path must render tags, title and full Org body."
+(ert-deftest supertag-view-stream-runtime-renders-title-only-node-list ()
+  "The real Runtime path must render keyed titles without body projections."
   (supertag-view-stream-test--with-store
     (unwind-protect
         (progn
@@ -89,18 +88,19 @@
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((buffer
                    (supertag-view-open
-                    'stream '(:tag "emacs/package" :layout plain))))
+                    'stream '(:tag "emacs/package"))))
               (with-current-buffer buffer
                 (font-lock-ensure)
                 (should (derived-mode-p 'supertag-view-stream-mode))
                 (should (equal (plist-get supertag-view--instance :view-id)
                                'stream))
-                (should (string-match-p "#emacs/package/elpa"
-                                        (buffer-string)))
                 (should (string-match-p "Package archives" (buffer-string)))
-                (should (string-match-p "| GNU | elpa.gnu.org |"
-                                        (buffer-string)))
-                (should (string-match-p "Keep it small" (buffer-string)))
+                (should-not (string-match-p "#emacs/package"
+                                            (buffer-string)))
+                (should-not (string-match-p "A paragraph" (buffer-string)))
+                (should-not (string-match-p "| GNU | elpa.gnu.org |"
+                                            (buffer-string)))
+                (should-not (string-match-p "Keep it small" (buffer-string)))
                 (should-not (string-match-p "/tmp/private-note.org"
                                             (buffer-string)))
                 (goto-char (point-min))
@@ -109,6 +109,8 @@
                   (should (equal (get-text-property
                                   position 'supertag-entity-id)
                                  "node-1"))
+                  (should-not (button-at position))
+                  (should-not (get-text-property position 'mouse-face))
                   (should (eq (get-text-property position 'font-lock-face)
                               'supertag-view-stream-title-face)))))))
       (supertag-view-stream-test--kill-buffers))))
@@ -125,10 +127,10 @@
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((buffer
                    (supertag-view-open
-                    'stream '(:tag "diary" :layout plain))))
+                    'stream '(:tag "diary"))))
               (with-current-buffer buffer
                 (goto-char (point-min))
-                (search-forward "Second body")
+                (search-forward "Second")
                 (should (equal (supertag-view-stream--current-node-id)
                                "node-2")))
               (supertag-view-stream-test--put-node
@@ -144,8 +146,8 @@
                                "node-0"))))))
       (supertag-view-stream-test--kill-buffers))))
 
-(ert-deftest supertag-view-stream-public-command-toggles-split-and-cleans-up ()
-  "The public command must own one Runtime plus a removable index companion."
+(ert-deftest supertag-view-stream-public-command-opens-one-title-only-buffer ()
+  "The public command must open one title-only Runtime buffer."
   (supertag-view-stream-test--with-store
     (unwind-protect
         (save-window-excursion
@@ -153,53 +155,23 @@
           (supertag-view-stream-test--put-tag "happy" "diary")
           (supertag-view-stream-test--put-node
            "node-1" "First title" '("diary")
-           (mapconcat (lambda (number) (format "First body %d" number))
-                      (number-sequence 1 80) "\n")
+           "First body"
            '(0 10 0 0))
           (supertag-view-stream-test--put-node
            "node-2" "Second title" '("happy") "Second body" '(0 20 0 0))
           (let ((main (supertag-view-stream "diary")))
             (should (buffer-live-p main))
-            (should (buffer-live-p (get-buffer "*Supertag Stream Index: diary*")))
-            (let ((main-window (get-buffer-window main))
-                  (index-window
-                   (get-buffer-window "*Supertag Stream Index: diary*")))
-              (should (> (window-total-width main-window)
-                         (window-total-width index-window)))
-              (should (<= (window-total-width index-window)
-                          supertag-view-stream-index-width))
-              (select-window index-window)
-              (with-current-buffer "*Supertag Stream Index: diary*"
-                (should (string-match-p "First title" (buffer-string)))
-                (should (string-match-p "Second title" (buffer-string)))
-                (should-not (string-match-p "/" (buffer-string)))
-                (forward-line 1)
-                (push-button))
-              (let ((position
-                     (with-current-buffer main
-                       (supertag-view-stream--find-entity "node-2"))))
-                (should (eq (selected-window) main-window))
-                (should (= (window-point main-window) position))
-                (should (= (window-start main-window) position))))
-            (with-current-buffer main
-              (should (equal (supertag-view-stream--current-node-id)
-                             "node-2")))
-            (with-current-buffer main
-              (supertag-view-stream-toggle-layout)
-              (should (eq (plist-get
-                           (plist-get supertag-view--instance :input) :layout)
-                          'plain)))
             (should-not (get-buffer "*Supertag Stream Index: diary*"))
             (with-current-buffer main
-              (supertag-view-stream-toggle-layout)
-              (should (eq (plist-get
-                           (plist-get supertag-view--instance :input) :layout)
-                          'split)))
-            (should (get-buffer "*Supertag Stream Index: diary*"))
+              (should (string-match-p "First title" (buffer-string)))
+              (should (string-match-p "Second title" (buffer-string)))
+              (should-not (string-match-p "First body" (buffer-string)))
+              (should-not (string-match-p "Second body" (buffer-string)))
+              (should-not (lookup-key supertag-view-stream-mode-map
+                                      (kbd "s"))))
             (with-current-buffer main
               (supertag-view-stream-quit))
-            (should-not (buffer-live-p main))
-            (should-not (get-buffer "*Supertag Stream Index: diary*"))))
+            (should-not (buffer-live-p main))))
       (supertag-view-stream-test--kill-buffers))))
 
 (ert-deftest supertag-view-stream-public-command-keeps-one-buffer-per-tag ()
@@ -218,27 +190,25 @@
             (should-not (eq diary work))
             (should (equal (buffer-name diary) "*Supertag Stream: diary*"))
             (should (equal (buffer-name work) "*Supertag Stream: work*"))
-            (should-not
-             (get-buffer-window "*Supertag Stream Index: diary*"))
-            (should (get-buffer-window "*Supertag Stream Index: work*"))
+            (should-not (get-buffer "*Supertag Stream Index: diary*"))
+            (should-not (get-buffer "*Supertag Stream Index: work*"))
             (let ((diary-again (supertag-view-stream "diary")))
               (should (eq diary diary-again))
               (should (buffer-live-p work))
-              (should-not
-               (get-buffer-window "*Supertag Stream Index: work*"))
-              (should (get-buffer-window "*Supertag Stream Index: diary*"))
               (with-current-buffer diary
                 (should (equal (plist-get
                                 (plist-get supertag-view--instance :input) :tag)
                                "diary"))
-                (should (string-match-p "Diary body" (buffer-string)))
-                (should-not (string-match-p "Work body" (buffer-string))))
+                (should (string-match-p "Diary title" (buffer-string)))
+                (should-not (string-match-p "Diary body" (buffer-string)))
+                (should-not (string-match-p "Work title" (buffer-string))))
               (with-current-buffer work
                 (should (equal (plist-get
                                 (plist-get supertag-view--instance :input) :tag)
                                "work"))
-                (should (string-match-p "Work body" (buffer-string)))
-                (should-not (string-match-p "Diary body" (buffer-string)))))))
+                (should (string-match-p "Work title" (buffer-string)))
+                (should-not (string-match-p "Work body" (buffer-string)))
+                (should-not (string-match-p "Diary title" (buffer-string)))))))
       (supertag-view-stream-test--kill-buffers))))
 
 (ert-deftest supertag-view-stream-navigation-and-node-view-use-stable-id ()
@@ -253,7 +223,7 @@
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((buffer
                    (supertag-view-open
-                    'stream '(:tag "diary" :layout plain)))
+                    'stream '(:tag "diary")))
                   opened)
               (with-current-buffer buffer
                 (goto-char (point-min))
@@ -289,7 +259,7 @@
             (cl-letf (((symbol-function 'display-buffer) #'ignore))
               (let ((main
                      (supertag-view-open
-                      'stream '(:tag "diary" :layout plain))))
+                      'stream '(:tag "diary"))))
                 (with-current-buffer main
                   (setq edit (supertag-view-stream-edit)))
                 (setq base (buffer-base-buffer edit))
@@ -331,7 +301,7 @@
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((buffer
                    (supertag-view-open
-                    'stream '(:tag "diary" :layout plain))))
+                    'stream '(:tag "diary"))))
               (should (= 1 (length
                             (gethash :store-changed supertag--subscribers))))
               (kill-buffer buffer)

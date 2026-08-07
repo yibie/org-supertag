@@ -1,5 +1,12 @@
 # change_stream_view_20260806
 
+## 2026-08-08 — task012 / issue034 / issue035 — Modify/Delete
+
+- Files: `supertag-view-stream.el`、`test/test-view-stream.el`、README/CHANGELOG/View guide、Stream spec/plan/tech/PRFAQ/task/issue/manual records。
+- Behavior: Stream 现在是每 tag 独立的单列标题流；`n`/`p` 导航，`e` 打开完整源 Org 节点，`v` 打开 Node View，`g` 刷新，`q` 退出；不再显示正文/tag token，不再创建 companion index，也没有 `s` 或 split/plain layout。
+- Simplification: 删除 index mode/window、button、layout state/toggle、跨 buffer selection sync 和 full-body/tag widgets；复用既有 title widget key 与 source-backed edit，没有新增详情状态或 Framework contract。
+- Verification: 新契约 ERT 在旧实现上 4/8 失败；实现后 Stream 8/8，隔离 worktree full ERT 400/400；current-file strict byte compile、checkdoc、check-parens、diff-check 通过，repo-local `.elc` zero。当前脏工作区的 2 个 Dashboard test 因用户未提交文件新增但未安装的 `textui` 依赖失败，与本次 diff 隔离。
+
 ## 2026-08-07 — task011 / issue035 — Modify
 
 - Files: `supertag-view-stream.el`、`test/test-view-stream.el`、Stream spec/task/issue/manual records。

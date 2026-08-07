@@ -115,7 +115,7 @@ You define these **once per tag** (in the Schema View, `M-x supertag-view-schema
 - **Table View** (`M-x supertag-view-table`): Like a spreadsheet for your tagged nodes. Sort by any column, filter, bulk edit.
 - **Node View** (`M-x supertag-view-node`): Edit a single node's fields with auto-completion.
 - **Kanban** (`M-x supertag-view-kanban`): Board-style view for workflow tags (`#task`, `#project`).
-- **Stream View** (`M-x supertag-view-stream`): Read the complete bodies of a tag and all transitive `:extends` descendants as one chronological stream. Press `s` for plain/split, `e` for a narrowed source edit, or `v` for fields in Node View.
+- **Stream View** (`M-x supertag-view-stream`): Browse a chronological, single-column title list for a tag and all transitive `:extends` descendants. Use `n`/`p` to move, `e` to open the complete source node, or `v` for fields in Node View.
 
 ---
 
@@ -213,7 +213,7 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 |---|---|---|
 | Tag something | `M-x supertag-add-tag` | Adds `#tag` inline, node appears in that tag's table |
 | See all nodes of a tag | `M-x supertag-view-table` | Spreadsheet view. Sort, filter, edit cells |
-| Read a tag as a continuous page | `M-x supertag-view-stream` | Full node bodies, including nested tags; split/plain reading and narrowed source editing |
+| Browse a tag chronologically | `M-x supertag-view-stream` | Single-column title list including transitive `:extends` descendants; `e` opens the complete source node |
 | Edit a node's fields | `M-x supertag-view-node` | Form view with completion, pickers, and validation |
 | Board view | `M-x supertag-view-kanban` | Drag-and-drop between columns |
 | Define tag fields | `M-x supertag-view-schema` | Add/remove fields, set types, configure inheritance |

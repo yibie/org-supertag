@@ -1,5 +1,7 @@
 # issue035 — Stream 切换 tag 后旧索引窗口残留
 
+Status: Superseded and resolved by task012 on 2026-08-08.
+
 ## Environment
 
 - Nova Emacs 图形 frame
@@ -36,5 +38,7 @@ main 与 index buffer name 已按 tag 隔离。问题位于 presentation lifecyc
 
 ## Tracking
 
-- Task: task011
-- Resolved At/By/Commit: 2026-08-07 / Codex / 本变更提交；issue 待用户确认
+- Task: task011、task012
+- Superseding decision: 用户在 2026-08-08 批准单列标题流；companion index 的 buffer/window lifecycle 已整体删除。
+- Current verification: task012 ERT 连续打开多个 tag，断言各 main buffer 独立且不会创建任何 Stream Index buffer。
+- Resolved At/By/Commit: 2026-08-08 / Codex / 本变更提交

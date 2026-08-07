@@ -1,5 +1,7 @@
 # issue034 — Stream 双列索引选择后正文不可见
 
+Status: Superseded and resolved by task012 on 2026-08-08.
+
 ## Environment
 
 - Stream split 布局
@@ -36,5 +38,7 @@ index click、`n`/`p` 与 refresh restore 都汇入 `supertag-view-stream--selec
 
 ## Tracking
 
-- Task: task009
-- Resolved At/By/Commit: 2026-08-07 / Codex / 本变更提交；issue 待用户确认
+- Task: task009、task012
+- Superseding decision: 用户在 2026-08-08 批准单列标题流；companion index 与 Stream 正文投影均删除，原交互路径不再存在。
+- Current verification: task012 ERT 断言不创建 index buffer，`n`/`p` 直接定位主标题，`e` 打开完整源节点。
+- Resolved At/By/Commit: 2026-08-08 / Codex / 本变更提交

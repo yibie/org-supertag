@@ -29,11 +29,10 @@
 ** View framework
 - Source-backed node upserts now preserve an existing =:created-at= value, so
   editing a Stream node cannot silently move it to the end of creation order.
-- Added =M-x supertag-view-stream=: choose a tag to read its nodes and all
-  transitive =:extends= descendants as a creation-ordered full-body stream.  The
-  default split layout pairs a title-only index with the main reading buffer;
-  =s= toggles plain layout, =e= opens a source-backed narrowed indirect edit,
-  and =v= opens Node View for field changes.  The View Runtime remains
+- Added =M-x supertag-view-stream=: choose a tag to browse its nodes and all
+  transitive =:extends= descendants as a creation-ordered, single-column title
+  stream.  =n=/=p= navigate, =e= opens the complete source-backed narrowed
+  node, and =v= opens Node View for field changes.  The View Runtime remains
   unchanged and no dependency or persistence format was added.
 - Progress Dashboard, Effort Distribution, and Priority Matrix now use the
   same View Runtime as Search, Table, Kanban, Node, and the Widget DSL.

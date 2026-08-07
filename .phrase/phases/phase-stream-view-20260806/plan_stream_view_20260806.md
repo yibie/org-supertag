@@ -8,6 +8,7 @@
 4. Source indirect/narrow edit + public Node View entry。
 5. Subscription/cleanup + empty/error boundaries。
 6. Documentation、performance、full/static/graphical verification。
+7. task012：删除 companion/layout/full-body 投影，收敛为单列标题流。
 
 ## Implementation Order
 
@@ -17,6 +18,13 @@
 4. 完成 index buffer、window arrangement、selection overlay 与 thin commands。
 5. 完成 source indirect edit 和 Node View public node-ID entry。
 6. 完成 subscription/cleanup、文档和真实 `emacs -Q` smoke。
+
+## task012 Cleanup Plan
+
+1. 先把 focused ERT 锁定为单列标题、无 body/index/button/`s`，并证明旧实现失败。
+2. 删除 index mode/window、layout input/state/toggle、full-body/tag widgets，只保留稳定 title key、导航与既有 `e`/`v`。
+3. 更新当前产品文档；历史 change/task 记录保留原貌并由 task012 标注 superseded。
+4. 运行 focused/full/static gates，确认无 index symbol、无 repo-local `.elc`，再提交并推送。
 
 ## Quality Gates
 
@@ -31,12 +39,11 @@ git diff --check
 
 ## Risks
 
-- split companion stale：generic Runtime restore 必须重建 index，不在 renderer 跨 buffer 写。
-- Org syntax face 被 selection 覆盖：overlay face 只提供背景并保留底层 syntax face。
+- title face 被 selection 覆盖：overlay face 只提供背景并保留底层 title face。
 - indirect edit 暴露 child node：restriction end 使用下一个 heading，而非整个 subtree end。
 - source ID/location stale：创建 indirect buffer 前验证 file 和 ID；失败不遗留 buffer/window。
-- layout cleanup 破坏用户窗口：打开前保存 window configuration；只有显式 `q` 恢复，Runtime reopen cleanup 不擅自恢复。
-- 代码膨胀：不新增 Framework API、Widget type、state struct 或 layout class；实现只保留主 Adapter、companion 和 edit boundary。
+- 窗口恢复破坏用户布局：打开前保存 window configuration；只有显式 `q` 恢复。
+- 代码膨胀：不新增 Framework API、Widget type、详情状态或替代索引；实现只保留主 Adapter 和 edit boundary。
 
 ## Rollback
 

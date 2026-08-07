@@ -114,7 +114,7 @@ rating   →  数字（1–5）
 - **表格视图** (`M-x supertag-view-table`)：像一个针对你标签节点的电子表格。点列头排序，过滤，批量编辑。
 - **节点视图** (`M-x supertag-view-node`)：编辑单个节点的字段，带自动补全和校验。
 - **看板视图** (`M-x supertag-view-kanban`)：拖拽式的看板，适合 `#task`、`#project`。
-- **Stream View** (`M-x supertag-view-stream`)：把一个标签及其所有传递 `:extends` 后代节点的完整正文按时间串成一页。按 `s` 切换 plain/分栏，`e` narrow 编辑源节点，`v` 进入 Node View 修改字段。
+- **Stream View** (`M-x supertag-view-stream`)：把一个标签及其所有传递 `:extends` 后代节点显示为单列时间标题流。用 `n`/`p` 移动，按 `e` 打开完整源节点，按 `v` 进入 Node View 修改字段。
 
 ---
 
@@ -212,7 +212,7 @@ rating   →  数字（1–5）
 |---|---|---|
 | 打标签 | `M-x supertag-add-tag` | 添加 `#tag` 到标题，节点自动出现在该标签的表格里 |
 | 看一个标签的所有节点 | `M-x supertag-view-table` | 电子表格视图。可排序、过滤、直接编辑单元格 |
-| 把标签当成连续页面阅读 | `M-x supertag-view-stream` | 完整正文与嵌套标签，支持分栏/plain 和源节点 narrow 编辑 |
+| 按时间浏览一个标签 | `M-x supertag-view-stream` | 单列标题流，包含传递 `:extends` 后代；按 `e` 打开完整源节点 |
 | 编辑单个节点的字段 | `M-x supertag-view-node` | 表单视图，带自动补全、选择器和校验 |
 | 看板视图 | `M-x supertag-view-kanban` | 拖拽式看板，列之间移动 |
 | 定义标签字段 | `M-x supertag-view-schema` | 增删字段、设置类型、配置继承关系 |

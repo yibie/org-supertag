@@ -3,13 +3,11 @@
 ;;; Commentary:
 
 ;; Stream View presents every node carrying a tag (or one of its transitive
-;; `:extends' descendants) as a continuous, full-body reading view.  The main buffer is
-;; a normal View Runtime instance rendered through the existing Widget DSL.
-;; A small companion buffer supplies the optional left-hand index.
+;; `:extends' descendants) as a chronological title list.  The buffer is a
+;; normal View Runtime instance rendered through the existing Widget DSL.
 
 ;;; Code:
 
-(require 'button)
 (require 'cl-lib)
 (require 'org)
 (require 'subr-x)
@@ -18,18 +16,11 @@
 (require 'supertag-services-sync)
 (require 'supertag-view-api)
 (require 'supertag-view-framework)
-(require 'supertag-view-helper)
 (require 'supertag-view-node)
-(require 'supertag-view-svg-tag)
 
 (defgroup supertag-view-stream nil
-  "Continuous reading views for tagged nodes."
+  "Chronological title views for tagged nodes."
   :group 'org-supertag)
-
-(defcustom supertag-view-stream-index-width 26
-  "Width of the Stream View index window in columns."
-  :type 'integer
-  :group 'supertag-view-stream)
 
 (defface supertag-view-stream-title-face
   '((t :inherit org-level-2 :height 1.15 :weight semi-bold))
@@ -45,17 +36,11 @@
   "Background face for the selected Stream node."
   :group 'supertag-view-stream)
 
-(defvar-local supertag-view-stream--index-buffer nil
-  "Companion index buffer owned by the current Stream buffer.")
-
 (defvar-local supertag-view-stream--origin-window-configuration nil
   "Window configuration to restore when the Stream quits.")
 
 (defvar-local supertag-view-stream--selection-overlay nil
-  "Selection overlay in a Stream or Stream index buffer.")
-
-(defvar-local supertag-view-stream--main-buffer nil
-  "Main Stream buffer associated with an index buffer.")
+  "Selection overlay in a Stream buffer.")
 
 (defvar-local supertag-view-stream-edit--return-buffer nil
   "Stream buffer to refresh after an indirect edit finishes.")
@@ -71,7 +56,6 @@
     (set-keymap-parent map org-mode-map)
     (define-key map (kbd "n") #'supertag-view-stream-next-node)
     (define-key map (kbd "p") #'supertag-view-stream-previous-node)
-    (define-key map (kbd "s") #'supertag-view-stream-toggle-layout)
     (define-key map (kbd "e") #'supertag-view-stream-edit)
     (define-key map (kbd "v") #'supertag-view-stream-open-node-view)
     (define-key map (kbd "g") #'supertag-view-refresh)
@@ -80,28 +64,10 @@
   "Keymap for `supertag-view-stream-mode'.")
 
 (define-derived-mode supertag-view-stream-mode org-mode "Supertag-Stream"
-  "Major mode for reading tagged nodes as a continuous stream."
+  "Major mode for browsing tagged nodes as a title stream."
   :keymap supertag-view-stream-mode-map
   (setq buffer-read-only t
         truncate-lines nil))
-
-(defvar supertag-view-stream-index-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "n") #'supertag-view-stream-next-node)
-    (define-key map (kbd "p") #'supertag-view-stream-previous-node)
-    (define-key map (kbd "s") #'supertag-view-stream-toggle-layout)
-    (define-key map (kbd "e") #'supertag-view-stream-edit)
-    (define-key map (kbd "v") #'supertag-view-stream-open-node-view)
-    (define-key map (kbd "q") #'supertag-view-stream-quit)
-    (define-key map (kbd "RET") #'push-button)
-    map)
-  "Keymap for `supertag-view-stream-index-mode'.")
-
-(define-derived-mode supertag-view-stream-index-mode special-mode
-  "Supertag-Stream-Index"
-  "Major mode for the compact Stream View node index."
-  :keymap supertag-view-stream-index-mode-map
-  (setq truncate-lines t))
 
 (defvar supertag-view-stream-edit-mode-map
   (let ((map (make-sparse-keymap)))
@@ -139,16 +105,12 @@
 
 (defun supertag-view-stream--build-state (input)
   "Build data-only Stream state from Runtime INPUT."
-  (let* ((tag (plist-get input :tag))
-         (layout (if (memq (plist-get input :layout) '(plain split))
-                     (plist-get input :layout)
-                   'split)))
+  (let ((tag (plist-get input :tag)))
     (unless (and (stringp tag) (not (string-empty-p tag)))
       (user-error "Stream View requires a tag"))
     (let* ((node-ids (supertag-view-api-nodes-by-tag tag t))
            (nodes (supertag-view-api-get-entities :nodes node-ids)))
       (list :tag tag
-            :layout layout
             :nodes (cl-stable-sort (copy-sequence nodes)
                                    #'supertag-view-stream--node-before-p)))))
 
@@ -160,33 +122,19 @@
         title
       "Untitled")))
 
-(defun supertag-view-stream--node-tags (node)
-  "Return NODE tags as one display line."
-  (mapconcat (lambda (tag) (concat "#" tag))
-             (cl-remove-if-not #'stringp (plist-get node :tags))
-             " "))
-
 (defun supertag-view-stream--node-widget (node)
   "Return the Widget tree for NODE."
-  (let ((id (plist-get node :id)))
-    (list
-     :type :stack
-     :key id
-     :spacing 0
-     :children
-     (list
-      (list :type :text :content (supertag-view-stream--node-tags node))
-      (list :type :text
-            :content (propertize (supertag-view-stream--node-title node)
-                                 'font-lock-face
-                                 'supertag-view-stream-title-face))
-      (list :type :text :content (or (plist-get node :content) ""))))))
+  (list :type :text
+        :key (plist-get node :id)
+        :content (propertize (supertag-view-stream--node-title node)
+                             'font-lock-face
+                             'supertag-view-stream-title-face)))
 
 (defun supertag-view-stream--widgets (state)
   "Return the Stream Widget tree for STATE."
   (let ((nodes (plist-get state :nodes)))
     (if nodes
-        (list (list :type :stack :spacing 2
+        (list (list :type :stack :spacing 0
                     :children (mapcar #'supertag-view-stream--node-widget
                                       nodes)))
       (list (list :type :text
@@ -214,28 +162,19 @@
    (supertag-view-stream--widgets state) state)
   (supertag-view-stream--add-entity-properties)
   (setq header-line-format
-        (format " #%s   %d nodes   %s "
+        (format " #%s   %d nodes "
                 (plist-get state :tag)
-                (length (plist-get state :nodes))
-                (plist-get state :layout)))
+                (length (plist-get state :nodes))))
   (font-lock-flush))
 
 (defun supertag-view-stream--buffer-name (input)
   "Return a Stream buffer name for INPUT."
   (format "*Supertag Stream: %s*" (plist-get input :tag)))
 
-(defun supertag-view-stream--index-buffer-name (tag)
-  "Return the companion index buffer name for TAG."
-  (format "*Supertag Stream Index: %s*" tag))
-
 (defun supertag-view-stream--resolve-main-buffer ()
-  "Return the live main Stream buffer for the current context."
-  (cond
-   ((derived-mode-p 'supertag-view-stream-mode) (current-buffer))
-   ((and (buffer-live-p supertag-view-stream--main-buffer)
-         (with-current-buffer supertag-view-stream--main-buffer
-           (derived-mode-p 'supertag-view-stream-mode)))
-    supertag-view-stream--main-buffer)))
+  "Return the current Stream buffer, or nil outside Stream View."
+  (when (derived-mode-p 'supertag-view-stream-mode)
+    (current-buffer)))
 
 (defun supertag-view-stream--node-ids (main)
   "Return ordered node IDs from MAIN's current Runtime state."
@@ -276,7 +215,7 @@
               (point-max)))))
 
 (defun supertag-view-stream--highlight (id)
-  "Highlight entity ID in the current Stream-related buffer."
+  "Highlight entity ID in the current Stream buffer."
   (when (overlayp supertag-view-stream--selection-overlay)
     (delete-overlay supertag-view-stream--selection-overlay)
     (setq supertag-view-stream--selection-overlay nil))
@@ -286,151 +225,39 @@
     (overlay-put supertag-view-stream--selection-overlay
                  'face 'supertag-view-stream-current-face)))
 
-(defun supertag-view-stream--sync-selection (main id)
-  "Synchronize selection ID between MAIN and its index."
-  (when (buffer-live-p main)
-    (with-current-buffer main
-      (supertag-view-stream--highlight id))
-    (when-let* ((index (buffer-local-value
-                        'supertag-view-stream--index-buffer main))
-                ((buffer-live-p index)))
-      (with-current-buffer index
-        (supertag-view-stream--highlight id)
-        (when-let* ((position (supertag-view-stream--find-entity id)))
-          (goto-char position))))))
-
 (defun supertag-view-stream--select-node (main id)
-  "Select node ID in MAIN and synchronize its companion index."
+  "Select node ID in MAIN and reveal its title."
   (unless (buffer-live-p main)
     (user-error "Stream buffer is not live"))
   (let ((position
          (with-current-buffer main
            (if-let* ((position (supertag-view-stream--find-entity id)))
-               (progn (goto-char position) position)
+               (progn
+                 (goto-char position)
+                 (supertag-view-stream--highlight id)
+                 position)
              (user-error "Node %s is no longer in this Stream" id)))))
     (when-let* ((window (get-buffer-window main t)))
       (set-window-point window position)
       (set-window-start window position)))
-  (supertag-view-stream--sync-selection main id)
   id)
 
-(defun supertag-view-stream--index-activate (button)
-  "Select the node carried by index BUTTON."
-  (let ((main (button-get button 'supertag-main-buffer))
-        (id (button-get button 'supertag-entity-id)))
-    (supertag-view-stream--select-node main id)
-    (when-let* ((window (get-buffer-window main t)))
-      (select-window window))))
-
-(defun supertag-view-stream--render-index (main)
-  "Render MAIN's node index and return its companion buffer."
-  (let* ((instance (buffer-local-value 'supertag-view--instance main))
-         (state (plist-get instance :state))
-         (tag (plist-get state :tag))
-         (nodes (plist-get state :nodes))
-         (index (get-buffer-create
-                 (supertag-view-stream--index-buffer-name tag)))
-         (selected (with-current-buffer main
-                     (supertag-view-stream--current-node-id))))
-    (with-current-buffer index
-      (when (overlayp supertag-view-stream--selection-overlay)
-        (delete-overlay supertag-view-stream--selection-overlay))
-      (supertag-view-stream-index-mode)
-      (setq-local supertag-view-stream--main-buffer main)
-      (setq header-line-format (format " #%s " tag))
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (dolist (node nodes)
-          (let* ((id (plist-get node :id))
-                 (start (point)))
-            (insert (supertag-view-stream--node-title node) "\n")
-            (put-text-property start (point) 'supertag-entity-id id)
-            (make-text-button
-             start (max start (1- (point)))
-             'action #'supertag-view-stream--index-activate
-             'follow-link t
-             'mouse-face 'highlight
-             'supertag-main-buffer main
-             'supertag-entity-id id))))
-      (goto-char (point-min))
-      (supertag-view-stream--highlight selected))
-    (with-current-buffer main
-      (setq-local supertag-view-stream--index-buffer index))
-    index))
-
-(defun supertag-view-stream--remove-index (main)
-  "Remove MAIN's companion index buffer and windows."
-  (when (buffer-live-p main)
-    (let ((index (buffer-local-value
-                  'supertag-view-stream--index-buffer main)))
-      (when (buffer-live-p index)
-        (dolist (window (get-buffer-window-list index nil t))
-          (when (window-live-p window)
-            (set-window-dedicated-p window nil)
-            (unless (one-window-p t)
-              (delete-window window))))
-        (kill-buffer index))
-      (with-current-buffer main
-        (setq-local supertag-view-stream--index-buffer nil)))))
-
-(defun supertag-view-stream--show-index (main)
-  "Show MAIN's companion index to the left, returning non-nil on success."
-  (when-let* ((main-window (get-buffer-window main t)))
-    (let* ((index (supertag-view-stream--render-index main))
-           (existing (get-buffer-window index t)))
-      (cond
-       ((window-live-p existing) t)
-       ((<= (window-total-width main-window)
-            (+ supertag-view-stream-index-width 30))
-        (kill-buffer index)
-        (with-current-buffer main
-          (setq-local supertag-view-stream--index-buffer nil))
-        nil)
-       (t
-        (let ((index-window
-               (split-window main-window (- supertag-view-stream-index-width)
-                             'left)))
-          (set-window-buffer index-window index)
-          (set-window-dedicated-p index-window t)
-          t))))))
-
-(defun supertag-view-stream--layout (main)
-  "Apply MAIN's current split/plain presentation."
-  (let ((layout
-         (with-current-buffer main
-           (plist-get (plist-get supertag-view--instance :state) :layout))))
-    (pcase layout
-      ('plain (supertag-view-stream--remove-index main))
-      ('split
-       (unless (supertag-view-stream--show-index main)
-         (with-current-buffer main
-           (let* ((input (plist-get supertag-view--instance :input))
-                  (updated (plist-put (copy-sequence input) :layout 'plain)))
-             (setf (plist-get supertag-view--instance :input) updated)
-             (supertag-view-refresh main)))
-         (message "Stream window is too narrow; using plain layout"))))))
-
 (defun supertag-view-stream--restore-selection (selection)
-  "Restore Widget SELECTION and synchronize the Stream index."
+  "Restore Widget SELECTION in the Stream title list."
   (supertag-view-widget--restore-selection selection)
   (let* ((main (current-buffer))
          (id (or (supertag-view-stream--current-node-id)
                  (car (supertag-view-stream--node-ids main)))))
     (when id
-      (supertag-view-stream--select-node main id))
-    (when (buffer-live-p supertag-view-stream--index-buffer)
-      (supertag-view-stream--render-index main))))
+      (supertag-view-stream--select-node main id))))
 
 (defun supertag-view-stream--subscribe (_input _state refresh)
   "Subscribe the Stream to relevant Store changes using REFRESH."
-  (let ((main (current-buffer)))
-    (list
-     (supertag-view-api-subscribe
-      :store-changed
-      (lambda (path _old-value _new-value)
-        (when (and (listp path) (memq (car path) '(:nodes :tags)))
-          (funcall refresh))))
-     (lambda () (supertag-view-stream--remove-index main)))))
+  (supertag-view-api-subscribe
+   :store-changed
+   (lambda (path _old-value _new-value)
+     (when (and (listp path) (memq (car path) '(:nodes :tags)))
+       (funcall refresh)))))
 
 (defun supertag-view-stream--register-view ()
   "Register the Stream Adapter when needed."
@@ -450,29 +277,25 @@
 
 ;;;###autoload
 (defun supertag-view-stream (&optional tag)
-  "Open a split Stream View for TAG and all `:extends' descendants."
+  "Open a title Stream for TAG and all `:extends' descendants."
   (interactive
    (list (plist-get (supertag-view--read-tag) :value)))
   (unless (and (stringp tag) (not (string-empty-p tag)))
     (user-error "Stream View requires a tag"))
   (supertag-view-stream--register-view)
-  (let* ((previous (supertag-view-stream--resolve-main-buffer))
-         (origin (current-window-configuration))
+  (let* ((origin (current-window-configuration))
          (buffer (supertag-view-open
-                  'stream (list :tag tag :layout 'split))))
-    (when (and previous (not (eq previous buffer)))
-      (supertag-view-stream--remove-index previous))
+                  'stream (list :tag tag))))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (setq-local supertag-view-stream--origin-window-configuration origin))
-    (supertag-view-stream--layout buffer)
     (let ((id (car (supertag-view-stream--node-ids buffer))))
       (when id
         (supertag-view-stream--select-node buffer id)))
     buffer))
 
 (defun supertag-view-stream--move (delta)
-  "Move DELTA nodes in the current Stream or companion index."
+  "Move DELTA nodes in the current Stream."
   (let* ((main (or (supertag-view-stream--resolve-main-buffer)
                    (user-error "Not in a Stream View")))
          (ids (supertag-view-stream--node-ids main))
@@ -492,20 +315,6 @@
   "Move to the previous Stream node."
   (interactive)
   (supertag-view-stream--move -1))
-
-(defun supertag-view-stream-toggle-layout ()
-  "Toggle the current Stream between split and plain layouts."
-  (interactive)
-  (let ((main (or (supertag-view-stream--resolve-main-buffer)
-                  (user-error "Not in a Stream View"))))
-    (with-current-buffer main
-      (let* ((input (plist-get supertag-view--instance :input))
-             (layout (plist-get input :layout))
-             (updated (plist-put (copy-sequence input) :layout
-                                 (if (eq layout 'split) 'plain 'split))))
-        (setf (plist-get supertag-view--instance :input) updated)
-        (supertag-view-refresh main)))
-    (supertag-view-stream--layout main)))
 
 (defun supertag-view-stream-open-node-view ()
   "Open Node View for the current Stream node."
@@ -594,7 +403,6 @@
          (window-config
           (buffer-local-value
            'supertag-view-stream--origin-window-configuration main)))
-    (supertag-view-stream--remove-index main)
     (when (buffer-live-p main)
       (kill-buffer main))
     (when (window-configuration-p window-config)

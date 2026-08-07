@@ -65,3 +65,9 @@
   - 产出：旧 main buffer 保持存活，旧 index window 撤下，当前 tag 恢复标准双列布局
   - 验证方式：连续打开 `diary`、`work`、`diary`，每一步断言仅当前 tag index window 可见且另一 main buffer 存活
   - 影响范围：Stream 公共命令的 presentation lifecycle；不改变 Runtime buffer identity
+
+- task012 [x] 收敛 Stream 为单列标题流
+  - 依据：2026-08-08 用户批准 `agree/plan/exec`；spec 当前契约
+  - 产出：删除 companion index、split/plain layout、`s` 与正文/tag 投影；保留 `n`/`p`、`e`、`v`、`g`、`q` 和每 tag 独立 buffer
+  - 验证方式：失败优先 ERT 断言标题存在、正文/tag/button/index/`s` 不存在，`e` 仍显示完整源节点；focused/full/static gates
+  - 影响范围：Stream module/tests、README/CHANGELOG/View guide、phase 当前产品文档；不改 Runtime contract
