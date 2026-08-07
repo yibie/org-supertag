@@ -53,3 +53,9 @@
   - 产出：共享选择入口同步主 Stream window point/start
   - 验证方式：失败优先 ERT 从真实 index window 激活长列表末端节点，并断言目标节点位于主窗口顶部
   - 影响范围：Stream 选择与导航；不新增滚动状态或 Runtime contract
+
+- task010 [x] 锁定每个 tag 独立 Stream buffer
+  - 依据：spec Flow A、2026-08-07 用户要求
+  - 产出：不同 tag 独立 main buffer，同一 tag 重开复用原 buffer 的公共命令契约
+  - 验证方式：真实 Runtime 连续打开 `diary`、`work`、`diary`，断言 buffer identity、input 与正文隔离
+  - 影响范围：Stream 回归测试与文档；现有 identity 已满足时不改生产代码

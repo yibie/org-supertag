@@ -53,6 +53,7 @@ Stream state 是数据 plist：
 3. Runtime 创建主 buffer；Widget Renderer 生成完整正文流。
 4. presentation boundary 在当前主窗口左侧建立 index window，主 Stream 保持在右侧。
 5. header-line 只显示 `#tag`、node count 与 split/plain 状态。
+6. tag 是 Stream buffer identity：不同 tag 使用不同 main/index buffer；重复打开同一 tag 复用并刷新原 buffer。
 
 ### Flow B：导航与刷新
 
@@ -101,10 +102,12 @@ Stream state 是数据 plist：
 - Widget Renderer 的注册表、primitive、key capture/restore 与 mode contract 不变。
 - `supertag-view-node` 原交互命令保持行为；新增公开 node-ID 入口由原命令与 Stream 共用。
 - `org-supertag.el` 只新增 Stream 模块 require；无 load-time window/buffer 副作用。
+- 既有 Stream buffer 可同时存活；打开另一个 tag 不覆盖或改写前一个 tag 的 Runtime instance。
 
 ## Acceptance Criteria
 
 - 公共 Stream 命令通过真实 Runtime 建立一个主 instance。
+- 不同 tag 的公共命令返回不同且内容隔离的 main buffer；重复打开同一 tag 返回原 buffer。
 - tag descendant query 使用传递 `:extends` 语义，并有 `diaryx` 与平面斜杠 ID 反例。
 - renderer 不显示 file path 或前导 Org 星号；title face 高于正文；完整 Org 内容与 `#tag` token 存在。
 - split/plain、index click、`n`/`p`、refresh selection 与 missing-node fallback 通过工作流 ERT。

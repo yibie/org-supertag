@@ -1,5 +1,12 @@
 # change_stream_view_20260806
 
+## 2026-08-07 — task010 — Add / Confirm
+
+- Files: `test/test-view-stream.el`、Stream spec/task/manual records。
+- Behavior: 不同 tag 使用各自的 `*Supertag Stream: <tag>*` main buffer，内容与 Runtime input 隔离；重复打开同一 tag 复用原 buffer。
+- Simplification: 现有 `:buffer-name-fn` 已以 tag 建立正确 identity，因此不修改生产代码、不新增实例注册表。
+- Verification: 连续打开 `diary`、`work`、`diary` 的公共命令回归直接通过；Stream 8/8、相关 48/48、full ERT 400/400；test `check-parens`、diff-check 通过，repo-local `.elc` zero。
+
 ## 2026-08-07 — task009 / issue034 — Modify
 
 - Files: `supertag-view-stream.el`、`test/test-view-stream.el`、Stream spec/task/issue/manual records。

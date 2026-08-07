@@ -37,9 +37,10 @@
 
 ## Automated Quality Gates
 
-- Full ERT: 399/399 pass。
+- Full ERT: 400/400 pass。
 - Focused Stream + Node workflow: 9/9 pass。
 - task009 index click regression: Stream 7/7、Stream + Runtime + View 47/47 pass；长正文后的目标节点同步 main window point/start。
+- task010 per-tag buffer identity: Stream 8/8、Stream + Runtime + View 48/48 pass；`diary`/`work` 使用不同 buffer，重开 `diary` 复用原 buffer，input/正文互不串流。
 - `supertag-view-stream.el`: `byte-compile-error-on-warn=t` pass；checkdoc pass。
 - 本次修改的 `supertag-db-add-with-hash` 与 `supertag-view-node-open`: 单函数 byte compile/checkdoc pass。
 - `check-parens`: 所有修改的 Elisp 与测试 pass。

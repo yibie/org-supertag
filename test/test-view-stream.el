@@ -202,6 +202,38 @@
             (should-not (get-buffer "*Supertag Stream Index: diary*"))))
       (supertag-view-stream-test--kill-buffers))))
 
+(ert-deftest supertag-view-stream-public-command-keeps-one-buffer-per-tag ()
+  "Different tags get different buffers; reopening one tag reuses its buffer."
+  (supertag-view-stream-test--with-store
+    (unwind-protect
+        (save-window-excursion
+          (supertag-view-stream-test--put-tag "diary")
+          (supertag-view-stream-test--put-tag "work")
+          (supertag-view-stream-test--put-node
+           "diary-node" "Diary title" '("diary") "Diary body" '(0 10 0 0))
+          (supertag-view-stream-test--put-node
+           "work-node" "Work title" '("work") "Work body" '(0 20 0 0))
+          (let* ((diary (supertag-view-stream "diary"))
+                 (work (supertag-view-stream "work"))
+                 (diary-again (supertag-view-stream "diary")))
+            (should-not (eq diary work))
+            (should (eq diary diary-again))
+            (should (equal (buffer-name diary) "*Supertag Stream: diary*"))
+            (should (equal (buffer-name work) "*Supertag Stream: work*"))
+            (with-current-buffer diary
+              (should (equal (plist-get
+                              (plist-get supertag-view--instance :input) :tag)
+                             "diary"))
+              (should (string-match-p "Diary body" (buffer-string)))
+              (should-not (string-match-p "Work body" (buffer-string))))
+            (with-current-buffer work
+              (should (equal (plist-get
+                              (plist-get supertag-view--instance :input) :tag)
+                             "work"))
+              (should (string-match-p "Work body" (buffer-string)))
+              (should-not (string-match-p "Diary body" (buffer-string))))))
+      (supertag-view-stream-test--kill-buffers))))
+
 (ert-deftest supertag-view-stream-navigation-and-node-view-use-stable-id ()
   "Navigation and field dispatch must use the node ID at point."
   (supertag-view-stream-test--with-store
