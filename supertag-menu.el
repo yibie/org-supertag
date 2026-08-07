@@ -13,7 +13,11 @@
 ;;
 ;; Design notes:
 ;; - Commands are grouped into columns: Views, Tags & Fields, Search &
-;;   Query, Capture, Sync & Maintenance, and an optional Setup group.
+;;   Query, Capture, Sync & Maintenance, Git Sync, Automation, and an
+;;   optional Setup group. Less-common commands (virtual columns,
+;;   analytic demo views, database migration) live behind the Setup
+;;   group's "More commands..." nested prefix (`supertag-menu-more')
+;;   rather than crowding the top-level popup.
 ;; - Keys are two-character mnemonics of the form "<group><letter>"
 ;;   (e.g. "vt" for the table View, "ta" for Tag Add) so that every key
 ;;   across the whole menu is unique; the lowercase "q" is left untouched
@@ -103,12 +107,70 @@
 (declare-function supertag-doctor "supertag-doctor" (&optional report-only))
 ;; supertag-core-persistence.el (no autoload cookie; wrapped)
 (declare-function supertag-db-retry-lock "supertag-core-persistence" ())
+;; supertag-core-persistence.el (owned by a teammate; `supertag-restore'
+;; is developed alongside this iteration too, so it is wrapped exactly
+;; like `supertag-db-retry-lock' above rather than assumed present)
+(declare-function supertag-restore "supertag-core-persistence" ())
+
+;; supertag-git.el (;;;###autoload, but NOT part of org-supertag.el's own
+;; `require' chain; wrapped for robustness, same as `supertag-doctor')
+(declare-function supertag-git-setup "supertag-git" ())
+(declare-function supertag-git-clone "supertag-git" (remote-url local-directory))
+(declare-function supertag-git-sync-mode "supertag-git" (&optional arg))
+
+;; supertag-conflicts.el (;;;###autoload; also unconditionally required by
+;; org-supertag.el, so it is safe to reference directly)
+(declare-function supertag-conflicts-resolve "supertag-conflicts" ())
+(declare-function supertag-conflicts-use-ours-all "supertag-conflicts" ())
+(declare-function supertag-conflicts-use-theirs-all "supertag-conflicts" ())
+
+;; supertag-automation-sync.el / supertag-automation.el (no autoload
+;; cookie; unconditionally required by org-supertag.el, but wrapped
+;; anyway since Org-Supertag's own menu entries for this file wrap every
+;; non-autoloaded command)
+(declare-function supertag-automation-sync-enable "supertag-automation-sync" ())
+(declare-function supertag-automation-sync-disable "supertag-automation-sync" ())
+(declare-function supertag-automation-recalculate-all-rollups "supertag-automation" ())
+;; supertag-services-scheduler.el (no autoload cookie; wrapped)
+(declare-function supertag-scheduler-start "supertag-services-scheduler" ())
+(declare-function supertag-scheduler-stop "supertag-services-scheduler" ())
+(declare-function supertag-scheduler-list-tasks "supertag-services-scheduler" ())
+
+;; supertag-virtual-column.el (no autoload cookie; wrapped)
+(declare-function supertag-virtual-column-create-interactive "supertag-virtual-column" ())
+(declare-function supertag-virtual-column-edit-interactive "supertag-virtual-column" ())
+(declare-function supertag-virtual-column-delete-interactive "supertag-virtual-column" ())
+(declare-function supertag-virtual-column-list-interactive "supertag-virtual-column" ())
+
+;; supertag-view-priority-matrix.el / supertag-view-progress-dashboard.el /
+;; supertag-view-effort-distribution.el (no autoload cookie; wrapped).
+;; Only `-demo' entry points exist for these views today, so the menu
+;; wires and labels them honestly as demos.
+(declare-function supertag-view-priority-matrix-demo "supertag-view-priority-matrix" ())
+(declare-function supertag-view-progress-dashboard-demo "supertag-view-progress-dashboard" ())
+(declare-function supertag-view-effort-distribution-demo "supertag-view-effort-distribution" ())
+
+;; supertag-migration.el (;;;###autoload; also unconditionally required by
+;; org-supertag.el, so it is safe to reference directly)
+(declare-function supertag-migrate-database-to-new-arch "supertag-migration" ())
+(declare-function supertag-batch-convert-properties-to-fields "supertag-migration" ())
+(declare-function supertag-migration-add-ids-to-org-headings "supertag-migration" (directory))
+;; supertag-migrate-tag-ids.el (no autoload cookie; NOT part of
+;; org-supertag.el's own `require' chain; wrapped)
+(declare-function supertag-migrate-tag-ids "supertag-migrate-tag-ids" ())
+
+;; supertag-view-svg-tag.el / supertag-concept.el (;;;###autoload; also
+;; unconditionally required by org-supertag.el, so it is safe to
+;; reference these directly)
+(declare-function supertag-svg-tag-mode-toggle "supertag-view-svg-tag" ())
+(declare-function supertag-concept-link-mode "supertag-concept" (&optional arg))
 
 ;; supertag-setup.el and supertag-automation-templates.el are developed
 ;; alongside this file; guard every reference with `fboundp' and never
 ;; `require' them directly from here.
 (declare-function supertag-setup "supertag-setup" ())
 (declare-function supertag-automation-insert-template "supertag-automation-templates" ())
+(declare-function supertag-automation-list-templates "supertag-automation-templates" ())
 
 ;;; --- Thin lazy-loading wrappers ---
 ;; Each wrapper `require's the owning feature (safe: these files have no
@@ -215,6 +277,85 @@ DOC is used as the docstring of the generated wrapper."
   supertag-core-persistence supertag-db-retry-lock
   "Run `supertag-db-retry-lock', loading its feature first if needed.")
 
+(supertag-menu--defwrapper supertag-menu--restore
+  supertag-core-persistence supertag-restore
+  "Run `supertag-restore', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--git-setup
+  supertag-git supertag-git-setup
+  "Run `supertag-git-setup', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--git-clone
+  supertag-git supertag-git-clone
+  "Run `supertag-git-clone', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--git-sync-mode
+  supertag-git supertag-git-sync-mode
+  "Toggle `supertag-git-sync-mode', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--automation-sync-enable
+  supertag-automation-sync supertag-automation-sync-enable
+  "Run `supertag-automation-sync-enable', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--automation-sync-disable
+  supertag-automation-sync supertag-automation-sync-disable
+  "Run `supertag-automation-sync-disable', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--automation-recalculate-all-rollups
+  supertag-automation supertag-automation-recalculate-all-rollups
+  "Run `supertag-automation-recalculate-all-rollups', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--scheduler-start
+  supertag-services-scheduler supertag-scheduler-start
+  "Run `supertag-scheduler-start', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--scheduler-stop
+  supertag-services-scheduler supertag-scheduler-stop
+  "Run `supertag-scheduler-stop', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--scheduler-list-tasks
+  supertag-services-scheduler supertag-scheduler-list-tasks
+  "Run `supertag-scheduler-list-tasks', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--virtual-column-create
+  supertag-virtual-column supertag-virtual-column-create-interactive
+  "Run `supertag-virtual-column-create-interactive', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--virtual-column-edit
+  supertag-virtual-column supertag-virtual-column-edit-interactive
+  "Run `supertag-virtual-column-edit-interactive', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--virtual-column-delete
+  supertag-virtual-column supertag-virtual-column-delete-interactive
+  "Run `supertag-virtual-column-delete-interactive', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--virtual-column-list
+  supertag-virtual-column supertag-virtual-column-list-interactive
+  "Run `supertag-virtual-column-list-interactive', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--view-priority-matrix-demo
+  supertag-view-priority-matrix supertag-view-priority-matrix-demo
+  "Run `supertag-view-priority-matrix-demo', loading its feature first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--view-progress-dashboard-demo
+  supertag-view-progress-dashboard supertag-view-progress-dashboard-demo
+  "Run `supertag-view-progress-dashboard-demo', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--view-effort-distribution-demo
+  supertag-view-effort-distribution supertag-view-effort-distribution-demo
+  "Run `supertag-view-effort-distribution-demo', loading its feature
+first if needed.")
+
+(supertag-menu--defwrapper supertag-menu--migrate-tag-ids
+  supertag-migrate-tag-ids supertag-migrate-tag-ids
+  "Run `supertag-migrate-tag-ids', loading its feature first if needed.")
+
 ;;; --- The menu ---
 
 ;;;###autoload
@@ -228,7 +369,9 @@ DOC is used as the docstring of the generated wrapper."
     ("vw" "Whiteboard"     supertag-board-mode
      :if (lambda () (fboundp 'supertag-board-mode)))
     ("vg" "Graph UI"       supertag-graph-ui-open
-     :if (lambda () (fboundp 'supertag-graph-ui-open)))]
+     :if (lambda () (fboundp 'supertag-graph-ui-open)))
+    ("vy" "Toggle SVG tags"      supertag-svg-tag-mode-toggle)
+    ("vl" "Toggle concept links" supertag-concept-link-mode)]
    ["Tags & Fields"
     ("ta" "Add tag"            supertag-menu--add-tag)
     ("tr" "Remove tag"         supertag-menu--remove-tag)
@@ -258,11 +401,50 @@ DOC is used as the docstring of the generated wrapper."
     ("ms" "Sync status"       supertag-sync-status)
     ("md" "Doctor"            supertag-menu--doctor)
     ("ml" "Retry DB lock"     supertag-menu--db-retry-lock)]
+   ["Git Sync"
+    ("gs" "Setup git sync"       supertag-menu--git-setup)
+    ("gc" "Clone vault"          supertag-menu--git-clone)
+    ("gm" "Toggle sync mode"     supertag-menu--git-sync-mode)
+    ("gr" "Resolve conflicts"    supertag-conflicts-resolve)
+    ("go" "Use ours (all)"       supertag-conflicts-use-ours-all)
+    ("gt" "Use theirs (all)"     supertag-conflicts-use-theirs-all)]]
+  [["Automation"
+    ("al" "List templates"       supertag-automation-list-templates
+     :if (lambda () (fboundp 'supertag-automation-list-templates)))
+    ("ae" "Enable auto-sync"     supertag-menu--automation-sync-enable)
+    ("ad" "Disable auto-sync"    supertag-menu--automation-sync-disable)
+    ("ar" "Recalculate rollups"  supertag-menu--automation-recalculate-all-rollups)
+    ("as" "Start scheduler"      supertag-menu--scheduler-start)
+    ("ax" "Stop scheduler"       supertag-menu--scheduler-stop)
+    ("at" "List scheduled tasks" supertag-menu--scheduler-list-tasks)]
    ["Setup"
     ("zs" "Setup wizard"             supertag-setup
      :if (lambda () (fboundp 'supertag-setup)))
     ("zt" "Insert automation template" supertag-automation-insert-template
-     :if (lambda () (fboundp 'supertag-automation-insert-template)))]])
+     :if (lambda () (fboundp 'supertag-automation-insert-template)))
+    ("zr" "Restore from backup"      supertag-menu--restore)
+    ("zm" "More commands..."         supertag-menu-more)]])
+
+;;;###autoload
+(transient-define-prefix supertag-menu-more ()
+  "Secondary menu for less-common Org-Supertag commands.
+Reached from `supertag-menu''s Setup group; kept separate so the
+top-level popup does not get crowded with rarely-used virtual column,
+analytic demo view, and database migration commands."
+  [["Virtual Columns"
+    ("vc" "Create"  supertag-menu--virtual-column-create)
+    ("ve" "Edit"    supertag-menu--virtual-column-edit)
+    ("vd" "Delete"  supertag-menu--virtual-column-delete)
+    ("vl" "List"    supertag-menu--virtual-column-list)]
+   ["Analytics"
+    ("ap" "Priority matrix (demo)"      supertag-menu--view-priority-matrix-demo)
+    ("ab" "Progress dashboard (demo)"   supertag-menu--view-progress-dashboard-demo)
+    ("af" "Effort distribution (demo)"  supertag-menu--view-effort-distribution-demo)]
+   ["Migration"
+    ("ma" "Migrate DB to new arch"          supertag-migrate-database-to-new-arch)
+    ("mp" "Convert properties to fields"    supertag-batch-convert-properties-to-fields)
+    ("mi" "Add IDs to org headings"         supertag-migration-add-ids-to-org-headings)
+    ("mt" "Migrate tag IDs"                 supertag-menu--migrate-tag-ids)]])
 
 (provide 'supertag-menu)
 

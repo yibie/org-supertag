@@ -4,6 +4,11 @@
 ;; `supertag-smart-key' turns existing Org-Supertag text properties and
 ;; ordinary Emacs interaction primitives into one context-sensitive command.
 ;; Targets are transient data; recognition never mutates the buffer or store.
+;;
+;; `supertag-smart-key-mode' is an optional global minor mode that binds
+;; `C-c s' to `supertag-smart-key' and `C-c S' to `supertag-menu', so users
+;; who enable it always have a way back into Org-Supertag's discoverable
+;; command menu without having to remember either command's name.
 
 ;;; Code:
 
@@ -284,6 +289,22 @@ With prefix argument ASSIST, offer actions relevant to that object."
     (if-let* ((target (supertag--target-at-point)))
         (supertag--activate-target target)
       (user-error "No Org-Supertag target at point"))))
+
+(defvar supertag-smart-key-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c s") #'supertag-smart-key)
+    (define-key map (kbd "C-c S") #'supertag-menu)
+    map)
+  "Keymap for `supertag-smart-key-mode'.")
+
+;;;###autoload
+(define-minor-mode supertag-smart-key-mode
+  "Global minor mode binding `C-c s' to `supertag-smart-key' and `C-c S' to
+`supertag-menu', so Org-Supertag's context-sensitive activation and its
+discoverable command menu are always one keystroke away."
+  :global t
+  :group 'org-supertag
+  :keymap supertag-smart-key-mode-map)
 
 (provide 'supertag-smart-key)
 ;;; supertag-smart-key.el ends here
