@@ -1,5 +1,12 @@
 # change_stream_view_20260806
 
+## 2026-08-07 — task009 / issue034 — Modify
+
+- Files: `supertag-view-stream.el`、`test/test-view-stream.el`、Stream spec/task/issue/manual records。
+- Behavior: 双列索引点击节点后，主窗口 point/start 同步到节点起点，标题与正文开头立即可见；`n`/`p` 复用同一选择规则。
+- Simplification: 修复既有共享 `supertag-view-stream--select-node`，没有新增滚动状态、helper 或 Runtime 分支。
+- Verification: 回归先以 main window point `1`、目标位置 `1133` 失败；修复后 Stream 7/7、相关 47/47、full ERT 399/399；byte compile/checkdoc/check-parens/diff-check 通过，repo-local `.elc` zero。
+
 ## 2026-08-07 — task008 / issue009 — Modify
 
 - Files: shared scan/View API、Schema/View/Table selectors、Tag write boundaries、sync、nested/Stream tests and docs；真实 notes Store 与两个源 Org 文件。

@@ -303,10 +303,14 @@
   "Select node ID in MAIN and synchronize its companion index."
   (unless (buffer-live-p main)
     (user-error "Stream buffer is not live"))
-  (with-current-buffer main
-    (if-let* ((position (supertag-view-stream--find-entity id)))
-        (goto-char position)
-      (user-error "Node %s is no longer in this Stream" id)))
+  (let ((position
+         (with-current-buffer main
+           (if-let* ((position (supertag-view-stream--find-entity id)))
+               (progn (goto-char position) position)
+             (user-error "Node %s is no longer in this Stream" id)))))
+    (when-let* ((window (get-buffer-window main t)))
+      (set-window-point window position)
+      (set-window-start window position)))
   (supertag-view-stream--sync-selection main id)
   id)
 

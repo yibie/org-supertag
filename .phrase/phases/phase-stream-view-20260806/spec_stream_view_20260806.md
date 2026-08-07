@@ -57,9 +57,10 @@ Stream state 是数据 plist：
 ### Flow B：导航与刷新
 
 1. `n`/`p` 读取当前 node key 并移动到相邻稳定 node ID。
-2. 主 Stream 和 index 用仅含背景的 selection face 高亮同一 ID。
-3. Runtime refresh 按 node ID/offset capture → rebuild → render → restore。
-4. restore 后重建 index 投影；node 消失时落到首个可用节点。
+2. index click 或 `n`/`p` 选择节点时，主窗口从目标节点起始位置显示，标题与正文均处于可读区域。
+3. 主 Stream 和 index 用仅含背景的 selection face 高亮同一 ID。
+4. Runtime refresh 按 node ID/offset capture → rebuild → render → restore。
+5. restore 后重建 index 投影；node 消失时落到首个可用节点。
 
 ### Flow C：切换布局
 
@@ -91,6 +92,7 @@ Stream state 是数据 plist：
 - node 无文件、文件不存在或 ID 无法定位时，`e` 在创建 indirect buffer 前报错。
 - 当前窗口太窄不能 split 时保持 plain 并给出消息，不破坏现有窗口布局。
 - refresh 时 companion/index 已被用户 kill，主 Stream 继续可用，并在下次切换 split 时重建。
+- 双列索引激活位于长 Stream 末端的节点时，必须同步主窗口 point/start，不能只移动 buffer point 后把目标留在窗口底部。
 - kill main buffer 必须清理 index；重复 cleanup 必须幂等。
 
 ## Compatibility Contract
@@ -106,6 +108,7 @@ Stream state 是数据 plist：
 - tag descendant query 使用传递 `:extends` 语义，并有 `diaryx` 与平面斜杠 ID 反例。
 - renderer 不显示 file path 或前导 Org 星号；title face 高于正文；完整 Org 内容与 `#tag` token 存在。
 - split/plain、index click、`n`/`p`、refresh selection 与 missing-node fallback 通过工作流 ERT。
+- index click 后目标节点位于主窗口顶部，长正文的开头无需额外滚动即可阅读。
 - narrow 编辑测试证明 child heading 不在 restriction 内，修改落到 base buffer，且不自动保存。
 - narrow 编辑后的同步保留原 `:created-at`。
 - `v` 通过 Node View 的公开 node-ID 入口。

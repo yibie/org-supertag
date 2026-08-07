@@ -152,7 +152,10 @@
           (supertag-view-stream-test--put-tag "diary")
           (supertag-view-stream-test--put-tag "happy" "diary")
           (supertag-view-stream-test--put-node
-           "node-1" "First title" '("diary") "First body" '(0 10 0 0))
+           "node-1" "First title" '("diary")
+           (mapconcat (lambda (number) (format "First body %d" number))
+                      (number-sequence 1 80) "\n")
+           '(0 10 0 0))
           (supertag-view-stream-test--put-node
            "node-2" "Second title" '("happy") "Second body" '(0 20 0 0))
           (let ((main (supertag-view-stream "diary")))
@@ -164,13 +167,20 @@
               (should (> (window-total-width main-window)
                          (window-total-width index-window)))
               (should (<= (window-total-width index-window)
-                          supertag-view-stream-index-width)))
-            (with-current-buffer "*Supertag Stream Index: diary*"
-              (should (string-match-p "First title" (buffer-string)))
-              (should (string-match-p "Second title" (buffer-string)))
-              (should-not (string-match-p "/" (buffer-string)))
-              (forward-line 1)
-              (push-button))
+                          supertag-view-stream-index-width))
+              (select-window index-window)
+              (with-current-buffer "*Supertag Stream Index: diary*"
+                (should (string-match-p "First title" (buffer-string)))
+                (should (string-match-p "Second title" (buffer-string)))
+                (should-not (string-match-p "/" (buffer-string)))
+                (forward-line 1)
+                (push-button))
+              (let ((position
+                     (with-current-buffer main
+                       (supertag-view-stream--find-entity "node-2"))))
+                (should (eq (selected-window) main-window))
+                (should (= (window-point main-window) position))
+                (should (= (window-start main-window) position))))
             (with-current-buffer main
               (should (equal (supertag-view-stream--current-node-id)
                              "node-2")))

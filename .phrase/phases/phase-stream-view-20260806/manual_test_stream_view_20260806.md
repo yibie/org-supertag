@@ -37,8 +37,9 @@
 
 ## Automated Quality Gates
 
-- Full ERT: 392/392 pass。
+- Full ERT: 399/399 pass。
 - Focused Stream + Node workflow: 9/9 pass。
+- task009 index click regression: Stream 7/7、Stream + Runtime + View 47/47 pass；长正文后的目标节点同步 main window point/start。
 - `supertag-view-stream.el`: `byte-compile-error-on-warn=t` pass；checkdoc pass。
 - 本次修改的 `supertag-db-add-with-hash` 与 `supertag-view-node-open`: 单函数 byte compile/checkdoc pass。
 - `check-parens`: 所有修改的 Elisp 与测试 pass。
@@ -48,4 +49,6 @@
 
 ## User Hands-on Gate
 
-在用户日常 Emacs 中执行 `M-x supertag-view-stream`，选择一个含 `/` 后代且至少三个节点的真实 tag，确认阅读密度、`s`、`n`/`p`、`e`、`v` 与 `q`。用户明确回复通过前，task006、issue032、phase、commit/push 均保持未完成。
+在用户日常 Emacs 中执行 `M-x supertag-view-stream`，选择一个含 `:extends` 后代且至少三个节点的真实 tag，确认阅读密度、`s`、`n`/`p`、`e`、`v` 与 `q`。用户明确回复通过前，task006、issue032 与 phase 均保持未完成。
+
+issue034 追加检查：在 split 左侧索引点击当前视口外的靠后节点，右侧应从该节点标题开始显示，正文开头无需额外滚动即可阅读。自动化已通过，待用户实机确认后关闭 issue034。

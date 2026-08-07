@@ -33,3 +33,4 @@
 - issue031 [x] Kanban 并排卡片操作可能命中相邻列节点（实现、图形 `emacs -Q` 回归与用户验收通过；DONE-phase-view-runtime-20260804/issue_view_runtime_kanban_card_target_20260804.md）
 - issue032 [ ] source-backed 节点同步重置 `:created-at`，导致 Stream 编辑后顺序漂移（修复与回归测试完成，待用户实机确认；phase-stream-view-20260806/issue_stream_edit_resets_created_at_20260806.md）
 - issue033 [ ] Widget DSL editable-field 遗留 overlay 并推动同行边框 2px（实现与 live GUI 验证完成，待用户确认；phase-view-dsl-20260204/issue_widget_field_border_20260806.md）
+- issue034 [ ] Stream 双列索引点击后目标节点可能落在主窗口底部，正文不可见（phase-stream-view-20260806/issue_stream_index_scroll_20260807.md）

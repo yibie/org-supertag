@@ -47,3 +47,9 @@
   - 产出：Stream/View/Table 只按传递 `:extends` 聚合；Schema 不再派生斜杠 namespace；真实 Store 迁移并备份
   - 验证方式：失败优先 ERT 覆盖 direct/deep descendants 与斜杠反例；focused/full/static；真实 Store/source 重载确认
   - 影响范围：共享 scan/View API、Schema/View/Table、nested/Stream tests、真实 Store 的两个遗留 Tag
+
+- task009 [x] 保证双列索引选择后的节点正文可见
+  - 依据：issue034、spec Flow B
+  - 产出：共享选择入口同步主 Stream window point/start
+  - 验证方式：失败优先 ERT 从真实 index window 激活长列表末端节点，并断言目标节点位于主窗口顶部
+  - 影响范围：Stream 选择与导航；不新增滚动状态或 Runtime contract
