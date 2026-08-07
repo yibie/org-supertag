@@ -10,7 +10,6 @@
 (require 'supertag-services-query)
 (require 'supertag-services-ui)
 (require 'supertag-core-schema)
-(require 'supertag-core-tag-path)
 (require 'supertag-view-helper)
 (require 'supertag-ops-tag)
 (require 'supertag-ops-tag-merge)
@@ -49,24 +48,21 @@ tag contains its own ID, ensuring consistency for later processing."
     tags-by-id))
 
 (defun supertag-schema--build-tree ()
-  "Build one parent tree from explicit parents and slash-path fallbacks."
+  "Build one parent tree from explicit `:extends' relationships."
   (let ((tags-by-id (supertag-schema--get-all-tags-by-id))
         (nodes-by-id (make-hash-table :test 'equal))
         (parent-by-id (make-hash-table :test 'equal))
         (children-by-id (make-hash-table :test 'equal))
         roots)
+    (maphash
+     (lambda (id tag)
+       (let ((node (copy-sequence tag)))
+         (setq node (plist-put node :id id))
+         (setq node (plist-put node :label id))
+         (puthash id node nodes-by-id)))
+     tags-by-id)
     (cl-labels
-        ((ensure-namespace
-          (path)
-          (unless (gethash path nodes-by-id)
-            (puthash path
-                     (list :id path
-                           :label (supertag-tag-path-leaf path)
-                           :virtual t)
-                     nodes-by-id)
-            (when-let* ((parent (supertag-tag-path-parent path)))
-              (ensure-namespace parent))))
-         (would-cycle-p
+        ((would-cycle-p
           (child parent)
           (let ((current parent)
                 (seen (make-hash-table :test 'equal))
@@ -77,36 +73,12 @@ tag contains its own ID, ensuring consistency for later processing."
                   (setq cycle t)
                 (setq current (gethash current parent-by-id))))
             cycle)))
-      (maphash
-       (lambda (id tag)
-         (let ((actual (copy-sequence tag)))
-           (setq actual (plist-put actual :id id))
-           (setq actual (plist-put actual :label
-                                   (supertag-tag-path-leaf id)))
-           (setq actual (plist-put actual :virtual nil))
-           (puthash id actual nodes-by-id)))
-       tags-by-id)
-      (maphash
-       (lambda (id tag)
-         (unless (plist-get tag :extends)
-           (when-let* ((parent (supertag-tag-path-parent id)))
-             (ensure-namespace parent))))
-       tags-by-id)
       (dolist (id (sort (hash-table-keys nodes-by-id) #'string<))
-        (let* ((node (gethash id nodes-by-id))
-               (explicit (and (not (plist-get node :virtual))
-                              (plist-get node :extends))))
-          (when (and explicit
-                     (gethash explicit nodes-by-id)
-                     (not (would-cycle-p id explicit)))
-            (puthash id explicit parent-by-id))))
-      (dolist (id (sort (hash-table-keys nodes-by-id)
-                        (lambda (left right) (< (length left) (length right)))))
-        (unless (gethash id parent-by-id)
-          (when-let* ((parent (supertag-tag-path-parent id)))
-            (when (and (gethash parent nodes-by-id)
-                       (not (would-cycle-p id parent)))
-              (puthash id parent parent-by-id))))))
+        (let ((parent (plist-get (gethash id nodes-by-id) :extends)))
+          (when (and parent
+                     (gethash parent nodes-by-id)
+                     (not (would-cycle-p id parent)))
+            (puthash id parent parent-by-id)))))
     (maphash
      (lambda (id _node)
        (if-let* ((parent (gethash id parent-by-id)))
@@ -265,26 +237,21 @@ This function handles both legacy and global field modes."
          (indent (make-string (* 2 level) ? ))
          (tag-id (plist-get tag-node :id))
          (label (or (plist-get tag-node :label) tag-id))
-         (virtual (plist-get tag-node :virtual))
          (parent-id (plist-get tag-node :extends))
          (children (plist-get tag-node :children))
          (branch (and children t)))
     ;; Render the tag itself
     (let* ((start (point))
-           (context (if virtual
-                        (list :type :namespace :path tag-id
-                              :has-descendants t)
-                      (list :type :tag :tag-id tag-id
-                            :has-descendants branch))))
-      (insert (format "%s%s%s" indent label (if branch "/" "")))
+           (context (list :type :tag :tag-id tag-id
+                          :has-descendants branch)))
+      (insert (format "%s%s" indent label))
       (insert "\n")
       (add-text-properties start (1- (point))
                            `(supertag-context ,context)))
 
     ;; Render fields, grouped by origin
     ;; Use supertag-schema--get-own-fields to get only directly defined fields
-    (unless virtual
-      (let* ((own-fields (supertag-schema--get-own-fields tag-id))
+    (let* ((own-fields (supertag-schema--get-own-fields tag-id))
            (processed-fields (make-hash-table :test 'equal))
            (visited-parents (make-hash-table :test 'equal))
            (current-parent-id parent-id))
@@ -333,7 +300,7 @@ This function handles both legacy and global field modes."
               (plist-get
                (supertag-schema--ensure-plist
                 (supertag-tag-get current-parent-id))
-               :extends)))))
+               :extends))))
 
     ;; Render children recursively
     (dolist (child children)
@@ -466,7 +433,7 @@ Users can rebind keys in this map to avoid conflicts with modal editing.")
   (interactive)
   (let ((query (supertag-view--get-tag-at-point)))
     (unless query
-      (user-error "Not on a tag or namespace line"))
+      (user-error "Not on a tag line"))
     (require 'supertag-view-table)
     (supertag-view-table query)))
 

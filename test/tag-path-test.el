@@ -80,13 +80,18 @@
      (equal '("exact")
             (mapcar #'car (supertag-find-nodes-by-tag "emacs"))))))
 
-(ert-deftest tag-path-query-includes-only-segment-boundary-descendants ()
+(ert-deftest nested-tag-query-follows-explicit-extends-only ()
   (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "emacs")
+    (tag-path-test--put-tag "package" "emacs")
+    (tag-path-test--put-tag "elpa" "package")
+    (tag-path-test--put-tag "emacs2")
+    (tag-path-test--put-tag "emacs/legacy")
     (dolist (pair '(("exact" . "emacs")
-                    ("child" . "emacs/package")
-                    ("deep" . "emacs/package/elpa")
-                    ("lookalike" . "emacs2/package")
-                    ("other" . "linux/package")))
+                    ("child" . "package")
+                    ("deep" . "elpa")
+                    ("lookalike" . "emacs2")
+                    ("flat-slash" . "emacs/legacy")))
       (tag-path-test--put-node (car pair) (cdr pair)))
     (let ((expected '("child" "deep" "exact")))
       (should
@@ -106,20 +111,21 @@
                 '(:type :tag :value "emacs" :include-descendants t))
                #'string<))))))
 
-(ert-deftest tag-path-descendants-return-only-real-complete-tag-ids ()
+(ert-deftest nested-tag-descendants-return-transitive-extends-ids ()
   (tag-path-test--with-clean-store
-    (dolist (tag '("emacs/package"
-                   "emacs/package/elpa"
-                   "emacs/"
-                   "emacs2/package"
-                   "linux/package"))
-      (tag-path-test--put-tag tag))
+    (tag-path-test--put-tag "emacs")
+    (tag-path-test--put-tag "package" "emacs")
+    (tag-path-test--put-tag "elpa" "package")
+    (tag-path-test--put-tag "emacs/legacy")
+    (tag-path-test--put-tag "emacs2")
     (should
-     (equal '("emacs/package" "emacs/package/elpa")
+     (equal '("elpa" "package")
             (sort (supertag-find-tag-descendants "emacs") #'string<)))))
 
-(ert-deftest tag-path-single-node-sync-keeps-entities-and-relations-aligned ()
+(ert-deftest nested-tag-sync-resolves-display-path-to-real-id ()
   (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "emacs")
+    (tag-path-test--put-tag "package" "emacs")
     (let ((file (make-temp-file "supertag-tag-path" nil ".org")))
       (unwind-protect
           (with-temp-buffer
@@ -128,11 +134,11 @@
             (insert "* Package #emacs/package\n:PROPERTIES:\n:ID: node-1\n:END:\n")
             (goto-char (point-min))
             (supertag-node-sync-at-point)
-            (should (supertag-tag-get "emacs/package"))
-            (should (equal '("emacs/package")
+            (should-not (supertag-tag-get "emacs/package"))
+            (should (equal '("package")
                            (plist-get (supertag-node-get "node-1") :tags)))
             (should (= 1 (length (supertag-relation-find-between
-                                  "node-1" "emacs/package" :node-tag))))
+                                  "node-1" "package" :node-tag))))
             (goto-char (point-min))
             (re-search-forward " #emacs/package")
             (replace-match "")
@@ -141,6 +147,31 @@
             (should-not (plist-get (supertag-node-get "node-1") :tags))
             (should-not (supertag-relation-find-by-from "node-1" :node-tag)))
         (delete-file file)))))
+
+(ert-deftest nested-tag-bulk-import-stores-real-id ()
+  (tag-path-test--with-clean-store
+    (tag-path-test--put-tag "diary")
+    (tag-path-test--put-tag "happy" "diary")
+    (cl-letf (((symbol-function 'supertag--parse-org-nodes)
+               (lambda (&rest _)
+                 '((:id "node-1" :title "Node" :type :node
+                    :tags ("diary/happy"))))))
+      (let ((result (supertag-migrate-org-files-to-database "/tmp/source.org")))
+        (should (= 1 (plist-get result :nodes-created)))
+        (should (= 0 (plist-get result :errors)))))
+    (should (equal '("happy")
+                   (plist-get (supertag-node-get "node-1") :tags)))
+    (should (= 1 (length (supertag-relation-find-between
+                          "node-1" "happy" :node-tag))))))
+
+(ert-deftest nested-tag-create-rejects-persistent-slash-id ()
+  (tag-path-test--with-clean-store
+    (should-error
+     (supertag-tag-create '(:id "emacs/package" :name "emacs/package"))
+     :type 'user-error)
+    (should-error
+     (supertag-tag-rename "emacs" "emacs/package")
+     :type 'user-error)))
 
 (ert-deftest tag-path-incremental-sync-respects-native-tag-policy ()
   (with-temp-buffer
@@ -158,7 +189,7 @@
         (should-not
          (plist-get (supertag-extractor--tags headline nil nil) :tags))))))
 
-(ert-deftest tag-path-schema-tree-unifies-explicit-and-path-parents ()
+(ert-deftest nested-tag-schema-tree-uses-explicit-parents-only ()
   (tag-path-test--with-clean-store
     (tag-path-test--put-tag "diary")
     (supertag-tag-add-field "diary" '(:name "mood" :type :string))
@@ -168,24 +199,21 @@
            (diary (cl-find "diary" tree
                            :key (lambda (node) (plist-get node :id))
                            :test #'equal))
-           (coding (cl-find "coding" tree
+           (coding (cl-find "coding/日志" tree
                             :key (lambda (node) (plist-get node :id))
                             :test #'equal)))
       (should (equal '("happy")
                      (mapcar (lambda (node) (plist-get node :id))
                              (plist-get diary :children))))
-      (should (plist-get coding :virtual))
-      (should (equal '("coding/日志")
-                     (mapcar (lambda (node) (plist-get node :id))
-                             (plist-get coding :children)))))
+      (should coding)
+      (should-not (plist-get coding :children)))
     (with-temp-buffer
       (supertag-schema--render)
-      (should (string-match-p "^diary/$" (buffer-string)))
+      (should (string-match-p "^diary$" (buffer-string)))
       (should (string-match-p "^  happy$" (buffer-string)))
       (should-not (string-match-p "happy -> diary" (buffer-string)))
       (should (string-match-p "Inherited from diary" (buffer-string)))
-      (should (string-match-p "^coding/$" (buffer-string)))
-      (should (string-match-p "^  日志$" (buffer-string)))
+      (should (string-match-p "^coding/日志$" (buffer-string)))
       (let ((happy (tag-path-test--context-on-line "^  happy$")))
         (should (eq :tag (plist-get happy :type)))
         (should (equal "happy" (plist-get happy :tag-id)))))))
@@ -196,7 +224,7 @@
   (should (eq #'supertag-schema--add-child-tag-at-point
               (lookup-key supertag-schema-view-mode-map (kbd "a c")))))
 
-(ert-deftest tag-path-schema-tree-avoids-parent-path-cycle ()
+(ert-deftest nested-tag-schema-tree-follows-explicit-parent ()
   (tag-path-test--with-clean-store
     (tag-path-test--put-tag "a" "a/b")
     (tag-path-test--put-tag "a/b")
@@ -209,12 +237,15 @@
 
 (ert-deftest tag-path-view-context-retains-descendant-scope ()
   (tag-path-test--with-clean-store
-    (tag-path-test--put-node "child" "emacs/package")
-    (tag-path-test--put-node "other" "emacs2/package")
+    (tag-path-test--put-tag "emacs")
+    (tag-path-test--put-tag "package" "emacs")
+    (tag-path-test--put-tag "emacs2")
+    (tag-path-test--put-node "child" "package")
+    (tag-path-test--put-node "other" "emacs2")
     (with-temp-buffer
-      (insert (propertize "emacs/"
+      (insert (propertize "emacs"
                           'supertag-context
-                          '(:type :namespace :path "emacs")))
+                          '(:type :tag :tag-id "emacs" :has-descendants t)))
       (goto-char (point-min))
       (let* ((query (supertag-view--get-tag-at-point))
              (context (supertag-view--build-context query))
@@ -305,6 +336,15 @@
         (should candidate)
         (should (equal "diary/happy"
                        (get-text-property 0 'supertag-tag-id candidate)))))))
+
+(ert-deftest nested-tag-completion-does-not-offer-new-slash-id ()
+  (tag-path-test--with-clean-store
+    (with-temp-buffer
+      (org-mode)
+      (insert "#unknown/child")
+      (let* ((completion-styles '(basic))
+             (table (nth 2 (supertag-completion-at-point))))
+        (should-not (all-completions "unknown/child" table))))))
 
 (ert-deftest tag-path-completion-does-not-commit-a-partial-prefix ()
   (tag-path-test--with-clean-store
@@ -397,52 +437,45 @@
       (should (equal '("diary" "happy") seen))
       (should (equal "diary/" (nth 1 display)))))))
 
-(ert-deftest tag-path-shared-reader-can-select-a-virtual-namespace ()
+(ert-deftest nested-tag-shared-reader-rejects-virtual-namespace ()
   (let (seen)
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt collection &rest _)
                  (setq seen (mapcar #'substring-no-properties collection))
                  "Apple")))
+      (should-error
+       (supertag-ui-read-tag
+        "Tag: " '("Apple/Shortcut/\u8bed\u8a00" "diary/work") nil nil t)
+       :type 'user-error)
       (should
-       (equal "Apple"
-              (supertag-ui-read-tag
-               "Tag or namespace: "
-               '("Apple/Shortcut/\u8bed\u8a00" "diary/work")
-               nil nil t)))
-      (should
-       (equal '("Apple" "Apple/Shortcut" "Apple/Shortcut/\u8bed\u8a00"
-                "diary" "diary/work")
+       (equal '("Apple/Shortcut/\u8bed\u8a00" "diary/work")
               seen)))))
 
-(ert-deftest tag-path-branch-rename-migrates-complete-identities ()
+(ert-deftest nested-tag-legacy-slash-rename-migrates-complete-identity ()
   (tag-path-test--with-clean-store
     (let ((file (make-temp-file "supertag-tag-path" nil ".org"
-                                "* P #emacs/package\n* E #emacs/package/elpa\n"))
+                                "* P #emacs/package\n"))
           (supertag-query-saved
            '(("packages" . "(has-tag \"emacs/package\")")))
           (supertag--view-configs (make-hash-table :test 'eq)))
       (unwind-protect
           (progn
-            (supertag-tag-create
-             '(:id "emacs/package"
-               :name "emacs/package"
+            (supertag-store-put-entity
+             :tags "emacs/package"
+             '(:id "emacs/package" :name "emacs/package" :type :tag
                :fields ((:name "tier" :type :string)
                         (:name "related" :type :tag)
                         (:name "plain-text" :type :string))))
-            (supertag-tag-create
-             '(:id "emacs/package/elpa"
-               :name "emacs/package/elpa"
-               :extends "emacs/package"))
             (supertag-store-put-entity
              :nodes "node"
              (list :id "node" :title "node" :type :node :file file
-                   :tags '("emacs/package" "emacs/package/elpa")))
+                   :tags '("emacs/package")))
             (supertag-store-put-tag-field-associations
              "emacs/package" '((:field-id "tier")))
             (supertag-store-put-legacy-field
              "node" "emacs/package" "tier" "core")
             (supertag-store-put-legacy-field
-             "node" "emacs/package" "related" "emacs/package/elpa")
+             "node" "emacs/package" "related" "emacs/package")
             (supertag-store-put-legacy-field
              "node" "emacs/package" "plain-text" "emacs/package")
             (supertag-store-put-field-definition
@@ -453,7 +486,7 @@
              '(:id "plain-global" :name "Plain global" :type :string))
             (supertag-store-put-field-value
              "node" "related-tags"
-             '("emacs/package" "emacs/package/elpa"))
+             '("emacs/package"))
             (supertag-store-put-field-value
              "node" "plain-global" "emacs/package")
             (supertag-store-put-entity
@@ -463,34 +496,30 @@
              :relations "schema-relation"
              (list :id "schema-relation" :type :schema-link
                    :from "emacs/package" :to "other"
-                   :props '(:target-tag "emacs/package/elpa")))
+                   :props '(:target-tag "emacs/package")))
             (puthash 'packages
                      '(:id packages :tag "emacs/package")
                      supertag--view-configs)
             (supertag--process-node-tags (supertag-node-get "node"))
-            (supertag-tag-rename "emacs/package" "lisp/package")
+            (supertag-tag-rename "emacs/package" "package")
             (should-not (supertag-tag-get "emacs/package"))
-            (should (supertag-tag-get "lisp/package"))
-            (should (equal "lisp/package"
-                           (plist-get
-                            (supertag-tag-get "lisp/package/elpa")
-                            :extends)))
-            (should (equal '("lisp/package" "lisp/package/elpa")
+            (should (supertag-tag-get "package"))
+            (should (equal '("package")
                            (plist-get (supertag-node-get "node") :tags)))
-            (should (= 2 (length (supertag-relation-find-by-from
+            (should (= 1 (length (supertag-relation-find-by-from
                                   "node" :node-tag))))
             (should (supertag-store-get-tag-field-associations
-                     "lisp/package"))
+                     "package"))
             (should (equal "core"
                            (supertag-get
-                            '(:fields "node" "lisp/package" "tier"))))
-            (should (equal "lisp/package/elpa"
+                            '(:fields "node" "package" "tier"))))
+            (should (equal "package"
                            (supertag-get
-                            '(:fields "node" "lisp/package" "related"))))
+                            '(:fields "node" "package" "related"))))
             (should (equal "emacs/package"
                            (supertag-get
-                            '(:fields "node" "lisp/package" "plain-text"))))
-            (should (equal '("lisp/package" "lisp/package/elpa")
+                            '(:fields "node" "package" "plain-text"))))
+            (should (equal '("package")
                            (supertag-store-get-field-value
                             "node" "related-tags")))
             (should (equal "emacs/package"
@@ -499,45 +528,38 @@
             (should
              (cl-some
               (lambda (relation)
-                (and (equal "lisp/package" (plist-get relation :from))
-                     (equal "lisp/package/elpa"
+                (and (equal "package" (plist-get relation :from))
+                     (equal "package"
                             (plist-get
                              (plist-get relation :props)
                              :target-tag))))
-              (supertag-relation-find-by-from "lisp/package" :schema-link)))
-            (should (equal "lisp/package"
+              (supertag-relation-find-by-from "package" :schema-link)))
+            (should (equal "package"
                            (plist-get
                             (supertag-store-get-entity
                              :automations "auto")
                             :tag)))
-            (should (equal "(has-tag \"lisp/package\")"
+            (should (equal "(has-tag \"package\")"
                            (cdr (assoc "packages" supertag-query-saved))))
-            (should (equal "lisp/package"
+            (should (equal "package"
                            (plist-get
                             (gethash 'packages supertag--view-configs)
                             :tag)))
             (with-temp-buffer
               (insert-file-contents file)
-              (should (string-match-p "#lisp/package\\(?:\\s-\\|$\\)"
-                                      (buffer-string)))
-              (should (string-match-p "#lisp/package/elpa\\(?:\\s-\\|$\\)"
+              (should (string-match-p "#package\\(?:\\s-\\|$\\)"
                                       (buffer-string)))))
         (delete-file file)))))
 
-(ert-deftest tag-path-branch-rename-collision-leaves-store-unchanged ()
+(ert-deftest tag-rename-collision-leaves-store-unchanged ()
   (tag-path-test--with-clean-store
-    (tag-path-test--put-tag "emacs/package")
-    (tag-path-test--put-tag "emacs/package/elpa")
-    (tag-path-test--put-tag "lisp/package/elpa")
-    (tag-path-test--put-node "node" "emacs/package/elpa")
-    (should-error
-     (supertag-tag-rename "emacs/package" "emacs/package/elpa"))
-    (should-error
-     (supertag-tag-rename "emacs/package" "lisp/package"))
-    (should (supertag-tag-get "emacs/package"))
-    (should (supertag-tag-get "emacs/package/elpa"))
-    (should (supertag-tag-get "lisp/package/elpa"))
-    (should (equal '("emacs/package/elpa")
+    (tag-path-test--put-tag "package")
+    (tag-path-test--put-tag "lisp")
+    (tag-path-test--put-node "node" "package")
+    (should-error (supertag-tag-rename "package" "lisp"))
+    (should (supertag-tag-get "package"))
+    (should (supertag-tag-get "lisp"))
+    (should (equal '("package")
                    (plist-get (supertag-node-get "node") :tags)))))
 
 (ert-deftest tag-path-exact-delete-does-not-truncate-a-descendant-token ()

@@ -859,8 +859,17 @@ This does not remove the node from the store immediately."
 
 (defun supertag-db-add-with-hash (id props &optional counters)
   "Add node with ID and PROPS to database, including hash value.
+Existing creation time is preserved while file-backed properties are updated.
 This function also handles tag creation and relations.
 COUNTERS is an optional plist for tracking statistics."
+  (when-let* ((existing (supertag-node-get id))
+              (created-at (plist-get existing :created-at)))
+    (setq props (plist-put (copy-sequence props) :created-at created-at)))
+  (when (plist-member props :tags)
+    (setq props
+          (plist-put (copy-sequence props) :tags
+                     (mapcar #'supertag--normalize-tag-id
+                             (plist-get props :tags)))))
   (let ((node-hash (supertag-node-hash props)))
     ;; Ensure :id, :type and :hash are added to props while preserving existing fields
     (let ((node-props (plist-put props :id id)))
@@ -1546,6 +1555,22 @@ Return a list of tag strings, or an empty list if none."
         (cl-remove-if (lambda (s) (or (null s) (string-empty-p s)))
                       (mapcar #'identity tags)))))
 
+  (defun supertag--normalize-tag-id (name)
+    "Return NAME's real Tag ID, resolving read-only parent display paths."
+    (let ((sanitized (supertag-sanitize-tag-name name)))
+      (if (not (string-match-p "/" sanitized))
+          sanitized
+        (or (catch 'found
+              (maphash
+               (lambda (tag-id _tag)
+                 (when (equal sanitized (supertag-tag-display-path tag-id))
+                   (throw 'found tag-id)))
+               (supertag-store-get-collection :tags))
+              nil)
+            (user-error
+             "Unknown nested Tag path '%s'; create its :extends hierarchy first"
+             sanitized)))))
+
   (defun supertag--merge-and-sanitize-tags (tags-1 tags-2)
     "Merge two tag lists and sanitize names.
 Returns a de-duplicated list preserving order preference of TAGS-1."
@@ -1631,7 +1656,7 @@ Ensures tags are created only once and returns existing tag IDs.
 IMPORTANT: This function NEVER modifies existing tags - it only creates new ones."
   (let ((tag-ids '()))
     (dolist (tag-name tag-names)
-      (let* ((sanitized-name (supertag-sanitize-tag-name tag-name))
+      (let* ((sanitized-name (supertag--normalize-tag-id tag-name))
              (tag-id sanitized-name)
              (existing-tag (supertag-tag-get tag-id)))
         ;; CRITICAL: Only create if tag doesn't exist
@@ -2251,7 +2276,7 @@ It will create entities of type :node and :tag, and establish relations between 
                   (when node-tags
                     (setq all-tags (append all-tags node-tags))))))
             (setf (plist-get counters :files-processed)
-                  (1+ (plist-get counters :files-processed)))))
+                  (1+ (plist-get counters :files-processed))))
         (error
          (message "Failed to parse file %s: %s" file (error-message-string err))
          (setf (plist-get counters :errors)
@@ -2272,21 +2297,21 @@ It will create entities of type :node and :tag, and establish relations between 
     (message "Creating node entities and relations...")
     (dolist (node all-nodes)
       (condition-case err
-          (progn
+          (let* ((node-tags (plist-get node :tags))
+                 (tag-ids (mapcar #'supertag--normalize-tag-id node-tags))
+                 (canonical-node (plist-put (copy-sequence node) :tags tag-ids)))
             ;; Create node
-            (supertag-node-create node)
+            (supertag-node-create canonical-node)
             (setf (plist-get counters :nodes-created)
                   (1+ (plist-get counters :nodes-created)))
 
             ;; Create node-tag relations
-            (let ((node-id (plist-get node :id))
-                  (node-tags (plist-get node :tags)))
-              (when (and node-id node-tags)
-                (let ((tag-ids (mapcar #'supertag-sanitize-tag-name node-tags)))
-                  (supertag--create-node-tag-relations node-id tag-ids)
-                  (setf (plist-get counters :relations-created)
-                        (+ (plist-get counters :relations-created)
-                           (length tag-ids)))))))
+            (let ((node-id (plist-get canonical-node :id)))
+              (when (and node-id tag-ids)
+                (supertag--create-node-tag-relations node-id tag-ids)
+                (setf (plist-get counters :relations-created)
+                      (+ (plist-get counters :relations-created)
+                         (length tag-ids))))))
         (error
          (message "Failed to create node %s: %s" (plist-get node :id) (error-message-string err))
          (setf (plist-get counters :errors)
@@ -2301,7 +2326,7 @@ It will create entities of type :node and :tag, and establish relations between 
              (plist-get counters :relations-created)
              (plist-get counters :errors))
 
-    counters)
+    counters))
 
 (defun supertag--find-org-files (directory)
   "Recursively find all .org files in DIRECTORY.

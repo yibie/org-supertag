@@ -1,4 +1,4 @@
-# Org-SuperTag 5.0 – 在 Emacs 里，把你的 Org 文件变成结构化知识库
+# Org-SuperTag – 在 Emacs 里，把你的 Org 文件变成结构化知识库
 
 [中文](./README_CN.md) | [English](./README.md)
 
@@ -28,20 +28,34 @@ Org-SuperTag 把普通的 Org 标题变成一个**可结构化查询的知识库
 
 ---
 
-## 30 秒安装
+## 安装与首次运行
 
 ```emacs-lisp
 ;; 用 straight.el 安装
 (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
-
-;; 告诉 SuperTag 你的 Org 文件在哪
-(setq org-supertag-sync-directories '("~/org/"))
-
-;; 初始化一次——扫描你所有的文件
-M-x supertag-sync-full-initialize
 ```
 
-就这些。不需要 API key，不需要数据库服务器，不需要配置向导。**你现有的 Org 文件直接就能用。**
+然后在 Emacs 里：
+
+1. **`M-x supertag-setup`** —— 引导式配置向导。它会报告当前状态，让你选择要同步的目录、选择 file-ID 来源（Org-roam、Denote 或两者都要）、设置持久化选项，并可选地执行首次扫描。
+2. **`M-x supertag-menu`** —— 汇集所有 SuperTag 功能的菜单。用它来发现命令，而不是死记硬背。
+3. **`M-x supertag-doctor`** —— 任何时候感觉不对劲都可以跑一下。它是一次完整的健康检查，并会引导你修复问题。
+
+就这些。不需要 API key，不需要运行数据库服务器。**你现有的 Org 文件直接就能用。**
+
+---
+
+## 记住这一个命令就够了
+
+**`M-x supertag-menu`** 是通往所有功能的 transient 入口：打标签、视图、搜索、捕获、同步、concept 等等，按任务分类，不用死记硬背每个命令。这篇 README 如果你只记住一件事，记住它就够了。
+
+最省事的快捷键方案是内置的全局 minor mode：
+
+```emacs-lisp
+(supertag-smart-key-mode 1)  ; C-c s → 光标处智能操作，C-c S → supertag-menu
+```
+
+也可以用 `global-set-key` 把菜单绑到任何你喜欢的键上。
 
 ---
 
@@ -100,6 +114,7 @@ rating   →  数字（1–5）
 - **表格视图** (`M-x supertag-view-table`)：像一个针对你标签节点的电子表格。点列头排序，过滤，批量编辑。
 - **节点视图** (`M-x supertag-view-node`)：编辑单个节点的字段，带自动补全和校验。
 - **看板视图** (`M-x supertag-view-kanban`)：拖拽式的看板，适合 `#task`、`#project`。
+- **Stream View** (`M-x supertag-view-stream`)：把一个标签及其所有传递 `:extends` 后代节点的完整正文按时间串成一页。按 `s` 切换 plain/分栏，`e` narrow 编辑源节点，`v` 进入 Node View 修改字段。
 
 ---
 
@@ -197,6 +212,7 @@ rating   →  数字（1–5）
 |---|---|---|
 | 打标签 | `M-x supertag-add-tag` | 添加 `#tag` 到标题，节点自动出现在该标签的表格里 |
 | 看一个标签的所有节点 | `M-x supertag-view-table` | 电子表格视图。可排序、过滤、直接编辑单元格 |
+| 把标签当成连续页面阅读 | `M-x supertag-view-stream` | 完整正文与嵌套标签，支持分栏/plain 和源节点 narrow 编辑 |
 | 编辑单个节点的字段 | `M-x supertag-view-node` | 表单视图，带自动补全、选择器和校验 |
 | 看板视图 | `M-x supertag-view-kanban` | 拖拽式看板，列之间移动 |
 | 定义标签字段 | `M-x supertag-view-schema` | 增删字段、设置类型、配置继承关系 |
@@ -219,8 +235,8 @@ babel 代码块，用 `M-x supertag-query-save` 保存以便复用，或者用 `
 
 ```emacs-lisp
 (with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c s p") #'supertag-promote-concept)
-  (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
+  (define-key org-mode-map (kbd "C-c n p") #'supertag-promote-concept)
+  (define-key org-mode-map (kbd "C-c n o") #'supertag-concept-open-at-point))
 ```
 
 ### Concept mention 的行为边界
@@ -378,6 +394,7 @@ M-x supertag-migrate-database-to-new-arch RET
 
 | 问题 | 解决方法 |
 |---|---|
+| 不知道从哪查起 | `M-x supertag-doctor` —— 8 个板块的健康检查，并引导你逐项修复 |
 | 数据库看起来不对 | `M-x supertag-sync-cleanup-database` 然后 `M-x supertag-sync-full-rescan` |
 | 自动同步没启动 | 检查 `org-supertag-sync-directories` 是否正确配置 |
 | 某个文件没同步 | `M-x supertag-sync-analyze-file` |

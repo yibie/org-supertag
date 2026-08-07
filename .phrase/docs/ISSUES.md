@@ -8,7 +8,7 @@
 - issue006 [x] automation async worker 报错 changed-props 未绑定（phase-automation-alignment-20260116/issue_automation_alignment_20260121_changed_props_void.md）
 - issue007 [x] 父标题变更后 add-reference 候选仍显示旧 `:olp`（phase-view-dsl-20260204/issue_view_dsl_20260205_olp_stale.md）
 - issue008 [x] `supertag-add-reference` 在同一文件内插入反向链接后，正向链接偏离光标位置（fixed in `supertag-ui-commands.el`，见 `test-add-reference.el`）
-- issue009 [ ] 父子标签已统一；`#dia` 第一项为 `diary`、第二项为显式 `[New]`，待用户实机确认（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
+- issue009 [ ] 标签层级已统一为 `:extends`，遗留斜杠 ID 已迁移；待用户实机确认 Stream/Schema 行为（.phrase/docs/issue_nested_tags_20260624.md / tech-refer_nested_tags_20260624.md）
 - issue010 [x] persistence 候选去重导致显式 DB 被 snapshot 重复项降级（phase-sync-integrity-20251226/issue_sync_integrity_20260711_persistence_failover.md）
 - issue011 [ ] file-node 身份不稳定且 Denote/Org-ID 链接语义泄漏到多层（phase-sync-integrity-20251226/issue_sync_integrity_20260711_file_node_identity.md）
 - issue012 [ ] concept promote 先产生副作用且 mention 上下文/冲突处理不稳定（phase-concept-mentions-20260708/issue_concept_mentions_20260711_review.md）
@@ -31,4 +31,5 @@
 - issue029 [ ] org-supertag 延迟加载后现存 Org buffer 不显示 inline tag SVG（phase-smart-key-20260721/issue_svg_tag_late_load_20260730.md）
 - issue030 [ ] 下划线 inline Tag 被 Org subscript 改写；共享 range matcher 与 post-hook 整批清理安全已实现，待用户重扫/清理验收（phase-smart-key-20260721/issue_inline_tag_underscore_pollution_20260801.md）
 - issue031 [x] Kanban 并排卡片操作可能命中相邻列节点（实现、图形 `emacs -Q` 回归与用户验收通过；DONE-phase-view-runtime-20260804/issue_view_runtime_kanban_card_target_20260804.md）
+- issue032 [ ] source-backed 节点同步重置 `:created-at`，导致 Stream 编辑后顺序漂移（修复与回归测试完成，待用户实机确认；phase-stream-view-20260806/issue_stream_edit_resets_created_at_20260806.md）
 - issue033 [ ] Widget DSL editable-field 遗留 overlay 并推动同行边框 2px（实现与 live GUI 验证完成，待用户确认；phase-view-dsl-20260204/issue_widget_field_border_20260806.md）

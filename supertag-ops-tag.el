@@ -111,6 +111,9 @@ Returns the created tag data."
         (progn
           (message "Tag '%s' already exists, returning existing tag." id)
           existing-tag)
+      (when (string-match-p "/" id)
+        (user-error
+         "Tag IDs cannot contain '/'; create the tag and set :extends instead"))
       ;; If tag does not exist, create it
       (let* ((final-props `(:id ,id
                              :name ,name
@@ -510,8 +513,11 @@ Returns the updated tag data."
               (plist-put tag :fields new-fields))))))))
 
 (defun supertag-tag-rename (old-id new-id)
-  "Rename OLD-ID and every namespace descendant below NEW-ID."
+  "Rename OLD-ID and any legacy slash descendants below NEW-ID."
   (interactive "sRename tag from: \nsRename tag to: ")
+  (when (string-match-p "/" (supertag-sanitize-tag-name new-id))
+    (user-error
+     "Tag IDs cannot contain '/'; rename the tag and set :extends instead"))
   (require 'supertag-ops-tag-merge)
   (let* ((plan (supertag-tag-path-rename-plan old-id new-id))
          (result (supertag-tag-path-rename-execute plan)))

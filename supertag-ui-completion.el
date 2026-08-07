@@ -183,6 +183,7 @@ unfinished input as an exact match; `[New]' comes from CAPF metadata."
                            all-candidates))
          (should-add-new (and (not (string-empty-p safe-prefix))
                              (supertag-tag-path-valid-p safe-prefix)
+                             (not (string-match-p "/" safe-prefix))
                              (not (member safe-prefix all-tags))
                              (not (member safe-prefix current-tags)))))
     (if should-add-new

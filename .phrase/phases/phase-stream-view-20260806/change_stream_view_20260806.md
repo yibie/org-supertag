@@ -1,0 +1,29 @@
+# change_stream_view_20260806
+
+## 2026-08-07 — task008 / issue009 — Modify
+
+- Files: shared scan/View API、Schema/View/Table selectors、Tag write boundaries、sync、nested/Stream tests and docs；真实 notes Store 与两个源 Org 文件。
+- Behavior: Stream 的父 Tag 现在聚合所有传递 `:extends` 子标签节点；Schema 只显示真实 Tag 缩进树；新建、重命名、同步和批量导入都不能产生未知斜杠 Tag ID。
+- Data: `Apple/Shortcut/语言` 与 `coding/日志` 已迁移为真实叶子 ID + `:extends` 链；迁移前创建唯一数据库恢复快照。
+- Verification: focused ERT 84/84；full ERT 399/399；14 files byte compile；16 files `check-parens`；真实 `diary` 由 exact 2 扩展至 256 nodes，Store 斜杠 ID 2→0。
+
+## 2026-08-06 — task002–task005 — Add / Modify
+
+- Files: `supertag-view-stream.el`、`supertag-view-node.el`、`org-supertag.el`、`test/test-view-stream.el`、`test/run-tests.sh`、README/CHANGELOG/View guide。
+- Behavior: 新增 `M-x supertag-view-stream`；精确 tag 与 `/` 后代按创建时间完整渲染，默认 26 列标题索引 + 主正文，支持 `n`/`p`、index click、`s`、`e`、`v`、`g`、`q`。
+- Simplification: 主 buffer 是现有 View Runtime 的普通 Adapter，正文直接复用 Widget Renderer；companion index 只持有 title/node ID，不新增 Framework contract、第二 Runtime、第三方 widget 依赖或虚拟化。
+- Verification: focused workflow ERT 9/9；独立图形 `emacs -Q` 验证 split/plain、SVG、Org 正文、稳定选择、narrow、Node View 与 teardown；visual-verdict 94/100 pass。
+
+## 2026-08-06 — task007 / issue032 — Modify
+
+- Files: `supertag-services-sync.el`、`test/test-view-stream.el`、`issue_stream_edit_resets_created_at_20260806.md`、spec/task/issue indexes。
+- Behavior: source-backed upsert 现在保留已有节点的 `:created-at`；Stream narrow 编辑后不再因为同步而改变创建时间排序。
+- Simplification: 在所有文件同步与 point sync 共用的 `supertag-db-add-with-hash` 固化一个不可变元数据规则，没有在 Stream renderer/window 层补偿排序。
+- Verification: public Stream edit ERT 先以重置后的时间失败，再通过；`view-stream sync-worker node` 25/25。
+
+## 2026-08-06 — task001 — Add
+
+- Files: `pr_faq_stream_view_20260806.md`、`spec_stream_view_20260806.md`、`tech_refer_stream_view_20260806.md`、`plan_stream_view_20260806.md`、`task_stream_view_20260806.md`、`change_stream_view_20260806.md`、`.phrase/docs/CHANGE.md`。
+- Behavior: 无产品行为变化；用户批准默认 split、plain toggle、descendant query、source narrow edit 与 Node View field boundary。
+- Decision: Stream 作为普通 Runtime Adapter，Widget Renderer 完整重绘，split 由 Adapter companion 管理；不修改 Framework contract，不新增依赖或虚拟化层。
+- Verification: 文档契约互相引用一致；`git diff --check`。

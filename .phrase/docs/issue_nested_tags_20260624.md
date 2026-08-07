@@ -2,7 +2,7 @@
 
 ## Summary
 
-统一 org-supertag 已有的父子关系：真实 Tag ID 负责搜索和写入，`:extends` 父链负责补全展示与 Schema 缩进；旧 `a/b` 完整路径 ID 继续兼容。
+统一 org-supertag 的父子关系：真实 Tag ID 负责搜索和写入，`:extends` 是唯一层级来源；`a/b` 只允许作为父链的只读展示，不再作为持久化层级 ID。
 
 ## Origin
 
@@ -23,27 +23,25 @@
 
 ## Current State
 
-- 提取、同步、写回和 completion 将 `a/b/c` 作为一个完整 Tag ID 处理。
-- `:extends` 同时是 Schema 中唯一的显式父子关系与字段继承关系。
-- 单节点/全文件同步、显式后代查询、Schema namespace 树、路径补全、
-  View/Table 聚合入口和事务化分支重命名均已实现。
+- `:extends` 是 Schema、查询和字段继承共用的唯一父子关系。
+- completion 可把 `happy :extends diary` 显示为 `diary/happy`，但实际写入仍是 `happy`。
+- 新建、重命名和同步写库均拒绝产生未知斜杠 ID；旧斜杠数据只保留迁移能力。
 - 自动化、真实 Store 副本和 Schema 视觉验收完成。
 - 2026-08-01 修复 completion 的扁平混排：候选按 namespace 直接子级逐层
   展示，`#diary/` 不再泄漏 `ATTACH`、`Apple` 等根级候选。主要 Tag 写入
   入口已复用同一套 namespace reader，自动化验收完成。
 - 2026-08-03 实机反馈证明逐层下钻仍不自然；改为输入真实 ID `happy`，候选
   显示父链 `diary/happy`，确认后仍只写入 `#happy`。
-- Schema View 将 `happy :extends diary` 直接放入 `diary` 分支，不再用箭头把
-  父子关系拆成第二种表现；旧完整路径仅在没有显式父级时作兼容回退。
+- Schema View 将 `happy :extends diary` 直接缩进到 `diary` 下，不再显示斜杠分支或派生虚拟父级。
 
 ## Scope (if implemented)
 
-1. 真实 Tag ID 保持不变，不迁移、不双写；父链只是显示信息。
+1. 真实 Tag ID 不含 `/`；父链只作为只读显示信息，不迁移、不双写。
 2. completion 与共享 Tag reader 按真实 ID 搜索，以 `:extends` 父链作为 affixation。
-3. Schema View 优先使用显式 `:extends` 父子树；旧完整路径 ID 才派生虚拟 namespace。
+3. Schema、View 与 Table 只读取显式 `:extends` 父子树，不派生虚拟 namespace。
 4. 新增子标签统一写 `:extends`，不再提供独立的路径子标签入口。
 5. View/Table 保留 `include-descendants` scope；后代聚合 Table 只读。
-6. 分支重命名原子迁移 exact + descendants；精确删除使用完整 token 边界。
+6. 遗留斜杠 ID 可原子迁移为真实 ID；新建与重命名不能产生新斜杠 ID。
 7. 默认精确查询、`:extends` 继承和 Store schema 保持不变。
 
 ## Status
@@ -63,6 +61,7 @@
   `wrong-type-argument arrayp nil`；三列统一为字符串。
 - task020 [x] 输入父级 `diary`/`diary/` 时渐进显示 `diary/happy` 等真实子标签；
   选中后在 sync/Store 之前归一化为叶子真实 ID。
+- task023 [x] 将后代查询、Schema 和 View/Table scope 统一为传递 `:extends`；迁移真实 Store 中两个斜杠 ID，并阻止同步重新创建斜杠 ID。
 
 ## Environment
 
@@ -82,16 +81,16 @@ N/A
 
 关键发现：
 
-1. **完整路径已经可用**：现有 Store 和 inline tag 边界允许 `/`，真实 vault 中已有 `Apple/Shortcut/语言` 等标签。
-2. **叶子存储不可用**：`emacs/package` 与 `linux/package` 会冲突为同一个 `package`。
-3. **已有父子来源就是 `:extends`**：把 `/` namespace 与它并排展示会制造两套层级心智模型。
-4. **性能风险很低**：现有 tag query 本来就是 O(N) scan；显式后代查询只在该 scan 中增加段边界前缀判断。
+1. **真实层级已存在**：`diary` 的子标签都由 `:extends` 表达，旧查询却只识别 `/` 前缀。
+2. **遗留数据有限**：真实 Store 仅有 `Apple/Shortcut/语言`、`coding/日志` 两个斜杠 ID，叶子 ID 无冲突，可安全迁移。
+3. **两套关系必然漂移**：Schema 与 completion 已展示 `:extends`，查询仍按 `/` 聚合，直接导致 Stream 漏节点。
+4. **无需新索引**：现有 tag query 本来就是 O(N) scan；父链遍历可在同一次查询中完成。
 
 ## Root Cause
 
-上一版把“嵌套”建模为逐层进入 `/` namespace，但真实数据已经用
-`happy :extends diary` 表达父子关系。completion 只匹配候选 ID，不展示父链；Schema
-又把 `:extends` 画成箭头、把 `/` 画成缩进，因此输入和浏览都暴露了两套关系。
+上一版虽已让 completion 和 Schema 优先展示 `:extends`，查询仍把 `/` 前缀当作后代，
+Schema 仍为斜杠 ID 派生虚拟父级。因此 `happy :extends diary` 在界面中是子标签，
+Stream 的 `include-descendants` 却看不到它，层级事实来源仍然分裂。
 
 ## Fix
 
@@ -99,9 +98,9 @@ N/A
 
 1. 从 `:extends` 计算只读 display path；cycle 时退回真实 ID。
 2. CAPF 与共享 Tag reader 的候选值保持真实 ID，以 Emacs affixation 显示父链。
-3. Schema 用 `:extends` 连接实际父子；只有无显式父级的旧路径 ID 才按 `/` 连接。
+3. Schema、View 与 Table 只按 `:extends` 连接实际父子，不再派生 `/` namespace。
 4. 删除独立路径子标签入口；`a n` 与兼容键 `a c` 调用同一个 Child Tag 命令。
-5. 完整路径查询、后代聚合、分支重命名和 Store schema 保持兼容，不做数据迁移。
+5. 将真实 Store 的 `Apple/Shortcut/语言`、`coding/日志` 迁移为叶子 ID + `:extends` 链，并同步改写源 Org token；迁移前创建唯一恢复快照。
 
 详细方案见 `.phrase/docs/tech-refer_nested_tags_20260624.md`。
 
@@ -180,6 +179,16 @@ task022 验收：
 - focused ERT 22/22、completion self-check、真实 `corfu--compute`/formatter 通过；
   full ERT、byte compile、`check-parens`、`git diff --check` 通过。
 
+task023 验收：
+- focused ERT 84/84、全量 ERT 399/399；覆盖 direct/deep `:extends`、平面斜杠反例、
+  新建/重命名拒绝斜杠 ID、单点同步与批量导入的 display-path 归一化。
+- 16 个改动 Elisp/test 文件通过 `check-parens`；14 个产品 Elisp 文件非写入 byte compile 通过，
+  仅保留仓库既有 Emacs 31 过时宏/docstring 警告；`git diff --check` 通过。
+- 真实 Store 迁移 `Apple/Shortcut/语言` → `语言 :extends Shortcut :extends Apple`、
+  `coding/日志` → `日志 :extends coding`；源 Org token 同步改写，斜杠 Tag ID 从 2 降为 0。
+- 恢复快照：`/Users/chenyibin/Documents/notes/.supertag/backups/supertag-db-prerestore-20260807-111830-GxuUKe.el`。
+- 真实 `diary` 查询 exact=2、include-descendants=256，新增 254 个子标签节点；识别 13 个传递子标签。
+
 ## User Confirmation
 
 - 2026-07-29：确认采用“完整路径即 Tag ID、读取时推导层级、`:extends` 保持独立”的方案。
@@ -194,4 +203,6 @@ task022 验收：
   completion 的 `[New]` 注册；进入 task021。
 - 2026-08-04：实机确认 Corfu 最终仍把 `[New]` 放第一行，要求真实补全项第一、
   `[New]` 第二；进入 task022。
+- 2026-08-07：明确 `:extends` 是唯一层级规则；取消完整路径 ID 的兼容后代语义，并授权清理真实数据库中的斜杠层级标签；进入 task023。
+- 2026-08-07：task023 代码、数据迁移与自动化验收完成；issue 保持打开，等待用户实机确认 Stream/Schema。
 - 端到端实现结果验收：Pending

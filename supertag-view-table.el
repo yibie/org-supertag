@@ -15,7 +15,6 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'supertag-core-store)
-(require 'supertag-core-tag-path)
 (require 'supertag-core-notify)
 (require 'supertag-ops-node)
 (require 'supertag-ops-tag)
@@ -57,20 +56,19 @@
       (list :type :tag :value query)
     query))
 
-(defun supertag-view-table--query-for-path (path)
-  "Return a tag query for PATH, aggregating when it has descendants."
-  (append (list :type :tag :value path)
-          (when (supertag-tag-path-has-descendants-p
-                 path (supertag-view-api-list-tag-ids))
+(defun supertag-view-table--query-for-tag (tag)
+  "Return a query for TAG, aggregating when it has explicit descendants."
+  (append (list :type :tag :value tag)
+          (when (supertag-view-api-tag-descendants tag)
             '(:include-descendants t))))
 
 (defun supertag-view-table--read-tag-query (&optional prompt choices)
-  "Read a canonical tag or namespace query."
-  (let ((path (supertag-ui-read-tag
-               (or prompt "View table for tag or namespace: ")
+  "Read a canonical Tag query."
+  (let ((tag (supertag-ui-read-tag
+               (or prompt "View table for tag: ")
                (or choices (supertag-view-api-list-tag-ids))
-               nil nil t)))
-    (supertag-view-table--query-for-path path)))
+               nil nil)))
+    (supertag-view-table--query-for-tag tag)))
 
 (defun supertag-view-table--aggregate-p (&optional query)
   "Return non-nil when QUERY or the current query includes descendants."
@@ -538,9 +536,9 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
          (selected-tags '()))
     (while (let ((tag (supertag-ui-read-tag
                        "Select tag (empty finishes): "
-                       available-tags nil t t)))
+                       available-tags nil t)))
              (when (and tag (not (string-empty-p tag)))
-               (push (supertag-view-table--query-for-path tag) selected-tags)
+               (push (supertag-view-table--query-for-tag tag) selected-tags)
                (setq available-tags (delete tag available-tags))
                t)))
     (nreverse selected-tags)))
@@ -577,14 +575,11 @@ If called interactively without DATA-SOURCE, prompts for data source selection."
 Prompts user to select a tag from available tags."
   (interactive)
   (supertag-view-table
-   (supertag-view-table--read-tag-query "Select tag or namespace: ")))
+   (supertag-view-table--read-tag-query "Select tag: ")))
 
 (defun supertag-view-table--get-available-tags ()
-  "Return canonical tag IDs and derived namespace paths."
-  (let ((ids (supertag-view-api-list-tag-ids)))
-    (sort (delete-dups
-           (append ids (supertag-tag-path-namespace-prefixes ids)))
-          #'string<)))
+  "Return canonical Tag IDs."
+  (sort (delete-dups (supertag-view-api-list-tag-ids)) #'string<))
 
 (defun supertag-tag-get-id-by-name (tag-name)
   "Get tag ID by TAG-NAME."
@@ -1854,7 +1849,7 @@ With prefix argument INDEX, switch to specific table number."
 
     (when (and new-tag-name (not (string-empty-p new-tag-name)))
       ;; 2. Create new query object and append it.
-      (let ((new-query-obj (supertag-view-table--query-for-path new-tag-name)))
+      (let ((new-query-obj (supertag-view-table--query-for-tag new-tag-name)))
         (setq-local supertag-view-table--query-objs (append supertag-view-table--query-objs (list new-query-obj))))
 
       ;; 3. Refresh and switch to the new table.

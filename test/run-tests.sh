@@ -34,6 +34,7 @@ TEST_FILES=(
     "test/node-ops-test.el"
     "test/view-framework-test.el"
     "test/view-runtime-test.el"
+    "test/test-view-stream.el"
     "test/test-view-table.el"
     "test/test-view-kanban.el"
     "test/test-view-node-runtime.el"
@@ -68,6 +69,7 @@ if [ $# -gt 0 ]; then
             node)      FILTER="$FILTER test/node-ops-test.el" ;;
             view)      FILTER="$FILTER test/view-framework-test.el" ;;
             view-runtime) FILTER="$FILTER test/view-runtime-test.el" ;;
+            view-stream) FILTER="$FILTER test/test-view-stream.el" ;;
             view-table) FILTER="$FILTER test/test-view-table.el" ;;
             view-kanban) FILTER="$FILTER test/test-view-kanban.el" ;;
             view-node) FILTER="$FILTER test/test-view-node-runtime.el" ;;
@@ -90,7 +92,7 @@ if [ $# -gt 0 ]; then
             tag-path)  FILTER="$FILTER test/tag-path-test.el" ;;
             embed)     FILTER="$FILTER test/embed-cache-test.el" ;;
             all)       FILTER="${TEST_FILES[*]}" ; break ;;
-            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view view-runtime view-table view-kanban view-node formula aggregate reference vc field-ref persist restore canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge tag-path embed all"; exit 1 ;;
+            *)         echo "Unknown filter: $arg"; echo "Available: extractor node view view-runtime view-stream view-table view-kanban view-node formula aggregate reference vc field-ref persist restore canon query tx merge git conflicts cl-block sync-worker smart-key tag-merge tag-path embed all"; exit 1 ;;
         esac
     done
     TEST_FILES=($FILTER)

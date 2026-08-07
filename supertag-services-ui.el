@@ -479,21 +479,16 @@ Returns a field definition plist, or nil if cancelled."
   "Read one Tag ID with parent paths shown as completion prefixes.
 PROMPT is the minibuffer prompt.  TAG-IDS defaults to every stored Tag
 ID.  When ALLOW-NEW is non-nil, a valid new ID may be returned.  When
-ALLOW-EMPTY is non-nil, empty input returns nil.  ALLOW-NAMESPACE adds
-derived slash-path namespaces as selectable results."
+ALLOW-EMPTY is non-nil, empty input returns nil.  ALLOW-NAMESPACE is
+accepted for backward compatibility but no longer creates virtual IDs."
+  (ignore allow-namespace)
   (let ((known-tags (sort (delete-dups
                            (copy-sequence
                             (if tag-ids-supplied-p
                                 tag-ids
                               (supertag-view-api-list-tag-ids))))
                           #'string<)))
-    (let* ((candidates
-            (if allow-namespace
-                (sort (delete-dups
-                       (append known-tags
-                               (supertag-tag-path-namespace-prefixes known-tags)))
-                      #'string<)
-              known-tags))
+    (let* ((candidates known-tags)
            (completion-extra-properties
             '(:affixation-function supertag-tag-affixate-candidates))
            (answer (completing-read
@@ -505,9 +500,12 @@ derived slash-path namespaces as selectable results."
         (if allow-empty nil (user-error "A tag is required")))
        ((not (supertag-tag-path-valid-p answer))
         (user-error "Tag paths cannot contain empty segments"))
+       ((and (string-match-p "/" answer)
+             (not (member answer known-tags)))
+        (user-error
+         "Tag IDs cannot contain '/'; create the tag and set :extends instead"))
        ((or allow-new
-            (member answer known-tags)
-            (and allow-namespace (member answer candidates)))
+            (member answer known-tags))
         answer)
        (t (user-error "Unknown tag '%s'" answer))))))
 

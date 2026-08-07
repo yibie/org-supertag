@@ -1,5 +1,13 @@
 # change_nested_tags_20260624
 
+## 2026-08-07 (task023)
+
+- **Action**: Make `:extends` the only hierarchy and descendant-query source; migrate the live Store's two slash IDs.
+- **Behavior**: Stream/View/Table aggregate transitive children, Schema renders only real Tag nodes, and new/renamed/synchronized Tag IDs cannot contain `/`; parent display paths still resolve to their real leaf IDs.
+- **Data**: Migrated `Apple/Shortcut/语言` and `coding/日志`, rewrote their source Org tokens, and retained a unique pre-migration database snapshot.
+- **Verification**: focused ERT 84/84; full ERT 399/399; non-writing byte compile and `check-parens`; live `diary` exact 2 → descendant scope 256; slash IDs 2 → 0.
+- **Remaining**: issue009 stays open only for the user's live Stream/Schema confirmation.
+
 ## 2026-08-04 (task022)
 
 - **Action**: Keep the first real completion above the explicit `[New]` action in actual Corfu sorting.

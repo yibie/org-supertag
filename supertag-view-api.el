@@ -149,8 +149,12 @@ Entities that do not exist are skipped."
 
 (defun supertag-view-api-nodes-by-tag (tag-name &optional include-descendants)
   "Return node IDs that have TAG-NAME.
-When INCLUDE-DESCENDANTS is non-nil, include slash-delimited descendants."
+When INCLUDE-DESCENDANTS is non-nil, include transitive `:extends' descendants."
   (supertag-index-get-nodes-by-tag tag-name include-descendants))
+
+(defun supertag-view-api-tag-descendants (tag-name)
+  "Return Tag IDs that transitively extend TAG-NAME."
+  (supertag-find-tag-descendants tag-name))
 
 ;; --- Field Access (UI-agnostic) ---
 

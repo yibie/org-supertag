@@ -843,6 +843,21 @@ Falls back to beginning of buffer when no field is found."
         (supertag-view-node--focus-view))
     (message "No active supertag node view.")))
 
+;;;###autoload
+(defun supertag-view-node-open (node-id)
+  "Open Node View for NODE-ID and focus its first field."
+  (unless (and (stringp node-id) (not (string-empty-p node-id)))
+    (user-error "Node View requires a node ID"))
+  (supertag-view-node--show-side node-id)
+  (supertag-view-node--focus-view)
+  (when-let* ((buffer (supertag-view-node--buffer)))
+    (with-current-buffer buffer
+      (supertag-view-node--goto-first-field)
+      (when-let* ((window (get-buffer-window buffer t)))
+        (with-selected-window window
+          (recenter)))))
+  (supertag-view-node--buffer))
+
 (defun supertag-view-node ()
   "Toggle the Org-Supertag node view as a side window that follows context."
   (interactive)
@@ -850,13 +865,7 @@ Falls back to beginning of buffer when no field is found."
     (if supertag-view-node--enabled
         (supertag-view-node--hide-side)
       (if node-id
-          (progn
-            (supertag-view-node--show-side node-id)
-            (supertag-view-node--focus-view)
-            (when-let ((buf (supertag-view-node--buffer)))
-              (with-current-buffer buf
-                (supertag-view-node--goto-first-field)
-                (recenter))))
+          (supertag-view-node-open node-id)
         (user-error "No node detected at point")))))
 
 ;; If Evil is installed, set an initial state that won't override this mode's keys.

@@ -464,6 +464,7 @@ active vault when `supertag-sync-auto-start` is non-nil."
 (require 'supertag-concept)
 (require 'supertag-view-svg-tag)
 (require 'supertag-view-node)
+(require 'supertag-view-stream)
 (require 'supertag-view-table)
 (require 'supertag-view-kanban)
 (require 'supertag-smart-key)

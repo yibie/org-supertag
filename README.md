@@ -1,4 +1,4 @@
-# Org-SuperTag 5.0 – Structured knowledge, inside Emacs, on your own files
+# Org-SuperTag – Structured knowledge, inside Emacs, on your own files
 
 [中文](./README_CN.md) | [English](./README.md)
 
@@ -29,20 +29,34 @@ No external services. No Python. No lock-in. Your `.org` files stay yours — we
 
 ---
 
-## 30-second installation
+## Installation and first run
 
 ```emacs-lisp
 ;; With straight.el
 (straight-use-package '(org-supertag :host github :repo "yibie/org-supertag"))
-
-;; Tell SuperTag where your Org files are
-(setq org-supertag-sync-directories '("~/org/"))
-
-;; Initialize once — this scans all your files
-M-x supertag-sync-full-initialize
 ```
 
-That's it. No API keys, no database server, no configuration wizard. Your existing Org files are already compatible.
+Then, in Emacs:
+
+1. **`M-x supertag-setup`** — the guided setup wizard. It reports your current status, lets you pick which directories to sync, choose a file-ID source (Org-roam, Denote, or both), set persistence options, and optionally run the first scan.
+2. **`M-x supertag-menu`** — the menu that surfaces every SuperTag feature. Use it to discover commands instead of memorizing them.
+3. **`M-x supertag-doctor`** — run this any time something looks off. It's a full health check with guided repairs.
+
+That's it. No API keys, no database server to run. Your existing Org files are already compatible.
+
+---
+
+## The one command to remember
+
+**`M-x supertag-menu`** is the transient entry point to everything: tagging, views, search, capture, sync, concepts, and more, organized so you can find what you need without memorizing individual commands. If you remember nothing else from this README, remember this one.
+
+The easiest way to get keybindings is the built-in global minor mode:
+
+```emacs-lisp
+(supertag-smart-key-mode 1)  ; C-c s → smart action at point, C-c S → supertag-menu
+```
+
+Or bind the menu directly to any key you like with `global-set-key`.
 
 ---
 
@@ -101,6 +115,7 @@ You define these **once per tag** (in the Schema View, `M-x supertag-view-schema
 - **Table View** (`M-x supertag-view-table`): Like a spreadsheet for your tagged nodes. Sort by any column, filter, bulk edit.
 - **Node View** (`M-x supertag-view-node`): Edit a single node's fields with auto-completion.
 - **Kanban** (`M-x supertag-view-kanban`): Board-style view for workflow tags (`#task`, `#project`).
+- **Stream View** (`M-x supertag-view-stream`): Read the complete bodies of a tag and all transitive `:extends` descendants as one chronological stream. Press `s` for plain/split, `e` for a narrowed source edit, or `v` for fields in Node View.
 
 ---
 
@@ -198,6 +213,7 @@ Define fields on `#meeting`: `date`, `participants`, `decisions`, `action-items`
 |---|---|---|
 | Tag something | `M-x supertag-add-tag` | Adds `#tag` inline, node appears in that tag's table |
 | See all nodes of a tag | `M-x supertag-view-table` | Spreadsheet view. Sort, filter, edit cells |
+| Read a tag as a continuous page | `M-x supertag-view-stream` | Full node bodies, including nested tags; split/plain reading and narrowed source editing |
 | Edit a node's fields | `M-x supertag-view-node` | Form view with completion, pickers, and validation |
 | Board view | `M-x supertag-view-kanban` | Drag-and-drop between columns |
 | Define tag fields | `M-x supertag-view-schema` | Add/remove fields, set types, configure inheritance |
@@ -222,8 +238,8 @@ Optional keybindings:
 
 ```emacs-lisp
 (with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c s p") #'supertag-promote-concept)
-  (define-key org-mode-map (kbd "C-c s o") #'supertag-concept-open-at-point))
+  (define-key org-mode-map (kbd "C-c n p") #'supertag-promote-concept)
+  (define-key org-mode-map (kbd "C-c n o") #'supertag-concept-open-at-point))
 ```
 
 ### How concept mentions behave
@@ -384,6 +400,7 @@ No migration needed. Add `#tag` to headings, define fields, and start using view
 
 | Problem | Fix |
 |---|---|
+| Not sure where to start | `M-x supertag-doctor` — an 8-section health check with guided repairs |
 | Database looks wrong | `M-x supertag-sync-cleanup-database` then `M-x supertag-sync-full-rescan` |
 | Auto-sync not starting | Check `org-supertag-sync-directories` is set correctly |
 | Specific file not syncing | `M-x supertag-sync-analyze-file` |

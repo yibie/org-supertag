@@ -10,28 +10,41 @@
 
 (require 'cl-lib)
 (require 'supertag-core-store)
-(require 'supertag-core-tag-path)
 (require 'supertag-ops-node)
 
 
 ;;; --- Scan-based Query Functions ---
 
-(defun supertag--node-tags-match-p (tags tag-name include-descendants)
-  "Return non-nil when TAGS match TAG-NAME and optional descendants."
-  (or (member tag-name tags)
-      (and include-descendants
-           (cl-some (lambda (tag)
-                      (supertag-tag-path-descendant-p tag tag-name))
-                    tags))))
+(defun supertag--tag-parent-id (tag)
+  "Return TAG's explicit parent ID."
+  (if (hash-table-p tag)
+      (gethash :extends tag)
+    (plist-get tag :extends)))
+
+(defun supertag--tag-descendant-p (candidate parent tags)
+  "Return non-nil when CANDIDATE transitively extends PARENT in TAGS."
+  (let ((current candidate)
+        (seen (make-hash-table :test 'equal))
+        found)
+    (while (and current (not found) (not (gethash current seen)))
+      (puthash current t seen)
+      (setq current (supertag--tag-parent-id (gethash current tags)))
+      (setq found (equal current parent)))
+    found))
+
+(defun supertag--node-tags-match-p (tags matching-tags)
+  "Return non-nil when TAGS contain one of MATCHING-TAGS."
+  (cl-some (lambda (tag) (member tag matching-tags)) tags))
 
 (defun supertag-find-tag-descendants (tag-name)
-  "Return stored tag IDs below TAG-NAME's slash path."
+  "Return stored tag IDs that transitively extend TAG-NAME."
   (let ((tags-ht (supertag-store-get-collection :tags))
         results)
     (when (hash-table-p tags-ht)
       (maphash
        (lambda (tag-id _tag-data)
-         (when (supertag-tag-path-descendant-p tag-id tag-name)
+         (when (and (not (equal tag-id tag-name))
+                    (supertag--tag-descendant-p tag-id tag-name tags-ht))
            (push tag-id results)))
        tags-ht))
     (nreverse results)))
@@ -39,15 +52,17 @@
 (defun supertag-index-get-nodes-by-tag (tag-name &optional include-descendants)
   "Find all nodes with TAG-NAME by scanning the store.
 This is an O(N) operation.  When INCLUDE-DESCENDANTS is non-nil,
-also match slash-delimited descendants of TAG-NAME."
-  (let ((nodes-ht (supertag-store-get-collection :nodes))
+also match tags that transitively extend TAG-NAME."
+  (let ((matching-tags (cons tag-name
+                             (and include-descendants
+                                  (supertag-find-tag-descendants tag-name))))
+        (nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
                  (when (supertag--node-tags-match-p
                         (plist-get node-data :tags)
-                        tag-name
-                        include-descendants)
+                        matching-tags)
                    (push node-id results)))
                nodes-ht))
     (nreverse results)))
@@ -90,18 +105,20 @@ DATE-FIELD can be :created-at or :modified-at (default :created-at)."
   "Find all nodes with TAG-NAME by scanning the store.
 This is an O(N) operation.
 TAG-NAME is the name of the tag to search for.
-When INCLUDE-DESCENDANTS is non-nil, slash-delimited descendants
-of TAG-NAME also match.
+When INCLUDE-DESCENDANTS is non-nil, tags that transitively extend
+TAG-NAME also match.
 Returns a list of (node-id . node-data) pairs."
-  (let ((nodes-ht (supertag-store-get-collection :nodes))
+  (let ((matching-tags (cons tag-name
+                             (and include-descendants
+                                  (supertag-find-tag-descendants tag-name))))
+        (nodes-ht (supertag-store-get-collection :nodes))
         (results '()))
     (when (hash-table-p nodes-ht)
       (maphash (lambda (node-id node-data)
                  (when (and node-data
                             (supertag--node-tags-match-p
                              (plist-get node-data :tags)
-                             tag-name
-                             include-descendants))
+                             matching-tags))
                    (push (cons node-id node-data) results)))
                nodes-ht))
     (nreverse results)))

@@ -59,8 +59,11 @@
 - 2026-08-05: DONE-phase-view-runtime-20260804/change_view_runtime_20260804.md  # Widget renderer backend research: native primitives, stable keys, layout and dependency gates
 - 2026-08-05: DONE-phase-widget-renderer-20260805/change_widget_renderer_20260805.md  # native Widget renderer implementation phase
 - 2026-08-05: DONE-phase-widget-renderer-20260805/change_widget_renderer_20260805.md  # stable keys + native controls + Dashboard migration + Stream benchmark; hands-on approved
+- 2026-08-06: phase-stream-view-20260806/change_stream_view_20260806.md  # approved Stream View MVP phase
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task020 interactive in-memory Widget DSL Showcase
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task021 Showcase progress and responsive layout fixes
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task022 ASCII-safe fixed-width borders
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task023 responsive 80-column breakpoint
 - 2026-08-06: phase-view-dsl-20260204/change_view_dsl_20260204.md  # task024 editable-field overlay and pixel alignment fix
+- 2026-08-07: .phrase/docs/change_nested_tags_20260624.md  # task023 :extends-only hierarchy + slash-ID migration
+- 2026-08-07: phase-stream-view-20260806/change_stream_view_20260806.md  # task008 inherited descendant aggregation

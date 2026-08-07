@@ -1,5 +1,14 @@
 # tech-refer: 嵌套标签 `#a/b/c` 的自动解析与层级展示
 
+## Decision Update (2026-08-07, supersedes persistent slash namespaces)
+
+- `:extends` 是唯一的持久化父子关系和后代查询依据。
+- `diary/happy` 只可作为 `happy :extends diary` 的只读展示路径；节点、关系和 Tag entity 均保存真实 ID `happy`。
+- `include-descendants` 递归遍历 `:extends`，不再按字符串 `/` 前缀推导层级。
+- Schema、View 与 Table 不再从斜杠 ID 创建虚拟 namespace。
+- 真实 Store 中现有两个斜杠 ID 通过事务化 rename 改为叶子 ID，补齐父 Tag 和 `:extends`，同时改写源 Org token；执行前保留唯一数据库快照。
+- 新建、重命名、同步与批量导入都不再产生未知斜杠 ID，避免清理后重新污染 Store。
+
 ## Decision Update (2026-08-03, supersedes the 2026-07-29 frontend model)
 
 ### Parent-aware completion and Schema

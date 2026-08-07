@@ -21,7 +21,6 @@
 (require 'subr-x)
 (require 'widget)
 (require 'wid-edit)
-(require 'supertag-core-tag-path)
 (require 'supertag-services-ui)
 (require 'supertag-view-api)
 
@@ -323,12 +322,12 @@ Returns DEFAULT if not found or error."
     (supertag-view-select-and-render query)))
 
 (defun supertag-view--read-tag ()
-  "Read a tag query, including derived namespace choices."
+  "Read a tag query and include its explicit descendants when present."
   (let* ((tag-ids (supertag-view-api-list-tag-ids))
          (tag (supertag-ui-read-tag
-               "Tag or namespace: " tag-ids nil nil t)))
+               "Tag: " tag-ids nil nil)))
     (append (list :type :tag :value tag)
-            (when (supertag-tag-path-has-descendants-p tag tag-ids)
+            (when (supertag-view-api-tag-descendants tag)
               '(:include-descendants t)))))
 
 (defun supertag-view--get-tag-at-point ()
@@ -338,9 +337,6 @@ Returns DEFAULT if not found or error."
                       (get-text-property fallback 'supertag-context)))
          (type (plist-get context :type)))
     (pcase type
-      (:namespace
-       (list :type :tag :value (plist-get context :path)
-             :include-descendants t))
       ((or :tag :field)
        (append (list :type :tag :value (plist-get context :tag-id))
                (when (plist-get context :has-descendants)
