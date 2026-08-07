@@ -69,8 +69,6 @@ AGENTS.md
 ext/board-ui/node_modules/
 ext/board-ui/.next/
 ext/board-ui/out/
-# allow ext/board-ui/hooks (overrides the global hooks/ rule above)
-!ext/board-ui/hooks/
 
 # ext/graph-ui build artifacts and dependencies
 ext/graph-ui/node_modules/
@@ -82,13 +80,16 @@ ext/graph-ui/out/
 .yoyo/
 
 # Claude Code guidance file
+# Anchored to the repo root: these are top-level agent scratch directories.
+# Unanchored, they also match same-named directories anywhere in the tree
+# (e.g. ext/board-ui/hooks/, which holds shipped application source).
 CLAUDE.md
-.claude/
-commands/
-docs/
-hooks/
-logs/
-qoder/
+/.claude/
+/commands/
+/docs/
+/hooks/
+/logs/
+/qoder/
 
 # pi coding agent
 .pi/
