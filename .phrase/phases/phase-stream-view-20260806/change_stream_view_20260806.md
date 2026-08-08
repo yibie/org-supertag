@@ -1,5 +1,14 @@
 # change_stream_view_20260806
 
+## 2026-08-08 — task013 / issue037 — Modify
+
+- Files: `supertag-view-stream.el`、`test/test-view-stream.el`、README/CHANGELOG 与 Stream phase 文档。
+- Root cause: shared selection 无条件写入 window start；edit 入口继承源折叠状态且只有确认命令，没有取消事务边界。
+- Behavior: 可见标题间移动不再跳到窗口顶部；`e` 展开标题与正文；`C-c C-c` 确认并同步，`C-c C-k` 恢复编辑前文本并返回。
+- Simplification: 删除 window-start 写入，复用 Org fold API 与既有 indirect buffer；取消只保存当前 narrow 文本，不新增 Runtime/Store 状态。
+- Verification: regression-first focused Stream ERT 先复现三个症状；修复后 Stream 9/9、相关 View 49/49、full ERT 401/401；strict byte compile、checkdoc、check-parens、diff-check 与 repo-local `.elc` zero 通过。
+- Remaining: issue037 等待用户实机确认后关闭。
+
 ## 2026-08-08 — task012 / issue034 / issue035 — Modify/Delete
 
 - Files: `supertag-view-stream.el`、`test/test-view-stream.el`、README/CHANGELOG/View guide、Stream spec/plan/tech/PRFAQ/task/issue/manual records。

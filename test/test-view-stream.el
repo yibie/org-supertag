@@ -243,45 +243,100 @@
                 (should (equal opened "node-2"))))))
       (supertag-view-stream-test--kill-buffers))))
 
-(ert-deftest supertag-view-stream-edit-narrows-source-without-autosave ()
-  "Stream editing must share source text, exclude children and not auto-save."
+(ert-deftest supertag-view-stream-navigation-does-not-pin-point-to-window-top ()
+  "Moving among visible Stream titles must preserve the window start."
+  (supertag-view-stream-test--with-store
+    (unwind-protect
+        (save-window-excursion
+          (supertag-view-stream-test--put-node
+           "node-1" "First" '("diary") "First body" '(0 10 0 0))
+          (supertag-view-stream-test--put-node
+           "node-2" "Second" '("diary") "Second body" '(0 20 0 0))
+          (let* ((main (supertag-view-stream "diary"))
+                 (window (get-buffer-window main t))
+                 (start (window-start window)))
+            (with-selected-window window
+              (supertag-view-stream-next-node))
+            (should (= (window-start window) start))
+            (should (equal (with-current-buffer main
+                             (supertag-view-stream--current-node-id))
+                           "node-2"))))
+      (supertag-view-stream-test--kill-buffers))))
+
+(ert-deftest supertag-view-stream-edit-confirms-or-aborts-expanded-source ()
+  "Stream edit must show title/body, confirm changes and support abort."
   (supertag-view-stream-test--with-store
     (let ((file (make-temp-file
                  "supertag-stream-edit-" nil ".org"
                  "* Parent #diary\n:PROPERTIES:\n:ID: edit-node\n:END:\nOriginal body\n** Child\nChild body\n"))
           base
-          edit)
+          edit
+          main)
       (unwind-protect
           (progn
             (supertag-view-stream-test--put-node
              "edit-node" "Parent" '("diary") "Original body"
              '(0 10 0 0) file 1)
+            (setq base (find-file-noselect file))
+            (with-current-buffer base
+              (org-mode)
+              (goto-char (point-min))
+              (org-fold-hide-entry))
             (cl-letf (((symbol-function 'display-buffer) #'ignore))
-              (let ((main
-                     (supertag-view-open
-                      'stream '(:tag "diary"))))
-                (with-current-buffer main
-                  (setq edit (supertag-view-stream-edit)))
-                (setq base (buffer-base-buffer edit))
-                (with-current-buffer edit
-                  (should (buffer-narrowed-p))
-                  (should (string-match-p "Original body" (buffer-string)))
-                  (should-not (string-match-p "Child body" (buffer-string)))
-                  (goto-char (point-max))
-                  (insert "Changed in Stream\n")
-                  (supertag-view-stream-edit-finish))
-                (should-not (buffer-live-p edit))
-                (with-current-buffer base
-                  (should (string-match-p "Changed in Stream"
-                                          (buffer-string))))
-                (should (equal (plist-get
-                                (supertag-store-get-entity :nodes "edit-node")
-                                :created-at)
-                               '(0 10 0 0)))
-                (with-temp-buffer
-                  (insert-file-contents file)
-                  (should-not (string-match-p "Changed in Stream"
-                                              (buffer-string)))))))
+              (setq main
+                    (supertag-view-open
+                     'stream '(:tag "diary")))
+              (with-current-buffer main
+                (setq edit (supertag-view-stream-edit)))
+              (with-current-buffer edit
+                (should (buffer-narrowed-p))
+                (should (eq (key-binding (kbd "C-c C-c"))
+                            #'supertag-view-stream-edit-finish))
+                (goto-char (point-min))
+                (should (looking-at-p "\\* Parent"))
+                (search-forward "Original body")
+                (should-not (invisible-p (1- (point))))
+                (should-not (string-match-p "Child body" (buffer-string)))
+                (should (eq (key-binding (kbd "C-c C-k"))
+                            #'supertag-view-stream-edit-abort))
+                (goto-char (point-max))
+                (insert "Aborted in Stream\n")
+                (call-interactively (key-binding (kbd "C-c C-k"))))
+              (should-not (buffer-live-p edit))
+              (with-current-buffer base
+                (should (string-match-p "Original body" (buffer-string)))
+                (should-not (string-match-p "Aborted in Stream"
+                                            (buffer-string)))
+                (should-not (buffer-modified-p)))
+              (should (equal (plist-get
+                              (supertag-store-get-entity :nodes "edit-node")
+                              :content)
+                             "Original body"))
+              (with-current-buffer main
+                (setq edit (supertag-view-stream-edit)))
+              (with-current-buffer edit
+                (goto-char (point-max))
+                (insert "Changed in Stream\n")
+                (call-interactively (key-binding (kbd "C-c C-c"))))
+              (should-not (buffer-live-p edit))
+              (with-current-buffer base
+                (should (string-match-p "Changed in Stream"
+                                        (buffer-string)))
+                (should (buffer-modified-p)))
+              (should (equal (plist-get
+                              (supertag-store-get-entity :nodes "edit-node")
+                              :created-at)
+                             '(0 10 0 0)))
+              (should (string-match-p
+                       "Changed in Stream"
+                       (or (plist-get
+                            (supertag-store-get-entity :nodes "edit-node")
+                            :content)
+                           "")))
+              (with-temp-buffer
+                (insert-file-contents file)
+                (should-not (string-match-p "Changed in Stream"
+                                            (buffer-string))))))
         (when (buffer-live-p edit)
           (with-current-buffer edit (set-buffer-modified-p nil))
           (kill-buffer edit))

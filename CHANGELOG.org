@@ -27,6 +27,10 @@
   user-facing upgrade/downgrade notes.
 
 ** View framework
+- Stream title navigation now preserves natural window scrolling instead of
+  pinning every selected row to the top.  The =e= edit buffer explicitly
+  expands the source title and body; =C-c C-c= confirms the edit and
+  =C-c C-k= restores the pre-edit text and aborts.
 - Source-backed node upserts now preserve an existing =:created-at= value, so
   editing a Stream node cannot silently move it to the end of creation order.
 - Added =M-x supertag-view-stream=: choose a tag to browse its nodes and all

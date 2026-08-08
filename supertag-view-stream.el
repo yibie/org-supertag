@@ -51,6 +51,12 @@
 (defvar-local supertag-view-stream-edit--node-id nil
   "Node ID being edited in the current indirect buffer.")
 
+(defvar-local supertag-view-stream-edit--original-text nil
+  "Source text to restore when the current Stream edit is aborted.")
+
+(defvar-local supertag-view-stream-edit--base-modified-p nil
+  "Whether the source buffer was modified before the Stream edit.")
+
 (defvar supertag-view-stream-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map org-mode-map)
@@ -72,6 +78,7 @@
 (defvar supertag-view-stream-edit-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'supertag-view-stream-edit-finish)
+    (define-key map (kbd "C-c C-k") #'supertag-view-stream-edit-abort)
     map)
   "Keymap for `supertag-view-stream-edit-mode'.")
 
@@ -238,8 +245,7 @@
                  position)
              (user-error "Node %s is no longer in this Stream" id)))))
     (when-let* ((window (get-buffer-window main t)))
-      (set-window-point window position)
-      (set-window-start window position)))
+      (set-window-point window position)))
   id)
 
 (defun supertag-view-stream--restore-selection (selection)
@@ -368,32 +374,53 @@
         (widen)
         (narrow-to-region (car range) (cdr range))
         (goto-char (point-min))
+        (org-fold-show-all)
         (setq-local supertag-view-stream-edit--return-buffer main
                     supertag-view-stream-edit--window-configuration window-config
-                    supertag-view-stream-edit--node-id node-id)
+                    supertag-view-stream-edit--node-id node-id
+                    supertag-view-stream-edit--original-text
+                    (buffer-substring-no-properties (point-min) (point-max))
+                    supertag-view-stream-edit--base-modified-p
+                    (buffer-modified-p))
         (supertag-view-stream-edit-mode 1))
       (pop-to-buffer edit)
       edit)))
+
+(defun supertag-view-stream-edit--close (refresh)
+  "Close the current Stream edit, refreshing its Stream when REFRESH."
+  (let ((edit (current-buffer))
+        (main supertag-view-stream-edit--return-buffer)
+        (window-config supertag-view-stream-edit--window-configuration))
+    (kill-buffer edit)
+    (when (window-configuration-p window-config)
+      (set-window-configuration window-config))
+    (when (and refresh (buffer-live-p main))
+      (supertag-view-refresh main))
+    main))
 
 (defun supertag-view-stream-edit-finish ()
   "Finish the current Stream indirect edit and return to its Stream."
   (interactive)
   (unless supertag-view-stream-edit-mode
     (user-error "Not editing a Stream node"))
-  (let ((edit (current-buffer))
-        (main supertag-view-stream-edit--return-buffer)
-        (window-config supertag-view-stream-edit--window-configuration)
-        (node-id supertag-view-stream-edit--node-id))
+  (let ((node-id supertag-view-stream-edit--node-id))
     (save-restriction
       (widen)
       (when (supertag-node--goto-location node-id)
         (supertag-node-sync-at-point)))
-    (kill-buffer edit)
-    (when (window-configuration-p window-config)
-      (set-window-configuration window-config))
-    (when (buffer-live-p main)
-      (supertag-view-refresh main))
-    main))
+    (supertag-view-stream-edit--close t)))
+
+(defun supertag-view-stream-edit-abort ()
+  "Abort the current Stream edit and return without keeping its changes."
+  (interactive)
+  (unless supertag-view-stream-edit-mode
+    (user-error "Not editing a Stream node"))
+  (let ((inhibit-read-only t)
+        (buffer-undo-list t))
+    (delete-region (point-min) (point-max))
+    (insert supertag-view-stream-edit--original-text)
+    (set-buffer-modified-p supertag-view-stream-edit--base-modified-p))
+  (supertag-view-stream-edit--close nil))
 
 (defun supertag-view-stream-quit ()
   "Quit the current Stream and restore its original window configuration."

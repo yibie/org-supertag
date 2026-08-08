@@ -36,3 +36,4 @@
 - issue034 [x] Stream 双列索引点击后目标节点可能落在主窗口底部，正文不可见（task012 已删除双列索引；phase-stream-view-20260806/issue_stream_index_scroll_20260807.md）
 - issue035 [x] 切换 Stream tag 时旧 companion index window 残留并不断增加列数（task012 已删除 companion index；phase-stream-view-20260806/issue_stream_stale_index_window_20260807.md）
 - issue036 [x] 根级 agent ignore 规则误伤 Board UI hooks，导致 clean clone 无法构建（.phrase/docs/issue_board_ui_build_20260808.md）
+- issue037 [ ] Stream 标题导航强制置顶，编辑页缺少展开与取消语义（实现与回归完成，待用户实机确认；phase-stream-view-20260806/issue_stream_navigation_edit_20260808.md）

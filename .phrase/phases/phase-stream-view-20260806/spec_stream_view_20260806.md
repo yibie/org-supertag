@@ -10,10 +10,10 @@ Stream View 是按标签浏览节点标题的独立 View。它通过现有 View 
 - 节点按 `:created-at` 升序排列；缺失时间时使用稳定 node ID 排序。
 - 主 Stream 只显示无 Org 星号的节点标题，不显示正文、文件路径、标签 token 或下划线 button。
 - Stream 只有单列主 buffer，不创建 companion index，不提供 split/plain 与 `s` 切换。
-- `n`/`p` 在标题间导航，并同步 point、窗口位置和轻微高亮。
+- `n`/`p` 在标题间导航，并同步 point 和轻微高亮；可见标题沿用窗口的自然滚动位置，不强制置顶。
 - refresh 使用稳定 node ID 恢复位置；节点消失时回退到第一个节点。
-- `e` 打开源 Org 节点的 indirect/narrow 编辑 buffer；编辑作用于源 buffer，不自动保存。
-- `C-c C-c` 结束 narrow 编辑、返回原窗口布局并刷新 Stream。
+- `e` 打开并展开源 Org 节点的 indirect/narrow 编辑 buffer；标题和正文可见，编辑作用于源 buffer，不自动保存。
+- `C-c C-c` 确认 narrow 编辑、返回原窗口布局并刷新 Stream；`C-c C-k` 恢复进入编辑前的文本并取消。
 - `v` 将当前 node ID 交给 Node View 修改 tag、field 和 field value。
 - Store 相关变更自动刷新；退出或 kill 不残留 subscription 或 hook。
 
@@ -57,7 +57,7 @@ Stream state 是数据 plist：
 ### Flow B：导航与刷新
 
 1. `n`/`p` 读取当前 node key 并移动到相邻稳定 node ID。
-2. `n`/`p` 选择节点时，主窗口从目标标题起始位置显示。
+2. `n`/`p` 只移动窗口 point；目标已可见时保持当前 window start，需要时由 Emacs 原生滚动保证可见。
 3. 主 Stream 用仅含背景的 selection face 高亮当前标题。
 4. Runtime refresh 按 node ID/offset capture → rebuild → render → restore。
 5. node 消失时落到首个可用标题。
@@ -66,10 +66,11 @@ Stream state 是数据 plist：
 
 1. 用户在当前节点按 `e`。
 2. Adapter 根据 node ID 打开源文件、定位 ID，并建立 indirect buffer。
-3. narrow 范围从当前 heading 到下一个 heading；不把 child node 暴露为当前节点正文。
+3. narrow 范围从当前 heading 到下一个 heading；不把 child node 暴露为当前节点正文，并显式展开标题与正文。
 4. 用户使用正常 Org 编辑/undo；文件不自动保存。
-5. `C-c C-c` 关闭 indirect buffer、恢复原窗口配置并刷新 Stream。
-6. 同步保留原 `:created-at`，因此正文编辑不会改变 Stream 排序。
+5. `C-c C-c` 确认修改，关闭 indirect buffer、恢复原窗口配置并刷新 Stream。
+6. `C-c C-k` 恢复进入编辑前的 narrow 文本，关闭 indirect buffer，不触发 Store 同步。
+7. 确认同步保留原 `:created-at`，因此正文编辑不会改变 Stream 排序。
 
 ### Flow D：编辑字段
 
@@ -83,7 +84,8 @@ Stream state 是数据 plist：
 - 无节点时显示明确空状态；`n`/`p`/`e`/`v` 给出 `user-error`。
 - node 无 title 时显示 `Untitled`；正文是否为空不影响标题流。
 - node 无文件、文件不存在或 ID 无法定位时，`e` 在创建 indirect buffer 前报错。
-- 长标题流导航到末端节点时，必须同步实际 Stream window 的 point/start，不能把目标留在不可见位置。
+- 长标题流导航到不可见节点时必须同步实际 Stream window point，由 Emacs 原生滚动显示目标；已可见节点不能被强制移到窗口顶部。
+- 编辑前源 buffer 已折叠时，edit buffer 仍展开当前标题与正文；取消恢复文本和进入编辑前的 modified 状态。
 - 连续打开多个 tag 时，各 main buffer 独立存活，彼此 input、标题与 Runtime instance 不串线。
 
 ## Compatibility Contract
@@ -102,8 +104,9 @@ Stream state 是数据 plist：
 - tag descendant query 使用传递 `:extends` 语义，并有 `diaryx` 与平面斜杠 ID 反例。
 - renderer 只显示标题，不显示正文、file path、tag token、前导 Org 星号、button 或下划线。
 - `s` 未绑定；`n`/`p`、refresh selection 与 missing-node fallback 通过工作流 ERT。
-- 导航后目标标题位于主窗口顶部。
-- narrow 编辑测试证明 child heading 不在 restriction 内，修改落到 base buffer，且不自动保存。
+- 导航到已可见标题时 window start 不变；跨出可见区时目标仍可见。
+- narrow 编辑测试证明标题与正文已展开、child heading 不在 restriction 内，确认修改落到 base buffer 且不自动保存。
+- `C-c C-k` 取消测试证明编辑文本未保留、Store 未同步、原 modified 状态恢复。
 - narrow 编辑后的同步保留原 `:created-at`。
 - `v` 通过 Node View 的公开 node-ID 入口。
 - 重复 open/refresh/quit 后无多余 subscriber；不会创建 Stream Index buffer。

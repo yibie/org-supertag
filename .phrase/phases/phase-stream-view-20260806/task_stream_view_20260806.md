@@ -71,3 +71,9 @@
   - 产出：删除 companion index、split/plain layout、`s` 与正文/tag 投影；保留 `n`/`p`、`e`、`v`、`g`、`q` 和每 tag 独立 buffer
   - 验证方式：失败优先 ERT 断言标题存在、正文/tag/button/index/`s` 不存在，`e` 仍显示完整源节点；focused/full/static gates
   - 影响范围：Stream module/tests、README/CHANGELOG/View guide、phase 当前产品文档；不改 Runtime contract
+
+- task013 [x] 修正列表自然滚动与可取消的展开编辑
+  - 依据：issue037、2026-08-08 用户实机反馈
+  - 产出：选择节点不再强制 window start；`e` 展开标题/正文；`C-c C-c` 确认，`C-c C-k` 恢复编辑前文本并取消
+  - 验证方式：失败优先 public Stream ERT 覆盖 window start、折叠正文、确认/取消与 modified 状态；focused/full/static gates
+  - 影响范围：Stream selection/edit boundary 与当前交互文档；不改 Runtime、Store 或持久化格式
